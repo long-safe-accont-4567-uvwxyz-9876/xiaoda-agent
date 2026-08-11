@@ -81,6 +81,24 @@ def test_registry_update_route_rollback_on_persist_failure(fresh_registry):
     assert reg.get_task("chat")["model"] == original_model
 
 
+def test_registry_update_route_with_extra_persist_is_atomic():
+    """chat 路由 + chat_model 双写应原子：chat_model 写失败时路由也回滚，不分裂。"""
+    from model_router import ModelRouteRegistry
+    mock_cfg = MagicMock()
+    mock_cfg.set_many = MagicMock(side_effect=RuntimeError("chat_model write failed"))
+    reg = ModelRouteRegistry(
+        {"chat": {"model": "mimo-v2.5", "client": "mimo", "max_tokens": 131072}},
+        config_service=mock_cfg,
+    )
+    original = reg.get_task("chat")
+    with pytest.raises(RuntimeError, match="chat_model"):
+        reg.update_route(
+            "chat", model_id="agnes-2.0-flash", provider="agnes",
+            extra_persist={"models.chat_model": {"provider": "agnes", "model_id": "agnes-2.0-flash"}},
+        )
+    assert reg.get_task("chat") == original
+
+
 def test_registry_snapshot_task_independent_of_get_task(fresh_registry):
     """snapshot_task 与 get_task 返回独立的拷贝。"""
     reg, _ = fresh_registry

@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import os
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any, TYPE_CHECKING
 
 from loguru import logger
@@ -36,6 +37,29 @@ def _embedding_service_for_mode(
     from local_ai.integration.embedding import LocalEmbeddingService
 
     return LocalEmbeddingService.bundled(model_dir, query_prefix=query_prefix)
+
+
+async def _local_memory_services(
+    instance_manager: Any,
+    embed_mode: str,
+    model_dir: str,
+    query_prefix: str,
+    *,
+    remote_reranker: Any = None,
+) -> Any:
+    from local_ai.integration.embedding import LocalEmbeddingService
+    from local_ai.integration.reranker import LocalRerankerService
+
+    embedding = LocalEmbeddingService.managed(
+        instance_manager,
+        lambda: _embedding_service_for_mode(
+            embed_mode,
+            model_dir,
+            query_prefix,
+        ),
+    )
+    reranker = LocalRerankerService.managed(instance_manager, remote_reranker)
+    return SimpleNamespace(embedding=embedding, reranker=reranker)
 
 
 class AgentCoreBootstrapper:
@@ -279,6 +303,17 @@ class AgentCoreBootstrapper:
         core = self.core
         await core.db.init()
         core.router.set_db(core.db, analytics=core.db.analytics)
+        if getattr(core, "local_ai_instances", None) is None:
+            from local_ai.devices.registry import DeviceRegistry
+            from local_ai.instances.manager import InstanceManager
+            from local_ai.models.registry import ModelRegistry
+            from local_ai.runtimes.registry import RuntimeRegistry
+
+            core.local_ai_instances = InstanceManager(
+                ModelRegistry(core.db),
+                DeviceRegistry(),
+                RuntimeRegistry(),
+            )
         embed_api_key = os.getenv("EMBED_API_KEY", "")
         embed_base_url = os.getenv("EMBED_BASE_URL", "https://api.siliconflow.cn/v1")
         # 本地推理模式（EMBED_MODE=local）不依赖 API Key，同样创建向量存储
@@ -306,7 +341,8 @@ class AgentCoreBootstrapper:
             try:
                 from memory.vector_store import _default_local_model_dir
 
-                embedding_service = _embedding_service_for_mode(
+                memory_services = await _local_memory_services(
+                    core.local_ai_instances,
                     embed_mode,
                     _default_local_model_dir(),
                     os.getenv("LOCAL_EMBED_QUERY_PREFIX", ""),
@@ -316,7 +352,7 @@ class AgentCoreBootstrapper:
                     embed_api_key=embed_api_key,
                     embed_base_url=embed_base_url,
                     embed_mode=embed_mode,
-                    embedding_service=embedding_service,
+                    embedding_service=memory_services.embedding,
                 )
                 await core._vec_store.init()
                 logger.info("vector_store.enabled" +
@@ -340,6 +376,16 @@ class AgentCoreBootstrapper:
 
         # 1. Reranker + QueryTransformer（硅基流动免费模型）
         reranker = self._init_reranker(config)
+        from local_ai.integration.reranker import LocalRerankerService
+        from memory.vector_store import _default_local_model_dir
+
+        memory_services = await _local_memory_services(
+            core.local_ai_instances,
+            getattr(core._vec_store, "_embed_mode", os.getenv("EMBED_MODE", "local")),
+            _default_local_model_dir(),
+            os.getenv("LOCAL_EMBED_QUERY_PREFIX", ""),
+            remote_reranker=reranker,
+        )
         query_transformer = self._init_query_transformer(config)
 
         # 2. Memory + KnowledgeGraph
@@ -348,7 +394,12 @@ class AgentCoreBootstrapper:
             memory=core.db.memory,
             vector_store=core._vec_store,
             router=core.router,
-            reranker=reranker,
+            reranker=memory_services.reranker,
+            reranker_service=(
+                memory_services.reranker
+                if isinstance(memory_services.reranker, LocalRerankerService)
+                else None
+            ),
             query_transformer=query_transformer,
         )
         # ContextNest A2/A3: 注入上下文治理 (哈希链 + 审计追踪)

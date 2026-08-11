@@ -41,6 +41,39 @@ def test_pyinstaller_collects_local_ai_and_gateway_platform_adapters():
     assert "collect_submodules('llm_gateway')" in spec
 
 
+def test_pyinstaller_collects_complete_ort_genai_package():
+    module = ast.parse(read_project_file("xiaoda-agent.spec"))
+    loop = next(
+        node
+        for node in module.body
+        if isinstance(node, ast.For)
+        and any(
+            isinstance(child, ast.Call)
+            and isinstance(child.func, ast.Name)
+            and child.func.id == "collect_all"
+            for child in ast.walk(node)
+        )
+    )
+    from PyInstaller.utils.hooks import collect_all
+
+    namespace = {"datas": [], "binaries": [], "hiddenimports": [], "collect_all": collect_all}
+    exec(compile(ast.Module(body=[loop], type_ignores=[]), "xiaoda-agent.spec", "exec"), namespace)
+
+    assert any("onnxruntime_genai" in source for source, _ in namespace["datas"])
+    assert any("onnxruntime-genai" in source for source, _ in namespace["binaries"])
+    assert "onnxruntime_genai" in namespace["hiddenimports"]
+
+
+def test_docker_build_context_includes_pyinstaller_spec():
+    patterns = [
+        line.strip()
+        for line in read_project_file(".dockerignore").splitlines()
+        if line.strip() and not line.lstrip().startswith("#")
+    ]
+    assert "!xiaoda-agent.spec" in patterns
+    assert patterns.index("!xiaoda-agent.spec") > patterns.index("*.spec")
+
+
 def test_python_distribution_includes_local_ai_and_gateway_packages():
     with (ROOT / "pyproject.toml").open("rb") as file:
         packages = tomllib.load(file)["tool"]["setuptools"]["packages"]["find"]["include"]
@@ -111,6 +144,14 @@ def test_release_artifacts_include_linux_arm64_frozen_bundle():
     workflow = read_project_file(".github/workflows/build-release.yml")
     assert "xiaoda-agent-linux-arm64-*.tar.gz" in workflow
     assert "xiaoda-agent-linux-arm64-*.run" in workflow
+
+
+def test_gitee_release_sync_uploads_all_linux_arm64_artifacts():
+    workflow = read_project_file(".github/workflows/build-release.yml")
+    gitee_section = workflow[workflow.index("Sync release to Gitee"):]
+    assert "xiaoda-agent-linux-arm64-*.tar.gz" in gitee_section
+    assert "xiaoda-agent-linux-arm64-*-install.sh" in gitee_section
+    assert "xiaoda-agent-linux-arm64-*.run" in gitee_section
 
 
 def test_release_never_bundles_market_model_storage_or_partial_downloads():

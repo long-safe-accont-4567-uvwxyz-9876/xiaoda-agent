@@ -334,7 +334,11 @@ class ConfigService:
                 self._notify(path, value)
 
     def delete(self, path: str) -> None:
-        """按点分路径删除配置项, 落盘并通知 watcher."""
+        """按点分路径删除配置项, 落盘并通知 watcher.
+
+        Warning 4/Item 2 修复：_save() 失败时恢复内存快照（删除前的旧值），
+        防止内存已被删除但磁盘未删除导致的脏状态被后续写入持久化。
+        """
         with self._lock:
             parts = path.split(".")
             node = self._data
@@ -346,8 +350,16 @@ class ConfigService:
                 node = node[part]
             if not isinstance(node, dict):
                 return
+            old_value = node.get(parts[-1])
+            existed = parts[-1] in node
             node.pop(parts[-1], None)
-            self._save()
+            try:
+                self._save()
+            except Exception:
+                if existed:
+                    self._assign(path, copy.deepcopy(old_value))
+                logger.error("config_service.delete_rollback path={} reason=save_failed", path)
+                raise
         self._notify(path, None)
 
     def _save(self) -> None:

@@ -4,8 +4,6 @@ import json
 import re
 from typing import Any, AsyncIterator, Mapping
 
-import httpx
-
 from llm_gateway.contracts import ProviderCapabilities
 from llm_gateway.transports.base import (
     CapabilityReport,
@@ -16,6 +14,7 @@ from llm_gateway.transports.base import (
     TransportError,
     normalize_finish_reason,
 )
+from security.ssrf_guard import build_secure_async_client, resolve_and_pin
 
 _PATH = re.compile(r"^[A-Za-z][A-Za-z0-9_-]*(?:\.(?:[A-Za-z][A-Za-z0-9_-]*|[0-9]+|\*))*$")
 _HEADER = re.compile(r"^(?:[^{}]|\{(?:api_key|base_url)\})*$")
@@ -40,9 +39,35 @@ class CustomMappingTransport(ProviderTransport):
         self._mapping = self._validate_mapping(mapping)
         self._headers = self._render_headers(headers or {}, api_key)
         self._owns_http = http_client is None
-        self._http = http_client if http_client is not None else httpx.AsyncClient(timeout=120)
+        self._http = http_client if http_client is not None else build_secure_async_client(self._base_url)
         self._chat_path = self._safe_endpoint(chat_path)
         self._models_path = self._safe_endpoint(models_path)
+        self._connect_url: str | None = None
+        self._host: str = ""
+
+    def _effective_target(self) -> tuple[str, str]:
+        """请求期绑定锁定 IP: 返回 (连接URL, Host头)。
+
+        仅当本 transport 自建底层 client（生产路径）时执行请求期 DNS 解析 + 校验并绑定
+        锁定 IP；若调用方注入外部 client（测试/调用方自管连接），则按原 base_url 直连。
+        """
+        if self._connect_url is None:
+            if self._owns_http:
+                try:
+                    self._connect_url, self._host = resolve_and_pin(self._base_url)
+                except ValueError as error:
+                    raise TransportError(str(error)) from None
+            else:
+                self._connect_url = self._base_url
+                self._host = ""
+        return self._connect_url, self._host
+
+    def _headers_with_host(self, host: str) -> dict[str, str]:
+        if host:
+            headers = dict(self._headers)
+            headers["Host"] = host
+            return headers
+        return self._headers
 
     @classmethod
     def _validate_mapping(cls, mapping: Mapping[str, Any]) -> dict[str, Any]:
@@ -124,7 +149,9 @@ class CustomMappingTransport(ProviderTransport):
 
     async def complete(self, request: CompletionRequest) -> Completion:
         try:
-            response = await self._http.post(f"{self._base_url}{self._chat_path}", json=self._payload(request, stream=False), headers=self._headers)
+            connect_url, host = self._effective_target()
+            headers = self._headers_with_host(host)
+            response = await self._http.post(f"{connect_url}{self._chat_path}", json=self._payload(request, stream=False), headers=headers)
             response.raise_for_status()
             data = response.json()
             mapping = self._mapping.get("response", {})
@@ -139,7 +166,9 @@ class CustomMappingTransport(ProviderTransport):
 
     async def stream(self, request: CompletionRequest) -> AsyncIterator[CompletionChunk]:
         try:
-            async with self._http.stream("POST", f"{self._base_url}{self._chat_path}", json=self._payload(request, stream=True), headers=self._headers) as response:
+            connect_url, host = self._effective_target()
+            headers = self._headers_with_host(host)
+            async with self._http.stream("POST", f"{connect_url}{self._chat_path}", json=self._payload(request, stream=True), headers=headers) as response:
                 response.raise_for_status()
                 mapping = self._mapping.get("stream", {})
                 async for line in response.aiter_lines():
@@ -158,7 +187,9 @@ class CustomMappingTransport(ProviderTransport):
 
     async def discover_models(self) -> tuple[str, ...]:
         try:
-            response = await self._http.get(f"{self._base_url}{self._models_path}", headers=self._headers)
+            connect_url, host = self._effective_target()
+            headers = self._headers_with_host(host)
+            response = await self._http.get(f"{connect_url}{self._models_path}", headers=headers)
             response.raise_for_status()
             values = self._get_path(response.json(), self._mapping.get("models", "data.*.id"), ())
             models = tuple(str(value) for value in values if value)
@@ -168,7 +199,9 @@ class CustomMappingTransport(ProviderTransport):
 
     async def health_check(self) -> CapabilityReport:
         try:
-            response = await self._http.get(f"{self._base_url}{self._models_path}", headers=self._headers)
+            connect_url, host = self._effective_target()
+            headers = self._headers_with_host(host)
+            response = await self._http.get(f"{connect_url}{self._models_path}", headers=headers)
             if response.status_code == 404:
                 return CapabilityReport(True, self.capabilities, models=await super().discover_models())
             response.raise_for_status()

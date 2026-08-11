@@ -22,6 +22,7 @@ from security.ssrf_guard import (
     validate_url,
     get_pinned_ip,
     check_ip,
+    resolve_and_pin,
     _PIN_CACHE,
 )
 
@@ -179,6 +180,43 @@ class TestSSRFGuard(unittest.TestCase):
             pinned = get_pinned_ip(url)
         # 应返回锁定的公网 IP, 而非被篡改的内网 IP
         self.assertEqual(pinned, "93.184.216.34")
+
+    # ── 请求期解析绑定 (resolve_and_pin) ──
+
+    def test_resolve_and_pin_pins_to_safe_ip(self):
+        """请求期解析: 返回 (锁定 IP 的连接 URL, 原始 Host 头)"""
+        with patch("security.ssrf_guard.socket.getaddrinfo",
+                   _make_getaddrinfo(["93.184.216.34"])):
+            connect_url, host = resolve_and_pin("https://example.com/v1")
+        self.assertEqual(connect_url, "https://93.184.216.34/v1")
+        self.assertEqual(host, "example.com")
+
+    def test_resolve_and_pin_preserves_port(self):
+        """请求期解析: 非默认端口保留在连接 URL 与 Host 头中"""
+        with patch("security.ssrf_guard.socket.getaddrinfo",
+                   _make_getaddrinfo(["93.184.216.34"])):
+            connect_url, host = resolve_and_pin("http://example.com:8080/v1")
+        self.assertEqual(connect_url, "http://93.184.216.34:8080/v1")
+        self.assertEqual(host, "example.com:8080")
+
+    def test_resolve_and_pin_rejects_request_time_dangerous(self):
+        """请求期 DNS rebinding 到危险 IP 应被拦截"""
+        with patch("security.ssrf_guard.socket.getaddrinfo",
+                   _make_getaddrinfo(["10.0.0.1"])):
+            with self.assertRaises(ValueError):
+                resolve_and_pin("https://example.com/api")
+
+    def test_resolve_and_pin_rejects_localhost(self):
+        """请求期解析 localhost 直接拒绝"""
+        with self.assertRaises(ValueError):
+            resolve_and_pin("http://localhost:8000/api")
+
+    def test_resolve_and_pin_whitelist_passthrough(self):
+        """白名单主机请求期原样返回, 不替换主机名"""
+        with patch.dict(os.environ, {"SSRF_ALLOW_HOSTS": "internal.svc"}):
+            connect_url, host = resolve_and_pin("http://internal.svc/health")
+        self.assertEqual(connect_url, "http://internal.svc/health")
+        self.assertEqual(host, "")
 
     # ── 白名单 ──
 

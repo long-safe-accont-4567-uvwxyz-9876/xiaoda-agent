@@ -202,6 +202,21 @@ def test_local_ai_services_attach_to_application_state(tmp_path) -> None:
     assert services.downloads._state_path == tmp_path / "downloads.json"
 
 
+def test_local_ai_services_reuse_core_instance_manager(tmp_path) -> None:
+    from unittest.mock import Mock
+
+    api = FastAPI()
+    shared = Mock()
+    core = SimpleNamespace(
+        db=SimpleNamespace(local_ai=Mock()),
+        local_ai_instances=shared,
+    )
+
+    services = attach_local_ai_services(api, core, object(), tmp_path / "downloads.json")
+
+    assert services.instances is shared
+
+
 def test_local_ai_service_initialization_recovers_downloads(monkeypatch, tmp_path) -> None:
     recovered: list[bool] = []
 
@@ -234,6 +249,8 @@ def test_websocket_local_ai_events_have_canonical_resource_keys() -> None:
         "type": "local_ai_instance_updated",
         "instance": {"id": "instance:one"},
     }
+    with pytest.raises(ValueError, match="unsupported Local AI resource"):
+        local_ai_event("arbitrary", Record(id="unsafe"))
 
 
 def test_download_event_sink_translates_task_to_canonical_download_key() -> None:

@@ -64,6 +64,19 @@ class FailingStopRuntime(FakeRuntime):
         raise RuntimeError(f"cannot stop {self.name}")
 
 
+class ReleasedThenFailingStopRuntime(FakeRuntime):
+    def __init__(self, events: list[str], name: str) -> None:
+        super().__init__(events, name)
+        self.stop_attempts = 0
+
+    def stop(self) -> None:
+        self.stop_attempts += 1
+        self.events.append(f"stop:{self.name}:{self.stop_attempts}")
+        self.running = False
+        if self.stop_attempts == 1:
+            raise RuntimeError(f"cannot finish stop {self.name}")
+
+
 class RetryableStopRuntime(FakeRuntime):
     def __init__(self, events: list[str], name: str, stop_failures: int = 1) -> None:
         super().__init__(events, name)
@@ -210,6 +223,20 @@ class FakeDatabase:
         self.closed = True
 
 
+class RetryableCloseDatabase(FakeDatabase):
+    def __init__(self, events: list[str], close_failures: int) -> None:
+        super().__init__(events)
+        self.close_failures = close_failures
+        self.close_attempts = 0
+
+    async def close(self) -> None:
+        self.close_attempts += 1
+        self.events.append(f"database:close:{self.close_attempts}")
+        if self.close_attempts <= self.close_failures:
+            raise RuntimeError("cannot close database")
+        self.closed = True
+
+
 class RecordingInstances(dict):
     def __init__(self, manager: InstanceManager, values: dict) -> None:
         super().__init__(values)
@@ -299,6 +326,31 @@ def test_runtime_registry_creates_adapter_for_profile():
     assert type(adapter).__name__ == "EmbeddingRuntime"
 
 
+def test_runtime_registry_supports_explicit_model_context():
+    profile = RuntimeProfile(
+        runtime="ort",
+        device_id="cpu:0",
+        provider="CPUExecutionProvider",
+    )
+    adapter = RuntimeRegistry().create(
+        profile,
+        model_dir="/models/embedding",
+        purpose=ModelPurpose.EMBEDDING,
+    )
+    assert type(adapter).__name__ == "EmbeddingRuntime"
+
+
+def test_runtime_registry_does_not_read_model_context_from_provider_options():
+    profile = RuntimeProfile(
+        runtime="ort",
+        device_id="cpu:0",
+        provider="CPUExecutionProvider",
+        options={"model_dir": "/models/embedding", "purpose": "embedding"},
+    )
+    with pytest.raises(RuntimeValidationError, match="model_dir"):
+        RuntimeRegistry().create(profile)
+
+
 def test_runtime_registry_rejects_unsupported_runtime():
     profile = RuntimeProfile(
         runtime="vip",
@@ -324,13 +376,13 @@ def test_runtime_registry_rejects_unknown_runtime_purpose_combination(runtime, p
         RuntimeRegistry().create(profile, installed_model=installed)
 
 
-def test_runtime_registry_requires_explicit_installed_model():
+def test_runtime_registry_requires_model_context():
     profile = RuntimeProfile(
         runtime="ort",
         device_id="cpu:0",
         provider="CPUExecutionProvider",
     )
-    with pytest.raises(RuntimeValidationError, match="installed_model"):
+    with pytest.raises(RuntimeValidationError, match="model_dir|purpose"):
         RuntimeRegistry().create(profile)
 
 
@@ -342,6 +394,77 @@ async def test_start_selects_profile_and_honors_backend_override(setup_manager):
     assert instance.device_id == "gpu:0"
     assert instance.runtime.value == "ort_genai"
     assert dict(runtimes[0].profile.options) == {}
+
+
+@pytest.mark.asyncio
+async def test_resolve_healthy_runtime_by_purpose(setup_manager):
+    manager, _, _, runtimes, _ = setup_manager
+    instance = await manager.start("local:embedding")
+
+    resolved = await manager.resolve_runtime(ModelPurpose.EMBEDDING)
+
+    assert resolved is runtimes[0]
+    assert manager.get(instance.id).health == "healthy"
+
+
+@pytest.mark.asyncio
+async def test_resolve_runtime_preserves_unavailable_selected_purpose(setup_manager):
+    manager, devices, _, _, _ = setup_manager
+    await manager.start("local:embedding")
+    devices.remove("cpu:0")
+    await manager.refresh_health()
+
+    with pytest.raises(RuntimeValidationError, match="embedding.*unavailable"):
+        await manager.resolve_runtime(ModelPurpose.EMBEDDING)
+
+
+@pytest.mark.asyncio
+async def test_stopped_runtime_preserves_selected_purpose_identity(setup_manager):
+    manager, _, _, _, _ = setup_manager
+    instance = await manager.start("local:embedding")
+    identity = manager.selection_identity(ModelPurpose.EMBEDDING)
+
+    await manager.stop(instance.id)
+
+    assert manager.selection_identity(ModelPurpose.EMBEDDING) == identity
+    with pytest.raises(RuntimeValidationError, match="embedding.*unavailable"):
+        await manager.resolve_runtime(ModelPurpose.EMBEDDING)
+
+
+@pytest.mark.asyncio
+async def test_resolve_runtime_returns_none_when_purpose_has_no_selection(setup_manager):
+    manager, _, _, _, _ = setup_manager
+
+    assert await manager.resolve_runtime(ModelPurpose.RERANKER) is None
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("provider", "options"),
+    [
+        ("CUDAExecutionProvider", {"device_id": 1, "arena_extend_strategy": "kSameAsRequested"}),
+        ("DmlExecutionProvider", {"device_id": 2}),
+    ],
+)
+async def test_start_does_not_pollute_provider_options_with_model_context(
+    setup_manager,
+    provider,
+    options,
+):
+    manager, devices, _, runtimes, _ = setup_manager
+
+    def recommend(model, override=None):
+        return RuntimeProfile(
+            runtime="ort",
+            device_id=override or "gpu:0",
+            provider=provider,
+            options=options,
+        )
+
+    devices.recommend = recommend
+    await manager.start("local:embedding", backend_override="gpu:0")
+    assert dict(runtimes[0].profile.options) == options
+    assert not {"model_dir", "model_id", "purpose"} & runtimes[0].profile.options.keys()
 
 
 @pytest.mark.asyncio
@@ -503,10 +626,10 @@ async def test_shutdown_closes_database_after_stop_failure(setup_manager):
         await manager.shutdown()
     with pytest.raises(ExceptionGroup, match="shutdown failed"):
         await manager.shutdown()
-    assert manager.active_count == 0
-    assert database.closed is True
-    assert events[-1] == "database:close"
-    assert events.count("database:close") == 1
+    assert manager.active_count == 1
+    assert manager.list()[0].health == "stop_failed"
+    assert database.closed is False
+    assert events.count("database:close") == 0
 
 
 @pytest.mark.asyncio
@@ -516,6 +639,50 @@ async def test_shutdown_is_idempotent(setup_manager):
     await manager.shutdown()
     await manager.shutdown()
     assert events.count("database:close") == 1
+
+
+@pytest.mark.asyncio
+async def test_shutdown_retries_owned_database_close_without_stopping_runtime_twice(
+    setup_manager,
+):
+    manager, _, _, runtimes, events = setup_manager
+    database = RetryableCloseDatabase(events, close_failures=1)
+    manager._database = database
+    await manager.start("local:embedding")
+    with pytest.raises(ExceptionGroup, match="shutdown failed"):
+        await manager.shutdown()
+    first_shutdown_task = manager._shutdown_task
+    assert manager._shutdown_completed is False
+    assert manager._database_closed is False
+    await manager.shutdown()
+    assert manager._shutdown_task is not first_shutdown_task
+    assert database.close_attempts == 2
+    assert database.closed is True
+    assert manager._database_closed is True
+    assert manager._shutdown_completed is True
+    assert events.count("stop:local:embedding") == 1
+    assert runtimes[0].running is False
+
+
+@pytest.mark.asyncio
+async def test_shutdown_retries_permanently_failing_owned_database_close(setup_manager):
+    manager, _, _, runtimes, events = setup_manager
+    database = RetryableCloseDatabase(events, close_failures=100)
+    manager._database = database
+    await manager.start("local:embedding")
+    previous_task = None
+    for attempt in range(1, 4):
+        with pytest.raises(ExceptionGroup, match="shutdown failed") as captured:
+            await manager.shutdown()
+        assert captured.value.subgroup(RuntimeError) is not None
+        assert manager._shutdown_task is not previous_task
+        previous_task = manager._shutdown_task
+        assert database.close_attempts == attempt
+        assert manager._database_closed is False
+        assert manager._shutdown_completed is False
+    assert database.closed is False
+    assert events.count("stop:local:embedding") == 1
+    assert runtimes[0].running is False
 
 
 @pytest.mark.asyncio
@@ -663,11 +830,18 @@ async def test_shutdown_aggregates_persistent_pending_cleanup_failure(setup_mana
     assert first_shutdown.value.subgroup(RuntimeError) is not None
     assert runtime.running is True
     assert len(manager._pending_cleanup) == 1
-    assert database.closed is True
+    assert database.closed is False
     with pytest.raises(ExceptionGroup, match="shutdown failed"):
         await manager.shutdown()
     assert runtime.stop_attempts == 3
     assert len(manager._pending_cleanup) == 1
+    assert database.closed is False
+    await manager.shutdown()
+    assert runtime.stop_attempts == 4
+    assert runtime.running is False
+    assert manager._pending_cleanup == {}
+    assert database.closed is True
+    assert events[-2:] == ["stop:local:embedding:4", "database:close"]
     assert events.count("database:close") == 1
 
 
@@ -940,6 +1114,34 @@ async def test_health_writeback_preserves_route_bound_during_health_check(setup_
 
 
 @pytest.mark.asyncio
+async def test_sync_bind_and_unbind_share_manager_snapshot_boundary(setup_manager):
+    manager, _, _, _, _ = setup_manager
+    instance = await manager.start("local:chat")
+    assert type(manager._state_lock) is type(threading.RLock())
+
+    async def interleave(operation):
+        entered = threading.Event()
+
+        def run():
+            entered.set()
+            return operation()
+
+        manager._state_lock.acquire()
+        try:
+            task = asyncio.create_task(asyncio.to_thread(run))
+            await asyncio.to_thread(entered.wait)
+            assert task.done() is False
+        finally:
+            manager._state_lock.release()
+        return await task
+
+    bound = await interleave(lambda: manager.bind_route(instance.id, "chat"))
+    assert bound.active_routes == ("chat",)
+    unbound = await interleave(lambda: manager.unbind_route(instance.id, "chat"))
+    assert unbound.active_routes == ()
+
+
+@pytest.mark.asyncio
 async def test_stop_failure_keeps_instance_and_runtime_for_retry(setup_manager):
     manager, _, _, _, events = setup_manager
     runtime = RetryableStopRuntime(events, "local:embedding")
@@ -958,6 +1160,24 @@ async def test_stop_failure_keeps_instance_and_runtime_for_retry(setup_manager):
 
 
 @pytest.mark.asyncio
+async def test_stop_failure_after_release_keeps_ownership_for_retry(setup_manager):
+    manager, _, _, _, events = setup_manager
+    runtime = ReleasedThenFailingStopRuntime(events, "local:embedding")
+    manager._runtime_registry = RuntimeRegistry({"ort": lambda profile: runtime})
+    instance = await manager.start("local:embedding")
+    with pytest.raises(RuntimeError, match="cannot finish stop"):
+        await manager.stop(instance.id)
+    retained = manager.get(instance.id)
+    assert retained is not None
+    assert retained.state == "degraded"
+    assert retained.health == "stop_failed"
+    assert manager.active_count == 1
+    await manager.stop(instance.id)
+    assert manager.get(instance.id) is None
+    assert runtime.stop_attempts == 2
+
+
+@pytest.mark.asyncio
 async def test_shutdown_retries_failed_stop_and_closes_owned_database(setup_manager):
     manager, _, database, _, events = setup_manager
     runtime = RetryableStopRuntime(events, "local:embedding")
@@ -966,10 +1186,36 @@ async def test_shutdown_retries_failed_stop_and_closes_owned_database(setup_mana
     with pytest.raises(ExceptionGroup, match="shutdown failed"):
         await manager.shutdown()
     assert manager.active_count == 1
-    assert database.closed is True
+    assert database.closed is False
     await manager.shutdown()
     assert manager.active_count == 0
     assert runtime.stop_attempts == 2
+    assert database.closed is True
+    assert events[-2:] == ["stop:local:embedding:2", "database:close"]
+    assert events.count("database:close") == 1
+
+
+@pytest.mark.asyncio
+async def test_shutdown_continues_after_permanent_stop_failure(setup_manager):
+    manager, _, database, _, events = setup_manager
+    permanent = RetryableStopRuntime(events, "local:embedding", stop_failures=100)
+    healthy = FakeRuntime(events, "local:chat")
+    manager._runtime_registry = RuntimeRegistry(
+        {
+            "ort": lambda profile: permanent,
+            "ort_genai": lambda profile: healthy,
+        }
+    )
+    failed = await manager.start("local:embedding")
+    stopped = await manager.start("local:chat")
+    with pytest.raises(ExceptionGroup, match="shutdown failed"):
+        await manager.shutdown()
+    assert manager.get(failed.id).health == "stop_failed"
+    assert manager.get(stopped.id) is None
+    assert manager.active_count == 1
+    assert permanent.stop_attempts == 1
+    assert healthy.running is False
+    assert database.closed is False
 
 
 @pytest.mark.asyncio
@@ -986,3 +1232,4 @@ async def test_shutdown_does_not_close_borrowed_database(setup_manager):
     await borrowed.start("local:embedding")
     await borrowed.shutdown()
     assert database.closed is False
+    assert borrowed._shutdown_completed is True

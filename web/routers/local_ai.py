@@ -79,7 +79,10 @@ def create_local_ai_services(core: Any, broadcast: Any, state_path: str | Path) 
         event_sink=local_ai_event_sink(broadcast),
         state_path=state_path,
     )
-    instances = InstanceManager(models, devices, RuntimeRegistry())
+    instances = getattr(core, "local_ai_instances", None)
+    if instances is None:
+        instances = InstanceManager(models, devices, RuntimeRegistry())
+        core.local_ai_instances = instances
     return LocalAIServices(devices, catalog, models, downloads, instances, broadcast)
 
 

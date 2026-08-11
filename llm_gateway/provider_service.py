@@ -1,9 +1,15 @@
 from __future__ import annotations
 
+import asyncio
 import os
+import re
+import sys
+import urllib.parse
 from collections.abc import Callable, Mapping
 from dataclasses import asdict
 from typing import Any
+
+from loguru import logger
 
 from llm_gateway.contracts import (
     AuthDefinition,
@@ -21,7 +27,7 @@ from llm_gateway.transports import (
     OpenAICompatibleTransport,
     ProviderTransport,
 )
-from security.ssrf_guard import is_local_host, validate_url
+from security.ssrf_guard import build_secure_async_client, validate_url
 
 
 class ProviderConnectionError(RuntimeError):
@@ -32,6 +38,13 @@ class ProviderInUseError(RuntimeError):
     pass
 
 
+_OLLAMA_ALLOWED_HOSTS = {
+    "localhost",
+    "127.0.0.1",
+    "::1",
+}
+
+
 class ProviderCredentialStore:
     def read(self, provider_id: str) -> str:
         from web._provider_keys import load_provider_key
@@ -39,11 +52,12 @@ class ProviderCredentialStore:
         return load_provider_key(provider_id)
 
     def write(self, provider_id: str, value: str) -> None:
+        from utils.atomic_write import atomic_write
         from web._provider_keys import _encode_key, _key_file
 
         path = _key_file(provider_id)
         path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(_encode_key(value) + "\n", encoding="utf-8")
+        atomic_write(path, _encode_key(value) + "\n", encoding="utf-8", mode=0o600)
         try:
             os.chmod(path, 0o600)
         except OSError:
@@ -73,6 +87,7 @@ class ProviderService:
         self._transport_factory = transport_factory or self._build_transport
         self._runtime_client_factory = runtime_client_factory or self._build_runtime_client
         self._reports: dict[str, CapabilityReport] = {}
+        self._locks: dict[str, asyncio.Lock] = {}
         self._restore_custom_definitions()
 
     async def test(self, draft: Mapping[str, Any], credentials: Mapping[str, Any] | None = None) -> CapabilityReport:
@@ -90,17 +105,18 @@ class ProviderService:
         credentials: Mapping[str, Any] | None = None,
     ) -> ProviderDefinition:
         definition = self._definition(draft)
-        try:
-            self.catalog.get(definition.id)
-        except KeyError:
-            pass
-        else:
-            raise ValueError(f"provider already exists: {definition.id}")
-        credential = self._credential(definition, credentials)
-        report, client = await self._stage(definition, credential)
-        self._commit_create(definition, credential, client)
-        self._reports[definition.id] = report
-        return definition
+        async with self._lock(definition.id):
+            try:
+                self.catalog.get(definition.id)
+            except KeyError:
+                pass
+            else:
+                raise ValueError(f"provider already exists: {definition.id}")
+            credential = self._credential(definition, credentials)
+            report, client = await self._stage(definition, credential)
+            self._commit_create(definition, credential, client)
+            self._reports[definition.id] = report
+            return definition
 
     async def update(
         self,
@@ -108,49 +124,44 @@ class ProviderService:
         draft: Mapping[str, Any],
         credentials: Mapping[str, Any] | None = None,
     ) -> ProviderDefinition:
-        old_definition = self.catalog.get(provider_id)
-        if old_definition.builtin:
-            raise ValueError(f"builtin provider cannot be replaced: {provider_id}")
-        merged = self._record(old_definition)
-        merged.update(draft)
-        merged["id"] = provider_id
-        definition = self._definition(merged)
-        credential = self._credential(definition, credentials)
-        report, client = await self._stage(definition, credential)
-        self._commit_update(old_definition, definition, credential, client)
-        self._reports[provider_id] = report
-        return definition
+        async with self._lock(provider_id):
+            old_definition = self.catalog.get(provider_id)
+            if old_definition.builtin:
+                raise ValueError(f"builtin provider cannot be replaced: {provider_id}")
+            merged = self._record(old_definition)
+            merged.update(draft)
+            merged["id"] = provider_id
+            definition = self._definition(merged)
+            credential = self._credential(definition, credentials)
+            report, client = await self._stage(definition, credential)
+            self._commit_update(old_definition, definition, credential, client)
+            self._reports[provider_id] = report
+            return definition
 
     async def delete(self, provider_id: str) -> None:
-        definition = self.catalog.get(provider_id)
-        if definition.builtin:
-            raise ValueError(f"builtin provider cannot be removed: {provider_id}")
-        routes = self.config.get("models.routes", {}) or {}
-        used_by = [task for task, entry in routes.items() if entry.get("client") == provider_id]
-        if used_by:
-            raise ProviderInUseError(", ".join(used_by))
-        old_record = self.config.get(f"models.providers.{provider_id}")
-        old_credential = self.credentials.read(provider_id)
-        clients = self._runtime_clients()
-        old_client = clients.get(provider_id)
-        try:
-            self.config.delete(f"models.providers.{provider_id}")
-            self.credentials.delete(provider_id)
-            clients.pop(provider_id, None)
-            self.catalog.unregister(provider_id)
-            self._reports.pop(provider_id, None)
-        except Exception:
-            if old_record is not None:
-                self.config.set(f"models.providers.{provider_id}", old_record)
-            if old_credential:
-                self.credentials.write(provider_id, old_credential)
-            if old_client is not None:
-                clients[provider_id] = old_client
+        async with self._lock(provider_id):
+            definition = self.catalog.get(provider_id)
+            if definition.builtin:
+                raise ValueError(f"builtin provider cannot be removed: {provider_id}")
+            routes = self.config.get("models.routes", {}) or {}
+            used_by = [task for task, entry in routes.items() if entry.get("client") == provider_id]
+            if used_by:
+                raise ProviderInUseError(", ".join(used_by))
+            old_record = self.config.get(f"models.providers.{provider_id}")
+            old_credential = self.credentials.read(provider_id)
+            old_report = self._reports.get(provider_id)
+            clients = self._runtime_clients()
+            old_client = clients.get(provider_id)
             try:
-                self.catalog.get(provider_id)
-            except KeyError:
-                self.catalog.register(definition)
-            raise
+                self.config.delete(f"models.providers.{provider_id}")
+                self.credentials.delete(provider_id)
+                clients.pop(provider_id, None)
+                self.catalog.unregister(provider_id)
+                self._reports.pop(provider_id, None)
+            except Exception:
+                self._run_rollback(self._delete_rollback_actions(
+                    provider_id, definition, old_record, old_credential, old_report, clients, old_client))
+                raise
 
     async def capabilities(self, provider_id: str) -> CapabilityReport:
         if provider_id in self._reports:
@@ -179,12 +190,11 @@ class ProviderService:
             definition = self.catalog.get(provider_id)
         except KeyError:
             return "missing"
-        if not definition.builtin:
-            record = self.config.get(f"models.providers.{provider_id}") or {}
-            if not record.get("enabled", True):
-                return "disabled"
-            if provider_id not in self._runtime_clients():
-                return "unavailable"
+        record = self.config.get(f"models.providers.{provider_id}") or {}
+        if not definition.builtin and not record.get("enabled", True):
+            return "disabled"
+        if provider_id not in self._runtime_clients():
+            return "unavailable"
         report = self._reports.get(provider_id)
         if report and report.models and model_id not in report.models:
             return "model"
@@ -204,14 +214,12 @@ class ProviderService:
             self.catalog.register(definition)
             self._runtime_clients()[definition.id] = client
         except Exception:
-            self.credentials.delete(definition.id)
-            if self.config.get(path) is not None:
-                self.config.delete(path)
-            try:
-                self.catalog.unregister(definition.id)
-            except KeyError:
-                pass
-            self._runtime_clients().pop(definition.id, None)
+            self._run_rollback([
+                lambda: self.credentials.delete(definition.id),
+                lambda: self.config.delete(path) if self.config.get(path) is not None else None,
+                lambda: self._safe_unregister(definition.id),
+                lambda: self._runtime_clients().pop(definition.id, None),
+            ])
             raise
 
     def _commit_update(
@@ -226,30 +234,56 @@ class ProviderService:
         old_record = self.config.get(path)
         old_credential = self.credentials.read(provider_id)
         old_client = self._runtime_clients().get(provider_id)
+
+        def restore_runtime() -> None:
+            if old_client is None:
+                self._runtime_clients().pop(provider_id, None)
+            else:
+                self._runtime_clients()[provider_id] = old_client
+
         try:
             self.credentials.write(provider_id, credential)
             self.config.set(path, self._record(definition))
             self.catalog.register(definition, replace_existing=True)
             self._runtime_clients()[provider_id] = client
         except Exception:
-            if old_credential:
-                self.credentials.write(provider_id, old_credential)
-            else:
-                self.credentials.delete(provider_id)
-            self.config.set(path, old_record)
-            self.catalog.register(old_definition, replace_existing=True)
-            if old_client is None:
-                self._runtime_clients().pop(provider_id, None)
-            else:
-                self._runtime_clients()[provider_id] = old_client
+            self._run_rollback([
+                lambda: (self.credentials.write(provider_id, old_credential)
+                         if old_credential else self.credentials.delete(provider_id)),
+                lambda: self.config.set(path, old_record),
+                lambda: self.catalog.register(old_definition, replace_existing=True),
+                restore_runtime,
+            ])
             raise
 
     def _restore_custom_definitions(self) -> None:
+        clients = self._runtime_clients()
         for provider_id, record in (self.config.get("models.providers", {}) or {}).items():
+            try:
+                definition = self._definition(dict(record, id=provider_id))
+            except Exception as error:
+                logger.warning("provider_service.restore_definition_failed id={} error={}", provider_id, error)
+                continue
             try:
                 self.catalog.get(provider_id)
             except KeyError:
-                self.catalog.register(self._definition(dict(record, id=provider_id)))
+                self.catalog.register(definition)
+            # 内置 provider 与凭证池 provider 不在重建范围：
+            # 内置由 ModelRouter 初始化，凭证池由 _register_credential_pool_providers 注册。
+            if definition.builtin or provider_id in clients:
+                continue
+            try:
+                credential = self.credentials.read(provider_id)
+                if definition.auth.required and not credential:
+                    continue
+                clients[provider_id] = self._runtime_client_factory(definition, credential)
+            except Exception as error:
+                logger.warning(
+                    "provider_service.restore_client_failed id={} error={}",
+                    provider_id,
+                    error,
+                )
+                continue
 
     def _credential(self, definition: ProviderDefinition, credentials: Mapping[str, Any] | None) -> str:
         supplied = str((credentials or {}).get("api_key", "") or "").strip()
@@ -261,6 +295,10 @@ class ProviderService:
     @staticmethod
     def _definition(draft: Mapping[str, Any]) -> ProviderDefinition:
         provider_id = str(draft.get("id", "")).strip().lower()
+        # 凭证文件按 provider_id 落盘（web/_provider_keys._key_file 仅保留 alnum/-/_），
+        # 含点号等字符的 id（如 a.b）会与 ab 映射到同一凭证文件造成 ID 冲突，直接拒绝。
+        if not re.fullmatch(r"[a-z0-9_-]+", provider_id):
+            raise ValueError(f"provider id must match ^[a-z0-9_-]+$: {provider_id!r}")
         protocol_value = draft.get("protocol", draft.get("format", "openai_compatible"))
         protocol_aliases = {
             "openai": ProviderProtocol.OPENAI_COMPATIBLE.value,
@@ -270,10 +308,26 @@ class ProviderService:
         base_url = str(draft.get("base_url", "")).strip()
         if protocol is not ProviderProtocol.LOCAL_ORT and not base_url.startswith(("http://", "https://")):
             raise ValueError("base_url must be an http(s) URL")
-        if protocol is not ProviderProtocol.LOCAL_ORT and not is_local_host(base_url):
-            allowed, reason = validate_url(base_url)
-            if not allowed:
-                raise ValueError(f"base_url safety check failed: {reason}")
+        if protocol is not ProviderProtocol.LOCAL_ORT:
+            if protocol is ProviderProtocol.OLLAMA:
+                # 严格本地策略：仅 http://localhost:11434、http://127.0.0.1:11434、http://[::1]:11434，
+                # 拒绝 HTTPS 本地目标、回环别名（localhost.localdomain/ip6-localhost 等）、
+                # 0.0.0.0、容器宿主别名与其他端口。
+                if not ProviderService._is_ollama_local(base_url):
+                    raise ValueError(
+                        "Ollama local provider must use http://localhost:11434, "
+                        "http://127.0.0.1:11434 or http://[::1]:11434"
+                    )
+            else:
+                allowed, reason = validate_url(base_url)
+                if not allowed:
+                    raise ValueError(f"base_url safety check failed: {reason}")
+        headers = dict(draft.get("headers") or {})
+        for header_name, header_value in headers.items():
+            if "{api_key}" not in str(header_value) and "{base_url}" not in str(header_value):
+                raise ValueError(
+                    f"header {header_name} must use {{api_key}}/{{base_url}} placeholder, got literal value"
+                )
         capabilities_raw = draft.get("capabilities", {}) or {}
         capabilities = ProviderCapabilities(
             tools=bool(capabilities_raw.get("tools", draft.get("supports_tools", True))),
@@ -305,7 +359,7 @@ class ProviderService:
                 "label": str(draft.get("label", provider_id)),
                 "enabled": bool(draft.get("enabled", True)),
                 "order": int(draft.get("order", 9999)),
-                "headers": dict(draft.get("headers") or {}),
+                "headers": headers,
                 "mapping": dict(draft.get("mapping") or {}),
             },
         )
@@ -341,6 +395,90 @@ class ProviderService:
             self.runtime_router._custom_clients = {}
         return self.runtime_router._custom_clients
 
+    def _lock(self, provider_id: str) -> asyncio.Lock:
+        # 按规范化 provider ID 共享锁，避免 "Custom" 与 "custom" 各自持锁
+        key = provider_id.strip().lower()
+        lock = self._locks.get(key)
+        if lock is None:
+            lock = asyncio.Lock()
+            self._locks[key] = lock
+        return lock
+
+    def _run_rollback(self, actions: list[Callable[[], None]]) -> None:
+        failures: list[BaseException] = []
+        for action in actions:
+            try:
+                action()
+            except Exception as error:
+                failures.append(error)
+                logger.warning("provider_service.rollback_action_failed", exc_info=True)
+        if not failures:
+            return
+        # 补偿步骤全部尝试后，将补偿失败聚合到当前主异常的 __context__ 链：
+        # 原始提交异常仍保持为主异常，链遍历可看到全部补偿失败。
+        primary = sys.exc_info()[1]
+        if primary is None:
+            return
+        node: BaseException | None = primary
+        seen = {id(node)}
+        while node.__context__ is not None and id(node.__context__) not in seen:
+            node = node.__context__
+            seen.add(id(node))
+        for error in failures:
+            if error is primary or id(error) in seen:
+                continue
+            error.__context__ = None
+            error.__cause__ = None
+            node.__context__ = error
+            node = error
+            seen.add(id(error))
+
+    def _safe_unregister(self, provider_id: str) -> None:
+        try:
+            self.catalog.unregister(provider_id)
+        except KeyError:
+            pass
+
+    def _delete_rollback_actions(self, provider_id, definition, old_record,
+                                 old_credential, old_report, clients, old_client) -> list[Callable[[], None]]:
+        def restore_config() -> None:
+            if old_record is not None:
+                self.config.set(f"models.providers.{provider_id}", old_record)
+
+        def restore_credential() -> None:
+            if old_credential:
+                self.credentials.write(provider_id, old_credential)
+
+        def restore_runtime() -> None:
+            if old_client is not None:
+                clients[provider_id] = old_client
+
+        def restore_catalog() -> None:
+            try:
+                self.catalog.get(provider_id)
+            except KeyError:
+                self.catalog.register(definition)
+
+        def restore_report() -> None:
+            if old_report is not None:
+                self._reports[provider_id] = old_report
+            else:
+                self._reports.pop(provider_id, None)
+
+        return [restore_config, restore_credential, restore_runtime, restore_catalog, restore_report]
+
+    @staticmethod
+    def _is_ollama_local(base_url: str) -> bool:
+        """严格判断 Ollama 本地目标：http + 规范回环主机（localhost/127.0.0.1/[::1]）+ 端口 11434。"""
+        try:
+            parsed = urllib.parse.urlparse(base_url)
+            if parsed.scheme != "http":
+                return False
+            host = (parsed.hostname or "").lower().rstrip(".")
+            return host in _OLLAMA_ALLOWED_HOSTS and parsed.port == 11434
+        except ValueError:
+            return False
+
     @staticmethod
     def _build_transport(definition: ProviderDefinition, credential: str) -> ProviderTransport:
         if definition.protocol is ProviderProtocol.ANTHROPIC:
@@ -360,11 +498,16 @@ class ProviderService:
         if definition.protocol is ProviderProtocol.OPENAI_COMPATIBLE:
             from openai import AsyncOpenAI
 
-            client = AsyncOpenAI(api_key=credential or "not-required", base_url=definition.endpoint.base_url)
+            client = AsyncOpenAI(
+                api_key=credential or "not-required",
+                base_url=definition.endpoint.base_url,
+                http_client=build_secure_async_client(definition.endpoint.base_url),
+            )
             return OpenAICompatibleTransport(
                 client,
                 capabilities=definition.capabilities,
                 default_model=definition.default_model,
+                base_url=definition.endpoint.base_url,
             )
         if definition.protocol is ProviderProtocol.CUSTOM_MAPPING:
             headers = dict(definition.metadata.get("headers") or {})
@@ -385,6 +528,31 @@ class ProviderService:
 
     @staticmethod
     def _build_runtime_client(definition: ProviderDefinition, credential: str) -> Any:
+        if definition.protocol is ProviderProtocol.OLLAMA:
+            from openai import AsyncOpenAI
+
+            # Ollama 的 OpenAI 兼容端点是 base_url + /v1
+            return AsyncOpenAI(
+                api_key=credential or "ollama",
+                base_url=f"{definition.endpoint.base_url.rstrip('/')}/v1",
+            )
+        if definition.protocol is ProviderProtocol.CUSTOM_MAPPING:
+            from web.custom_providers import CustomMappingCompatClient
+
+            headers = dict(definition.metadata.get("headers") or {})
+            if definition.auth.header and definition.auth.header not in headers and credential:
+                value = f"{definition.auth.scheme} {{api_key}}".strip()
+                headers[definition.auth.header] = value
+            return CustomMappingCompatClient(
+                credential,
+                definition.endpoint.base_url,
+                mapping=dict(definition.metadata.get("mapping") or {}),
+                headers=headers,
+                capabilities=definition.capabilities,
+                default_model=definition.default_model,
+                chat_path=definition.endpoint.chat_path,
+                models_path=definition.endpoint.models_path,
+            )
         from web.custom_providers import build_client
 
         format_name = "anthropic" if definition.protocol is ProviderProtocol.ANTHROPIC else "openai"

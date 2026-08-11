@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import threading
 from collections.abc import Callable
 from dataclasses import replace
 from datetime import datetime, timezone
@@ -14,8 +15,10 @@ from local_ai.contracts import (
     DeviceState,
     InstalledModel,
     ModelInstance,
+    ModelPurpose,
 )
 from local_ai.models.registry import ModelNotFoundError, ModelRegistry
+from local_ai.runtimes.base import RuntimeValidationError
 from local_ai.runtimes.registry import RuntimeAdapter, RuntimeRegistry
 
 
@@ -48,6 +51,10 @@ class InstanceManager:
         self._instances: dict[str, ModelInstance] = {}
         self._runtimes: dict[str, RuntimeAdapter] = {}
         self._model_instances: dict[str, str] = {}
+        self._instance_purposes: dict[str, ModelPurpose] = {}
+        self._selected_instances: dict[ModelPurpose, str] = {}
+        self._selection_generations: dict[ModelPurpose, int] = {}
+        self._route_bindings: dict[tuple[str, str], int] = {}
         self._model_locks: dict[str, asyncio.Lock] = {}
         self._stopping_instances: set[str] = set()
         self._shutdown_lock = asyncio.Lock()
@@ -57,10 +64,12 @@ class InstanceManager:
         self._lifecycle_tasks: set[asyncio.Task[Any]] = set()
         self._model_tasks: dict[str, set[asyncio.Task[Any]]] = {}
         self._pending_cleanup: dict[str, tuple[str, RuntimeAdapter]] = {}
+        self._state_lock = threading.RLock()
 
     @property
     def active_count(self) -> int:
-        return len(self._instances)
+        with self._state_lock:
+            return len(self._instances)
 
     async def start(
         self,
@@ -69,11 +78,12 @@ class InstanceManager:
     ) -> ModelInstance:
         lock = self._model_locks.setdefault(model_id, asyncio.Lock())
         async with lock:
-            if self._shutting_down:
-                raise RuntimeError("instance manager is shutting down")
-            existing_id = self._model_instances.get(model_id)
-            if existing_id is not None:
-                return self._instances[existing_id]
+            with self._state_lock:
+                if self._shutting_down:
+                    raise RuntimeError("instance manager is shutting down")
+                existing_id = self._model_instances.get(model_id)
+                if existing_id is not None:
+                    return self._instances[existing_id]
             installed = await self._model_registry.get(model_id)
             if installed is None:
                 raise ModelNotFoundError(f"model not found: {model_id!r}")
@@ -95,16 +105,23 @@ class InstanceManager:
                     started_at=now,
                     updated_at=now,
                 )
-                self._instances[instance.id] = instance
-                self._runtimes[instance.id] = runtime
-                self._model_instances[model_id] = instance.id
+                with self._state_lock:
+                    self._instances[instance.id] = instance
+                    self._runtimes[instance.id] = runtime
+                    self._model_instances[model_id] = instance.id
+                    self._instance_purposes[instance.id] = installed.purpose
+                    self._selected_instances[installed.purpose] = instance.id
+                    self._selection_generations[installed.purpose] = (
+                        self._selection_generations.get(installed.purpose, 0) + 1
+                    )
                 return instance
             except BaseException as start_error:
                 try:
                     await self._run_sync(model_id, runtime.stop)
                 except BaseException as rollback_error:
-                    cleanup_id = uuid4().hex
-                    self._pending_cleanup[cleanup_id] = (model_id, runtime)
+                    with self._state_lock:
+                        cleanup_id = uuid4().hex
+                        self._pending_cleanup[cleanup_id] = (model_id, runtime)
                     group_type = (
                         ExceptionGroup
                         if isinstance(start_error, Exception)
@@ -118,51 +135,142 @@ class InstanceManager:
                 raise
 
     async def stop(self, instance_id: str) -> None:
-        instance = self._instances.get(instance_id)
+        with self._state_lock:
+            instance = self._instances.get(instance_id)
         if instance is None:
             return
         lock = self._model_locks.setdefault(instance.model_id, asyncio.Lock())
         async with lock:
-            current = self._instances.get(instance_id)
-            if current is None:
-                return
-            if current.active_routes:
-                raise InstanceInUseError(
-                    f"instance {instance_id!r} is used by routes {current.active_routes!r}"
-                )
+            with self._state_lock:
+                current = self._instances.get(instance_id)
+                if current is None:
+                    return
+                if current.active_routes:
+                    raise InstanceInUseError(
+                        f"instance {instance_id!r} is used by routes {current.active_routes!r}"
+                    )
             await self._stop_locked(current)
 
     def get(self, instance_id: str) -> ModelInstance | None:
-        return self._instances.get(instance_id)
+        with self._state_lock:
+            return self._instances.get(instance_id)
 
     def list(self) -> list[ModelInstance]:
-        return list(self._instances.values())
+        with self._state_lock:
+            return list(self._instances.values())
+
+    async def resolve_runtime(
+        self,
+        purpose: ModelPurpose | str,
+    ) -> RuntimeAdapter | None:
+        resolved_purpose = ModelPurpose(purpose)
+        with self._state_lock:
+            selected_id = self._selected_instances.get(resolved_purpose)
+            if selected_id is None:
+                return None
+            instance = self._instances.get(selected_id)
+            runtime = self._runtimes.get(selected_id)
+        if instance is None:
+            raise RuntimeValidationError(
+                f"selected {resolved_purpose.value} runtime is unavailable"
+            )
+        if runtime is None:
+            raise RuntimeValidationError(
+                f"selected {resolved_purpose.value} runtime is unavailable"
+            )
+        if (
+            instance.state != "running"
+            or instance.health != "healthy"
+            or not await self._run_sync(instance.model_id, runtime.health)
+        ):
+            raise RuntimeValidationError(
+                f"selected {resolved_purpose.value} runtime is unavailable"
+            )
+        return runtime
+
+    async def acquire_runtime(
+        self,
+        purpose: ModelPurpose | str,
+        route: str,
+    ) -> tuple[str, RuntimeAdapter] | None:
+        resolved_purpose = ModelPurpose(purpose)
+        runtime = await self.resolve_runtime(resolved_purpose)
+        if runtime is None:
+            return None
+        with self._state_lock:
+            selected_id = self._selected_instances.get(resolved_purpose)
+            if selected_id is None or self._runtimes.get(selected_id) is not runtime:
+                raise RuntimeValidationError(
+                    f"selected {resolved_purpose.value} runtime changed during acquisition"
+                )
+            self.bind_route(selected_id, route)
+        return selected_id, runtime
+
+    def release_runtime(self, instance_id: str, route: str) -> None:
+        self.unbind_route(instance_id, route)
+
+    def selection_identity(self, purpose: ModelPurpose | str) -> tuple[str, int] | None:
+        resolved_purpose = ModelPurpose(purpose)
+        with self._state_lock:
+            selected_id = self._selected_instances.get(resolved_purpose)
+            if selected_id is None:
+                return None
+            return (
+                selected_id,
+                self._selection_generations.get(resolved_purpose, 0),
+            )
+
+    def selection_available(self, purpose: ModelPurpose | str) -> bool:
+        resolved_purpose = ModelPurpose(purpose)
+        with self._state_lock:
+            selected_id = self._selected_instances.get(resolved_purpose)
+            if selected_id is None:
+                return False
+            instance = self._instances.get(selected_id)
+            runtime = self._runtimes.get(selected_id)
+        if instance is None or runtime is None:
+            return False
+        return instance.state == "running" and instance.health == "healthy"
 
     def bind_route(self, instance_id: str, route: str) -> ModelInstance:
-        if instance_id in self._stopping_instances:
-            raise InstanceInUseError(f"instance {instance_id!r} is stopping")
-        instance = self._required_instance(instance_id)
-        routes = tuple(dict.fromkeys((*instance.active_routes, route)))
-        updated = replace(instance, active_routes=routes, updated_at=self._now())
-        self._instances[instance_id] = updated
-        return updated
+        with self._state_lock:
+            if instance_id in self._stopping_instances:
+                raise InstanceInUseError(f"instance {instance_id!r} is stopping")
+            instance = self._required_instance(instance_id)
+            key = (instance_id, route)
+            self._route_bindings[key] = self._route_bindings.get(key, 0) + 1
+            routes = tuple(dict.fromkeys((*instance.active_routes, route)))
+            updated = replace(instance, active_routes=routes, updated_at=self._now())
+            self._instances[instance_id] = updated
+            return updated
 
     def unbind_route(self, instance_id: str, route: str) -> ModelInstance:
-        instance = self._required_instance(instance_id)
-        routes = tuple(item for item in instance.active_routes if item != route)
-        updated = replace(instance, active_routes=routes, updated_at=self._now())
-        self._instances[instance_id] = updated
-        return updated
+        with self._state_lock:
+            instance = self._required_instance(instance_id)
+            key = (instance_id, route)
+            count = self._route_bindings.get(key, 0)
+            if count > 1:
+                self._route_bindings[key] = count - 1
+                routes = instance.active_routes
+            else:
+                self._route_bindings.pop(key, None)
+                routes = tuple(item for item in instance.active_routes if item != route)
+            updated = replace(instance, active_routes=routes, updated_at=self._now())
+            self._instances[instance_id] = updated
+            return updated
 
     async def refresh_health(self) -> list[ModelInstance]:
         devices = {
             device.id: device for device in self._device_registry.scan(force=True)
         }
-        for instance_id, instance in tuple(self._instances.items()):
+        with self._state_lock:
+            instances = tuple(self._instances.items())
+        for instance_id, instance in instances:
             lock = self._model_locks.setdefault(instance.model_id, asyncio.Lock())
             async with lock:
-                current = self._instances.get(instance_id)
-                runtime = self._runtimes.get(instance_id)
+                with self._state_lock:
+                    current = self._instances.get(instance_id)
+                    runtime = self._runtimes.get(instance_id)
                 if current is None or runtime is None:
                     continue
                 device = devices.get(current.device_id)
@@ -172,8 +280,10 @@ class InstanceManager:
                     state, health = "running", "healthy"
                 else:
                     state, health = "degraded", "unhealthy"
-                if not self._shutting_down:
+                with self._state_lock:
                     latest = self._instances.get(instance_id)
+                    if self._shutting_down:
+                        continue
                     if latest is None:
                         continue
                     self._instances[instance_id] = replace(
@@ -188,8 +298,11 @@ class InstanceManager:
         async with self._shutdown_lock:
             if self._shutdown_completed:
                 shutdown_task = self._shutdown_task
-            elif self._shutdown_task is None:
-                self._shutting_down = True
+            elif self._shutdown_task is None or (
+                self._shutdown_task.done() and not self._shutdown_completed
+            ):
+                with self._state_lock:
+                    self._shutting_down = True
                 self._shutdown_task = asyncio.create_task(self._shutdown())
                 shutdown_task = self._shutdown_task
             else:
@@ -199,13 +312,9 @@ class InstanceManager:
         try:
             await self._await_completion(shutdown_task)
         finally:
-            async with self._shutdown_lock:
-                if (
-                    self._shutdown_task is shutdown_task
-                    and shutdown_task.done()
-                    and not self._shutdown_completed
-                ):
-                    self._shutdown_task = None
+            # 失败时保留 task 引用，便于下次 shutdown() 检测到
+            # 已完成的失败 task 并重新执行。
+            pass
 
     async def _shutdown(self) -> None:
         errors: list[Exception] = []
@@ -213,10 +322,13 @@ class InstanceManager:
             for lock in tuple(self._model_locks.values()):
                 await lock.acquire()
                 lock.release()
-            for instance in tuple(self._instances.values()):
+            with self._state_lock:
+                instances = tuple(self._instances.values())
+            for instance in instances:
                 lock = self._model_locks.setdefault(instance.model_id, asyncio.Lock())
                 async with lock:
-                    current = self._instances.get(instance.id)
+                    with self._state_lock:
+                        current = self._instances.get(instance.id)
                     if current is None:
                         continue
                     try:
@@ -224,14 +336,19 @@ class InstanceManager:
                     except Exception as error:
                         errors.append(error)
             await self._await_lifecycle_tasks()
-            for cleanup_id, (model_id, runtime) in tuple(self._pending_cleanup.items()):
+            with self._state_lock:
+                pending_cleanup = tuple(self._pending_cleanup.items())
+            for cleanup_id, (model_id, runtime) in pending_cleanup:
                 try:
                     await self._run_sync(model_id, runtime.stop)
                 except Exception as error:
                     errors.append(error)
                 else:
-                    self._pending_cleanup.pop(cleanup_id, None)
-            if self._database is not None and self._owns_database and not self._database_closed:
+                    with self._state_lock:
+                        self._pending_cleanup.pop(cleanup_id, None)
+            with self._state_lock:
+                can_close_database = not self._instances and not self._pending_cleanup
+            if can_close_database and self._database is not None and self._owns_database and not self._database_closed:
                 try:
                     await self._database.close()
                 except Exception as error:
@@ -241,24 +358,26 @@ class InstanceManager:
             if errors:
                 raise ExceptionGroup("instance manager shutdown failed", errors)
         finally:
-            self._shutdown_completed = not self._instances and not self._pending_cleanup
+            with self._state_lock:
+                owned_database_closed = (
+                    self._database is None
+                    or not self._owns_database
+                    or self._database_closed
+                )
+                self._shutdown_completed = (
+                    not self._instances
+                    and not self._pending_cleanup
+                    and owned_database_closed
+                )
 
     async def _stop_locked(self, instance: ModelInstance) -> None:
-        runtime = self._runtimes[instance.id]
-        self._stopping_instances.add(instance.id)
+        with self._state_lock:
+            runtime = self._runtimes[instance.id]
+            self._stopping_instances.add(instance.id)
         try:
             await self._run_sync(instance.model_id, runtime.stop)
         except BaseException:
-            stopped = False
-            try:
-                stopped = not runtime.health()
-            except Exception:
-                pass
-            if stopped:
-                self._instances.pop(instance.id, None)
-                self._runtimes.pop(instance.id, None)
-                self._model_instances.pop(instance.model_id, None)
-            else:
+            with self._state_lock:
                 current = self._instances.get(instance.id)
                 if current is not None:
                     self._instances[instance.id] = replace(
@@ -269,10 +388,16 @@ class InstanceManager:
                     )
             raise
         finally:
-            self._stopping_instances.discard(instance.id)
-        self._instances.pop(instance.id, None)
-        self._runtimes.pop(instance.id, None)
-        self._model_instances.pop(instance.model_id, None)
+            with self._state_lock:
+                self._stopping_instances.discard(instance.id)
+        with self._state_lock:
+            for key in tuple(self._route_bindings):
+                if key[0] == instance.id:
+                    self._route_bindings.pop(key, None)
+            self._instances.pop(instance.id, None)
+            self._runtimes.pop(instance.id, None)
+            self._model_instances.pop(instance.model_id, None)
+            self._instance_purposes.pop(instance.id, None)
 
     async def _run_sync(
         self,

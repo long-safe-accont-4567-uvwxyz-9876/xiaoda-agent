@@ -16,11 +16,13 @@ import ipaddress
 import os
 import re
 import socket
+import threading as _threading
 import urllib.parse
 from collections import OrderedDict
+from typing import Any
 
+import httpx
 from loguru import logger
-
 
 # ── Step 1: 协议白名单 ──
 _ALLOWED_SCHEMES = {"http", "https"}
@@ -81,7 +83,6 @@ _BLOCKED_NETWORKS = [
 # 缓存已通过 Step4 校验的 IP, 避免每次请求重新解析, 防止 TOCTOU
 # 注意: 缓存无 TTL, 适用于专用聊天agent+本地编辑器场景;
 # 多租户公网场景应加 TTL 防 IP 漂移误用
-import threading as _threading
 
 _PIN_CACHE: "OrderedDict[str, str]" = OrderedDict()
 _PIN_CACHE_MAX_SIZE = 1000
@@ -272,6 +273,110 @@ def get_pinned_ip(url: str) -> str | None:
         if cached:
             _PIN_CACHE.move_to_end(hostname)
     return cached if cached else None
+
+
+def resolve_and_pin(base_url: str) -> tuple[str, str]:
+    """请求期安全解析并返回 ``(连接URL, Host头)``。
+
+    对 ``base_url`` 做一次**全新** DNS 解析 + 全量校验；任一 IP 命中危险网段即抛
+    ``ValueError``。校验通过后把 URL 主机名替换为首个安全 IP（锁定），返回原始
+    netloc 作为 Host 头，使实际连接目标与校验结果一致，从而关闭「解析后到请求前
+    被篡改」的 DNS rebinding TOCTOU。
+
+    与 ``validate_url`` 的区别：``validate_url`` 主要在 provider 定义期调用并缓存，
+    而 ``resolve_and_pin`` 在每次实际请求前调用，不信任历史缓存，实时重新解析。
+
+    Args:
+        base_url: default http/https URL。
+
+    Returns:
+        ``(connect_url, host_header)``。白名单主机（``SSRF_ALLOW_HOSTS``）原样返回，
+        ``host_header`` 为空串；其余主机返回主机名替换为锁定 IP 的连接 URL 与原始
+        Host 头。
+
+    Raises:
+        ValueError: 协议不在白名单、命中危险主机名、DNS 解析失败、或任一 IP 命中
+        危险网段时抛出。
+    """
+    try:
+        normalized = _normalize_url(base_url)
+        parsed = urllib.parse.urlparse(normalized)
+    except Exception as e:
+        raise ValueError(f"SSRF 校验失败: {e}") from None
+
+    scheme = (parsed.scheme or "").lower()
+    if scheme not in _ALLOWED_SCHEMES:
+        raise ValueError(f"SSRF 校验失败: 协议 {scheme!r} 不在白名单 (仅允许 http/https)")
+
+    hostname = parsed.hostname
+    if not hostname:
+        raise ValueError("SSRF 校验失败: 缺少主机名")
+
+    host_key = hostname.lower().rstrip(".")
+    if host_key in _load_whitelist():
+        return normalized, ""
+
+    blocked_reason = _is_hostname_blocked(hostname)
+    if blocked_reason:
+        raise ValueError(f"SSRF 校验失败: {blocked_reason}")
+
+    port = parsed.port or (443 if scheme == "https" else 80)
+    try:
+        ips = _resolve_all_ips(hostname, port)
+    except (socket.gaierror, OSError) as e:
+        raise ValueError(f"SSRF 校验失败: DNS 解析失败: {hostname} ({e})") from None
+    if not ips:
+        raise ValueError(f"SSRF 校验失败: DNS 无记录: {hostname}")
+
+    for ip in ips:
+        ok, reason = check_ip(ip)
+        if not ok:
+            raise ValueError(f"SSRF 校验失败: 目标 {hostname} 解析到危险 IP {ip}: {reason}")
+
+    pinned_ip = ips[0]
+    host_header = parsed.netloc
+    pinned_host = f"[{pinned_ip}]" if ":" in pinned_ip else pinned_ip
+    connect_netloc = f"{pinned_host}:{parsed.port}" if parsed.port is not None else pinned_host
+    connect_url = parsed._replace(netloc=connect_netloc).geturl()
+    return connect_url, host_header
+
+
+class SecureAsyncTransport(httpx.AsyncBaseTransport):
+    """统一安全异步传输层：请求期把连接目标绑定为锁定 IP，保留原始 Host 与 HTTPS SNI。
+
+    每次请求前对 base_url 做全新解析 + 校验（resolve_and_pin），任一 IP 命中危险网段
+    即抛 ValueError，关闭「解析后到请求前被篡改」的 DNS rebinding TOCTOU。校验通过后
+    把请求 URL 的主机名替换为锁定 IP（TCP 实际连接目标），注入原始 Host 头，并通过
+    sni_hostname extension 保留原始主机名供 TLS SNI / 证书校验使用。白名单主机
+    （host 为空）原样直连不改写。
+    """
+
+    def __init__(self, base_url: str, http_transport: Any | None = None) -> None:
+        self._base_url = base_url
+        self._http_transport = http_transport if http_transport is not None else httpx.AsyncHTTPTransport()
+
+    async def handle_async_request(self, request: httpx.Request) -> httpx.Response:
+        connect_url, host = resolve_and_pin(self._base_url)
+        if host:
+            netloc = urllib.parse.urlparse(connect_url).netloc
+            request.url = request.url.copy_with(netloc=netloc.encode("ascii"))
+            request.headers["Host"] = host
+            request.extensions["sni_hostname"] = urllib.parse.urlparse(self._base_url).hostname
+        return await self._http_transport.handle_async_request(request)
+
+
+def build_secure_async_client(
+    base_url: str,
+    *,
+    timeout: float = 120.0,
+    http_transport: Any | None = None,
+) -> httpx.AsyncClient:
+    """构造绑定统一安全传输层的 httpx 异步 client，并禁止自动跟随重定向。"""
+    return httpx.AsyncClient(
+        transport=SecureAsyncTransport(base_url, http_transport=http_transport),
+        timeout=timeout,
+        follow_redirects=False,
+    )
 
 
 # ── 便捷封装 ──

@@ -442,7 +442,8 @@ class ModelRouteRegistry:
                      max_tokens: int | None = None,
                      thinking: dict | None = None,
                      timeout: int | None = None,
-                     persist: bool = True) -> dict:
+                     persist: bool = True,
+                     extra_persist: dict | None = None) -> dict:
         """原子地更新路由：内存 + 持久化。
 
         Args:
@@ -453,6 +454,8 @@ class ModelRouteRegistry:
             thinking: 可选，{"type": "enabled"|"disabled", "budget_tokens": ...}
             timeout: 可选，超时秒数
             persist: 是否持久化到 ConfigService（启动恢复时设为 False）
+            extra_persist: 可选，与路由同一次落盘的额外配置（如 models.chat_model），
+                通过 set_many 原子写入，避免第二次写失败导致配置分裂。
 
         Returns:
             新的路由 entry（深拷贝）
@@ -500,13 +503,17 @@ class ModelRouteRegistry:
                     _effective_timeout = new_entry.get("timeout")
                     if _effective_timeout is None and timeout is not None:
                         _effective_timeout = timeout
-                    cfg.set(f"models.routes.{task}", {
+                    route_value = {
                         "model": new_entry["model"],
                         "client": new_entry["client"],
                         "max_tokens": new_entry.get("max_tokens"),
                         "thinking": _thinking_bool,
                         "timeout": _effective_timeout,
-                    })
+                    }
+                    if extra_persist:
+                        cfg.set_many({f"models.routes.{task}": route_value, **extra_persist})
+                    else:
+                        cfg.set(f"models.routes.{task}", route_value)
                 except Exception as e:
                     # 回滚内存
                     self._table[task] = old_entry

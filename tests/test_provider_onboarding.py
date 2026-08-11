@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 from dataclasses import dataclass
 from types import SimpleNamespace
 
@@ -40,6 +41,10 @@ class MemoryConfig:
     def set(self, path: str, value) -> None:
         if path.startswith("models.providers."):
             self.providers[path.rsplit(".", 1)[-1]] = dict(value)
+
+    def set_many(self, updates: dict) -> None:
+        for path, value in updates.items():
+            self.set(path, value)
 
     def delete(self, path: str) -> None:
         self.providers.pop(path.rsplit(".", 1)[-1], None)
@@ -314,6 +319,602 @@ async def test_failed_create_commit_rolls_back_credential_catalog_and_runtime():
         service.catalog.get("custom")
 
 
+@pytest.mark.asyncio
+async def test_compensation_failure_is_isolated_and_preserves_original_error():
+    class FailingDeleteCredentials(MemoryCredentials):
+        def delete(self, provider_id):
+            raise OSError("credential delete failed")
+    config = FailingConfig("set")
+    runtime = SimpleNamespace(_custom_clients={})
+    service = ProviderService(
+        config,
+        builtin_catalog(),
+        runtime,
+        credential_store=FailingDeleteCredentials(),
+        transport_factory=lambda definition, credential: FakeTransport(CapabilityReport(
+            True,
+            ProviderCapabilities(),
+            models=(definition.default_model,),
+        )),
+        runtime_client_factory=lambda definition, credential: object(),
+    )
+
+    with pytest.raises(OSError, match="config write failed") as excinfo:
+        await service.create(draft(), {"api_key": "secret"})
+
+    with pytest.raises(KeyError):
+        service.catalog.get("custom")
+
+    chain = []
+    node = excinfo.value
+    while node is not None:
+        chain.append(str(node))
+        node = node.__context__
+    assert any("credential delete failed" in text for text in chain)
+
+
+@pytest.mark.asyncio
+async def test_rollback_failures_are_aggregated_in_chain_when_commit_and_rollback_fail():
+    """提交与补偿都失败时：原始提交异常保持为主异常，补偿失败聚合到异常链。"""
+    class FailingDeleteCredentials(MemoryCredentials):
+        def delete(self, provider_id):
+            raise OSError("credential delete failed")
+
+    class FailingSetConfig(MemoryConfig):
+        def __init__(self):
+            super().__init__()
+            self.failed = False
+
+        def set(self, path, value):
+            if not self.failed:
+                self.failed = True
+                raise OSError("config set failed")
+            super().set(path, value)
+
+    runtime = SimpleNamespace(_custom_clients={})
+    service = ProviderService(
+        FailingSetConfig(),
+        builtin_catalog(),
+        runtime,
+        credential_store=FailingDeleteCredentials(),
+        transport_factory=lambda definition, credential: FakeTransport(CapabilityReport(
+            True,
+            definition.capabilities,
+            models=(definition.default_model,),
+        )),
+        runtime_client_factory=lambda definition, credential: object(),
+    )
+
+    with pytest.raises(OSError, match="config set failed") as excinfo:
+        await service.create(draft(), {"api_key": "secret"})
+
+    assert str(excinfo.value) == "config set failed"
+    chain = []
+    node = excinfo.value
+    while node is not None:
+        chain.append(str(node))
+        node = node.__context__
+    assert any("credential delete failed" in text for text in chain)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("mode", ["credential_write", "config_set", "catalog_register"])
+async def test_create_commit_step_failure_matrix(mode):
+    """create 提交任一环节失败时，配置/凭证/runtime/catalog 全部回滚干净。"""
+    class FailingCreds(MemoryCredentials):
+        def write(self, provider_id, value):
+            if mode == "credential_write":
+                raise OSError("credential write failed")
+            super().write(provider_id, value)
+
+    class FailingCfg(MemoryConfig):
+        def set(self, path, value):
+            if mode == "config_set":
+                raise OSError("config set failed")
+            super().set(path, value)
+
+    config = FailingCfg()
+    credentials = FailingCreds()
+    runtime = SimpleNamespace(_custom_clients={})
+    service = ProviderService(
+        config,
+        builtin_catalog(),
+        runtime,
+        credential_store=credentials,
+        transport_factory=lambda definition, credential: FakeTransport(CapabilityReport(
+            True,
+            definition.capabilities,
+            models=(definition.default_model,),
+        )),
+        runtime_client_factory=lambda definition, credential: object(),
+    )
+    if mode == "catalog_register":
+        def failing_register(definition, replace_existing=False):
+            raise OSError("catalog register failed")
+        service.catalog.register = failing_register
+
+    with pytest.raises(OSError):
+        await service.create(draft(), {"api_key": "secret"})
+
+    assert config.get("models.providers.custom") is None
+    assert credentials.read("custom") == ""
+    assert runtime._custom_clients == {}
+    with pytest.raises(KeyError):
+        service.catalog.get("custom")
+
+
+@pytest.mark.asyncio
+async def test_update_commit_failure_restores_all_snapshots():
+    """update 提交失败时恢复旧配置/凭证/runtime/catalog/report 快照。"""
+    class FailingSetConfig(MemoryConfig):
+        def __init__(self):
+            super().__init__()
+            self.fail_set = False
+
+        def set(self, path, value):
+            if self.fail_set:
+                raise OSError("config set failed")
+            super().set(path, value)
+
+    config = FailingSetConfig()
+    credentials = MemoryCredentials()
+    runtime = SimpleNamespace(_custom_clients={})
+    service = ProviderService(
+        config,
+        builtin_catalog(),
+        runtime,
+        credential_store=credentials,
+        transport_factory=lambda definition, credential: FakeTransport(CapabilityReport(
+            True,
+            definition.capabilities,
+            models=(definition.default_model,),
+        )),
+        runtime_client_factory=lambda definition, credential: (definition.id, credential),
+    )
+    await service.create(draft(), {"api_key": "old-key"})
+    service._reports["custom"] = CapabilityReport(True, ProviderCapabilities(), models=("custom-chat",))
+    config.fail_set = True
+
+    with pytest.raises(OSError, match="config set failed"):
+        await service.update("custom", draft(label="Changed"), {"api_key": "new-key"})
+
+    assert config.get("models.providers.custom")["label"] == "Custom"
+    assert credentials.read("custom") == "old-key"
+    assert runtime._custom_clients["custom"] == ("custom", "old-key")
+    assert service.catalog.get("custom").metadata.get("label") == "Custom"
+    assert service._reports["custom"].models == ("custom-chat",)
+
+
+@pytest.mark.asyncio
+async def test_delete_commit_failure_restores_all_snapshots():
+    """delete 提交失败时恢复旧配置/凭证/runtime/catalog/report 快照。"""
+    class FailingDeleteConfig(MemoryConfig):
+        def __init__(self):
+            super().__init__()
+            self.fail_delete = False
+
+        def delete(self, path):
+            if self.fail_delete:
+                raise OSError("config delete failed")
+            super().delete(path)
+
+    config = FailingDeleteConfig()
+    credentials = MemoryCredentials()
+    runtime = SimpleNamespace(_custom_clients={})
+    service = ProviderService(
+        config,
+        builtin_catalog(),
+        runtime,
+        credential_store=credentials,
+        transport_factory=lambda definition, credential: FakeTransport(CapabilityReport(
+            True,
+            definition.capabilities,
+            models=(definition.default_model,),
+        )),
+        runtime_client_factory=lambda definition, credential: (definition.id, credential),
+    )
+    await service.create(draft(), {"api_key": "secret"})
+    service._reports["custom"] = CapabilityReport(True, ProviderCapabilities(), models=("custom-chat",))
+    config.fail_delete = True
+
+    with pytest.raises(OSError, match="config delete failed"):
+        await service.delete("custom")
+
+    assert config.get("models.providers.custom")["label"] == "Custom"
+    assert credentials.read("custom") == "secret"
+    assert runtime._custom_clients["custom"] == ("custom", "secret")
+    assert service.catalog.get("custom").id == "custom"
+    assert service._reports["custom"].models == ("custom-chat",)
+
+
+def test_config_service_delete_rolls_back_memory_on_save_failure(tmp_path, monkeypatch):
+    """ConfigService.delete 的 _save() 失败时必须恢复内存快照（Warning 4/Item 2）。"""
+    import json
+
+    from web.config_service import ConfigService
+
+    path = tmp_path / "webui_overrides.json"
+    path.write_text(json.dumps({
+        "models": {"providers": {"custom": {"label": "Custom"}}},
+    }), encoding="utf-8")
+    cfg = ConfigService(path=path)
+
+    def failing_save():
+        raise OSError("disk full")
+
+    monkeypatch.setattr(cfg, "_save", failing_save)
+
+    with pytest.raises(OSError, match="disk full"):
+        cfg.delete("models.providers.custom")
+
+    assert cfg.get("models.providers.custom") == {"label": "Custom"}
+
+
+def test_provider_credential_store_write_is_atomic_and_roundtrips(tmp_path, monkeypatch):
+    """凭证写入走同目录临时文件 + 原子替换，不残留临时文件（Item 2）。"""
+    from llm_gateway.provider_service import ProviderCredentialStore
+    from web import _provider_keys
+
+    monkeypatch.setattr(_provider_keys, "_get_cred_dir", lambda: tmp_path)
+    store = ProviderCredentialStore()
+
+    store.write("custom", "sk-very-secret-value-123")
+    assert list(tmp_path.glob(".atomic_*")) == []
+    key_file = tmp_path / "provider_custom.key"
+    assert key_file.exists()
+    assert store.read("custom") == "sk-very-secret-value-123"
+
+    store.write("custom", "sk-replacement-value-456")
+    assert list(tmp_path.glob(".atomic_*")) == []
+    assert store.read("custom") == "sk-replacement-value-456"
+
+    store.delete("custom")
+    assert not key_file.exists()
+
+
+@pytest.mark.asyncio
+async def test_concurrent_create_and_update_are_serialized(service):
+    """同 ID 的 create 与 update 并发应串行化：create 成功后 update 生效。"""
+    provider_service, config, credentials, runtime = service
+    entered = asyncio.Event()
+    release = asyncio.Event()
+    calls = 0
+
+    async def staged(definition, credential):
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            entered.set()
+            await release.wait()
+        return CapabilityReport(True, definition.capabilities, models=(definition.default_model,)), (definition.id, credential)
+
+    provider_service._stage = staged
+    first = asyncio.create_task(provider_service.create(draft(), {"api_key": "first"}))
+    await entered.wait()
+    second = asyncio.create_task(provider_service.update("custom", draft(label="Updated"), {"api_key": "second"}))
+    release.set()
+    results = await asyncio.gather(first, second, return_exceptions=True)
+
+    assert sum(isinstance(result, ProviderDefinition) for result in results) == 2
+    assert config.get("models.providers.custom")["label"] == "Updated"
+    assert credentials.read("custom") == "second"
+
+
+@pytest.mark.asyncio
+async def test_concurrent_update_and_delete_are_serialized(service):
+    """同 ID 的 update 与 delete 并发应串行化：最终状态一致（provider 被删除）。"""
+    provider_service, config, credentials, runtime = service
+    await provider_service.create(draft(), {"api_key": "initial"})
+    entered = asyncio.Event()
+    release = asyncio.Event()
+    calls = 0
+
+    async def staged(definition, credential):
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            entered.set()
+            await release.wait()
+        return CapabilityReport(True, definition.capabilities, models=(definition.default_model,)), (definition.id, credential)
+
+    provider_service._stage = staged
+    first = asyncio.create_task(provider_service.update("custom", draft(label="Changed"), {"api_key": "updated"}))
+    await entered.wait()
+    second = asyncio.create_task(provider_service.delete("custom"))
+    release.set()
+    results = await asyncio.gather(first, second, return_exceptions=True)
+
+    assert all(not isinstance(result, Exception) for result in results)
+    assert config.get("models.providers.custom") is None
+    assert credentials.read("custom") == ""
+    assert "custom" not in runtime._custom_clients
+
+
+def test_non_ollama_rejects_non_loopback_local_hosts(service):
+    provider_service, _, _, _ = service
+    for base_url in ("http://host.docker.internal:8000/v1", "http://0.0.0.0:8000/v1"):
+        with pytest.raises(ValueError, match="safety"):
+            provider_service._definition(draft(base_url=base_url))
+
+
+@pytest.mark.asyncio
+async def test_concurrent_create_failure_cannot_rollback_successful_create(service):
+    provider_service, config, credentials, runtime = service
+    entered = asyncio.Event()
+    release = asyncio.Event()
+    calls = 0
+
+    async def staged(definition, credential):
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            entered.set()
+            await release.wait()
+        return CapabilityReport(True, definition.capabilities, models=(definition.default_model,)), (definition.id, credential)
+
+    provider_service._stage = staged
+    first = asyncio.create_task(provider_service.create(draft(), {"api_key": "first"}))
+    await entered.wait()
+    second = asyncio.create_task(provider_service.create(draft(), {"api_key": "second"}))
+    release.set()
+    results = await asyncio.gather(first, second, return_exceptions=True)
+
+    assert sum(isinstance(result, ProviderDefinition) for result in results) == 1
+    assert sum(isinstance(result, ValueError) for result in results) == 1
+    assert config.get("models.providers.custom") is not None
+    assert credentials.read("custom") in {"first", "second"}
+    assert runtime._custom_clients["custom"] == ("custom", credentials.read("custom"))
+
+
+def test_custom_mapping_rejects_literal_secret_headers(service):
+    provider_service, _, _, _ = service
+
+    with pytest.raises(ValueError, match="header"):
+        provider_service._definition(custom_mapping_draft(headers={"Authorization": "Bearer real-secret"}))
+
+
+def test_non_ollama_loopback_localhost_internal_service_is_rejected(service):
+    """SSRF 收窄契约：仅 Ollama 允许 loopback；非 Ollama 协议指向 localhost 内部服务应被拒绝。
+
+    旧策略对所有协议统一豁免 localhost，现收窄为仅 Ollama（loopback:11434）例外。
+    """
+    provider_service, _, _, _ = service
+    from security.ssrf_guard import validate_url
+
+    for base_url in (
+        "http://localhost:8000/v1",
+        "http://127.0.0.1:8000/v1",
+        "http://[::1]:8000/v1",
+    ):
+        with pytest.raises(ValueError, match="safety"):
+            provider_service._definition(draft(base_url=base_url))
+        with pytest.raises(ValueError, match="safety"):
+            provider_service._definition(custom_mapping_draft(base_url=base_url))
+    # Ollama 仍允许 loopback 标准端口
+    assert provider_service._definition(
+        draft(protocol="ollama", base_url="http://127.0.0.1:11434")
+    ).protocol is ProviderProtocol.OLLAMA
+    # 公网 URL 仍放行
+    allowed, reason = validate_url("https://example.com/v1")
+    assert allowed is True
+    assert reason == ""
+    with pytest.raises(ValueError, match="safety"):
+        provider_service._definition(draft(base_url="http://169.254.169.254/latest"))
+
+
+def test_ollama_local_provider_requires_loopback_and_standard_port(service):
+    provider_service, _, _, _ = service
+
+    definition = provider_service._definition(draft(protocol="ollama", base_url="http://127.0.0.1:11434"))
+    assert definition.protocol is ProviderProtocol.OLLAMA
+    with pytest.raises(ValueError, match="Ollama"):
+        provider_service._definition(draft(protocol="ollama", base_url="http://127.0.0.1:8000"))
+
+
+def test_ollama_allows_only_strict_local_allowlist(service):
+    """Item 3：仅允许 http://localhost:11434、http://127.0.0.1:11434、http://[::1]:11434。"""
+    provider_service, _, _, _ = service
+    for base_url in (
+        "http://localhost:11434",
+        "http://127.0.0.1:11434",
+        "http://[::1]:11434",
+    ):
+        definition = provider_service._definition(draft(protocol="ollama", base_url=base_url))
+        assert definition.protocol is ProviderProtocol.OLLAMA
+        assert definition.endpoint.base_url == base_url
+
+
+def test_ollama_rejects_https_and_noncanonical_local_hosts(service):
+    """Item 3：拒绝 HTTPS 本地目标、非规范回环别名、0.0.0.0、容器宿主别名与非 11434 端口。"""
+    provider_service, _, _, _ = service
+    for base_url in (
+        "https://localhost:11434",
+        "http://localhost.localdomain:11434",
+        "http://ip6-localhost:11434",
+        "http://ip6-loopback:11434",
+        "http://0.0.0.0:11434",
+        "http://host.docker.internal:11434",
+        "http://host.minikube.internal:11434",
+        "http://localhost:8080",
+        "http://127.0.0.1:8080",
+        "http://[::1]:8080",
+    ):
+        with pytest.raises(ValueError, match="Ollama"):
+            provider_service._definition(draft(protocol="ollama", base_url=base_url))
+
+
+def test_legacy_provider_create_rejects_localhost_base_url(service, monkeypatch):
+    """Item 3：旧 /models/providers 入口对 localhost base_url 直接 400（无通用豁免）。"""
+    provider_service, config, _, runtime = service
+    app = FastAPI()
+    app.state.provider_service = provider_service
+    app.state.core = SimpleNamespace(router=runtime)
+    app.dependency_overrides[get_current_user] = lambda: "test-user"
+    app.include_router(models_router, prefix="/api/v1")
+    monkeypatch.setattr("web.routers.models._cfg", lambda request: config)
+
+    for base_url in ("http://localhost:8000/v1", "http://127.0.0.1:11434"):
+        response = TestClient(app).post(
+            "/api/v1/models/providers",
+            json={"id": "custom", "format": "openai", "base_url": base_url, "api_key": "secret"},
+        )
+        assert response.status_code == 400
+
+
+@pytest.mark.asyncio
+async def test_saved_custom_mapping_runtime_client_is_compat_client():
+    from web.custom_providers import CustomMappingCompatClient
+
+    config = MemoryConfig()
+    credentials = MemoryCredentials()
+    runtime = SimpleNamespace(_custom_clients={})
+    provider_service = ProviderService(
+        config,
+        builtin_catalog(),
+        runtime,
+        credential_store=credentials,
+        transport_factory=lambda definition, credential: FakeTransport(CapabilityReport(
+            True,
+            definition.capabilities,
+            models=(definition.default_model,),
+        )),
+    )
+
+    await provider_service.create(
+        custom_mapping_draft(base_url="https://example.com/v1"),
+        {"api_key": "secret"},
+    )
+
+    client = runtime._custom_clients["mapped"]
+    assert isinstance(client, CustomMappingCompatClient)
+    assert callable(client.chat.completions.create)
+
+
+@pytest.mark.asyncio
+async def test_saved_ollama_runtime_client_uses_openai_v1_base_url():
+    from openai import AsyncOpenAI
+
+    config = MemoryConfig()
+    credentials = MemoryCredentials()
+    runtime = SimpleNamespace(_custom_clients={})
+    provider_service = ProviderService(
+        config,
+        builtin_catalog(),
+        runtime,
+        credential_store=credentials,
+        transport_factory=lambda definition, credential: FakeTransport(CapabilityReport(
+            True,
+            definition.capabilities,
+            models=(definition.default_model,),
+        )),
+    )
+
+    await provider_service.create(
+        draft(protocol="ollama", base_url="http://127.0.0.1:11434", id="local-ollama"),
+        {"api_key": ""},
+    )
+
+    client = runtime._custom_clients["local-ollama"]
+    assert isinstance(client, AsyncOpenAI)
+    assert str(client.base_url).endswith("/v1/")
+
+
+def test_restart_rebuilds_runtime_client_from_persisted_config_and_credentials():
+    from web.custom_providers import CustomMappingCompatClient
+
+    config = MemoryConfig()
+    credentials = MemoryCredentials()
+    config.providers["mapped"] = ProviderService._record(
+        ProviderService._definition(custom_mapping_draft(base_url="https://example.com/v1"))
+    )
+    credentials.values["mapped"] = "secret"
+
+    ProviderService(
+        config,
+        builtin_catalog(),
+        SimpleNamespace(_custom_clients={}),
+        credential_store=credentials,
+    )
+    restarted = ProviderService(
+        config,
+        builtin_catalog(),
+        SimpleNamespace(_custom_clients={}),
+        credential_store=credentials,
+    )
+
+    client = restarted._runtime_clients().get("mapped")
+    assert isinstance(client, CustomMappingCompatClient)
+
+
+def test_restart_skips_provider_missing_required_credential_without_crashing():
+    config = MemoryConfig()
+    credentials = MemoryCredentials()
+    config.providers["custom"] = ProviderService._record(
+        ProviderService._definition(draft(id="custom", base_url="https://example.com/v1"))
+    )
+
+    restarted = ProviderService(
+        config,
+        builtin_catalog(),
+        SimpleNamespace(_custom_clients={}),
+        credential_store=credentials,
+    )
+
+    assert restarted.catalog.get("custom").id == "custom"
+    assert "custom" not in restarted._runtime_clients()
+
+
+def test_provider_id_rejects_dots_that_would_collide_in_credential_files(service):
+    provider_service, _, _, _ = service
+
+    with pytest.raises(ValueError, match="provider id"):
+        provider_service._definition(draft(id="a.b"))
+    with pytest.raises(ValueError, match="provider id"):
+        provider_service._definition(draft(id="a/b"))
+
+    assert provider_service._definition(draft(id="ab")).id == "ab"
+
+
+def test_builtin_route_rejects_missing_runtime_client(service):
+    provider_service, _, _, _ = service
+
+    assert provider_service.validate_route("mimo", "mimo-v2.5") == "unavailable"
+
+
+def test_route_update_unknown_provider_returns_404(service, monkeypatch):
+    provider_service, config, _, runtime = service
+    app = FastAPI()
+    app.state.provider_service = provider_service
+    app.state.core = SimpleNamespace(router=runtime)
+    app.dependency_overrides[get_current_user] = lambda: "test-user"
+    app.include_router(models_router, prefix="/api/v1")
+    monkeypatch.setattr("web.routers.models._cfg", lambda request: config)
+
+    response = TestClient(app).put(
+        "/api/v1/models/routes/chat",
+        json={"provider": "ghost", "model": "x"},
+    )
+
+    assert response.status_code == 404
+
+
+def test_builtin_route_unavailable_returns_409(service, monkeypatch):
+    provider_service, config, _, runtime = service
+    app = FastAPI()
+    app.state.provider_service = provider_service
+    app.state.core = SimpleNamespace(router=runtime)
+    app.dependency_overrides[get_current_user] = lambda: "test-user"
+    app.include_router(models_router, prefix="/api/v1")
+    monkeypatch.setattr("web.routers.models._cfg", lambda request: config)
+
+    response = TestClient(app).put(
+        "/api/v1/models/routes/chat",
+        json={"provider": "mimo", "model": "mimo-v2.5"},
+    )
+
+    assert response.status_code == 409
+
+
 def test_route_rejects_disabled_provider(service, monkeypatch):
     provider_service, config, _, runtime = service
     config.providers["disabled"] = draft(id="disabled", enabled=False)
@@ -467,5 +1068,33 @@ def test_legacy_provider_update_uses_atomic_service(service, monkeypatch):
 
     assert response.status_code == 422
     assert config.get("models.providers") == before
+    assert credentials.read("custom") == "old-key"
+    assert runtime._custom_clients["custom"] == ("custom", "old-key")
+
+
+def test_legacy_key_update_preserves_state_when_health_check_fails(service, monkeypatch):
+    provider_service, config, credentials, runtime = service
+    config.providers["custom"] = draft()
+    credentials.values["custom"] = "old-key"
+    runtime._custom_clients["custom"] = ("custom", "old-key")
+    provider_service.catalog.register(provider_service._definition(config.providers["custom"]))
+    provider_service._transport_factory = lambda definition, credential: FakeTransport(CapabilityReport(
+        False,
+        definition.capabilities,
+        error="invalid credential",
+    ))
+    app = FastAPI()
+    app.state.provider_service = provider_service
+    app.state.core = SimpleNamespace(router=runtime)
+    app.dependency_overrides[get_current_user] = lambda: "test-user"
+    app.include_router(models_router, prefix="/api/v1")
+    monkeypatch.setattr("web.routers.models._cfg", lambda request: config)
+
+    response = TestClient(app).post(
+        "/api/v1/models/providers/custom/key",
+        json={"api_key": "invalid-key"},
+    )
+
+    assert response.status_code == 422
     assert credentials.read("custom") == "old-key"
     assert runtime._custom_clients["custom"] == ("custom", "old-key")

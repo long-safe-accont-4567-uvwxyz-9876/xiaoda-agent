@@ -15,6 +15,7 @@ from llm_gateway.transports.base import (
     parse_tool_calls,
     request_kwargs,
 )
+from security.ssrf_guard import resolve_and_pin
 
 
 class OpenAICompatibleTransport(ProviderTransport):
@@ -24,12 +25,25 @@ class OpenAICompatibleTransport(ProviderTransport):
         *,
         capabilities: ProviderCapabilities | None = None,
         default_model: str = "",
+        base_url: str = "",
     ) -> None:
         super().__init__(capabilities=capabilities, default_model=default_model)
         self._client = client
+        self._base_url = base_url
+
+    def _validate(self) -> None:
+        """请求前对 base_url 做全新解析 + 校验，拒绝已被 rebinding 到危险地址的目标。
+
+        该 transport 包装预构建的 OpenAI SDK client（连接按 hostname 由 SDK 内部发起），
+        无法直接改写连接目标，因此采用等价的请求期 host 校验：每次请求前实时解析并
+        校验，命中危险 IP 即拒绝。
+        """
+        if self._base_url:
+            resolve_and_pin(self._base_url)
 
     async def complete(self, request: CompletionRequest) -> Completion:
         try:
+            self._validate()
             response = await self._client.chat.completions.create(**request_kwargs(request, stream=False))
             choice = response.choices[0]
             usage = getattr(response, "usage", None)
@@ -50,6 +64,7 @@ class OpenAICompatibleTransport(ProviderTransport):
 
     async def stream(self, request: CompletionRequest) -> AsyncIterator[CompletionChunk]:
         try:
+            self._validate()
             response = await self._client.chat.completions.create(**request_kwargs(request, stream=True))
             async for item in response:
                 choice = item.choices[0]
@@ -66,6 +81,7 @@ class OpenAICompatibleTransport(ProviderTransport):
 
     async def discover_models(self) -> tuple[str, ...]:
         try:
+            self._validate()
             response = await self._client.models.list()
             models = tuple(str(model.id) for model in response.data if getattr(model, "id", None))
             return models or await super().discover_models()
@@ -74,6 +90,7 @@ class OpenAICompatibleTransport(ProviderTransport):
 
     async def health_check(self) -> CapabilityReport:
         try:
+            self._validate()
             response = await self._client.models.list()
             models = tuple(str(model.id) for model in response.data if getattr(model, "id", None))
             return CapabilityReport(True, self.capabilities, models=models or await super().discover_models())

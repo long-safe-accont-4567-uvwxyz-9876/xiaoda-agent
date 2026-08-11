@@ -391,6 +391,59 @@ def test_custom_mapping_rejects_executable_or_unsafe_templates():
         CustomMappingTransport("https://custom.test", mapping={}, headers={"X-Key": "{api_key.__class__}"})
 
 
+class RecordingHttpClient:
+    """记录发起请求的 URL/headers 的内存 httpx 替身。"""
+
+    def __init__(self) -> None:
+        self.recorded: list[tuple[str, str, dict[str, Any]]] = []
+
+    async def post(self, url: str, **kwargs: Any) -> JsonResponse:
+        self.recorded.append(("POST", url, kwargs))
+        return JsonResponse({"result": {"answer": "hello"}})
+
+    async def get(self, url: str, **kwargs: Any) -> JsonResponse:
+        self.recorded.append(("GET", url, kwargs))
+        return JsonResponse({"data": [{"id": "custom-model"}]})
+
+
+@pytest.mark.asyncio
+async def test_custom_mapping_connects_to_pinned_ip(monkeypatch):
+    """SSRF: 请求期应把连接目标绑定为锁定 IP，并携带原始 Host 头（关闭 DNS rebinding）。"""
+    transport = CustomMappingTransport(
+        "https://attacker.example/v1",
+        mapping={"response": {"text": "result.answer"}},
+        api_key="k",
+    )
+    client = RecordingHttpClient()
+    transport._http = client  # 保留 _owns_http=True，仅替换底层 client
+    monkeypatch.setattr(
+        "llm_gateway.transports.custom_mapping.resolve_and_pin",
+        lambda url: ("http://10.0.0.1/v1", "attacker.example"),
+    )
+
+    completion = await transport.complete(sample_request())
+
+    method, url, kwargs = client.recorded[0]
+    assert method == "POST"
+    assert url == "http://10.0.0.1/v1/chat/completions"
+    assert kwargs["headers"]["Host"] == "attacker.example"
+    assert completion.text == "hello"
+
+
+@pytest.mark.asyncio
+async def test_custom_mapping_blocks_request_time_dns_rebinding(monkeypatch):
+    """SSRF: 请求期解析到危险地址应被拦截（而非按 hostname 直连）。"""
+    transport = CustomMappingTransport("https://attacker.example/v1", mapping={}, api_key="k")
+
+    def unsafe(url):
+        raise ValueError("SSRF 校验失败: 目标 attacker.example 解析到危险 IP 10.0.0.1")
+
+    monkeypatch.setattr("llm_gateway.transports.custom_mapping.resolve_and_pin", unsafe)
+
+    with pytest.raises(TransportError):
+        await transport.complete(sample_request())
+
+
 @pytest.mark.asyncio
 async def test_custom_mapping_applies_declarative_paths_and_header_templates():
     client = HttpClient("custom")
@@ -454,6 +507,7 @@ async def test_anthropic_compat_client_supports_streaming(monkeypatch):
 
     transport = AnthropicTransport("key", "https://anthropic.test", http_client=HttpClient("anthropic"))
     monkeypatch.setattr("web.custom_providers.AnthropicTransport", lambda *args, **kwargs: transport)
+    monkeypatch.setattr("web.custom_providers.resolve_and_pin", lambda url: (url, ""))
     client = AnthropicCompatClient("key", "https://anthropic.test")
 
     stream = await client._create(model="claude-test", messages=[{"role": "user", "content": "hi"}], stream=True)
@@ -465,14 +519,26 @@ async def test_anthropic_compat_client_supports_streaming(monkeypatch):
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    ("module_name", "factory"),
+    ("module_name", "factory", "patch_target"),
     [
-        ("llm_gateway.transports.anthropic", lambda: AnthropicTransport("key")),
-        ("llm_gateway.transports.ollama", lambda: OllamaTransport("http://ollama.test")),
-        ("llm_gateway.transports.custom_mapping", lambda: CustomMappingTransport("https://custom.test", mapping={})),
+        (
+            "llm_gateway.transports.anthropic",
+            lambda: AnthropicTransport("key"),
+            "llm_gateway.transports.anthropic.build_secure_async_client",
+        ),
+        (
+            "llm_gateway.transports.ollama",
+            lambda: OllamaTransport("http://ollama.test"),
+            "llm_gateway.transports.ollama.httpx.AsyncClient",
+        ),
+        (
+            "llm_gateway.transports.custom_mapping",
+            lambda: CustomMappingTransport("https://custom.test", mapping={}),
+            "llm_gateway.transports.custom_mapping.build_secure_async_client",
+        ),
     ],
 )
-async def test_http_transport_closes_only_owned_client(monkeypatch, module_name, factory):
+async def test_http_transport_closes_only_owned_client(monkeypatch, module_name, factory, patch_target):
     class CloseableClient:
         def __init__(self, **kwargs: Any) -> None:
             self.closed = False
@@ -481,7 +547,7 @@ async def test_http_transport_closes_only_owned_client(monkeypatch, module_name,
             self.closed = True
 
     owned = CloseableClient()
-    monkeypatch.setattr(f"{module_name}.httpx.AsyncClient", lambda **kwargs: owned)
+    monkeypatch.setattr(patch_target, lambda *args, **kwargs: owned)
     transport = factory()
 
     await transport.aclose()
@@ -518,6 +584,7 @@ async def test_anthropic_compat_stream_closes_transport_when_consumer_stops(monk
 
     transport = TemporaryTransport()
     monkeypatch.setattr("web.custom_providers.AnthropicTransport", lambda *args, **kwargs: transport)
+    monkeypatch.setattr("web.custom_providers.resolve_and_pin", lambda url: (url, ""))
     client = AnthropicCompatClient("key", "https://anthropic.test")
 
     stream = await client._create(model="claude-test", messages=[{"role": "user", "content": "hi"}], stream=True)
@@ -525,3 +592,230 @@ async def test_anthropic_compat_stream_closes_transport_when_consumer_stops(monk
     await stream.aclose()
 
     assert transport.closed is True
+
+
+@pytest.mark.asyncio
+async def test_anthropic_runtime_client_blocks_request_time_dns_rebinding(monkeypatch):
+    """SSRF: 运行时 anthropic chat 路径请求期 rebinding 到内网/元数据应被拦截。"""
+    from web.custom_providers import AnthropicCompatClient
+
+    def unsafe(url):
+        raise ValueError("SSRF 校验失败: 目标 attacker.example 解析到危险 IP 10.0.0.1")
+
+    monkeypatch.setattr("web.custom_providers.resolve_and_pin", unsafe)
+    client = AnthropicCompatClient("key", "https://attacker.example")
+
+    with pytest.raises(ValueError):
+        await client.chat.completions.create(
+            model="m", messages=[{"role": "user", "content": "hi"}]
+        )
+
+
+@pytest.mark.asyncio
+async def test_openai_runtime_pinning_transport_rewrites_to_pinned_ip(monkeypatch):
+    """SSRF: openai 运行时传输层把连接目标改写为锁定 IP 并携带原始 Host 头。"""
+    import httpx
+
+    from web.custom_providers import PinningAsyncTransport
+
+    class Recording:
+        async def handle_async_request(self, request):
+            self.url = str(request.url)
+            self.host = request.headers.get("Host")
+            return httpx.Response(200, request=request, json={}, headers={"content-type": "application/json"})
+
+    recorder = Recording()
+    transport = PinningAsyncTransport("https://attacker.example/v1", http_transport=recorder)
+    monkeypatch.setattr(
+        "security.ssrf_guard.resolve_and_pin",
+        lambda url: ("https://10.0.0.1/v1", "attacker.example"),
+    )
+
+    await transport.handle_async_request(
+        httpx.Request("POST", "https://attacker.example/v1/chat/completions")
+    )
+
+    assert recorder.url == "https://10.0.0.1/v1/chat/completions"
+    assert recorder.host == "attacker.example"
+
+
+def test_openai_runtime_client_uses_pinning_transport():
+    """SSRF: build_client("openai") 产出的运行时 client 应经 pinning 传输层建连。"""
+    from web.custom_providers import PinningAsyncTransport, build_client
+
+    client = build_client("openai", "https://attacker.example/v1", "k")
+
+    assert isinstance(client._client._transport, PinningAsyncTransport)
+
+
+@pytest.mark.asyncio
+async def test_openai_runtime_client_blocks_request_time_dns_rebinding(monkeypatch):
+    """SSRF: 运行时 openai chat 路径请求期 rebinding 到内网/元数据应被拦截。"""
+    import openai
+
+    from web.custom_providers import build_client
+
+    def unsafe(url):
+        raise ValueError("SSRF 校验失败: 目标 attacker.example 解析到危险 IP 169.254.169.254")
+
+    monkeypatch.setattr("web.custom_providers.resolve_and_pin", unsafe)
+    client = build_client("openai", "https://attacker.example/v1", "k")
+
+    with pytest.raises(openai.APIConnectionError):
+        await client.chat.completions.create(
+            model="m", messages=[{"role": "user", "content": "hi"}]
+        )
+
+
+@pytest.mark.asyncio
+async def test_secure_transport_rewrites_to_pinned_ip_and_preserves_host_and_sni(monkeypatch):
+    """Item 4: 统一安全传输层把连接目标改写为锁定 IP，保留原始 Host 头与 HTTPS SNI。"""
+    import httpx
+
+    from security.ssrf_guard import SecureAsyncTransport
+
+    class Recording:
+        async def handle_async_request(self, request):
+            self.url = str(request.url)
+            self.host = request.headers.get("Host")
+            self.sni = request.extensions.get("sni_hostname")
+            return httpx.Response(200, request=request, json={},
+                                  headers={"content-type": "application/json"})
+
+    recorder = Recording()
+    transport = SecureAsyncTransport("https://attacker.example/v1", http_transport=recorder)
+    monkeypatch.setattr(
+        "security.ssrf_guard.resolve_and_pin",
+        lambda url: ("https://10.0.0.1/v1", "attacker.example"),
+    )
+
+    await transport.handle_async_request(
+        httpx.Request("POST", "https://attacker.example/v1/chat/completions")
+    )
+
+    assert recorder.url == "https://10.0.0.1/v1/chat/completions"
+    assert recorder.host == "attacker.example"
+    assert recorder.sni == "attacker.example"
+
+
+@pytest.mark.asyncio
+async def test_secure_transport_blocks_request_time_dns_rebinding(monkeypatch):
+    """Item 4: 统一安全传输层请求期解析到危险地址应被拦截。"""
+    import httpx
+
+    from security.ssrf_guard import SecureAsyncTransport
+
+    def unsafe(url):
+        raise ValueError("SSRF 校验失败: 目标 attacker.example 解析到危险 IP 10.0.0.1")
+
+    monkeypatch.setattr("security.ssrf_guard.resolve_and_pin", unsafe)
+    transport = SecureAsyncTransport("https://attacker.example/v1")
+
+    with pytest.raises(ValueError):
+        await transport.handle_async_request(
+            httpx.Request("GET", "https://attacker.example/v1/models")
+        )
+
+
+def test_build_secure_async_client_disables_redirect_following(monkeypatch):
+    """Item 4: 统一安全 client 禁止自动跟随重定向。"""
+    from security.ssrf_guard import build_secure_async_client
+
+    monkeypatch.setattr("security.ssrf_guard.resolve_and_pin", lambda url: (url, ""))
+    client = build_secure_async_client("https://api.example.com")
+
+    assert client.follow_redirects is False
+
+
+@pytest.mark.asyncio
+async def test_secure_client_does_not_follow_redirect_to_metadata(monkeypatch):
+    """Item 4: 上游返回 302 指向云元数据时统一安全 client 也不自动跟随。"""
+    import httpx
+
+    from security.ssrf_guard import build_secure_async_client
+
+    class Redirecting:
+        def __init__(self) -> None:
+            self.requests = 0
+
+        async def handle_async_request(self, request):
+            self.requests += 1
+            return httpx.Response(
+                302,
+                request=request,
+                headers={"Location": "http://169.254.169.254/latest/meta-data/"},
+            )
+
+    recorder = Redirecting()
+    monkeypatch.setattr(
+        "security.ssrf_guard.resolve_and_pin",
+        lambda url: ("https://attacker.example/v1", "attacker.example"),
+    )
+    client = build_secure_async_client("https://attacker.example/v1", http_transport=recorder)
+    resp = await client.get("https://attacker.example/v1/models")
+
+    assert resp.status_code == 302
+    assert recorder.requests == 1
+
+
+def test_anthropic_transport_default_client_uses_secure_transport():
+    from llm_gateway.transports import AnthropicTransport
+    from security.ssrf_guard import SecureAsyncTransport
+
+    transport = AnthropicTransport("key", "https://api.anthropic.com")
+
+    assert isinstance(transport._http._transport, SecureAsyncTransport)
+
+
+def test_custom_mapping_transport_default_client_uses_secure_transport():
+    from llm_gateway.transports import CustomMappingTransport
+    from security.ssrf_guard import SecureAsyncTransport
+
+    transport = CustomMappingTransport("https://custom.test", mapping={}, api_key="k")
+
+    assert isinstance(transport._http._transport, SecureAsyncTransport)
+
+
+def _openai_compatible_definition(base_url: str):
+    from llm_gateway.contracts import (
+        AuthDefinition,
+        EndpointDefinition,
+        ProviderCapabilities,
+        ProviderDefinition,
+        ProviderProtocol,
+    )
+
+    return ProviderDefinition(
+        id="remote-openai",
+        protocol=ProviderProtocol.OPENAI_COMPATIBLE,
+        endpoint=EndpointDefinition(base_url=base_url, chat_path="/chat/completions", models_path="/models"),
+        auth=AuthDefinition(environment_aliases=(), header="Authorization", scheme="Bearer", required=True),
+        capabilities=ProviderCapabilities(tools=True, model_discovery=True),
+        default_model="gpt-test",
+        max_tokens_cap=None,
+        metadata={"label": "Remote", "enabled": True, "order": 1, "headers": {}, "mapping": {}},
+    )
+
+
+def test_provider_transport_openai_injects_secure_http_client():
+    """Item 4: ProviderService 探活 transport 的 OpenAI client 应经统一安全传输层建连。"""
+    from llm_gateway.provider_service import ProviderService
+    from security.ssrf_guard import SecureAsyncTransport
+
+    transport = ProviderService._build_transport(
+        _openai_compatible_definition("https://attacker.example/v1"), "key"
+    )
+
+    assert isinstance(transport._client._client._transport, SecureAsyncTransport)
+
+
+def test_runtime_openai_client_uses_secure_transport():
+    """Item 4: 运行时 OpenAI client（build_client）应经统一安全传输层建连。"""
+    from llm_gateway.provider_service import ProviderService
+    from security.ssrf_guard import SecureAsyncTransport
+
+    client = ProviderService._build_runtime_client(
+        _openai_compatible_definition("https://attacker.example/v1"), "key"
+    )
+
+    assert isinstance(client._client._transport, SecureAsyncTransport)

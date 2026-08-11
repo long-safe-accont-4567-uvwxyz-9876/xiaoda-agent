@@ -36,7 +36,7 @@ class _AsyncClient:
 
 
 @pytest.mark.asyncio
-async def test_anthropic_provider_preserves_all_system_messages():
+async def test_anthropic_provider_preserves_all_system_messages(monkeypatch):
     post = AsyncMock()
     response = _Response({"content": [{"type": "text", "text": "ok"}], "usage": {}})
 
@@ -44,6 +44,7 @@ async def test_anthropic_provider_preserves_all_system_messages():
         "httpx.AsyncClient",
         side_effect=lambda **kwargs: _AsyncClient(response, post, **kwargs),
     ):
+        monkeypatch.setattr("web.custom_providers.resolve_and_pin", lambda url: (url, ""))
         client = AnthropicCompatClient("key")
         await client._create(
             model="claude-test",
@@ -59,7 +60,7 @@ async def test_anthropic_provider_preserves_all_system_messages():
 
 
 @pytest.mark.asyncio
-async def test_anthropic_provider_converts_openai_tools():
+async def test_anthropic_provider_converts_openai_tools(monkeypatch):
     post = AsyncMock()
     response = _Response({"content": [{"type": "text", "text": "ok"}], "usage": {}})
     tools = [{
@@ -79,6 +80,7 @@ async def test_anthropic_provider_converts_openai_tools():
         "httpx.AsyncClient",
         side_effect=lambda **kwargs: _AsyncClient(response, post, **kwargs),
     ):
+        monkeypatch.setattr("web.custom_providers.resolve_and_pin", lambda url: (url, ""))
         client = AnthropicCompatClient("key")
         await client._create(
             model="claude-test",
@@ -97,7 +99,7 @@ async def test_anthropic_provider_converts_openai_tools():
 
 
 @pytest.mark.asyncio
-async def test_anthropic_provider_converts_tool_use_response():
+async def test_anthropic_provider_converts_tool_use_response(monkeypatch):
     post = AsyncMock()
     response = _Response({
         "content": [
@@ -117,6 +119,7 @@ async def test_anthropic_provider_converts_tool_use_response():
         "httpx.AsyncClient",
         side_effect=lambda **kwargs: _AsyncClient(response, post, **kwargs),
     ):
+        monkeypatch.setattr("web.custom_providers.resolve_and_pin", lambda url: (url, ""))
         client = AnthropicCompatClient("key")
         result = await client._create(
             model="claude-test",
@@ -135,7 +138,7 @@ async def test_anthropic_provider_converts_tool_use_response():
 
 
 @pytest.mark.asyncio
-async def test_anthropic_provider_converts_tool_call_history_and_results():
+async def test_anthropic_provider_converts_tool_call_history_and_results(monkeypatch):
     post = AsyncMock()
     response = _Response({"content": [{"type": "text", "text": "晴天"}], "usage": {}})
     messages = [
@@ -156,6 +159,7 @@ async def test_anthropic_provider_converts_tool_call_history_and_results():
         "httpx.AsyncClient",
         side_effect=lambda **kwargs: _AsyncClient(response, post, **kwargs),
     ):
+        monkeypatch.setattr("web.custom_providers.resolve_and_pin", lambda url: (url, ""))
         client = AnthropicCompatClient("key")
         await client._create(model="claude-test", messages=messages)
 

@@ -132,16 +132,15 @@ async def update_provider(pid: str, body: dict, request: Request) -> Any:
     if pid in ("mimo",) or not record:
         raise HTTPException(404 if not record else 400,
                             "内置 provider 不可修改" if record else f"provider {pid} 不存在")
-    # base_url 变更时同样做 SSRF 校验（本地服务如 Ollama 放行）
+    # base_url 变更时同样做 SSRF 校验（无通用 localhost 豁免，Item 3）
     if "base_url" in body and body["base_url"]:
-        from security.ssrf_guard import validate_url, is_local_host
+        from security.ssrf_guard import validate_url
         _burl = str(body["base_url"]).strip()
         if not _burl.startswith(("http://", "https://")):
             raise HTTPException(400, "base_url 必须是 http(s) URL")
-        if not is_local_host(_burl):
-            allowed, reason = validate_url(_burl)
-            if not allowed:
-                raise HTTPException(400, f"base_url 安全检查失败: {reason}")
+        allowed, reason = validate_url(_burl)
+        if not allowed:
+            raise HTTPException(400, f"base_url 安全检查失败: {reason}")
     credentials = {"api_key": body["api_key"]} if body.get("api_key") else None
     try:
         definition = await request.app.state.provider_service.update(pid, body, credentials)
@@ -202,8 +201,15 @@ async def set_provider_key(pid: str, body: dict, request: Request) -> Any:
     record = cfg.get(f"models.providers.{pid}")
     if not record:
         raise HTTPException(404, f"provider {pid} 不存在（内置 provider 的 key 走 .env）")
-    _save_key_and_register(request, pid, record.get("format", "openai"),
-                           record.get("base_url", ""), api_key)
+    try:
+        await request.app.state.provider_service.update(pid, record, {"api_key": api_key})
+    except ValueError as e:
+        raise HTTPException(400, str(e)) from None
+    except Exception as e:
+        from llm_gateway.provider_service import ProviderConnectionError
+        if isinstance(e, ProviderConnectionError):
+            raise HTTPException(422, str(e)) from None
+        raise
     await _audit(request, "provider.key", pid)
     return Envelope(data={"id": pid, "key_masked": _mask(api_key)})
 
@@ -309,11 +315,16 @@ async def update_route(task: str, body: dict, request: Request) -> Any:
     if timeout is not None:
         timeout = max(5, min(timeout, 600))
 
+    extra_persist = None
+    if task == "chat":
+        extra_persist = {"models.chat_model": {"provider": final_provider, "model_id": model_id}}
+
     # 通过 Registry 原子化更新（内存 + 持久化，失败回滚）
     try:
         registry.update_route(
             task, model_id=model_id, provider=final_provider,
             max_tokens=max_tokens, thinking=thinking, timeout=timeout,
+            extra_persist=extra_persist,
         )
     except KeyError as e:
         raise HTTPException(404, f"未知路由任务 {task}: {e}") from None
@@ -325,11 +336,6 @@ async def update_route(task: str, body: dict, request: Request) -> Any:
     if timeout is not None:
         router_obj.TASK_TIMEOUTS[task] = timeout
 
-    # 同步更新 models.chat_model，使 GET /models/chat-model 返回最新值
-    if task == "chat":
-        final_entry = registry.get_task_ref(task) or {}
-        cfg.set("models.chat_model", {"provider": final_entry.get("client", "mimo"),
-                                       "model_id": final_entry["model"]})
     await _audit(request, "route.update", json.dumps({task: body}, ensure_ascii=False))
     await _broadcast_changed()
     final_entry = registry.get_task_ref(task) or {}

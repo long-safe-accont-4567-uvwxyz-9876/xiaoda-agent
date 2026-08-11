@@ -1249,6 +1249,10 @@ class MemoryManager:
                             max_distance=_max_distance)
             return items
         except Exception as e:
+            from local_ai.integration.reranker import LocalModelUnavailableError
+
+            if isinstance(e, LocalModelUnavailableError):
+                raise
             logger.warning("memory.vec_search_failed", error=str(e))
             return []
 

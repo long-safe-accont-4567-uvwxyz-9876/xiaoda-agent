@@ -3,8 +3,6 @@ from __future__ import annotations
 import json
 from typing import Any, AsyncIterator, Mapping
 
-import httpx
-
 from llm_gateway.contracts import ProviderCapabilities
 from llm_gateway.transports.base import (
     CapabilityReport,
@@ -17,6 +15,7 @@ from llm_gateway.transports.base import (
     TransportError,
     normalize_finish_reason,
 )
+from security.ssrf_guard import build_secure_async_client
 
 
 class AnthropicTransport(ProviderTransport):
@@ -28,13 +27,16 @@ class AnthropicTransport(ProviderTransport):
         http_client: Any = None,
         capabilities: ProviderCapabilities | None = None,
         default_model: str = "",
+        host: str = "",
     ) -> None:
         super().__init__(capabilities=capabilities, default_model=default_model)
         normalized = base_url.rstrip("/")
         self._base_url = normalized if normalized.endswith("/v1") else f"{normalized}/v1"
         self._headers = {"x-api-key": api_key, "anthropic-version": "2023-06-01", "content-type": "application/json"}
+        if host:
+            self._headers["Host"] = host
         self._owns_http = http_client is None
-        self._http = http_client if http_client is not None else httpx.AsyncClient(timeout=120)
+        self._http = http_client if http_client is not None else build_secure_async_client(self._base_url)
 
     @staticmethod
     def _text(content: Any) -> str:

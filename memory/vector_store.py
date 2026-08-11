@@ -13,6 +13,7 @@ from loguru import logger
 from utils.common import safe_int as _safe_int
 from local_ai.integration.embedding import LocalEmbeddingService
 from local_ai.integration.reranker import LocalModelUnavailableError
+from local_ai.runtimes.base import RuntimeValidationError
 
 try:
     import sqlite_vec
@@ -93,6 +94,10 @@ class EmbedCache:
             if len(self._cache) > self._max_size:
                 self._cache.popitem(last=False)
 
+    def clear(self) -> None:
+        with self._lock:
+            self._cache.clear()
+
     @property
     def stats(self) -> dict:
         """返回缓存统计信息（命中数、未命中数、命中率、当前大小）。"""
@@ -159,7 +164,8 @@ class VectorStore:
         self._brute_base_dir = ""
         # 单飞（single-flight）：同一文本并发调用 embed 时只发一次 API 请求，
         # 其余协程共享结果，避免 7 路检索通道并发时重复 embed 放大延迟/限流
-        self._inflight: dict[str, asyncio.Future] = {}
+        self._inflight: dict[tuple[Any, str], asyncio.Future] = {}
+        self._embedding_selection_key: tuple[str, int] | int | None = None
 
         # 并发嵌入限制（避免 API 限流），可通过环境变量配置
         _embed_concurrency = _safe_int(os.getenv("VECTOR_EMBED_CONCURRENCY", "8"), 8)
@@ -281,6 +287,8 @@ class VectorStore:
                 try:
                     ok = provider.load()  # 幂等：已加载直接返回 True
                 except Exception as e:  # noqa: BLE001
+                    if isinstance(e, LocalModelUnavailableError):
+                        raise
                     ok = False
                     logger.warning("vector_store.local_engine_start_failed error={}", str(e))
                 if ok:
@@ -322,6 +330,17 @@ class VectorStore:
             return
 
         import sqlite3
+
+        if (
+            not self._dimensions_explicit
+            and self._embed_mode == "local"
+            and self._local_provider is not None
+        ):
+            resolver = getattr(self._local_provider, "resolve_dimensions", None)
+            if resolver is not None:
+                resolved_dimensions = await resolver()
+                if resolved_dimensions > 0:
+                    self._dimensions = resolved_dimensions
 
         def _init_db() -> tuple[Any, bool]:
             """在后台线程中初始化 SQLite 数据库，加载 sqlite_vec 扩展并创建向量虚拟表。"""
@@ -512,12 +531,24 @@ class VectorStore:
         if self._embed_mode != "local" and not self._embed_client:
             return []
 
+        selection_key = None
+        if self._embed_mode == "local" and self._local_provider is not None:
+            selector = getattr(self._local_provider, "selection_key", None)
+            if selector is not None:
+                selection_key = await selector()
+                if (
+                    self._embedding_selection_key is not None
+                    and selection_key != self._embedding_selection_key
+                ):
+                    self._cache.clear()
+                self._embedding_selection_key = selection_key
         cached = self._cache.get(text)
         if cached:
             return cached
 
         # 单飞：已有同文本在途请求则直接共享结果，不重复打 API
-        inflight = self._inflight.get(text)
+        key = (selection_key, text)
+        inflight = self._inflight.get(key)
         if inflight is not None:
             try:
                 return await asyncio.shield(inflight)
@@ -525,18 +556,25 @@ class VectorStore:
                 if self._selected_local_service:
                     raise
                 return []
+            except RuntimeValidationError:
+                raise
             except Exception:
                 return []
 
         future = asyncio.get_running_loop().create_future()
-        self._inflight[text] = future
+        self._inflight[key] = future
         try:
             vec = await self._do_embed(text)
             if vec:
-                self._cache.put(text, vec)
+                if await self._current_selection_key() == selection_key:
+                    self._cache.put(text, vec)
             future.set_result(vec)
             return vec
         except Exception as e:
+            if isinstance(e, RuntimeValidationError):
+                future.set_exception(e)
+                future.exception()
+                raise
             if isinstance(e, LocalModelUnavailableError) and self._selected_local_service:
                 future.set_exception(e)
                 future.exception()
@@ -546,7 +584,14 @@ class VectorStore:
             logger.warning("vector_store.embed_singleflight_failed", error=str(e))
             return []
         finally:
-            self._inflight.pop(text, None)
+            self._inflight.pop(key, None)
+
+    async def _current_selection_key(self) -> Any | None:
+        if self._embed_mode == "local" and self._local_provider is not None:
+            selector = getattr(self._local_provider, "selection_key", None)
+            if selector is not None:
+                return await selector()
+        return None
 
     async def _do_embed(self, text: str) -> list[float]:
         """实际生成嵌入向量（本地推理或远程 API，含重试）。"""
@@ -558,8 +603,9 @@ class VectorStore:
             vectors = await self._local_provider.embed([text])
             vec = vectors[0] if vectors else []
             if vec and self._dimensions and len(vec) != self._dimensions:
-                logger.warning("vector_store.dimension_mismatch",
-                               expected=self._dimensions, actual=len(vec))
+                raise RuntimeValidationError(
+                    f"embedding dimension {len(vec)} does not match expected {self._dimensions}"
+                )
             return vec
         # 治本修复（2026-08-05 用户"治标不治本"反馈）：max_retries 2→1。
         # 根因：embed 偶发慢时重试也慢（网络波动不会 1s 内恢复），

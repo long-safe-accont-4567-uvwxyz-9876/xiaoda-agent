@@ -304,6 +304,8 @@ manager = ConnectionManager()
 
 
 def local_ai_event(resource: str, record: Any) -> dict[str, Any]:
+    if resource not in {"device", "download", "instance"}:
+        raise ValueError(f"unsupported Local AI resource: {resource}")
     payload = record.to_dict() if hasattr(record, "to_dict") else dict(record)
     return {
         "type": f"local_ai_{resource}_updated",
