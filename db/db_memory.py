@@ -1381,6 +1381,21 @@ class MemoryDB:
         rows = await cursor.fetchall()
         return [dict(r) for r in rows]
 
+    async def delete_child_chunks(self, child_ids: list[int], auto_commit: bool = True) -> None:
+        if not child_ids:
+            return
+        placeholders = ",".join("?" * len(child_ids))
+        await self._conn.execute(
+            f"DELETE FROM memory_child_chunks_fts WHERE rowid IN ({placeholders})",
+            child_ids,
+        )
+        await self._conn.execute(
+            f"DELETE FROM memory_child_chunks WHERE id IN ({placeholders})",
+            child_ids,
+        )
+        if auto_commit:
+            await self._conn.commit()
+
     async def delete_children_by_parent(self, parent_id: int) -> int:
         """删除指定父chunk的所有子chunk（含FTS索引）。返回删除数量。"""
         # 先删FTS

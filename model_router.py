@@ -28,6 +28,7 @@ from utils.credential_pool import get_credential_pool
 from security.ssrf_guard import validate_url as _ssrf_validate_url
 from core.app_exception import LLMError
 from core.error_codes import ErrorCodeEnum
+from llm_gateway.transports import CompletionRequest, TransportError
 import contextlib
 
 
@@ -637,13 +638,8 @@ class ModelRouter:
         if agnes.is_available():
             self._transports["agnes"] = agnes
         logger.info("router.transports", available=list(self._transports.keys()))
-        # 本地 ONNX Runtime GenAI chat 服务：由 bootstrap 注入 InstanceManager
-        # 封装。选中 local-ort provider 时 chat_stream 走该服务，不依赖云端。
-        self._local_chat_service: Any = None
-
-    def set_local_chat_service(self, service: Any) -> None:
-        """注入本地 chat 服务（LocalChatService），使 local-ort provider 可路由。"""
-        self._local_chat_service = service
+    def set_local_transport(self, transport: ProviderTransport) -> None:
+        self._transports[_LOCAL_ORT_PROVIDER] = transport
 
     def _get_credential_lock(self, provider: str) -> asyncio.Lock:
         """返回指定 provider 的凭证锁，按需创建。
@@ -1726,12 +1722,9 @@ class ModelRouter:
         provider = config.get("client", _CFG_DEFAULT_PROVIDER)
         timeout = self.TASK_TIMEOUTS.get(task_type, 30)
 
-        # 本地 ONNX Runtime GenAI chat：选中 local-ort 时直接经 LocalChatService
-        # 流式推理。放在重试循环之前 yield，令 LocalModelUnavailableError 直接传播，
-        # 绝不静默跨 provider 回退到云端（用户硬约束：无静默 fallback）。
         if provider == _LOCAL_ORT_PROVIDER:
             async for chunk in self._stream_local_chat(
-                messages, task_type, mt, temperature,
+                messages, task_type, model, mt, temperature,
             ):
                 yield chunk
             return
@@ -1931,30 +1924,40 @@ class ModelRouter:
         self,
         messages: list,
         task_type: str,
+        model: str,
         max_tokens: int,
         temperature: float,
     ) -> AsyncIterator[str]:
-        """经本地 ONNX Runtime GenAI chat 服务流式推理。
-
-        保持路由策略在 ModelRouter（provider/model 解析），协议/客户端细节委托给
-        LocalChatService。选中 local-ort 但未注入服务时抛 LLMError；实例停止等
-        本地不可用场景抛 LocalModelUnavailableError，不做云端回退。
-        """
-        service = self._local_chat_service
-        if service is None:
+        transport = self.get_transport(_LOCAL_ORT_PROVIDER)
+        if transport is None:
             raise LLMError(
-                "local-ort provider selected but local chat runtime is not configured",
+                "local-ort provider selected but local transport is not configured",
                 error_code=ErrorCodeEnum.E_LLM006,
             )
-        route = f"router:{task_type}"
-        options = {"max_tokens": max_tokens, "temperature": temperature}
-        async for chunk in service.stream(messages, options, route):
-            yield chunk
+        request = CompletionRequest(
+            model=model,
+            messages=tuple(messages),
+            temperature=temperature,
+            max_tokens=max_tokens,
+            extra={"route": f"router:{task_type}"},
+        )
+        try:
+            async for chunk in transport.stream(request):
+                if chunk.text:
+                    yield chunk.text
+        except TransportError as error:
+            if error.__cause__ is not None:
+                from local_ai.integration.reranker import LocalModelUnavailableError
+
+                if isinstance(error.__cause__, LocalModelUnavailableError):
+                    raise error.__cause__
+            raise
 
     @staticmethod
     def _classify_error(exc: Exception) -> str:
         """将异常分类为可重试/不可重试错误类型。"""
         exc_msg = str(exc).lower()
+        exc_name = type(exc).__name__.lower()
         if isinstance(exc, asyncio.TimeoutError) or 'timeout' in exc_name or 'timeout' in exc_msg:
             return 'timeout'
         if 'rate' in exc_msg or '429' in exc_msg or 'rate_limit' in exc_name:
@@ -2298,6 +2301,14 @@ class ModelRouter:
         model = config["model"]
         last_error = None
         provider = config.get("client", _CFG_DEFAULT_PROVIDER)
+
+        if provider == _LOCAL_ORT_PROVIDER:
+            chunks = []
+            async for chunk in self._stream_local_chat(
+                messages, task_type, model, max_tokens, temperature,
+            ):
+                chunks.append(chunk)
+            return "".join(chunks)
 
         messages = self._apply_prompt_caching(provider, messages)
         # 主路由路径也需过滤工具，防止小模型收到工具定义后输出退化

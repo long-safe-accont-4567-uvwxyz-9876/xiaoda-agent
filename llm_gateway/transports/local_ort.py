@@ -26,6 +26,7 @@ class LocalOrtTransport(ProviderTransport):
         model: str,
         *,
         cancel_token_factory: Callable[[], Any] = _CancelToken,
+        stream_context_factory: Callable[[CompletionRequest], Any] | None = None,
     ) -> None:
         super().__init__(
             capabilities=ProviderCapabilities(streaming=True, model_discovery=True),
@@ -33,6 +34,7 @@ class LocalOrtTransport(ProviderTransport):
         )
         self._runtime = runtime
         self._cancel_token_factory = cancel_token_factory
+        self._stream_context_factory = stream_context_factory
 
     def _options(self, request: CompletionRequest) -> dict[str, Any]:
         options = dict(request.extra)
@@ -52,7 +54,12 @@ class LocalOrtTransport(ProviderTransport):
 
     async def stream(self, request: CompletionRequest) -> AsyncIterator[CompletionChunk]:
         try:
-            async for text in self._runtime.stream(request.messages, self._options(request), self._cancel_token_factory()):
+            context = (
+                self._stream_context_factory(request)
+                if self._stream_context_factory is not None
+                else self._cancel_token_factory()
+            )
+            async for text in self._runtime.stream(request.messages, self._options(request), context):
                 yield CompletionChunk(text=str(text), model=self.default_model)
             yield CompletionChunk(model=self.default_model, finish_reason="stop")
         except Exception as error:

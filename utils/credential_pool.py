@@ -313,28 +313,25 @@ class CredentialPool:
                 base_url=agnes_url,
             ))
 
-        # 加载免费模型平台凭证
-        _KNOWN_PROVIDERS = {
-            "SILICONFLOW_API_KEY": ("siliconflow", "https://api.siliconflow.cn/v1"),
-            "OPENROUTER_API_KEY": ("openrouter", "https://openrouter.ai/api/v1"),
-        }
-        for env_key, (provider, base_url) in _KNOWN_PROVIDERS.items():
-            key = os.getenv(env_key, "")
-            if key:
-                self.add_credential(Credential(
-                    api_key=key,
-                    provider=provider,
-                    base_url=base_url,
-                ))
-
+        # 加载免费模型平台凭证（单一权威：ProviderCatalog）
         from config import get_provider_catalog
 
-        modelscope_credential = get_provider_catalog().resolve_environment_alias("modelscope", os.environ)
+        catalog = get_provider_catalog()
+        for provider in ("siliconflow", "openrouter"):
+            env_credential = catalog.resolve_environment_alias(provider, os.environ)
+            if env_credential:
+                self.add_credential(Credential(
+                    api_key=env_credential[1],
+                    provider=provider,
+                    base_url=catalog.get(provider).endpoint.base_url,
+                ))
+
+        modelscope_credential = catalog.resolve_environment_alias("modelscope", os.environ)
         if modelscope_credential:
             self.add_credential(Credential(
                 api_key=modelscope_credential[1],
                 provider="modelscope",
-                base_url=get_provider_catalog().get("modelscope").endpoint.base_url,
+                base_url=catalog.get("modelscope").endpoint.base_url,
             ))
 
         # P0 修复：Ollama 仅在用户显式配置时启用（不再默认注册）

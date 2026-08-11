@@ -11,7 +11,7 @@ from loguru import logger
 
 
 from utils.common import safe_int as _safe_int
-from local_ai.integration.embedding import LocalEmbeddingService
+from local_ai.integration.embedding import LocalEmbeddingService, LocalEmbeddingUnavailableError
 from local_ai.integration.reranker import LocalModelUnavailableError
 from local_ai.runtimes.base import RuntimeValidationError
 
@@ -516,8 +516,34 @@ class VectorStore:
         if self._cache.stats["size"] > 0:
             logger.info("vector_store.cache_stats", **self._cache.stats)
 
-    async def embed(self, text: str) -> list[float]:
-        """生成文本的嵌入向量，优先使用缓存，失败时自动重试。
+    async def embed(self, texts: list[str] | str) -> list[list[float]] | list[float]:
+        legacy_single = isinstance(texts, str)
+        batch = [texts] if legacy_single else texts
+        if not batch:
+            return []
+        if len(batch) == 1:
+            vector = await self._embed_one(batch[0])
+            return vector if legacy_single else [vector]
+        if self._embed_mode == "local":
+            vectors = await self._do_embed_batch(batch)
+        else:
+            vectors = await asyncio.gather(*(self._embed_one(text) for text in batch))
+        for vector in vectors:
+            self._validate_dimension(vector)
+        return vectors
+
+    async def _do_embed_batch(self, texts: list[str]) -> list[list[float]]:
+        if self._local_provider is None:
+            raise LocalEmbeddingUnavailableError("no running local embedding instance")
+        vectors = await self._local_provider.embed(texts)
+        if len(vectors) != len(texts):
+            raise RuntimeError(
+                f"local embedding returned {len(vectors)} vectors for {len(texts)} texts"
+            )
+        return vectors
+
+    async def _embed_one(self, text: str) -> list[float]:
+        """生成单条文本的嵌入向量，优先使用缓存，失败时自动重试。
 
         单飞（single-flight）：同一文本的并发调用共享一次 API 请求。
         """
@@ -552,7 +578,7 @@ class VectorStore:
         if inflight is not None:
             try:
                 return await asyncio.shield(inflight)
-            except LocalModelUnavailableError:
+            except LocalEmbeddingUnavailableError:
                 if self._selected_local_service:
                     raise
                 return []
@@ -575,7 +601,7 @@ class VectorStore:
                 future.set_exception(e)
                 future.exception()
                 raise
-            if isinstance(e, LocalModelUnavailableError) and self._selected_local_service:
+            if isinstance(e, LocalEmbeddingUnavailableError) and self._selected_local_service:
                 future.set_exception(e)
                 future.exception()
                 raise
@@ -602,10 +628,7 @@ class VectorStore:
                 return []
             vectors = await self._local_provider.embed([text])
             vec = vectors[0] if vectors else []
-            if vec and self._dimensions and len(vec) != self._dimensions:
-                raise RuntimeValidationError(
-                    f"embedding dimension {len(vec)} does not match expected {self._dimensions}"
-                )
+            self._validate_dimension(vec)
             return vec
         # 治本修复（2026-08-05 用户"治标不治本"反馈）：max_retries 2→1。
         # 根因：embed 偶发慢时重试也慢（网络波动不会 1s 内恢复），
@@ -661,6 +684,12 @@ class VectorStore:
                 logger.warning("vector_store.embed_failed", error=str(e), attempts=max_retries + 1)
                 return []
 
+    def _validate_dimension(self, vec: list[float]) -> None:
+        if vec and self._dimensions and len(vec) != self._dimensions:
+            raise RuntimeValidationError(
+                f"embedding dimension {len(vec)} does not match expected {self._dimensions}"
+            )
+
     async def warm_cache(self, texts: list[str]) -> None:
         """预热嵌入缓存：对未缓存文本调用 embed 填充缓存，单条失败不影响整体。"""
         if not self._embed_client or not texts:
@@ -669,7 +698,7 @@ class VectorStore:
             if not text or text in self._cache:
                 continue
             try:
-                await self.embed(text)
+                await self.embed([text])
             except Exception as e:
                 logger.warning("vector_store.warm_cache_item_failed", error=str(e))
 
@@ -678,7 +707,8 @@ class VectorStore:
         if not self._initialized or not self._vec_conn:
             return False
 
-        vec = await self.embed(text)
+        vectors = await self.embed([text])
+        vec = vectors[0] if vectors else []
         if not vec:
             return False
 
@@ -718,7 +748,8 @@ class VectorStore:
         """子chunk向量写入（使用独立表 memories_child_vec）。"""
         if not self._initialized or not self._vec_conn:
             return
-        vec = await self.embed(text)
+        vectors = await self.embed([text])
+        vec = vectors[0] if vectors else []
         if not vec:
             return
         vec_json = json.dumps(vec)
@@ -742,15 +773,16 @@ class VectorStore:
 
         await asyncio.to_thread(_do_upsert)
 
-    async def batch_upsert_children(self, items: list[tuple[int, str]]) -> None:
+    async def batch_upsert_children(self, items: list[tuple[int, str]]) -> bool:
         """批量子chunk向量写入。items = [(child_id, text), ...]"""
         if not self._initialized or not self._vec_conn or not items:
-            return
+            return False
         # 并发嵌入，受 semaphore 限制
         async def _embed_one(cid: int, text: str):
             """对单条文本执行嵌入，受并发信号量限制。"""
             async with self._embed_semaphore:
-                vec = await self.embed(text)
+                vectors = await self.embed([text])
+                vec = vectors[0] if vectors else []
                 return (cid, vec)
 
         tasks = [_embed_one(cid, text) for cid, text in items]
@@ -765,13 +797,13 @@ class VectorStore:
             if isinstance(vec, list) and vec:
                 valid.append((cid, vec))
         if not valid:
-            return
+            return False
 
-        def _do_batch() -> None:
+        def _do_batch() -> bool:
             """在后台线程中批量子chunk向量写入。"""
             with self._lock:
                 if self._closed:
-                    return
+                    return False
                 try:
                     self._vec_conn.execute("BEGIN TRANSACTION")
                     for cid, vec in valid:
@@ -784,14 +816,16 @@ class VectorStore:
                         if self._brute is not None:
                             self._brute.upsert("memories_child_vec", cid, vec)
                     self._vec_conn.commit()
+                    return True
                 except Exception as e:
                     try:
                         self._vec_conn.execute("ROLLBACK")
                     except Exception as re:
                         logger.debug("vector_store.batch_upsert_children_rollback_error", error=str(re))
                     logger.warning("vector_store.batch_upsert_children_failed", error=str(e))
+                    return False
 
-        await asyncio.to_thread(_do_batch)
+        return await asyncio.to_thread(_do_batch)
 
     async def delete(self, row_id: int) -> bool:
         """删除指定 rowid 的向量记录"""
@@ -858,7 +892,8 @@ class VectorStore:
         async def _embed_one(row_id: int, text: str) -> tuple[int, str, list[float]]:
             """对单条文本执行嵌入，受并发信号量限制。"""
             async with self._embed_semaphore:
-                vec = await self.embed(text)
+                vectors = await self.embed([text])
+                vec = vectors[0] if vectors else []
                 return (row_id, text, vec)
 
         embed_results = await asyncio.gather(
@@ -941,7 +976,8 @@ class VectorStore:
         if not self._initialized or not self._vec_conn:
             return []
 
-        vec = await self.embed(query_text)
+        vectors = await self.embed([query_text])
+        vec = vectors[0] if vectors else []
         if not vec:
             return []
 
@@ -1051,13 +1087,15 @@ class VectorStore:
 
         try:
             # 1. 获取原查询向量
-            query_vec = await self.embed(query)
+            query_vectors = await self.embed([query])
+            query_vec = query_vectors[0] if query_vectors else []
             if not query_vec:
                 tuples = await self.search(query, top_k=k, candidate_ids=cand_int)
                 return [{"rowid": r, "distance": d} for r, d in tuples]
 
             # 2. 获取 HyDE 文档向量
-            hyde_vec = await self.embed(hyde_doc)
+            hyde_vectors = await self.embed([hyde_doc])
+            hyde_vec = hyde_vectors[0] if hyde_vectors else []
             if not hyde_vec:
                 tuples = await self.search(query, top_k=k, candidate_ids=cand_int)
                 return [{"rowid": r, "distance": d} for r, d in tuples]
@@ -1120,7 +1158,8 @@ class VectorStore:
         """写入或更新 KG 实体向量（先删后插）。"""
         if not self._initialized or not self._vec_conn:
             return False
-        vec = await self.embed(text)
+        vectors = await self.embed([text])
+        vec = vectors[0] if vectors else []
         if not vec:
             return False
         vec_json = json.dumps(vec)
@@ -1160,7 +1199,8 @@ class VectorStore:
         """写入或更新 KG 关系向量（先删后插）。"""
         if not self._initialized or not self._vec_conn:
             return False
-        vec = await self.embed(text)
+        vectors = await self.embed([text])
+        vec = vectors[0] if vectors else []
         if not vec:
             return False
         vec_json = json.dumps(vec)
@@ -1200,7 +1240,8 @@ class VectorStore:
         """搜索 KG 实体向量，返回 [(rowid, distance), ...]。"""
         if not self._initialized or not self._vec_conn:
             return []
-        vec = await self.embed(query_text)
+        vectors = await self.embed([query_text])
+        vec = vectors[0] if vectors else []
         if not vec:
             return []
         vec_json = json.dumps(vec)
@@ -1236,7 +1277,8 @@ class VectorStore:
         """搜索 KG 关系向量，返回 [(rowid, distance), ...]。"""
         if not self._initialized or not self._vec_conn:
             return []
-        vec = await self.embed(query_text)
+        vectors = await self.embed([query_text])
+        vec = vectors[0] if vectors else []
         if not vec:
             return []
         vec_json = json.dumps(vec)

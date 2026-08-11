@@ -314,10 +314,15 @@ class AgentCoreBootstrapper:
                 DeviceRegistry(),
                 RuntimeRegistry(),
             )
-        # 注入本地 ONNX Runtime GenAI chat 服务，使 local-ort provider 可经
-        # InstanceManager 流式推理（协议/客户端细节委托给 LocalChatService）。
+        from llm_gateway.transports import LocalOrtTransport
         from local_ai.integration.chat import LocalChatService
-        core.router.set_local_chat_service(LocalChatService.managed(core.local_ai_instances))
+
+        local_chat = LocalChatService.managed(core.local_ai_instances)
+        core.router.set_local_transport(LocalOrtTransport(
+            local_chat,
+            "local-chat",
+            stream_context_factory=lambda request: request.extra["route"],
+        ))
         embed_api_key = os.getenv("EMBED_API_KEY", "")
         embed_base_url = os.getenv("EMBED_BASE_URL", "https://api.siliconflow.cn/v1")
         # 本地推理模式（EMBED_MODE=local）不依赖 API Key，同样创建向量存储

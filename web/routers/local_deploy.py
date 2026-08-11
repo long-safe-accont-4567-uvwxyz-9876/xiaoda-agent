@@ -215,13 +215,12 @@ def _detect_devices() -> dict:
         return _DEVICE_CACHE["data"]
 
     # NPU 实测（probe_npu 会 sudo -n 拉起 runner --probe，约 50ms~15s）
+    # 仅报告可用性，不虚构具体型号/算力（型号由权威探测路径提供）
     npu_ok = False
     npu_model = ""
     try:
         from memory.npu_embed import probe_npu
         npu_ok = probe_npu()
-        if npu_ok:
-            npu_model = "Vivante VIP9000 (3 TOPS INT8)"
     except Exception as e:  # noqa: BLE001
         logger.warning("local_deploy.device_npu_probe_failed error={}", str(e))
         npu_ok = False
@@ -247,7 +246,7 @@ def _detect_devices() -> dict:
         {
             "id": "npu",
             "name": "NPU",
-            "model": npu_model or "未检测到 VIP9000",
+            "model": npu_model or ("NPU" if npu_ok else "未检测到 VIP9000"),
             "desc": "NPU 常驻流加速，短文本 CPU / 长文本 NPU 自适应" if npu_ok
                     else "未检测到可用 NPU（需 Linux + VIP9000 驱动 + sudo 免密）",
             "available": npu_ok,

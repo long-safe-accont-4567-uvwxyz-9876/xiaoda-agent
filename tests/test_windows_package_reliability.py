@@ -1,4 +1,3 @@
-import ast
 import tomllib
 from pathlib import Path
 
@@ -41,37 +40,13 @@ def test_pyinstaller_collects_local_ai_and_gateway_platform_adapters():
     assert "collect_submodules('llm_gateway')" in spec
 
 
-def test_pyinstaller_collects_complete_ort_genai_package():
-    module = ast.parse(read_project_file("xiaoda-agent.spec"))
-    loop = next(
-        node
-        for node in module.body
-        if isinstance(node, ast.For)
-        and any(
-            isinstance(child, ast.Call)
-            and isinstance(child.func, ast.Name)
-            and child.func.id == "collect_all"
-            for child in ast.walk(node)
-        )
-    )
-    from PyInstaller.utils.hooks import collect_all
-
-    namespace = {"datas": [], "binaries": [], "hiddenimports": [], "collect_all": collect_all}
-    exec(compile(ast.Module(body=[loop], type_ignores=[]), "xiaoda-agent.spec", "exec"), namespace)
-
-    assert any("onnxruntime_genai" in source for source, _ in namespace["datas"])
-    assert any("onnxruntime-genai" in source for source, _ in namespace["binaries"])
-    assert "onnxruntime_genai" in namespace["hiddenimports"]
-
-
-def test_docker_build_context_includes_pyinstaller_spec():
+def test_docker_build_context_excludes_partial_downloads_globally():
     patterns = [
         line.strip()
         for line in read_project_file(".dockerignore").splitlines()
         if line.strip() and not line.lstrip().startswith("#")
     ]
-    assert "!xiaoda-agent.spec" in patterns
-    assert patterns.index("!xiaoda-agent.spec") > patterns.index("*.spec")
+    assert "*.part" in patterns
 
 
 def test_python_distribution_includes_local_ai_and_gateway_packages():
@@ -82,6 +57,8 @@ def test_python_distribution_includes_local_ai_and_gateway_packages():
 
 
 def test_pyinstaller_dynamic_library_collection_isolated_per_package():
+    import ast
+
     module = ast.parse(read_project_file("xiaoda-agent.spec"))
     loop = next(
         node

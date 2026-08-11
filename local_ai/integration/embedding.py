@@ -8,6 +8,14 @@ from typing import Any, Callable
 from local_ai.integration.reranker import LocalModelUnavailableError
 
 
+class LocalEmbeddingUnavailableError(LocalModelUnavailableError):
+    code = "local_embedding_unavailable"
+
+    def __init__(self, message: str) -> None:
+        super().__init__(message)
+        self.details = {"purpose": "embedding", "mode": "local"}
+
+
 class LocalEmbeddingService:
     def __init__(
         self,
@@ -90,7 +98,7 @@ class LocalEmbeddingService:
 
     async def embed(self, texts: list[str]) -> list[list[float]]:
         if self._unavailable_error is not None:
-            raise LocalModelUnavailableError(str(self._unavailable_error))
+            raise LocalEmbeddingUnavailableError(str(self._unavailable_error))
         runtime, binding = await self._resolve_runtime_for_inference()
         source = "instance" if runtime is not self._fallback else "bundled"
         try:
@@ -104,7 +112,7 @@ class LocalEmbeddingService:
                     )
                 return result
             if not self.available:
-                raise LocalModelUnavailableError("selected local embedding model is unavailable")
+                raise LocalEmbeddingUnavailableError("selected local embedding model is unavailable")
             if self.source == "bundled":
                 result = [await asyncio.to_thread(self._runtime.embed, text) for text in texts]
             else:
@@ -141,14 +149,14 @@ class LocalEmbeddingService:
         try:
             runtime = await self._instance_manager.resolve_runtime(ModelPurpose.EMBEDDING)
         except Exception as error:
-            raise LocalModelUnavailableError(str(error)) from error
+            raise LocalEmbeddingUnavailableError(str(error)) from error
         if runtime is not None:
             return runtime
         if self._fallback is None and self._fallback_factory is not None:
             self._fallback = self._fallback_factory()
         if self._fallback is not None:
             return self._fallback
-        raise LocalModelUnavailableError("selected local embedding model is unavailable")
+        raise LocalEmbeddingUnavailableError("no running local embedding instance")
 
     async def _resolve_runtime_for_inference(self) -> tuple[Any, tuple[str, str] | None]:
         if self._instance_manager is None:
@@ -162,7 +170,7 @@ class LocalEmbeddingService:
         try:
             acquired = await acquire(ModelPurpose.EMBEDDING, route)
         except Exception as error:
-            raise LocalModelUnavailableError(str(error)) from error
+            raise LocalEmbeddingUnavailableError(str(error)) from error
         if acquired is None:
             return await self._resolve_runtime(), None
         instance_id, runtime = acquired
@@ -174,4 +182,4 @@ class LocalEmbeddingService:
             closer()
 
 
-__all__ = ["LocalEmbeddingService"]
+__all__ = ["LocalEmbeddingService", "LocalEmbeddingUnavailableError"]

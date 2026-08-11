@@ -6,7 +6,7 @@ Multi-agent AI assistant with QQ bot, web UI, and CLI interfaces.
 
 import os
 import sys
-from PyInstaller.utils.hooks import collect_all, collect_data_files, collect_submodules
+from PyInstaller.utils.hooks import collect_data_files, collect_submodules
 
 SPECPATH = os.path.dirname(os.path.abspath(SPEC))
 
@@ -480,7 +480,6 @@ hiddenimports = [
     'cli_palette',
     'cli_menu',
 ]
-binaries = []
 
 # Collect any sub-modules that static analysis might miss
 for pkg in ('openai', 'pydantic', 'starlette', 'anyio', 'uvicorn', 'psutil', 'httpx', 'certifi', 'httpcore', 'pilk', 'PIL', 'webview', 'h2', 'hpack', 'hyperframe', 'prompt_toolkit'):
@@ -489,14 +488,10 @@ for pkg in ('openai', 'pydantic', 'starlette', 'anyio', 'uvicorn', 'psutil', 'ht
     except Exception:
         pass
 
-for pkg in ('onnxruntime_genai',):
-    try:
-        package_datas, package_binaries, package_hiddenimports = collect_all(pkg)
-        datas += package_datas
-        binaries += package_binaries
-        hiddenimports += package_hiddenimports
-    except Exception:
-        pass
+try:
+    hiddenimports += collect_submodules('onnxruntime_genai')
+except Exception:
+    pass
 
 try:
     hiddenimports += collect_submodules('local_ai')
@@ -513,6 +508,7 @@ except Exception:
 # onnxruntime: capi 下的 onnxruntime.dll/.so 用 collect_dynamic_libs 强制进 binaries
 #              （仅 collect_data_files 可能被当 data 处理，加载路径不一致导致失败）
 # tokenizers: Rust 扩展二进制（tokenizers*.pyd/.so）双保险收集
+binaries = []
 from PyInstaller.utils.hooks import collect_dynamic_libs
 for pkg in ('pilk', 'sqlite_vec', 'onnxruntime', 'onnxruntime_genai', 'tokenizers'):
     try:

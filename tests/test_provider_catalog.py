@@ -199,6 +199,53 @@ def test_credential_pool_loads_modelscope_from_each_catalog_alias(monkeypatch, a
     assert pool._pool["modelscope"][0].api_key == "modelscope-token"
 
 
+@pytest.mark.parametrize(
+    "alias,provider",
+    [
+        ("SILICONFLOW_API_KEY", "siliconflow"),
+        ("OPENROUTER_API_KEY", "openrouter"),
+    ],
+)
+def test_credential_pool_free_providers_delegate_to_catalog(monkeypatch, alias, provider):
+    from utils.credential_pool import CredentialPool
+
+    for key in (
+        "MIMO_API_KEY",
+        "AGNES_API_KEY",
+        "SILICONFLOW_API_KEY",
+        "OPENROUTER_API_KEY",
+        "MODELSCOPE_ACCESS_TOKEN",
+        "MODELSCOPE_API_KEY",
+        "OLLAMA_BASE_URL",
+    ):
+        monkeypatch.delenv(key, raising=False)
+    monkeypatch.setenv(alias, "delegate-token")
+
+    import config as config_module
+
+    class _Catalog:
+        def __init__(self, provider_id):
+            self._provider_id = provider_id
+
+        def resolve_environment_alias(self, provider_id, environment):
+            if provider_id == self._provider_id:
+                return alias, "delegate-token"
+            return None
+
+        def get(self, provider_id):
+            if provider_id != self._provider_id:
+                raise KeyError(provider_id)
+            return type("D", (), {"endpoint": type("E", (), {"base_url": "https://catalog-authority.test/v1"})})()
+
+    monkeypatch.setattr(config_module, "get_provider_catalog", lambda: _Catalog(provider))
+
+    pool = CredentialPool()
+
+    assert provider in pool._pool
+    assert pool._pool[provider][0].api_key == "delegate-token"
+    assert pool._pool[provider][0].base_url == "https://catalog-authority.test/v1"
+
+
 @pytest.mark.parametrize("alias", ["MODELSCOPE_ACCESS_TOKEN", "MODELSCOPE_API_KEY"])
 @pytest.mark.asyncio
 async def test_setup_validates_each_modelscope_alias(monkeypatch, alias: str):

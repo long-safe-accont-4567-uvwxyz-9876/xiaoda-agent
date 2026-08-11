@@ -49,3 +49,36 @@ cd web/frontend && npx vue-tsc --noEmit
 - 本次按要求更新：`task-1-report.md`。
 - 任务目标源文件和契约测试：保留进入任务前已有的未提交内容，未做覆盖性修改。
 - Git 提交：无。
+
+## 复审窄改修复（2026-08-11）
+
+### 根因与修复
+
+- 纯附件：前端已允许纯图片或纯文档发送，但 `_handle_chat` 在解析 `image_url` 与 `doc_path` 前遇到空文本即返回。现改为仅在文本和附件字段都为空时返回，并为纯图片、纯文档生成处理占位文本。
+- Workflow 签名：`sendMessage` 已改为接收 `ChatRequestSnapshot`，Workflow 预览仍传入字符串。现构造完整快照，模式关闭且附件为空。
+- TXT/MD 错配：上传端与前端声明支持 `.txt`、`.md`，真实 `document_reader` 未注册对应读取器。现复用 UTF-8 BOM 兼容文本读取路径，并同步工具描述。
+
+### 真实 RED 证据
+
+- 纯附件：`tests/test_transport_user_binding.py::test_web_adapter_processes_attachment_only_messages` 修复前为 `2 failed`，两种附件均未调用 `core.process`。
+- Workflow：`tests/test_webui_chat_experience_contracts.py::test_workflow_preview_uses_chat_request_snapshot_signature` 修复前为 `1 failed`，预览仍使用字符串签名。
+- TXT/MD：`tests/test_document_tools_text_formats.py` 修复前为 `2 failed`，分别返回不支持 `.txt` 与 `.md`。
+
+### 最终验证
+
+```bash
+.venv/bin/python -m pytest tests/test_frontend_runtime_contracts.py tests/test_webui_chat_experience_contracts.py tests/test_transport_user_binding.py tests/test_document_tools_text_formats.py -q
+```
+
+结果：`24 passed in 4.19s`。
+
+```bash
+.venv/bin/python -m ruff check web/ws_hub.py tools/document_tools.py tests/test_transport_user_binding.py tests/test_document_tools_text_formats.py tests/test_webui_chat_experience_contracts.py
+cd web/frontend && npx vue-tsc --noEmit
+.venv/bin/python -m py_compile web/ws_hub.py tools/document_tools.py tests/test_transport_user_binding.py tests/test_document_tools_text_formats.py tests/test_webui_chat_experience_contracts.py
+git diff --check -- web/ws_hub.py tools/document_tools.py web/frontend/src/views/WorkflowView.vue tests/test_transport_user_binding.py tests/test_document_tools_text_formats.py tests/test_webui_chat_experience_contracts.py task-1-report.md
+```
+
+结果：全部退出码 0。
+
+本轮未执行 `git add`、`git commit` 或 `git push`。但最终状态核对时发现并行进程已将 HEAD 从任务开始时的 `dc8ecb7` 推进到 `169e84c`，且该并行提交已包含本轮三处生产修复和新增测试。为避免破坏同一提交中的其他并行成果，本轮未执行 reset 或改写历史；当前报告修改仍保持未提交。

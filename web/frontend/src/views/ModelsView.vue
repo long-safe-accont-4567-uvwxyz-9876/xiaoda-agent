@@ -332,7 +332,6 @@ function setPresPreset(val: number) {
             </n-tag>
             <n-tag v-if="p.builtin" size="small" :bordered="false">{{ t('modelsView.builtin') }}</n-tag>
             <span class="p-url">{{ p.base_url }}</span>
-            <span class="p-key">{{ p.key_masked || t('modelsView.noKey') }}</span>
           </div>
           <div class="provider-ops">
             <span v-if="testResults[p.id]" class="test-badge"
@@ -522,7 +521,6 @@ function setPresPreset(val: number) {
 .provider-info { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; min-width: 0; }
 .p-label { font-weight: 600; }
 .p-url { font-size: 12px; color: var(--moon-dim); font-family: 'JetBrains Mono', monospace; }
-.p-key { font-size: 12px; color: var(--wisdom); font-family: 'JetBrains Mono', monospace; }
 .provider-ops { display: flex; align-items: center; gap: 6px; }
 
 .drag-handle {

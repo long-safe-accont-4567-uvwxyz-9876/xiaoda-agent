@@ -144,15 +144,15 @@ export class WsClient {
     return false
   }
 
-  on(type: string, handler: (data: WsEvent) => void) {
+  on<T extends WsEvent = WsEvent>(type: string, handler: (data: T) => void) {
     if (!this.listeners.has(type)) {
       this.listeners.set(type, new Set())
     }
-    this.listeners.get(type)!.add(handler)
+    this.listeners.get(type)!.add(handler as (data: WsEvent) => void)
   }
 
-  off(type: string, handler: (data: WsEvent) => void) {
-    this.listeners.get(type)?.delete(handler)
+  off<T extends WsEvent = WsEvent>(type: string, handler: (data: T) => void) {
+    this.listeners.get(type)?.delete(handler as (data: WsEvent) => void)
   }
 
   private emit(data: WsEvent) {

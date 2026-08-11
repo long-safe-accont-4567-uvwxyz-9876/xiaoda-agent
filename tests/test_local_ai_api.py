@@ -17,7 +17,9 @@ from web.routers.local_ai import (
 from web.routers.local_ai import (
     router as local_ai_router,
 )
+from web.routers import local_deploy
 from web.routers.local_deploy import router as local_deploy_router
+from web.routers.local_ai_storage import router as local_ai_storage_router
 from web.ws_hub import local_ai_event
 
 
@@ -399,3 +401,16 @@ def test_legacy_devices_endpoint_translates_authoritative_devices(
     assert payload["devices"][0]["id"] == "cpu:0"
     assert payload["devices"][0]["model"] == "Test CPU"
     assert "3 TOPS INT8" not in response.text
+
+
+def test_legacy_device_fallback_does_not_invent_npu_model(monkeypatch) -> None:
+    monkeypatch.setattr("memory.npu_embed.probe_npu", lambda: True)
+    monkeypatch.setattr(local_deploy, "_detect_cpu_model", lambda: "Test CPU")
+    monkeypatch.setattr(local_deploy, "_detect_gpu_model", lambda: "")
+    monkeypatch.setattr(local_deploy, "get_config_service", lambda: SimpleNamespace(get=lambda *args: ""))
+    local_deploy._DEVICE_CACHE["data"] = None
+
+    payload = local_deploy._detect_devices()
+
+    npu = next(device for device in payload["devices"] if device["id"] == "npu")
+    assert npu["model"] == "NPU"

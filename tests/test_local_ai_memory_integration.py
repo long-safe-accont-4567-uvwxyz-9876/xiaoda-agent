@@ -9,7 +9,7 @@ import pytest
 import core.bootstrap as bootstrap
 from local_ai.contracts import CatalogModel, ComputeDevice, InstalledModel, ModelPurpose, RuntimeProfile
 from local_ai.instances.manager import InstanceInUseError, InstanceManager
-from local_ai.integration.embedding import LocalEmbeddingService
+from local_ai.integration.embedding import LocalEmbeddingService, LocalEmbeddingUnavailableError
 from local_ai.integration.reranker import LocalModelUnavailableError, LocalRerankerService
 from local_ai.runtimes.registry import RuntimeRegistry
 from local_ai.runtimes.base import RuntimeValidationError
@@ -203,7 +203,7 @@ async def test_production_services_follow_instances_started_after_bootstrap(tmp_
     embedding_instance = await instances.start("embedding-a")
     reranker_instance = await instances.start("reranker-a")
 
-    assert await vector_store.embed("same") == [1.0]
+    assert await vector_store.embed(["same"]) == [[1.0]]
     assert await memory.rerank_with_selected_local_model("q", ["a", "b"]) == [
         {"index": 1, "relevance_score": 3.0},
         {"index": 0, "relevance_score": 2.0},
@@ -215,7 +215,7 @@ async def test_production_services_follow_instances_started_after_bootstrap(tmp_
     await instances.stop(reranker_instance.id)
 
     with pytest.raises(LocalModelUnavailableError):
-        await vector_store.embed("new")
+        await vector_store.embed(["new"])
     with pytest.raises(LocalModelUnavailableError):
         await memory.rerank_with_selected_local_model("q", ["a"])
 
@@ -236,12 +236,12 @@ async def test_cached_embedding_checks_stopped_selected_instance(tmp_path):
     )
     instance = await instances.start("embedding-a")
 
-    assert await vector_store.embed("cached") == [1.0]
-    assert await vector_store.embed("cached") == [1.0]
+    assert await vector_store.embed(["cached"]) == [[1.0]]
+    assert await vector_store.embed(["cached"]) == [[1.0]]
     await instances.stop(instance.id)
 
     with pytest.raises(LocalModelUnavailableError):
-        await vector_store.embed("cached")
+        await vector_store.embed(["cached"])
 
 
 @pytest.mark.asyncio
@@ -260,11 +260,11 @@ async def test_embedding_cache_is_isolated_between_selected_instances(tmp_path):
     )
 
     first = await instances.start("embedding-a")
-    assert await vector_store.embed("same") == [1.0]
+    assert await vector_store.embed(["same"]) == [[1.0]]
     await instances.stop(first.id)
     await instances.start("embedding-b")
 
-    assert await vector_store.embed("same") == [2.0]
+    assert await vector_store.embed(["same"]) == [[2.0]]
     assert runtimes["2.0"].embed_calls == [["same"]]
 
 
@@ -287,18 +287,18 @@ async def test_embedding_singleflight_is_isolated_between_selected_instances(tmp
     first_runtime.embed_entered = threading.Event()
     first_runtime.embed_release = threading.Event()
 
-    first_embed = asyncio.create_task(vector_store.embed("same"))
+    first_embed = asyncio.create_task(vector_store.embed(["same"]))
     assert await asyncio.to_thread(first_runtime.embed_entered.wait, 1)
     await instances.start("embedding-b")
 
     try:
-        second_result = await asyncio.wait_for(vector_store.embed("same"), 0.5)
+        second_result = await asyncio.wait_for(vector_store.embed(["same"]), 0.5)
     finally:
         first_runtime.embed_release.set()
         first_result = await first_embed
 
-    assert first_result == [1.0]
-    assert second_result == [2.0]
+    assert first_result == [[1.0]]
+    assert second_result == [[2.0]]
     assert runtimes["2.0"].embed_calls == [["same"]]
 
 
@@ -320,11 +320,11 @@ async def test_embedding_singleflight_shares_same_instance_same_text(tmp_path):
     runtime = runtimes["1.0"]
 
     results = await asyncio.gather(
-        vector_store.embed("same"),
-        vector_store.embed("same"),
+        vector_store.embed(["same"]),
+        vector_store.embed(["same"]),
     )
 
-    assert results == [[1.0], [1.0]]
+    assert results == [[[1.0]], [[1.0]]]
     assert runtime.embed_calls == [["same"]]
 
 
@@ -338,7 +338,7 @@ async def test_selected_local_embedding_instance_is_used(tmp_path):
         embedding_service=service,
     )
 
-    assert await vector_store.embed("hello") == [5.0]
+    assert await vector_store.embed(["hello"]) == [[5.0]]
     assert runtime.calls == [["hello"]]
 
 
@@ -354,7 +354,7 @@ async def test_stopped_local_embedding_does_not_fallback_to_bundled_bge(tmp_path
     runtime.running = False
 
     with pytest.raises(LocalModelUnavailableError):
-        await vector_store.embed("hello")
+        await vector_store.embed(["hello"])
 
 
 @pytest.mark.asyncio
@@ -371,7 +371,7 @@ async def test_stopping_selected_local_embedding_preserves_unavailable_selection
 
     assert vector_store.embed_engine_status()["source"] == "instance"
     with pytest.raises(LocalModelUnavailableError):
-        await vector_store.embed("hello")
+        await vector_store.embed(["hello"])
 
 
 @pytest.mark.asyncio
@@ -450,7 +450,7 @@ async def test_vector_store_rejects_runtime_dimension_mismatch_before_use(tmp_pa
     )
 
     with pytest.raises(RuntimeValidationError, match="dimension 1.*expected 2"):
-        await vector_store.embed("hello")
+        await vector_store.embed(["hello"])
 
 
 @pytest.mark.asyncio
@@ -627,18 +627,118 @@ async def test_embedding_stale_completion_does_not_pollute_cache_after_switch(tm
     first_runtime.embed_entered = threading.Event()
     first_runtime.embed_release = threading.Event()
 
-    first_embed = asyncio.create_task(vector_store.embed("same"))
+    first_embed = asyncio.create_task(vector_store.embed(["same"]))
     assert await asyncio.to_thread(first_runtime.embed_entered.wait, 1)
     await instances.start("embedding-b")
 
     try:
-        second_result = await asyncio.wait_for(vector_store.embed("same"), 0.5)
+        second_result = await asyncio.wait_for(vector_store.embed(["same"]), 0.5)
     finally:
         first_runtime.embed_release.set()
         first_result = await first_embed
 
-    assert second_result == [2.0]
-    assert first_result == [1.0]
+    assert second_result == [[2.0]]
+    assert first_result == [[1.0]]
 
-    assert await vector_store.embed("same") == [2.0]
+    assert await vector_store.embed(["same"]) == [[2.0]]
     assert runtimes["2.0"].embed_calls == [["same"]]
+
+
+@pytest.mark.asyncio
+async def test_vector_store_embed_is_the_batch_embedding_entrypoint(tmp_path):
+    runtime = FakeEmbeddingRuntime()
+    vector_store = VectorStore(
+        tmp_path / "vectors.db",
+        embed_mode="local",
+        embedding_service=LocalEmbeddingService(runtime),
+    )
+
+    assert await vector_store.embed(["hello", "world!"]) == [[5.0], [6.0]]
+    assert runtime.calls == [["hello", "world!"]]
+
+
+@pytest.mark.asyncio
+async def test_managed_local_embedding_without_running_instance_is_structured_error(tmp_path):
+    bundled_calls = []
+    service = LocalEmbeddingService.managed(
+        FakeInstanceManager(),
+        lambda: bundled_calls.append(True),
+    )
+    vector_store = VectorStore(
+        tmp_path / "vectors.db",
+        embed_mode="local",
+        embedding_service=service,
+    )
+
+    with pytest.raises(LocalEmbeddingUnavailableError) as exc_info:
+        await vector_store.embed(["hello"])
+
+    assert exc_info.value.code == "local_embedding_unavailable"
+    assert exc_info.value.details == {"purpose": "embedding", "mode": "local"}
+    # 懒回退：无运行实例时先咨询 bundled 回退工厂，无 bundled 模型才报结构化错误。
+    assert bundled_calls == [True]
+
+
+@pytest.mark.asyncio
+async def test_vector_store_batch_validates_every_embedding_dimension(tmp_path):
+    runtime = FakeEmbeddingRuntime()
+    runtime.dimensions = 2
+    runtime.embed = lambda texts: [[1.0, 2.0], [3.0]]
+    vector_store = VectorStore(
+        tmp_path / "vectors.db",
+        dimensions=2,
+        embed_mode="local",
+        embedding_service=LocalEmbeddingService(runtime),
+    )
+
+    with pytest.raises(RuntimeValidationError, match="dimension 1.*expected 2"):
+        await vector_store.embed(["valid", "invalid"])
+
+
+@pytest.mark.asyncio
+async def test_child_chunk_insert_is_compensated_when_vector_write_fails():
+    class FakeMemory:
+        def __init__(self) -> None:
+            self.rows = {}
+            self.next_id = 1
+
+        async def insert_child_chunk(self, **fields):
+            child_id = self.next_id
+            self.next_id += 1
+            self.rows[child_id] = fields
+            return child_id
+
+        async def delete_child_chunks(self, child_ids):
+            for child_id in child_ids:
+                self.rows.pop(child_id, None)
+
+    class FakeVectorStore:
+        async def batch_upsert_children(self, items):
+            return False
+
+        async def delete_child(self, child_id):
+            raise AssertionError("failed vector transaction must not leave vectors to delete")
+
+    memory = FakeMemory()
+    manager = MemoryManager.__new__(MemoryManager)
+    manager.memory = memory
+    manager.vec = FakeVectorStore()
+    children = [
+        {
+            "content": "first",
+            "embed_content": "first vector",
+            "chunk_type": "segment",
+            "weight": 1.0,
+            "overlap_hash": "",
+        },
+        {
+            "content": "second",
+            "embed_content": "second vector",
+            "chunk_type": "segment",
+            "weight": 0.8,
+            "overlap_hash": "",
+        },
+    ]
+
+    assert not await manager._insert_indexed_children(7, children, 0.9)
+    assert memory.rows == {}

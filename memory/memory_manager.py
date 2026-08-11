@@ -588,7 +588,11 @@ class MemoryManager:
         QueryCache 会据此降级为禁用缓存。
         """
         if self.vec is not None:
-            return self.vec.embed
+            async def _embed_query(text: str) -> list[float]:
+                vectors = await self.vec.embed([text])
+                return vectors[0] if vectors else []
+
+            return _embed_query
         return None
 
     def set_knowledge_graph(self, kg: Any) -> None:
@@ -870,7 +874,8 @@ class MemoryManager:
                     # embed client 已配 connect=15s + max_retries=0 + 共享 httpx client，
                     # 内层 embed 有 10s 单次超时 + 重试保护。原外层 3s 必然先于内层 10s 触发，
                     # 导致 embed 重试机制完全失效，网络抖动时子chunk向量召回被错误跳过。
-                    query_vec = await self.vec.embed(query)
+                    query_vectors = await self.vec.embed([query])
+                    query_vec = query_vectors[0] if query_vectors else []
                     if not query_vec:
                         return []
                     results = await self.vec.search_child(query_vec, top_k=recall_limit)
@@ -1381,6 +1386,33 @@ class MemoryManager:
             top_n=len(documents) if top_n is None else top_n,
             return_documents=False,
         )
+
+    async def _insert_indexed_children(
+        self,
+        parent_id: int,
+        children: list[dict],
+        importance: float,
+    ) -> bool:
+        child_items = []
+        child_ids = []
+        try:
+            for child in children:
+                child_id = await self.memory.insert_child_chunk(
+                    parent_id=parent_id,
+                    content=child["content"],
+                    embed_content=child["embed_content"],
+                    chunk_type=child["chunk_type"],
+                    importance=importance * child["weight"],
+                    overlap_hash=child["overlap_hash"],
+                )
+                child_ids.append(child_id)
+                child_items.append((child_id, child["embed_content"]))
+            if await self.vec.batch_upsert_children(child_items):
+                return True
+        except Exception:
+            pass
+        await self.memory.delete_child_chunks(child_ids)
+        return False
 
     async def _hybrid_rerank(self, query: str, fused: list[tuple[str, float]],
                               all_items: dict[str, dict], k: int) -> list[dict] | None:

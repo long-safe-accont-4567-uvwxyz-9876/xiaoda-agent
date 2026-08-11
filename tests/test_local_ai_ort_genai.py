@@ -710,7 +710,7 @@ def test_onnxruntime_genai_is_lazy_loaded():
     assert "import onnxruntime_genai" not in source.split("class OrtGenAiChatRuntime", 1)[0]
 
 
-def test_optional_dependency_and_pyinstaller_contracts():
+def test_optional_dependency_and_pyinstaller_collection_contracts():
     with Path("pyproject.toml").open("rb") as file:
         local_ai = tomllib.load(file)["project"]["optional-dependencies"]["local-ai"]
     requirement = Requirement(local_ai[0])
@@ -718,3 +718,5 @@ def test_optional_dependency_and_pyinstaller_contracts():
     assert requirement.name == "onnxruntime-genai"
     assert requirement.specifier.contains("0.15.2")
     assert "collect_submodules('onnxruntime_genai')" in spec
+    assert "('pilk', 'sqlite_vec', 'onnxruntime', 'onnxruntime_genai', 'tokenizers')" in spec
+    assert "collect_all" not in spec
