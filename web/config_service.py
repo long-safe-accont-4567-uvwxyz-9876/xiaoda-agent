@@ -164,6 +164,10 @@ _DEFAULTS: dict[str, Any] = {
     # 本地部署：embedding 引擎模式（""=跟随 env EMBED_MODE；local/remote=用户显式选择）
     # device：算力设备（""=跟随 LOCAL_EMBED_BACKEND/auto；cpu/npu=用户显式选择，重启生效）
     "local_deploy": {"mode": "", "device": ""},
+    # Local AI Platform (Task 6): default_model_root 是用户在 WebUI 选择并持久化的
+    # 模型下载根目录（PUT /api/v1/local-ai/storage/default 写入）；
+    # restricted_roots 是禁止作为下载目标的路径前缀列表（用户可扩展，默认空）。
+    "local_ai": {"default_model_root": "", "restricted_roots": []},
 }
 
 

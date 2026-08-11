@@ -105,6 +105,45 @@ def test_installed_model_requires_7_to_64_character_hex_revision():
         )
 
 
+@pytest.mark.parametrize(
+    ("ownership", "removable"),
+    [("user", True), ("bundled", False)],
+)
+def test_installed_model_derives_removable_from_ownership(ownership, removable):
+    model = InstalledModel(
+        id="local:one",
+        catalog_id="model:one",
+        revision="abc1234",
+        purpose=ModelPurpose.EMBEDDING,
+        directory="/models/one",
+        manifest_checksum="def",
+        validation_state="valid",
+        ownership=ownership,
+        installed_at=NOW,
+    )
+
+    assert model.removable is removable
+    assert model.to_dict()["removable"] is removable
+    assert InstalledModel.from_dict(model.to_dict()).removable is removable
+
+
+def test_bundled_installed_model_cannot_override_removable():
+    model = InstalledModel(
+        id="builtin:one",
+        catalog_id="model:one",
+        revision="abc1234",
+        purpose=ModelPurpose.EMBEDDING,
+        directory="/models/one",
+        manifest_checksum="def",
+        validation_state="valid",
+        ownership="bundled",
+        installed_at=NOW,
+        removable=True,
+    )
+
+    assert model.removable is False
+
+
 def test_compute_device_normalizes_backend_mappings():
     device = ComputeDevice(
         id="cpu:0",
@@ -455,7 +494,7 @@ def test_integer_fields_reject_bool_and_float(factory, match, invalid):
 
 @pytest.mark.parametrize("invalid", [True, False, 1.0])
 def test_manifest_size_rejects_bool_and_float(invalid):
-    with pytest.raises(ValueError, match="files.size"):
+    with pytest.raises(ValueError, match="size"):
         CatalogModel(
             id="model:one",
             source="modelscope",

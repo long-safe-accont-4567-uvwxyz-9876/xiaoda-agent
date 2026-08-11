@@ -1,34 +1,37 @@
 import asyncio
 import contextlib
-from contextvars import ContextVar
 import json
 import sqlite3
 import sys
 import time
-from typing import Any
-import aiosqlite
+from contextvars import ContextVar
 from pathlib import Path
+from typing import Any
+
+import aiosqlite
 from loguru import logger
+
 from config import DATA_DIR
+
+from .db_analytics import AnalyticsDB
+from .db_kg_v2 import KnowledgeDBV2
+from .db_knowledge import KnowledgeDB
+from .db_learning import LearningDB
+from .db_local_ai import LocalAIDB, transaction_lock_for
 from .db_memory import MemoryDB
 from .db_notebook import NotebookDB
-from .db_learning import LearningDB
-from .db_knowledge import KnowledgeDB
-from .db_kg_v2 import KnowledgeDBV2
-from .db_analytics import AnalyticsDB
 from .db_temporal_memory import TemporalMemoryDB
-from .profile_store import ProfileStore
 from .index_manager import build_default_index_manager
+from .profile_store import ProfileStore
 from .session_store import (
     SessionInfo,
     SessionSummaryEntry,
     fold_session_summary,
 )
 
-
 DB_DIR = DATA_DIR
 DB_PATH = DB_DIR / "agent.db"
-CURRENT_SCHEMA_VERSION = 24
+CURRENT_SCHEMA_VERSION = 25
 
 
 def _detect_fs_type(path: Path) -> str:
@@ -108,6 +111,7 @@ class DatabaseManager:
         self.temporal: TemporalMemoryDB | None = None
         self.profiles: ProfileStore | None = None
         self.kg_v2: KnowledgeDBV2 | None = None
+        self.local_ai: LocalAIDB | None = None
 
     async def init(self) -> None:
         # 幂等性：如果已有活跃连接，先关闭旧连接再创建新连接
@@ -140,6 +144,7 @@ class DatabaseManager:
             ) from e
 
         self._conn = await aiosqlite.connect(str(self.db_path))
+        self._write_tx_lock = transaction_lock_for(self._conn)
         self._conn.row_factory = aiosqlite.Row
         # busy_timeout 必须最先设置，防止后续 PRAGMA 因锁竞争失败
         # 5000→15000：greeting_scheduler/memory_encoding/portrait 等后台任务并发写入时，
@@ -204,6 +209,9 @@ class DatabaseManager:
         await self._profile_conn.execute("PRAGMA foreign_keys=ON")
         self.profiles = ProfileStore(self._profile_conn, self.profile_write_transaction)
         self.kg_v2 = KnowledgeDBV2(self._conn)
+        # LocalAIDB 必须在 _run_migrations 之后初始化（迁移 v25 才会创建表），
+        # 但 init() 顺序是先 _create_tables（含迁移）再赋值子模块，所以此处安全。
+        self.local_ai = LocalAIDB(self._conn, self.write_transaction)
         # 初始化独立只读连接(供 restore_from_db 使用)
         # WAL 模式下只读连接可与主连接并发读，永不被写事务阻塞
         # CodeRabbit 修复：init() 可能被重复调用，先关闭旧 _readonly_conn 防止连接泄漏
@@ -510,6 +518,7 @@ class DatabaseManager:
             (22, "fts_single_char_rebuild", self._migrate_v22),
             (23, "bitemporal_profile_fields", self._migrate_v23),
             (24, "profile_event_idempotency", self._migrate_v24),
+            (25, "installed_models_table", self._migrate_v25),
         ]
         for version, desc, migrate_fn in migrations:
             if current < version:
@@ -1425,6 +1434,85 @@ class DatabaseManager:
             )
             WHERE status = 'accepted'
         """)
+
+    async def _migrate_v25(self) -> None:
+        """v25: installed_models 表 + 内置 BGE 嵌入模型种子（Task 7 持久化模型注册表）。
+
+        幂等保证：
+        - CREATE TABLE IF NOT EXISTS / CREATE INDEX IF NOT EXISTS 重跑安全。
+        - 内置 BGE 条目通过存在性检查 + INSERT OR IGNORE 双重防御，避免
+          schema_version 回退后重复插入。
+        - 不调用 write_transaction()：迁移框架 _apply_migration 已管理提交节奏，
+          在迁移函数内部嵌套 write_transaction 会触发 mid-migration commit，
+          干扰 _apply_migration 的 dirty/schema_version 提交顺序。
+        """
+        await self._conn.execute("""
+            CREATE TABLE IF NOT EXISTS installed_models (
+                id TEXT PRIMARY KEY,
+                catalog_id TEXT NOT NULL,
+                revision TEXT NOT NULL,
+                purpose TEXT NOT NULL,
+                directory TEXT NOT NULL UNIQUE,
+                manifest_checksum TEXT NOT NULL,
+                validation_state TEXT NOT NULL,
+                ownership TEXT NOT NULL,
+                installed_at TEXT NOT NULL,
+                metadata TEXT DEFAULT '{}'
+            )
+        """)
+        await self._conn.execute("""
+            CREATE INDEX IF NOT EXISTS idx_installed_models_purpose
+            ON installed_models(purpose)
+        """)
+        await self._conn.execute("""
+            CREATE INDEX IF NOT EXISTS idx_installed_models_catalog_id
+            ON installed_models(catalog_id)
+        """)
+        # 种子内置 BGE 嵌入模型：与 memory/vector_store.py 中
+        # _default_local_model_dir() 的项目内路径约定对齐（<root>/models/
+        # bge-small-zh-v1.5）。该条目 ownership="bundled"，注册表禁止删除。
+        import json as _json
+        from datetime import datetime, timezone
+        from pathlib import Path
+        bundled_id = "builtin:bge-small-zh-v1.5"
+        # 幂等守卫 1：存在性检查（避免 schema_version 回退后重复 INSERT）
+        cursor = await self._conn.execute(
+            "SELECT 1 FROM installed_models WHERE id = ? LIMIT 1",
+            (bundled_id,),
+        )
+        if await cursor.fetchone() is None:
+            bundled_directory = str(
+                Path(__file__).resolve().parent.parent / "models" / "bge-small-zh-v1.5"
+            )
+            bundled_metadata = _json.dumps(
+                {
+                    "source": "builtin",
+                    "description": "Bundled BGE small Chinese embedding",
+                },
+                ensure_ascii=False,
+            )
+            # 幂等守卫 2：INSERT OR IGNORE 防御并发场景
+            await self._conn.execute(
+                """
+                INSERT OR IGNORE INTO installed_models (
+                    id, catalog_id, revision, purpose, directory,
+                    manifest_checksum, validation_state, ownership,
+                    installed_at, metadata
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    bundled_id,
+                    bundled_id,
+                    "0000000",
+                    "embedding",
+                    bundled_directory,
+                    "builtin",
+                    "validated",
+                    "bundled",
+                    datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
+                    bundled_metadata,
+                ),
+            )
 
     # SQL 注入防护：允许的 SQL 前缀白名单（仅 SELECT / PRAGMA 只读操作）
     _READONLY_PREFIXES = ("SELECT", "PRAGMA")

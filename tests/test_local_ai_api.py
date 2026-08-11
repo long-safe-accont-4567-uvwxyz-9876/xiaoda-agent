@@ -1,0 +1,281 @@
+from __future__ import annotations
+
+import asyncio
+from types import SimpleNamespace
+from typing import Any
+
+import pytest
+from fastapi import FastAPI
+from fastapi.testclient import TestClient
+
+from web.routers.auth import get_current_user
+from web.routers.local_ai import attach_local_ai_services, local_ai_event_sink, router as local_ai_router
+from web.routers.local_deploy import router as local_deploy_router
+from web.ws_hub import local_ai_event
+
+
+class Record:
+    def __init__(self, **values: Any) -> None:
+        self.__dict__.update(values)
+
+    def to_dict(self) -> dict[str, Any]:
+        return dict(self.__dict__)
+
+
+class FakeDevices:
+    def __init__(self) -> None:
+        self.items = [
+            Record(
+                id="cpu:0",
+                name="Test CPU",
+                kind="cpu",
+                architecture="x86_64",
+                state="available",
+                memory_total=16_000,
+                memory_available=12_000,
+                backends=[],
+                system={},
+                evidence={},
+            )
+        ]
+
+    def scan(self, force: bool = False) -> list[Record]:
+        return self.items
+
+
+class FakeCatalog:
+    def __init__(self) -> None:
+        self.items = [Record(id="catalog:qwen", purpose="chat", download_size=4)]
+
+    def filter(self, purpose: str | None, max_download_bytes: int | None, advanced: bool) -> list[Record]:
+        return self.items
+
+
+class FakeModels:
+    def __init__(self) -> None:
+        self.items = [Record(id="installed:qwen", removable=True)]
+        self.removed: list[str] = []
+
+    async def list(self) -> list[Record]:
+        return self.items
+
+    async def remove(self, model_id: str) -> None:
+        self.removed.append(model_id)
+
+
+class FakeDownloads:
+    def __init__(self) -> None:
+        self.items: list[Record] = []
+        self.started: list[str] = []
+
+    def list(self) -> list[Record]:
+        return self.items
+
+    def create(self, model: Record, destination: str) -> Record:
+        task = Record(id="download:one", model_id=model.id, destination=destination, state="pending")
+        self.items.append(task)
+        return task
+
+    async def start(self, task_id: str) -> Record:
+        self.started.append(task_id)
+        return self.items[0]
+
+    async def pause(self, task_id: str) -> Record:
+        return self.items[0]
+
+    async def resume(self, task_id: str) -> Record:
+        return self.items[0]
+
+    async def cancel(self, task_id: str, discard_partials: bool = False) -> Record:
+        return self.items[0]
+
+
+class FakeInstances:
+    def __init__(self) -> None:
+        self.items: list[Record] = []
+
+    def list(self) -> list[Record]:
+        return self.items
+
+    async def start(self, model_id: str, backend_override: str | None = None) -> Record:
+        instance = Record(id="instance:one", model_id=model_id, device_id=backend_override or "cpu:0", state="running")
+        self.items.append(instance)
+        return instance
+
+    async def stop(self, instance_id: str) -> None:
+        self.items = [item for item in self.items if item.id != instance_id]
+
+    def get(self, instance_id: str) -> Record | None:
+        return next((item for item in self.items if item.id == instance_id), None)
+
+
+@pytest.fixture
+def services() -> SimpleNamespace:
+    events: list[dict[str, Any]] = []
+
+    async def broadcast(event: dict[str, Any]) -> None:
+        events.append(event)
+
+    return SimpleNamespace(
+        devices=FakeDevices(),
+        catalog=FakeCatalog(),
+        models=FakeModels(),
+        downloads=FakeDownloads(),
+        instances=FakeInstances(),
+        broadcast=broadcast,
+        events=events,
+    )
+
+
+@pytest.fixture
+def app(services: SimpleNamespace) -> FastAPI:
+    api = FastAPI()
+    api.state.local_ai = services
+    api.include_router(local_ai_router, prefix="/api/v1")
+    api.include_router(local_deploy_router, prefix="/api/v1")
+    return api
+
+
+@pytest.fixture
+def client(app: FastAPI) -> TestClient:
+    app.dependency_overrides[get_current_user] = lambda: "test-user"
+    return TestClient(app)
+
+
+def data(response) -> Any:
+    assert response.status_code == 200, response.text
+    return response.json()["data"]
+
+
+def test_all_local_ai_resources_require_auth(app: FastAPI) -> None:
+    client = TestClient(app)
+    for path in (
+        "/api/v1/local-ai/devices",
+        "/api/v1/local-ai/catalog",
+        "/api/v1/local-ai/models",
+        "/api/v1/local-ai/downloads",
+        "/api/v1/local-ai/instances",
+    ):
+        assert client.get(path).status_code == 401
+
+
+def test_resource_collections_are_exposed(client: TestClient) -> None:
+    assert data(client.get("/api/v1/local-ai/devices"))[0]["id"] == "cpu:0"
+    assert data(client.get("/api/v1/local-ai/catalog"))[0]["id"] == "catalog:qwen"
+    assert data(client.get("/api/v1/local-ai/models"))[0]["id"] == "installed:qwen"
+    assert data(client.get("/api/v1/local-ai/downloads")) == []
+    assert data(client.get("/api/v1/local-ai/instances")) == []
+
+
+def test_main_app_mounts_all_local_ai_resource_routes() -> None:
+    from web.server import create_app
+
+    paths = {route.path for route in create_app().routes}
+    assert {
+        "/api/v1/local-ai/devices",
+        "/api/v1/local-ai/catalog",
+        "/api/v1/local-ai/models",
+        "/api/v1/local-ai/downloads",
+        "/api/v1/local-ai/instances",
+        "/api/v1/local-ai/storage",
+    } <= paths
+
+
+def test_local_ai_services_attach_to_application_state(tmp_path) -> None:
+    api = FastAPI()
+    core = SimpleNamespace(db=object())
+
+    async def broadcast(event: dict[str, Any]) -> None:
+        pass
+
+    services = attach_local_ai_services(api, core, broadcast, tmp_path / "downloads.json")
+    assert api.state.local_ai is services
+    assert services.downloads._state_path == tmp_path / "downloads.json"
+
+
+def test_websocket_local_ai_events_have_canonical_resource_keys() -> None:
+    assert local_ai_event("device", Record(id="cpu:0")) == {
+        "type": "local_ai_device_updated",
+        "device": {"id": "cpu:0"},
+    }
+    assert local_ai_event("download", Record(id="download:one")) == {
+        "type": "local_ai_download_updated",
+        "download": {"id": "download:one"},
+    }
+    assert local_ai_event("instance", Record(id="instance:one")) == {
+        "type": "local_ai_instance_updated",
+        "instance": {"id": "instance:one"},
+    }
+
+
+def test_download_event_sink_translates_task_to_canonical_download_key() -> None:
+    events: list[dict[str, Any]] = []
+
+    async def broadcast(event: dict[str, Any]) -> None:
+        events.append(event)
+
+    sink = local_ai_event_sink(broadcast)
+    asyncio.run(sink({"type": "local_ai_download_updated", "task": {"id": "download:one"}}))
+    assert events == [{
+        "type": "local_ai_download_updated",
+        "download": {"id": "download:one"},
+    }]
+
+
+def test_download_create_requires_destination_and_is_idempotent_by_request_id(
+    client: TestClient,
+    services: SimpleNamespace,
+) -> None:
+    assert client.post(
+        "/api/v1/local-ai/downloads",
+        json={"model_id": "catalog:qwen", "request_id": "request:one"},
+    ).status_code == 422
+    payload = {"model_id": "catalog:qwen", "destination": "/models", "request_id": "request:one"}
+    first = client.post("/api/v1/local-ai/downloads", json=payload)
+    second = client.post("/api/v1/local-ai/downloads", json=payload)
+    assert first.status_code == 202
+    assert second.status_code == 202
+    assert first.json()["data"]["task"]["id"] == "download:one"
+    assert second.json()["data"]["task"]["id"] == "download:one"
+    assert len(services.downloads.items) == 1
+
+
+def test_remove_model_requires_confirmation(
+    client: TestClient,
+    services: SimpleNamespace,
+) -> None:
+    path = "/api/v1/local-ai/models/installed:qwen"
+    assert client.delete(path).status_code == 400
+    assert services.models.removed == []
+    assert client.delete(path, headers={"X-Confirm": "yes"}).status_code == 204
+    assert services.models.removed == ["installed:qwen"]
+
+
+def test_rescan_and_instance_lifecycle_publish_websocket_events(
+    client: TestClient,
+    services: SimpleNamespace,
+) -> None:
+    assert data(client.post("/api/v1/local-ai/devices/rescan"))[0]["id"] == "cpu:0"
+    response = client.post(
+        "/api/v1/local-ai/instances",
+        json={"model_id": "installed:qwen", "device_id": "cpu:0", "request_id": "start:one"},
+    )
+    assert response.status_code == 202
+    assert response.json()["data"]["task_id"] == "start:one"
+    for _ in range(20):
+        if any(event["type"] == "local_ai_instance_updated" for event in services.events):
+            break
+        asyncio.run(asyncio.sleep(0))
+    assert any(event["type"] == "local_ai_device_updated" for event in services.events)
+    assert any(event["type"] == "local_ai_instance_updated" for event in services.events)
+
+
+def test_legacy_devices_endpoint_translates_authoritative_devices(
+    client: TestClient,
+) -> None:
+    response = client.get("/api/v1/local-deploy/devices")
+    assert response.status_code == 200
+    payload = response.json()["data"]
+    assert payload["devices"][0]["id"] == "cpu:0"
+    assert payload["devices"][0]["model"] == "Test CPU"
+    assert "3 TOPS INT8" not in response.text

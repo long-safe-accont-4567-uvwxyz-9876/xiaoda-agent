@@ -6,7 +6,6 @@ from pathlib import Path
 from local_ai.catalog.schema import CatalogSchemaError, parse_catalog
 from local_ai.contracts import CatalogModel, ModelPurpose
 
-
 _DEFAULT_CATALOG_PATH = Path(__file__).resolve().parents[2] / "config" / "local_model_catalog.json"
 _DEFAULT_MAX_DOWNLOAD_BYTES = 5 * 1024**3
 

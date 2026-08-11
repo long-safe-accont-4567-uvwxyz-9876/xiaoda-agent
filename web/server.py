@@ -46,10 +46,17 @@ async def _apply_model_overrides(core: Any) -> None:
 
 def _register_env_providers(cfg: Any, env_values: Any, os_module: Any) -> None:
     """从 .env 注册已知免费模型平台 provider。"""
+    from config import get_provider_catalog
+
+    modelscope_credential = get_provider_catalog().resolve_environment_alias(
+        "modelscope",
+        env_values,
+    )
+    modelscope_env = modelscope_credential[0] if modelscope_credential else "MODELSCOPE_ACCESS_TOKEN"
     _KNOWN_ENV_PROVIDERS = {
         "SILICONFLOW_API_KEY": ("siliconflow", "openai", "https://api.siliconflow.cn/v1", "SiliconFlow 硅基流动"),
         "OPENROUTER_API_KEY": ("openrouter", "openai", "https://openrouter.ai/api/v1", "OpenRouter"),
-        "MODELSCOPE_ACCESS_TOKEN": (
+        modelscope_env: (
             "modelscope", "openai",
             "https://api-inference.modelscope.cn/v1", "ModelScope 魔搭"
         ),
@@ -1006,14 +1013,16 @@ def create_app() -> FastAPI:
     from web.routers.workflows import router as workflows_router
     from web.routers.workspace import router as workspace_router
     from web.routers.wechat import router as wechat_router, public_router as wechat_public_router
+    from web.routers.local_ai import router as local_ai_router
     from web.routers.local_deploy import router as local_deploy_router
+    from web.routers.local_ai_storage import router as local_ai_storage_router
 
     for r in (auth_router, chat_router, system_router, agents_router,
               models_router, tools_router, mcp_router, insight_router,
               schedule_router, media_router, health_router, plugins_router,
               setup_router, model_discovery_router, market_router,
               mail_manage_router, workflows_router, workspace_router,
-              wechat_router, local_deploy_router,
+              wechat_router, local_ai_router, local_deploy_router, local_ai_storage_router,
               system_public_router, wechat_public_router):
         app.include_router(r, prefix="/api/v1")
 

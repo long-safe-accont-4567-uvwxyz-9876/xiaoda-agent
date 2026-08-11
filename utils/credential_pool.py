@@ -317,7 +317,6 @@ class CredentialPool:
         _KNOWN_PROVIDERS = {
             "SILICONFLOW_API_KEY": ("siliconflow", "https://api.siliconflow.cn/v1"),
             "OPENROUTER_API_KEY": ("openrouter", "https://openrouter.ai/api/v1"),
-            "MODELSCOPE_ACCESS_TOKEN": ("modelscope", "https://api-inference.modelscope.cn/v1"),
         }
         for env_key, (provider, base_url) in _KNOWN_PROVIDERS.items():
             key = os.getenv(env_key, "")
@@ -327,6 +326,16 @@ class CredentialPool:
                     provider=provider,
                     base_url=base_url,
                 ))
+
+        from config import get_provider_catalog
+
+        modelscope_credential = get_provider_catalog().resolve_environment_alias("modelscope", os.environ)
+        if modelscope_credential:
+            self.add_credential(Credential(
+                api_key=modelscope_credential[1],
+                provider="modelscope",
+                base_url=get_provider_catalog().get("modelscope").endpoint.base_url,
+            ))
 
         # P0 修复：Ollama 仅在用户显式配置时启用（不再默认注册）
         # 根因：原实现 os.getenv("OLLAMA_BASE_URL", "http://localhost:11434/v1")

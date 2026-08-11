@@ -1,11 +1,150 @@
+import ast
+import tomllib
 from pathlib import Path
 
+from packaging.requirements import Requirement
 
 ROOT = Path(__file__).resolve().parents[1]
 
 
 def read_project_file(relative_path: str) -> str:
     return (ROOT / relative_path).read_text(encoding="utf-8")
+
+
+def test_local_ai_dependency_marker_matches_supported_release_platforms():
+    with (ROOT / "pyproject.toml").open("rb") as file:
+        local_ai = tomllib.load(file)["project"]["optional-dependencies"]["local-ai"]
+    requirement = Requirement(local_ai[0])
+    assert requirement.name == "onnxruntime-genai"
+    assert str(requirement.specifier) == "==0.15.2"
+    assert requirement.marker is not None
+    assert requirement.marker.evaluate(
+        {"platform_system": "Linux", "platform_machine": "aarch64"}
+    )
+    assert requirement.marker.evaluate(
+        {"platform_system": "Linux", "platform_machine": "x86_64"}
+    )
+    assert requirement.marker.evaluate(
+        {"platform_system": "Windows", "platform_machine": "AMD64"}
+    )
+    assert not requirement.marker.evaluate(
+        {"platform_system": "Darwin", "platform_machine": "arm64"}
+    )
+    assert not requirement.marker.evaluate(
+        {"platform_system": "Windows", "platform_machine": "ARM64"}
+    )
+
+
+def test_pyinstaller_collects_local_ai_and_gateway_platform_adapters():
+    spec = read_project_file("xiaoda-agent.spec")
+    assert "collect_submodules('local_ai')" in spec
+    assert "collect_submodules('llm_gateway')" in spec
+
+
+def test_python_distribution_includes_local_ai_and_gateway_packages():
+    with (ROOT / "pyproject.toml").open("rb") as file:
+        packages = tomllib.load(file)["tool"]["setuptools"]["packages"]["find"]["include"]
+    assert "local_ai*" in packages
+    assert "llm_gateway*" in packages
+
+
+def test_pyinstaller_dynamic_library_collection_isolated_per_package():
+    module = ast.parse(read_project_file("xiaoda-agent.spec"))
+    loop = next(
+        node
+        for node in module.body
+        if isinstance(node, ast.For)
+        and any(
+            isinstance(child, ast.Call)
+            and isinstance(child.func, ast.Name)
+            and child.func.id == "collect_dynamic_libs"
+            for child in ast.walk(node)
+        )
+    )
+    attempted = []
+
+    def collect_dynamic_libs(package: str):
+        attempted.append(package)
+        if package == "sqlite_vec":
+            raise RuntimeError("missing native package")
+        return [(package, ".")]
+
+    namespace = {"binaries": [], "collect_dynamic_libs": collect_dynamic_libs}
+    exec(compile(ast.Module(body=[loop], type_ignores=[]), "xiaoda-agent.spec", "exec"), namespace)
+    assert attempted == [
+        "pilk",
+        "sqlite_vec",
+        "onnxruntime",
+        "onnxruntime_genai",
+        "tokenizers",
+    ]
+    assert namespace["binaries"] == [
+        ("pilk", "."),
+        ("onnxruntime", "."),
+        ("onnxruntime_genai", "."),
+        ("tokenizers", "."),
+    ]
+
+
+def test_supported_release_jobs_install_local_ai_dependencies():
+    workflow = read_project_file(".github/workflows/build-release.yml")
+    build_section = workflow[workflow.index("  build:"):workflow.index("  test:")]
+    assert "windows-x64" in build_section
+    assert "linux-x86_64" in build_section
+    assert "linux-arm64" in build_section
+    assert "ubuntu-24.04-arm" in build_section
+    assert 'pip install ".[local-ai]"' in build_section
+
+
+def test_release_validates_ort_genai_in_frozen_executable_and_native_bundle():
+    workflow = read_project_file(".github/workflows/build-release.yml")
+    build_section = workflow[workflow.index("  build:"):workflow.index("  test:")]
+    assert "pyi-archive_viewer" in build_section
+    assert "onnxruntime_genai" in build_section
+    assert "onnxruntime-genai*.dll" in build_section
+    assert "libonnxruntime-genai*.so*" in build_section
+    assert "local-ai-smoke" in build_section
+    assert '"$EXE" local-ai-smoke "$SMOKE_DIR"' in build_section
+
+
+def test_release_artifacts_include_linux_arm64_frozen_bundle():
+    workflow = read_project_file(".github/workflows/build-release.yml")
+    assert "xiaoda-agent-linux-arm64-*.tar.gz" in workflow
+    assert "xiaoda-agent-linux-arm64-*.run" in workflow
+
+
+def test_release_never_bundles_market_model_storage_or_partial_downloads():
+    spec = read_project_file("xiaoda-agent.spec")
+    assert "local_model_storage" not in spec
+    assert "*.part" not in spec
+    assert "LOCAL_AI_STORAGE_DIR" not in spec
+
+
+def test_local_release_installs_and_verifies_local_ai_runtime():
+    release_script = read_project_file("scripts/build-release.sh")
+    assert 'python3 -m pip install ".[local-ai]"' in release_script
+    assert "onnxruntime_genai" in release_script
+    assert "local-ai-smoke" in release_script
+    assert "onnxruntime-genai*.dll" in release_script
+    assert "libonnxruntime-genai*.so*" in release_script
+    assert "create_ort_genai_smoke_model.py" in release_script
+
+
+def test_docker_image_installs_local_ai_runtime_without_model_storage():
+    dockerfile = read_project_file("Dockerfile")
+    assert 'RUN pip install --no-cache-dir --prefix=/install ".[local-ai]"' in dockerfile
+    assert "import onnxruntime_genai" in dockerfile
+    assert "local_model_storage" not in dockerfile
+    assert "*.part" not in dockerfile
+
+
+def test_ort_genai_smoke_model_generator_is_shared_by_ci_and_local_release():
+    workflow = read_project_file(".github/workflows/build-release.yml")
+    release_script = read_project_file("scripts/build-release.sh")
+    generator = ROOT / "scripts/create_ort_genai_smoke_model.py"
+    assert generator.is_file()
+    assert "scripts/create_ort_genai_smoke_model.py" in workflow
+    assert "scripts/create_ort_genai_smoke_model.py" in release_script
 
 
 def test_windows_package_uses_exe_for_shortcuts():

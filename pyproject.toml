@@ -76,6 +76,7 @@ streamlit = ["streamlit>=1.28.0"]
 dev = ["pytest>=7.0", "pytest-asyncio>=0.21", "ruff>=0.1.0"]
 search = []
 windows = ["pywin32>=306"]
+local-ai = ["onnxruntime-genai==0.15.2; python_version >= '3.11' and ((platform_system == 'Windows' and platform_machine == 'AMD64') or (platform_system == 'Linux' and platform_machine == 'x86_64') or (platform_system == 'Linux' and platform_machine == 'aarch64'))"]
 
 [project.scripts]
 xiaoda-agent = "agent:main"
@@ -92,6 +93,8 @@ include = [
     "config*",
     "hooks*",
     "instinct_manager*",
+    "llm_gateway*",
+    "local_ai*",
     "xiaoli_agent*",
     "model_router*",
     "qq_bot_adapter*",

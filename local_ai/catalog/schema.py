@@ -91,11 +91,29 @@ def _parse_model(value: Any, index: int) -> CatalogModel:
     path = f"models[{index}]"
     model = _mapping(value, path)
     _fields(model, _MODEL_FIELDS, _REQUIRED_MODEL_FIELDS, path)
+    if not isinstance(model["license"], str) or not model["license"].strip():
+        raise CatalogSchemaError(f"{path}.license must not be empty")
     files = _sequence(model["files"], f"{path}.files")
+    seen_file_paths: set[str] = set()
+    total_size = 0
     for file_index, file_value in enumerate(files):
         file_path = f"{path}.files[{file_index}]"
         file_data = _mapping(file_value, file_path)
         _fields(file_data, _FILE_FIELDS, _FILE_FIELDS, file_path)
+        file_path_value = file_data["path"]
+        if not isinstance(file_path_value, str) or not file_path_value.strip():
+            raise CatalogSchemaError(f"{file_path}.path must be a non-empty string")
+        if file_path_value in seen_file_paths:
+            raise CatalogSchemaError(f"{file_path} has duplicate file path: {file_path_value}")
+        seen_file_paths.add(file_path_value)
+        file_size = file_data["size"]
+        if type(file_size) is not int or file_size <= 0:
+            raise CatalogSchemaError(f"{file_path}.size must be a positive integer")
+        total_size += file_size
+    if model["download_size"] != total_size:
+        raise CatalogSchemaError(
+            f"{path}.download_size must equal the sum of file sizes (expected {total_size}, got {model['download_size']})"
+        )
     compatibility = _mapping(model["compatibility"], f"{path}.compatibility")
     _fields(compatibility, _COMPATIBILITY_FIELDS, frozenset(), f"{path}.compatibility")
     for name, item in compatibility.items():
@@ -124,4 +142,12 @@ def parse_catalog(value: Any) -> tuple[CatalogModel, ...]:
         if parsed.scheme != "https" or not parsed.netloc:
             raise CatalogSchemaError("remote_catalog_url must be an HTTPS URL or null")
     models = _sequence(root["models"], "models")
-    return tuple(_parse_model(model, index) for index, model in enumerate(models))
+    seen_ids: set[str] = set()
+    result: list[CatalogModel] = []
+    for index, model_value in enumerate(models):
+        model = _parse_model(model_value, index)
+        if model.id in seen_ids:
+            raise CatalogSchemaError(f"models[{index}] has duplicate model id: {model.id}")
+        seen_ids.add(model.id)
+        result.append(model)
+    return tuple(result)

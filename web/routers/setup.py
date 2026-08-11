@@ -585,7 +585,9 @@ async def test_single_key(key_name: str, key_value: str, extra: dict | None = No
     if key_name == "WOLFRAMALPHA_API_KEY":
         return await _test_wolframalpha(key_value)
 
-    if key_name == "MODELSCOPE_ACCESS_TOKEN":
+    from config import get_provider_catalog
+
+    if key_name in get_provider_catalog().get("modelscope").auth.environment_aliases:
         return await _test_modelscope(key_value)
 
     if key_name == "TAVILY_API_KEY":
@@ -780,7 +782,6 @@ def _reset_credential_pool(updates: Any) -> None:
         _PROVIDER_KEY_MAP = {
             "SILICONFLOW_API_KEY": ("siliconflow", "https://api.siliconflow.cn/v1"),
             "OPENROUTER_API_KEY": ("openrouter", "https://openrouter.ai/api/v1"),
-            "MODELSCOPE_ACCESS_TOKEN": ("modelscope", "https://api-inference.modelscope.cn/v1"),
             "MIMO_API_KEY": ("mimo", "https://api.xiaomimimo.com/v1"),
             "DEEPSEEK_API_KEY": ("deepseek", "https://api.deepseek.com/v1"),
             "AGNES_API_KEY": ("agnes", ""),
@@ -793,6 +794,18 @@ def _reset_credential_pool(updates: Any) -> None:
             pool.replace_provider(provider, Credential(
                 api_key=new_key, provider=provider, base_url=base_url,
             ))
+        from config import get_provider_catalog
+
+        catalog = get_provider_catalog()
+        modelscope_credential = catalog.resolve_environment_alias("modelscope", updates)
+        if modelscope_credential:
+            pool.replace_provider("modelscope", Credential(
+                api_key=modelscope_credential[1],
+                provider="modelscope",
+                base_url=catalog.get("modelscope").endpoint.base_url,
+            ))
+        else:
+            pool.reset_provider("modelscope")
         logger.info("setup.credential_pool_updated")
     except (OSError, KeyError, ValueError, RuntimeError, TypeError) as e:
         logger.warning("setup.credential_pool_reset_failed error={}", str(e))

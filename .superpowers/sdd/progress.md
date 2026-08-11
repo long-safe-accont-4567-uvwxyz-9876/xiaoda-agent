@@ -96,14 +96,48 @@ Base: 5737490 · Branch: main · Execution: current worktree with user consent
   - 精确状态合同 RED 为 `2 failed, 62 deselected`；GREEN 后 Local AI 回归 `167 passed`；Ruff、compileall、diff check 通过，编辑器诊断因路径访问限制未计为成功。
   - 多卡消失恢复：仅保留 kind=gpu 且 identity_persistent!=False 的真实 GPU；default/ephemeral 排除；单卡消失为 UNAVAILABLE，复现恢复且不重复。
   - 多卡 RED 为 `1 failed, 1 passed`（StopIteration）；精确状态报告纠偏 RED 为 `2 failed`；GREEN 后 registry `69 passed`，Ruff/diff check 通过。
-- [ ] Task 4: Versioned Curated Catalog
-- [ ] Task 5: ModelScope Repository Adapter
-- [ ] Task 6: Server Storage Picker and Policy
-- [ ] Task 7: Persistent Model Registry
-- [ ] Task 8: Resumable Download Manager
-- [ ] Task 9: Standard ORT Embedding and Reranker Runtimes
-- [ ] Task 10: ONNX Runtime GenAI Chat Runtime
-- [ ] Task 11: Instance Manager and Runtime Registry
+- [x] Task 4: Versioned Curated Catalog (uncommitted by user constraint, review clean; 207 passed)
+  - 严格 JSON schema：schema_version=1、remote_catalog_url (HTTPS 或 null)、models 数组。
+  - 不可变 revision（7-64 hex）、每个文件 path/size>0/64 位 SHA256、download_size 必须等于文件大小之和。
+  - 拒绝空 license、重复 model ID、重复 file path、未知字段和错误类型。
+  - 默认市场隐藏超过 5 GiB 模型；advanced=True 显示全部；purpose/max_download_bytes 过滤。
+  - 目录以空数组发布，附 remote_catalog_url 接缝，不虚构任何 ModelScope 元数据。
+  - 修复 contracts.py 中 CatalogFile.from_dict 缺失字段抛 KeyError→ValueError。
+  - 修复 curated.py ruff I001 import 排序。
+- [x] Task 5: ModelScope Repository Adapter (uncommitted by user constraint, review clean; 260 passed)
+  - `ModelScopeRepository.list_files(repository, revision, token) -> list[RemoteFile]`：httpx 分页、Bearer auth、SSRF 防护。
+  - `ModelScopeRepository.inspect(repository, revision, token) -> CatalogInspection`：识别 ORT GenAI chat、embedding、reranker 布局。
+  - revision 验证与 contracts 一致（7-64 hex）；拒绝 main/master/latest。
+  - SSRF：IP 字面量直接检查；生产模式 DNS 解析 fail-closed；测试模式（自定义 transport）跳过 DNS。
+  - 目的不从仓库名猜测，只从实际配置文件识别。
+  - 未知布局 → `runnable=False`，`state="requires_configuration"`，附 missing 列表。
+  - evidence 递归冻结为不可变 MappingProxyType/tuple。
+  - Minor（供最终审查权衡）：无 DNS fail-closed 直接测试（需 mock socket）；`inspect` broad except 吞 SSRF ValueError（设计选择，best-effort API）。
+- [x] Task 6: Server Storage Picker and Policy (uncommitted by user constraint, review clean; 296 passed)
+  - `StoragePolicy.list_directory(path) -> DirectoryListing`：根目录/子目录浏览，过滤非目录，拒绝 traversal/forbidden。
+  - `StoragePolicy.validate_destination(path, required_bytes) -> StorageValidation`：可写性、磁盘空间、符号链接逃逸检查，不自动持久化。
+  - `StoragePolicy.get_default()/set_default(path)`：显式持久化，set_default 先校验再写入 resolved 绝对路径。
+  - REST API：`GET/POST /api/v1/local-ai/storage`、`GET/PUT /api/v1/local-ai/storage/default`，全部强制鉴权。
+  - dataclass `to_dict()` 与 contracts 模式一致；路由不导入私有函数。
+  - Minor（供最终审查权衡）：`restricted_roots` 配置默认值未接线（前向钩子）；`to_dict()` 手写未复用 `_Record` 基类；`_symlink_escapes_parent_tree` 仅检查最终组件（保守设计）。
+- [x] Task 7: Persistent Model Registry (uncommitted by user constraint, review clean after concurrency fixes; 42 database tests + 296 Local AI regression passed)
+  - 原子注册：ID/目录检查与 INSERT 位于同一串行写事务，竞争失败稳定映射领域异常。
+  - 裸 `LocalAIDB` 回退事务增加实例锁，覆盖 BEGIN IMMEDIATE、提交与回滚；三类并发测试通过。
+- [x] Task 8: Resumable Download Manager (uncommitted by user constraint, review clean after fix; 16 download tests + contracts/registry regression passed)
+  - 修复：symlink 逃逸阻断、Range 200 回退单调进度、并发 start 幂等、206 Content-Range 校验、完整 partial 直接原子完成。
+- [x] Task 9: Standard ORT Embedding and Reranker Runtimes (uncommitted by user constraint, review clean after score-shape fix; 20 tests passed)
+  - 修复：Reranker 仅接受 `(B,)` 或 `(B,1)` logits；非法 rank、尾维及 batch 数不匹配统一抛 `RuntimeValidationError`。
+  - 非阻塞后续：真实模型端到端、会话运行降级和缺依赖路径可在 Task 11/23 补充覆盖。
+- [x] Task 10: ONNX Runtime GenAI Chat Runtime (uncommitted by user constraint, review clean after two fix rounds; 75 tests passed)
+  - 对齐 ORT GenAI 0.15.2 `Config`/`append_tokens` API，完善取消、解码与所有部分初始化资源清理路径。
+  - CPU 零 provider options；CUDA/DML 按当前 wheel 实际能力结构化拒绝，禁止虚假加速声明。
+  - 发布矩阵覆盖 Windows x64、Linux x86_64、Linux ARM64，并由冻结可执行文件执行真实最小 Model smoke。
+- [x] Task 11: Instance Manager and Runtime Registry (uncommitted by user constraint, concurrency review clean; 281 passed)
+  - 每模型锁串行同模型生命周期，不同模型可独立启动；profile 选择、override、route 依赖、设备丢失与恢复均有测试覆盖。
+  - 取消阻塞中的同步 start 时等待 worker 完成；若已启动则在传播取消前停止 runtime，shutdown 保持 runtime 先于数据库关闭。
+  - health 刷新与 stop 通过每模型锁线性化，不再用旧快照复活幽灵实例。
+  - stop 期间登记 stopping 状态，同步 route 绑定被结构化拒绝，不改变现有调用接口。
+  - 并发终审 RED 为 `3 failed, 18 passed`；GREEN 后定向 `21 passed`，扩大回归 `281 passed`；Ruff、compileall、diff check 通过。
 - [ ] Task 12: VectorStore and Memory Integration
 - [ ] Task 13: Provider Catalog as Single Authority
 - [ ] Task 14: Complete Protocol Transports

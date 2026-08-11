@@ -141,7 +141,7 @@ def test_strict_schema_rejects_unsupported_or_unknown_data(tmp_path, payload, ma
     "models, match",
     [
         ([_model("chat:one", "chat", 1) | {"license": ""}], "license"),
-        ([_model("chat:one", "chat", 2)], "download_size"),
+        ([_model("chat:one", "chat", 2) | {"download_size": 3}], "download_size"),
         (
             [
                 _model("chat:one", "chat", 1),

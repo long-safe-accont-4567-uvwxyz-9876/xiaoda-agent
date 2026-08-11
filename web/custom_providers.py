@@ -6,12 +6,14 @@
   这样 ModelRouter 的调用点零改动即可使用。
 """
 from __future__ import annotations
+
 import json
+from types import SimpleNamespace
 from typing import Any
 
-from types import SimpleNamespace
-
 from loguru import logger
+
+from llm_gateway.transports import AnthropicTransport, CompletionRequest
 
 
 class _Usage(SimpleNamespace):
@@ -123,9 +125,45 @@ class AnthropicCompatClient:
     async def _create(self, model: str, messages: list[dict],
                       temperature: float = 0.7, max_tokens: int = 1024,
                       stream: bool = False, **kwargs: Any) -> Any:
-        import httpx
         if stream:
-            raise RuntimeError("Anthropic 适配器暂不支持流式")
+            transport = AnthropicTransport(self._api_key, self._base_url)
+            chunks = transport.stream(CompletionRequest(
+                model=model,
+                messages=tuple(messages),
+                tools=tuple(kwargs.get("tools") or ()),
+                tool_choice=kwargs.get("tool_choice"),
+                temperature=temperature,
+                max_tokens=max_tokens,
+            ))
+
+            async def compatible_stream():
+                try:
+                    async for chunk in chunks:
+                        tool_calls = [
+                            SimpleNamespace(
+                                id=call.id,
+                                type="function",
+                                function=SimpleNamespace(
+                                    name=call.name,
+                                    arguments=json.dumps(call.arguments, ensure_ascii=False),
+                                ),
+                            )
+                            for call in chunk.tool_calls
+                        ]
+                        delta = SimpleNamespace(
+                            content=chunk.text,
+                            reasoning_content=None,
+                            tool_calls=tool_calls or None,
+                        )
+                        choice = SimpleNamespace(
+                            delta=delta,
+                            finish_reason=chunk.finish_reason,
+                        )
+                        yield SimpleNamespace(choices=[choice], model=chunk.model or model)
+                finally:
+                    await transport.aclose()
+
+            return compatible_stream()
         system_parts = [
             self._text_content(m.get("content"))
             for m in messages if m.get("role") == "system"
@@ -152,6 +190,7 @@ class AnthropicCompatClient:
             "anthropic-version": "2023-06-01",
             "content-type": "application/json",
         }
+        import httpx
         async with httpx.AsyncClient(timeout=120) as client:
             resp = await client.post(f"{self._base_url}/v1/messages",
                                      json=payload, headers=headers)

@@ -302,6 +302,14 @@ class ConnectionManager:
 
 manager = ConnectionManager()
 
+
+def local_ai_event(resource: str, record: Any) -> dict[str, Any]:
+    payload = record.to_dict() if hasattr(record, "to_dict") else dict(record)
+    return {
+        "type": f"local_ai_{resource}_updated",
+        resource: payload,
+    }
+
 # PTY 终端会话: term_sid -> {pid, fd, conn_id, shell, alive}
 _pty_sessions: dict[str, dict] = {}
 _pty_sessions_lock = threading.Lock()

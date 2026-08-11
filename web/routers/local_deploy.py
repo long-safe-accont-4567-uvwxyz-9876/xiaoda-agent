@@ -288,6 +288,31 @@ def _fallback_status() -> dict:
 @router.get("/local-deploy/devices", response_model=Envelope[dict])
 async def local_deploy_devices(request: Request) -> Any:
     """算力设备检测：CPU / NPU / GPU 探测结果 + 当前持久化设备 + 实时占用。"""
+    services = getattr(request.app.state, "local_ai", None)
+    if services is not None:
+        current = str(get_config_service().get("local_deploy.device", "") or "")
+        devices = []
+        for device in services.devices.scan():
+            item = device.to_dict()
+            devices.append({
+                "id": item["id"],
+                "name": item["kind"].upper(),
+                "model": item["name"],
+                "desc": ", ".join(
+                    backend["provider"] for backend in item.get("backends", [])
+                ) or item["architecture"],
+                "available": item["state"] == "available",
+                "active": item["id"] == current,
+                "stats": {
+                    "memory_total": item["memory_total"],
+                    "memory_available": item["memory_available"],
+                },
+            })
+        return Envelope(data={
+            "current": current,
+            "devices": devices,
+            "runtime_backend": os.getenv("LOCAL_EMBED_BACKEND", "auto"),
+        })
     data = _detect_devices()
     data["runtime_backend"] = os.getenv("LOCAL_EMBED_BACKEND", "auto")
     vs = _get_vector_store(request)

@@ -287,7 +287,10 @@ class CatalogModel(_Record):
             if isinstance(manifest, CatalogFile):
                 normalized_files.append(manifest)
             elif isinstance(manifest, Mapping):
-                normalized_files.append(CatalogFile.from_dict(manifest))
+                try:
+                    normalized_files.append(CatalogFile.from_dict(manifest))
+                except KeyError as error:
+                    raise ValueError(f"files: missing required field {error}") from error
             else:
                 raise ValueError("files must contain CatalogFile records or mappings")
         _require_non_negative_int("parameter_count", self.parameter_count)
@@ -323,6 +326,7 @@ class InstalledModel(_Record):
     ownership: str
     installed_at: datetime
     metadata: Mapping[str, Any] = field(default_factory=dict)
+    removable: bool = True
 
     def __post_init__(self) -> None:
         for name in ("id", "catalog_id", "revision", "manifest_checksum", "validation_state", "ownership"):
@@ -330,8 +334,10 @@ class InstalledModel(_Record):
         _require_revision(self.revision)
         _require_path_string("directory", self.directory, absolute=True)
         _require_utc("installed_at", self.installed_at)
+        _require_bool("removable", self.removable)
         object.__setattr__(self, "purpose", ModelPurpose(self.purpose))
         object.__setattr__(self, "metadata", _freeze_mapping("metadata", self.metadata))
+        object.__setattr__(self, "removable", self.ownership != "bundled")
 
     @classmethod
     def from_dict(cls, data: Mapping[str, Any]) -> Self:

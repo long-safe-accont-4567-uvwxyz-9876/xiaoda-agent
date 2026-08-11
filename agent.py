@@ -231,6 +231,9 @@ def main() -> None:
     doctor_parser.add_argument("--json", action="store_true", help="JSON 格式输出")
     doctor_parser.add_argument("--fix", action="store_true", help="自动修复可修复的问题")
 
+    local_ai_smoke_parser = subparsers.add_parser("local-ai-smoke")
+    local_ai_smoke_parser.add_argument("model_dir")
+
     # 默认模式参数
     parser.add_argument("--web", action="store_true", help="启动 Web UI 模式")
     parser.add_argument("--desktop", action="store_true", help="启动桌面模式（pywebview 原生窗口）")
@@ -278,6 +281,10 @@ def main() -> None:
     if args.command == "doctor":
         from core.doctor import run_doctor
         sys.exit(run_doctor(json_output=args.json, auto_fix=args.fix))
+
+    if args.command == "local-ai-smoke":
+        from local_ai.runtimes.ort_genai import run_cpu_smoke
+        sys.exit(0 if run_cpu_smoke(args.model_dir) else 1)
 
     # 首次启动自动触发配置向导
     if args.setup:

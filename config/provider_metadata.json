@@ -1,4 +1,5 @@
 {
+  "schema_version": 1,
   "_comment": "Provider 元数据配置（替代 model_router.py / config.py 中的硬编码默认值）",
   "_doc": "所有默认值均来自各 provider 官方文档，标注 doc_url + doc_note 以便溯源。用户可通过此文件直接编辑，或通过环境变量覆盖（环境变量优先级最高）。",
   "_env_override": {
@@ -11,6 +12,8 @@
   },
   "providers": {
     "agnes": {
+      "protocol": "openai_compatible",
+      "environment_aliases": ["AGNES_API_KEY"],
       "base_url_default": "https://apihub.agnes-ai.cn/v1",
       "max_tokens_cap": 65535,
       "default_model": "agnes-2.0-flash",
@@ -21,6 +24,8 @@
       "builtin": true
     },
     "mimo": {
+      "protocol": "openai_compatible",
+      "environment_aliases": ["MIMO_API_KEY"],
       "base_url_default": "https://api.xiaomimimo.com/v1",
       "max_tokens_cap": 131072,
       "default_model": "mimo-v2.5",
@@ -32,6 +37,8 @@
       "builtin": true
     },
     "deepseek": {
+      "protocol": "openai_compatible",
+      "environment_aliases": ["DEEPSEEK_API_KEY"],
       "base_url_default": "https://api.deepseek.com/v1",
       "max_tokens_cap": 8192,
       "default_model": "deepseek-chat",
@@ -41,6 +48,8 @@
       "supports_tools": true
     },
     "siliconflow": {
+      "protocol": "openai_compatible",
+      "environment_aliases": ["SILICONFLOW_API_KEY"],
       "base_url_default": "https://api.siliconflow.cn/v1",
       "max_tokens_cap": null,
       "default_model": "deepseek-ai/DeepSeek-V3-0324",
@@ -50,6 +59,8 @@
       "supports_tools": true
     },
     "openrouter": {
+      "protocol": "openai_compatible",
+      "environment_aliases": ["OPENROUTER_API_KEY"],
       "base_url_default": "https://openrouter.ai/api/v1",
       "max_tokens_cap": null,
       "default_model": "",
@@ -59,6 +70,8 @@
       "supports_tools": true
     },
     "modelscope": {
+      "protocol": "openai_compatible",
+      "environment_aliases": ["MODELSCOPE_ACCESS_TOKEN", "MODELSCOPE_API_KEY"],
       "base_url_default": "https://api-inference.modelscope.cn/v1/",
       "max_tokens_cap": null,
       "default_model": "",
@@ -68,6 +81,8 @@
       "supports_tools": true
     },
     "ollama": {
+      "protocol": "ollama",
+      "environment_aliases": ["OLLAMA_API_KEY"],
       "base_url_default": "",
       "max_tokens_cap": null,
       "default_model": "qwen2.5:latest",

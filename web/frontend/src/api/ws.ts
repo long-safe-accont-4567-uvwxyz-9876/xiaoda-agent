@@ -3,6 +3,10 @@ export interface WsEvent {
   [key: string]: unknown
 }
 
+export type LocalAiWsEvent = WsEvent & {
+  type: 'local_ai_device_updated' | 'local_ai_download_updated' | 'local_ai_instance_updated'
+}
+
 export class WsClient {
   private ws: WebSocket | null = null
   private reconnectAttempts = 0

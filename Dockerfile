@@ -16,8 +16,10 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     gcc g++ python3-dev \
     && rm -rf /var/lib/apt/lists/*
 WORKDIR /build
-COPY requirements.txt .
+COPY . .
 RUN pip install --no-cache-dir --prefix=/install -r requirements.txt
+RUN pip install --no-cache-dir --prefix=/install ".[local-ai]"
+RUN PYTHONPATH=/install/lib/python3.11/site-packages python -c "import onnxruntime_genai"
 
 # ── Stage 2b: Python runtime ──
 FROM python:3.11-slim-bookworm

@@ -529,6 +529,7 @@ MIMO_BASE_URL = os.getenv("MIMO_BASE_URL", "https://api.xiaomimimo.com/v1")
 # 用户约束：默认用 MiMo，但模型 ID 不在代码里硬编码
 # 优先级：环境变量 > provider_metadata.json > 空串
 _PROVIDER_METADATA_CACHE: dict | None = None
+_PROVIDER_CATALOG_CACHE = None
 
 
 def _load_provider_metadata_cached() -> dict:
@@ -570,6 +571,19 @@ def _load_provider_metadata_cached() -> dict:
     return _PROVIDER_METADATA_CACHE
 
 
+def get_provider_catalog():
+    global _PROVIDER_CATALOG_CACHE
+    if _PROVIDER_CATALOG_CACHE is None:
+        from llm_gateway.provider_catalog import ProviderCatalog
+
+        user_path = get_config_dir() / "provider_metadata.json"
+        bundled_path = Path(__file__).resolve().parent / "config" / "provider_metadata.json"
+        _PROVIDER_CATALOG_CACHE = ProviderCatalog.from_paths(user_path, bundled_path)
+        for source_path, error in _PROVIDER_CATALOG_CACHE.load_errors:
+            logger.warning(f"config.provider_catalog_load_failed source={source_path} error={error}")
+    return _PROVIDER_CATALOG_CACHE
+
+
 def get_default_model_for_provider(provider: str) -> str:
     """返回指定 provider 的默认模型 ID。
 
@@ -595,14 +609,10 @@ def get_default_model_for_provider(provider: str) -> str:
     env_val = os.getenv(env_var, "").strip()
     if env_val:
         return env_val
-    # 2. provider_metadata.json
-    meta = _load_provider_metadata_cached()
-    providers = meta.get("providers", {}) if isinstance(meta, dict) else {}
-    provider_meta = providers.get(provider_lower, {})
-    if isinstance(provider_meta, dict):
-        return provider_meta.get("default_model", "") or ""
-    # 3. 未知 provider
-    return ""
+    try:
+        return get_provider_catalog().get(provider_lower).default_model
+    except KeyError:
+        return ""
 
 
 # ── 内置 Provider 集合（从 provider_metadata.json 派生，无硬编码）──
@@ -625,13 +635,7 @@ def get_builtin_providers() -> frozenset[str]:
     global _BUILTIN_PROVIDERS_CACHE
     if _BUILTIN_PROVIDERS_CACHE is not None:
         return _BUILTIN_PROVIDERS_CACHE
-    meta = _load_provider_metadata_cached()
-    providers = meta.get("providers", {}) if isinstance(meta, dict) else {}
-    builtin = set()
-    if isinstance(providers, dict):
-        for pid, pmeta in providers.items():
-            if isinstance(pmeta, dict) and pmeta.get("builtin", False):
-                builtin.add(pid)
+    builtin = {provider.id for provider in get_provider_catalog().list() if provider.builtin}
     # mimo 是最终兜底，必须包含（即使 metadata 异常未标记也保留）
     builtin.add("mimo")
     _BUILTIN_PROVIDERS_CACHE = frozenset(builtin)
@@ -683,13 +687,19 @@ AGNES_VIDEO_MODEL = os.getenv("AGNES_VIDEO_MODEL", "agnes-video-v2.0")
 # 子代理注册时根据 provider 自动选择正确的连接参数
 def get_provider_config(provider: str) -> dict:
     """返回 provider 对应的 base_url 和 api_key_env。"""
-    _PROVIDER_MAP = {
-        "mimo": {"base_url": MIMO_BASE_URL, "api_key_env": "MIMO_API_KEY"},
-        "siliconflow": {"base_url": "https://api.siliconflow.cn/v1", "api_key_env": "SILICONFLOW_API_KEY"},
-        "deepseek": {"base_url": DEEPSEEK_BASE_URL, "api_key_env": "DEEPSEEK_API_KEY"},
-        "agnes": {"base_url": AGNES_BASE_URL, "api_key_env": "AGNES_API_KEY"},
+    try:
+        definition = get_provider_catalog().get(provider)
+    except KeyError:
+        return {"base_url": "", "api_key_env": ""}
+    api_key_env = next(
+        (alias for alias in definition.auth.environment_aliases if os.getenv(alias, "").strip()),
+        definition.auth.environment_aliases[0] if definition.auth.environment_aliases else "",
+    )
+    base_url_env = f"{definition.id.upper()}_BASE_URL"
+    return {
+        "base_url": os.getenv(base_url_env, definition.endpoint.base_url),
+        "api_key_env": api_key_env,
     }
-    return _PROVIDER_MAP.get(provider, {"base_url": "", "api_key_env": ""})
 
 
 # ── Agent display_name 动态读取（规避 IP 风险，用户可自定义）──

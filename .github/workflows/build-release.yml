@@ -25,6 +25,9 @@ jobs:
           - runner: ubuntu-latest
             platform: linux-x86_64
             artifact: xiaoda-agent-linux-x86_64
+          - runner: ubuntu-24.04-arm
+            platform: linux-arm64
+            artifact: xiaoda-agent-linux-arm64
 
     runs-on: ${{ matrix.runner }}
 
@@ -128,7 +131,9 @@ jobs:
       - name: Install Python dependencies
         run: |
           pip install pyinstaller
+          pip install onnx
           pip install -r requirements.txt
+          pip install ".[local-ai]"
           pip install fastapi uvicorn[standard] websockets python-multipart sse-starlette httpx Pillow numpy rich python-dotenv loguru openai aiosqlite pydantic jieba pyyaml pilk pywebview
 
       - name: Verify pilk installed (SILK codec for voice messages)
@@ -292,6 +297,34 @@ jobs:
             exit 1
           fi
           echo "CLI interactive modules verified OK"
+
+      - name: Verify ORT GenAI frozen runtime
+        shell: bash
+        run: |
+          EXE=$(find dist/xiaoda-agent -maxdepth 1 -type f \( -name "xiaoda-agent" -o -name "xiaoda-agent.exe" \) -print -quit 2>/dev/null)
+          if [ -z "$EXE" ]; then
+            echo "FATAL: executable not found in build output!"
+            exit 1
+          fi
+          printf 'O PYZ.pyz\nq\n' | pyi-archive_viewer "$EXE" > /tmp/ort_genai_pyz_contents.txt
+          if ! grep -q "'onnxruntime_genai" /tmp/ort_genai_pyz_contents.txt; then
+            echo "FATAL: onnxruntime_genai NOT bundled in frozen executable!"
+            exit 1
+          fi
+          if [ "$RUNNER_OS" = "Windows" ]; then
+            ORT_GENAI=$(find dist/xiaoda-agent -name "onnxruntime-genai*.dll" -print -quit)
+          else
+            ORT_GENAI=$(find dist/xiaoda-agent -name "libonnxruntime-genai*.so*" -print -quit)
+          fi
+          if [ -z "$ORT_GENAI" ]; then
+            echo "FATAL: ORT GenAI native library NOT bundled!"
+            find dist/xiaoda-agent -iname "*genai*" 2>/dev/null | head -20 || true
+            exit 1
+          fi
+          ls -lh "$ORT_GENAI"
+          SMOKE_DIR="$RUNNER_TEMP/local-ai-smoke"
+          python scripts/create_ort_genai_smoke_model.py "$SMOKE_DIR"
+          "$EXE" local-ai-smoke "$SMOKE_DIR"
 
       - name: Ensure assets bundled in dist
         shell: bash
@@ -551,6 +584,28 @@ jobs:
           cat xiaoda-agent-linux-x86_64-v${VERSION}.tar.gz >> xiaoda-agent-linux-x86_64-v${VERSION}.run
           chmod +x xiaoda-agent-linux-x86_64-v${VERSION}.run
 
+      - name: Package (Linux ARM64)
+        if: matrix.platform == 'linux-arm64'
+        run: |
+          VERSION="${{ steps.version.outputs.version }}"
+          echo -n "$VERSION" > dist/xiaoda-agent/.version
+          mkdir -p dist/xiaoda-agent/scripts
+          cp scripts/auto-update.sh dist/xiaoda-agent/scripts/
+          cp scripts/doctor.sh dist/xiaoda-agent/scripts/
+          cp scripts/start-linux.sh dist/xiaoda-agent/scripts/
+          cp scripts/xiaoda dist/xiaoda-agent/scripts/
+          chmod +x dist/xiaoda-agent/scripts/auto-update.sh
+          chmod +x dist/xiaoda-agent/scripts/doctor.sh
+          chmod +x dist/xiaoda-agent/scripts/start-linux.sh
+          chmod +x dist/xiaoda-agent/scripts/xiaoda
+          tar -czf xiaoda-agent-linux-arm64-v${VERSION}.tar.gz -C dist xiaoda-agent
+          cp scripts/install-linux.sh xiaoda-agent-linux-arm64-v${VERSION}-install.sh
+          chmod +x xiaoda-agent-linux-arm64-v${VERSION}-install.sh
+          cat scripts/install-linux.sh > xiaoda-agent-linux-arm64-v${VERSION}.run
+          echo '__ARCHIVE__' >> xiaoda-agent-linux-arm64-v${VERSION}.run
+          cat xiaoda-agent-linux-arm64-v${VERSION}.tar.gz >> xiaoda-agent-linux-arm64-v${VERSION}.run
+          chmod +x xiaoda-agent-linux-arm64-v${VERSION}.run
+
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
@@ -561,6 +616,9 @@ jobs:
             xiaoda-agent-linux-x86_64-*.tar.gz
             xiaoda-agent-linux-x86_64-*-install.sh
             xiaoda-agent-linux-x86_64-*.run
+            xiaoda-agent-linux-arm64-*.tar.gz
+            xiaoda-agent-linux-arm64-*-install.sh
+            xiaoda-agent-linux-arm64-*.run
           if-no-files-found: error
 
   docker:
@@ -713,6 +771,9 @@ jobs:
             artifacts/xiaoda-agent-linux-x86_64-*.tar.gz
             artifacts/xiaoda-agent-linux-x86_64-*-install.sh
             artifacts/xiaoda-agent-linux-x86_64-*.run
+            artifacts/xiaoda-agent-linux-arm64-*.tar.gz
+            artifacts/xiaoda-agent-linux-arm64-*-install.sh
+            artifacts/xiaoda-agent-linux-arm64-*.run
             artifacts/*.sha256
 
       - name: Sync release to Gitee (国内镜像)

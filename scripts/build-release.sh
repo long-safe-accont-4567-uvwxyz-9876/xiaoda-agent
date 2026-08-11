@@ -100,6 +100,10 @@ do_build() {
         die "Spec file not found: $spec_file"
     fi
 
+    cd "$PROJECT_ROOT"
+    python3 -m pip install onnx
+    python3 -m pip install ".[local-ai]"
+
     # --- Build frontend ---------------------------------------------------------
     local frontend_dir="$PROJECT_ROOT/web/frontend"
     info "Building Web UI..."
@@ -160,6 +164,27 @@ do_build() {
         fi
     done
     rm -f /tmp/pyz_contents.txt
+
+    info "Verifying ORT GenAI frozen runtime..."
+    printf 'O PYZ.pyz\nq\n' | pyi-archive_viewer "$exe_file" > /tmp/ort_genai_pyz_contents.txt
+    if ! grep -q "'onnxruntime_genai" /tmp/ort_genai_pyz_contents.txt; then
+        die "Module onnxruntime_genai NOT bundled."
+    fi
+    local ort_genai_library
+    if [ "$os" = "windows" ]; then
+        ort_genai_library=$(find "$dist_dir" -name "onnxruntime-genai*.dll" -print -quit 2>/dev/null || true)
+    else
+        ort_genai_library=$(find "$dist_dir" -name "libonnxruntime-genai*.so*" -print -quit 2>/dev/null || true)
+    fi
+    if [ -z "$ort_genai_library" ]; then
+        die "ORT GenAI native library NOT bundled."
+    fi
+    local smoke_dir
+    smoke_dir=$(mktemp -d)
+    python3 "$PROJECT_ROOT/scripts/create_ort_genai_smoke_model.py" "$smoke_dir"
+    "$exe_file" local-ai-smoke "$smoke_dir"
+    rm -rf "$smoke_dir"
+    rm -f /tmp/ort_genai_pyz_contents.txt
 
     # --- Write version stamp into dist directory --------------------------------
     echo -n "$version" > "$dist_dir/.version"
