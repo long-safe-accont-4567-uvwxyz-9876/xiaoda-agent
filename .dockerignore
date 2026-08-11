@@ -13,6 +13,7 @@ __pycache__/
 build/
 dist/
 *.spec
+!xiaoda-agent.spec
 
 # Frontend build (we build it in Docker)
 web/dist/

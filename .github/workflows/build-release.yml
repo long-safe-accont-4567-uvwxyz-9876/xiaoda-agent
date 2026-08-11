@@ -803,6 +803,9 @@ jobs:
                    xiaoda-agent-windows-x64-*.tar.gz \
                    xiaoda-agent-linux-x86_64-*.tar.gz \
                    xiaoda-agent-linux-x86_64-*-install.sh \
+                   xiaoda-agent-linux-arm64-*.tar.gz \
+                   xiaoda-agent-linux-arm64-*-install.sh \
+                   xiaoda-agent-linux-arm64-*.run \
                    *.sha256; do
             [ -f "$f" ] || continue
             echo "上传: $f ($(du -h "$f" | cut -f1))"
