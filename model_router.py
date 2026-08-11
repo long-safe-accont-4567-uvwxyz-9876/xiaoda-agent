@@ -121,6 +121,10 @@ def _load_ollama_model_map() -> tuple[dict, str]:
 
 _OLLAMA_MODEL_MAP, _OLLAMA_DEFAULT_MODEL = _load_ollama_model_map()
 
+# 本地 ONNX Runtime GenAI chat 提供商标识：选中本地实例时，chat_stream 直接
+# 经 LocalChatService 流式推理，不经过云端 OpenAI 客户端，也不做跨 provider 回退。
+_LOCAL_ORT_PROVIDER = "local-ort"
+
 
 def translate_model_for_provider(provider: str, model: str) -> str:
     """把工作流/云平台模型名翻译为该 provider 实际使用的模型名。
@@ -633,6 +637,13 @@ class ModelRouter:
         if agnes.is_available():
             self._transports["agnes"] = agnes
         logger.info("router.transports", available=list(self._transports.keys()))
+        # 本地 ONNX Runtime GenAI chat 服务：由 bootstrap 注入 InstanceManager
+        # 封装。选中 local-ort provider 时 chat_stream 走该服务，不依赖云端。
+        self._local_chat_service: Any = None
+
+    def set_local_chat_service(self, service: Any) -> None:
+        """注入本地 chat 服务（LocalChatService），使 local-ort provider 可路由。"""
+        self._local_chat_service = service
 
     def _get_credential_lock(self, provider: str) -> asyncio.Lock:
         """返回指定 provider 的凭证锁，按需创建。
@@ -825,11 +836,13 @@ class ModelRouter:
         """
         # Step 1: 先验证 provider 可用，未注册直接抛（此时还没改任何状态）
         # N-2 修复：内置 provider 集合从 provider_metadata.json 派生，不硬编码
-        if provider not in _get_builtin_providers():
-            if provider not in self._custom_clients:
-                self._lazy_register_provider(provider)
-            if provider not in self._custom_clients:
-                raise LLMError(f"自定义 provider {provider} 未注册，请先注册客户端")
+        # local-ort 为本地 ONNX Runtime GenAI provider，无需云端 client 即可切换。
+        if provider != _LOCAL_ORT_PROVIDER:
+            if provider not in _get_builtin_providers():
+                if provider not in self._custom_clients:
+                    self._lazy_register_provider(provider)
+                if provider not in self._custom_clients:
+                    raise LLMError(f"自定义 provider {provider} 未注册，请先注册客户端")
 
         # Step 2: 保存 DEFAULT_PROVIDER 当前值用于失败回滚
         # 注意：必须用 config.DEFAULT_PROVIDER 实时读取，不能用模块级 import 快照
@@ -1713,6 +1726,16 @@ class ModelRouter:
         provider = config.get("client", _CFG_DEFAULT_PROVIDER)
         timeout = self.TASK_TIMEOUTS.get(task_type, 30)
 
+        # 本地 ONNX Runtime GenAI chat：选中 local-ort 时直接经 LocalChatService
+        # 流式推理。放在重试循环之前 yield，令 LocalModelUnavailableError 直接传播，
+        # 绝不静默跨 provider 回退到云端（用户硬约束：无静默 fallback）。
+        if provider == _LOCAL_ORT_PROVIDER:
+            async for chunk in self._stream_local_chat(
+                messages, task_type, mt, temperature,
+            ):
+                yield chunk
+            return
+
         messages = self._apply_prompt_caching(provider, messages)
         extra_headers = self._apply_caching_headers(extra_headers)
         tools = self._filter_tools_for_model(tools, model)
@@ -1904,10 +1927,33 @@ class ModelRouter:
             cause=last_error,
         ) from last_error
 
+    async def _stream_local_chat(
+        self,
+        messages: list,
+        task_type: str,
+        max_tokens: int,
+        temperature: float,
+    ) -> AsyncIterator[str]:
+        """经本地 ONNX Runtime GenAI chat 服务流式推理。
+
+        保持路由策略在 ModelRouter（provider/model 解析），协议/客户端细节委托给
+        LocalChatService。选中 local-ort 但未注入服务时抛 LLMError；实例停止等
+        本地不可用场景抛 LocalModelUnavailableError，不做云端回退。
+        """
+        service = self._local_chat_service
+        if service is None:
+            raise LLMError(
+                "local-ort provider selected but local chat runtime is not configured",
+                error_code=ErrorCodeEnum.E_LLM006,
+            )
+        route = f"router:{task_type}"
+        options = {"max_tokens": max_tokens, "temperature": temperature}
+        async for chunk in service.stream(messages, options, route):
+            yield chunk
+
     @staticmethod
     def _classify_error(exc: Exception) -> str:
         """将异常分类为可重试/不可重试错误类型。"""
-        exc_name = type(exc).__name__.lower()
         exc_msg = str(exc).lower()
         if isinstance(exc, asyncio.TimeoutError) or 'timeout' in exc_name or 'timeout' in exc_msg:
             return 'timeout'
