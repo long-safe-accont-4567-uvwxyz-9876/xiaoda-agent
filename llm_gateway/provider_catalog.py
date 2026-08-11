@@ -120,6 +120,14 @@ class ProviderCatalog:
                 raise ValueError(f"builtin provider cannot be replaced: {definition.id}")
         self._definitions[definition.id] = definition
 
+    def unregister(self, provider_id: str) -> ProviderDefinition:
+        normalized = _normalize_id(provider_id)
+        definition = self.get(normalized)
+        if definition.builtin:
+            raise ValueError(f"builtin provider cannot be removed: {normalized}")
+        del self._definitions[normalized]
+        return definition
+
     def validate(self, definition: ProviderDefinition) -> None:
         if not isinstance(definition, ProviderDefinition):
             raise TypeError("definition must be a ProviderDefinition")

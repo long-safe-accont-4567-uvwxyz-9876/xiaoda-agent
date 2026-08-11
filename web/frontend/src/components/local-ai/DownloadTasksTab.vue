@@ -31,7 +31,7 @@ async function confirmStart() {
   const deviceId = selectedDevice.value || deviceOptions.value[0]?.value
   if (!task || !deviceId) return message.warning('请选择可用算力设备')
   try {
-    await store.start({ model_id: task.model_id, device_id: deviceId, request_id: crypto.randomUUID() })
+    await store.start({ model_id: task.model_id, device_id: deviceId, request_id: store.createRequestId() })
     message.success('启动任务已创建')
     completedTask.value = ''
   } catch (error) {

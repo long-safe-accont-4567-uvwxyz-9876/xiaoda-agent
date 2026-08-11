@@ -26,6 +26,18 @@ if TYPE_CHECKING:
     from agent_core import AgentCore
 
 
+def _embedding_service_for_mode(
+    mode: str,
+    model_dir: str,
+    query_prefix: str,
+) -> Any | None:
+    if mode != "local":
+        return None
+    from local_ai.integration.embedding import LocalEmbeddingService
+
+    return LocalEmbeddingService.bundled(model_dir, query_prefix=query_prefix)
+
+
 class AgentCoreBootstrapper:
     """将 AgentCore 的异步初始化流程封装为独立类。
 
@@ -292,35 +304,26 @@ class AgentCoreBootstrapper:
         core._vec_store = None
         if embed_mode == "local" or embed_api_key:
             try:
+                from memory.vector_store import _default_local_model_dir
+
+                embedding_service = _embedding_service_for_mode(
+                    embed_mode,
+                    _default_local_model_dir(),
+                    os.getenv("LOCAL_EMBED_QUERY_PREFIX", ""),
+                )
                 core._vec_store = VectorStore(
                     db_path=str(core.db.db_path.parent / (core.db.db_path.stem + "_vec.db")),
                     embed_api_key=embed_api_key,
                     embed_base_url=embed_base_url,
                     embed_mode=embed_mode,
+                    embedding_service=embedding_service,
                 )
                 await core._vec_store.init()
                 logger.info("vector_store.enabled" +
                             (f" mode={embed_mode}" if embed_mode == "local" else ""))
             except Exception as e:
-                # 老用户升级保护：本地库维度不匹配（如旧远程库 1024 维 vs 本地 512 维）等
-                # local 初始化失败时，若配置了远程 API Key 则自动回退 remote，避免向量记忆失效
-                if embed_mode == "local" and embed_api_key:
-                    logger.warning("vector_store.local_init_failed_fallback_remote error={}", str(e))
-                    try:
-                        core._vec_store = VectorStore(
-                            db_path=str(core.db.db_path.parent / (core.db.db_path.stem + "_vec.db")),
-                            embed_api_key=embed_api_key,
-                            embed_base_url=embed_base_url,
-                            embed_mode="remote",
-                        )
-                        await core._vec_store.init()
-                        logger.info("vector_store.enabled mode=remote (fallback)")
-                    except Exception as e2:
-                        logger.warning(f"vector_store.init_failed: {e2}")
-                        core._vec_store = None
-                else:
-                    logger.warning(f"vector_store.init_failed: {e}")
-                    core._vec_store = None
+                logger.warning("vector_store.init_failed mode={} error={}", embed_mode, str(e))
+                core._vec_store = None
 
     # ── 认知系统 ──────────────────────────────────────────
 

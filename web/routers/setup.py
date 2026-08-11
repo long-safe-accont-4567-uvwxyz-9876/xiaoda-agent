@@ -3,6 +3,7 @@ from __future__ import annotations
 import os
 import shutil
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
 from zoneinfo import ZoneInfo
 
@@ -552,6 +553,24 @@ async def test_single_key(key_name: str, key_value: str, extra: dict | None = No
     """根据 key_name 调用对应的测试函数，返回 (success, message)。"""
     extra = extra or {}
 
+    from config import get_provider_catalog
+
+    catalog = get_provider_catalog()
+    if key_name in {"MODELSCOPE_ACCESS_TOKEN", "MODELSCOPE_API_KEY"}:
+        return await _test_modelscope(key_value)
+    for definition in catalog.list():
+        if key_name not in definition.auth.environment_aliases:
+            continue
+        from llm_gateway.provider_service import ProviderService
+
+        draft = ProviderService._record(definition)
+        report = await ProviderService(
+            SimpleNamespace(get=lambda *args, **kwargs: {}),
+            catalog,
+            SimpleNamespace(_custom_clients={}),
+        ).test(draft, {"api_key": key_value})
+        return report.available, "Provider 凭证验证成功" if report.available else (report.error or "Provider 凭证验证失败")
+
     if key_name == "MIMO_API_KEY":
         return await _test_mimo(key_value)
 
@@ -584,11 +603,6 @@ async def test_single_key(key_name: str, key_value: str, extra: dict | None = No
 
     if key_name == "WOLFRAMALPHA_API_KEY":
         return await _test_wolframalpha(key_value)
-
-    from config import get_provider_catalog
-
-    if key_name in get_provider_catalog().get("modelscope").auth.environment_aliases:
-        return await _test_modelscope(key_value)
 
     if key_name == "TAVILY_API_KEY":
         return await _test_tavily(key_value)

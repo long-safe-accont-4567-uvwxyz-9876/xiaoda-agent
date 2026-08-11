@@ -11,6 +11,8 @@ from loguru import logger
 
 
 from utils.common import safe_int as _safe_int
+from local_ai.integration.embedding import LocalEmbeddingService
+from local_ai.integration.reranker import LocalModelUnavailableError
 
 try:
     import sqlite_vec
@@ -124,7 +126,8 @@ class VectorStore:
     def __init__(self, db_path: str | Path, embed_api_key: str = "",
                  embed_base_url: str = "", embed_model: str = "BAAI/bge-m3",
                  dimensions: int = 0, embed_mode: str = "",
-                 local_model_dir: str = "", local_query_prefix: str = "") -> None:
+                 local_model_dir: str = "", local_query_prefix: str = "",
+                 embedding_service: LocalEmbeddingService | None = None) -> None:
         """初始化向量存储。
 
         embed_mode: "local" 走香橙派本地 onnxruntime 推理（BGE-small-zh-v1.5），
@@ -139,7 +142,8 @@ class VectorStore:
         self._embed_mode = embed_mode or os.getenv("EMBED_MODE", "local")
         self._local_model_dir = local_model_dir or _default_local_model_dir()
         self._local_query_prefix = local_query_prefix or os.getenv("LOCAL_EMBED_QUERY_PREFIX", "")
-        self._local_provider = None
+        self._local_provider = embedding_service
+        self._selected_local_service = embedding_service is not None
         self._initialized = False
         self._closed = False
         self._lock = threading.Lock()
@@ -169,7 +173,8 @@ class VectorStore:
             #     无 NPU（纯 CPU 机器/Windows 打包版/无 sudo）自动降级全 CPU；
             #   npu → 强制走自适应（探测失败仍降级 CPU）；
             #   cpu → 显式纯 CPU（onnxruntime）。
-            self._local_provider = self._build_local_provider()
+            if self._local_provider is None:
+                self._local_provider = self._build_local_provider()
             if self._local_provider is not None:
                 logger.info("vector_store.local_embed_enabled backend={} model_dir={}",
                             os.getenv("LOCAL_EMBED_BACKEND", "auto"), self._local_model_dir)
@@ -183,15 +188,7 @@ class VectorStore:
     def _build_local_provider(self) -> Any:
         """按 LOCAL_EMBED_BACKEND 构建本地 embedding provider（幂等）。"""
         try:
-            backend = os.getenv("LOCAL_EMBED_BACKEND", "auto")
-            if backend in ("npu", "auto"):
-                from memory.npu_embed import AdaptiveEmbeddingProvider
-                return AdaptiveEmbeddingProvider(
-                    self._local_model_dir,
-                    query_prefix=self._local_query_prefix,
-                )
-            from memory.local_embed import LocalEmbeddingProvider
-            return LocalEmbeddingProvider(
+            return LocalEmbeddingService.bundled(
                 self._local_model_dir,
                 query_prefix=self._local_query_prefix,
             )
@@ -222,6 +219,7 @@ class VectorStore:
                 running = False
         return {
             "mode": self._embed_mode,
+            "source": getattr(provider, "source", None),
             "engine_running": running,
             "backend": os.getenv("LOCAL_EMBED_BACKEND", "auto"),
             "api_configured": bool(
@@ -235,7 +233,7 @@ class VectorStore:
 
         幂等：目标模式与当前一致时直接返回现状。切换时释放旧本地引擎资源
         （onnxruntime session / NPU 常驻进程）；远程 client 由共享 httpx
-        连接池管理，仅释放引用。构建失败自动回退另一模式并告警。
+        连接池管理，仅释放引用。目标引擎不可用时保持显式选中状态。
         """
         mode = (mode or "remote").strip().lower()
         if mode not in ("local", "remote"):
@@ -258,18 +256,14 @@ class VectorStore:
                     self._local_provider = provider
                     logger.info("vector_store.embed_mode_switched mode=local")
                 else:
-                    logger.warning("vector_store.embed_mode_switch_failed fallback=remote")
-                    self._embed_mode = "remote"
-                    self._embed_client = self._build_remote_client()
+                    logger.warning("vector_store.embed_mode_switch_failed mode=local")
             else:
                 client = self._build_remote_client()
                 if client is not None:
                     self._embed_client = client
                     logger.info("vector_store.embed_mode_switched mode=remote")
                 else:
-                    logger.warning("vector_store.embed_mode_switch_failed fallback=local")
-                    self._embed_mode = "local"
-                    self._local_provider = self._build_local_provider()
+                    logger.warning("vector_store.embed_mode_switch_failed mode=remote")
             return self.embed_engine_status()
 
     def start_local_engine(self) -> dict:
@@ -301,7 +295,8 @@ class VectorStore:
                     self._local_provider.close()
                 except Exception as e:  # noqa: BLE001
                     logger.warning("vector_store.local_engine_stop_failed error={}", str(e))
-            self._local_provider = None
+            if not self._selected_local_service:
+                self._local_provider = None
             logger.info("vector_store.local_engine_stopped")
             return self.embed_engine_status()
 
@@ -526,6 +521,10 @@ class VectorStore:
         if inflight is not None:
             try:
                 return await asyncio.shield(inflight)
+            except LocalModelUnavailableError:
+                if self._selected_local_service:
+                    raise
+                return []
             except Exception:
                 return []
 
@@ -538,6 +537,10 @@ class VectorStore:
             future.set_result(vec)
             return vec
         except Exception as e:
+            if isinstance(e, LocalModelUnavailableError) and self._selected_local_service:
+                future.set_exception(e)
+                future.exception()
+                raise
             # 等待者同样拿到空结果（不传播异常，调用方均有兜底）
             future.set_result([])
             logger.warning("vector_store.embed_singleflight_failed", error=str(e))
@@ -552,7 +555,8 @@ class VectorStore:
         if self._embed_mode == "local":
             if self._local_provider is None:
                 return []
-            vec = await asyncio.to_thread(self._local_provider.embed, text)
+            vectors = await self._local_provider.embed([text])
+            vec = vectors[0] if vectors else []
             if vec and self._dimensions and len(vec) != self._dimensions:
                 logger.warning("vector_store.dimension_mismatch",
                                expected=self._dimensions, actual=len(vec))

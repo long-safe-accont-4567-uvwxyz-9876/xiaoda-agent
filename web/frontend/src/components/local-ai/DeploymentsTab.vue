@@ -7,6 +7,7 @@ const store = useLocalAiStore()
 const message = useMessage()
 const starting = ref('')
 const deviceOptions = computed(() => store.devices.filter(device => device.state === 'available').map(device => ({ label: device.name, value: device.id })))
+const activeInstances = computed(() => store.instances.filter(instance => instance.state !== 'stopped'))
 const selectedDevices = ref<Record<string, string>>({})
 
 async function start(modelId: string) {
@@ -14,7 +15,7 @@ async function start(modelId: string) {
   if (!deviceId) return message.warning('没有可用算力设备')
   starting.value = modelId
   try {
-    await store.start({ model_id: modelId, device_id: deviceId, request_id: crypto.randomUUID() })
+    await store.start({ model_id: modelId, device_id: deviceId, request_id: store.createRequestId() })
     message.success('启动任务已创建')
   } catch (error) {
     message.error(error instanceof Error ? error.message : String(error))
@@ -30,16 +31,16 @@ async function stop(id: string) {
 
 <template>
   <div class="local-ai-grid">
-    <article v-for="instance in store.instances" :key="instance.id" class="glass-panel resource-card">
+    <article v-for="instance in activeInstances" :key="instance.id" class="glass-panel resource-card">
       <div class="resource-head"><div><strong>{{ instance.model_id }}</strong><span>{{ instance.runtime }} · {{ instance.device_id }}</span></div><n-tag :type="instance.health === 'healthy' ? 'success' : 'warning'">{{ instance.state }}</n-tag></div>
       <div class="resource-meta">用途路由：{{ instance.active_routes.join('、') || '未设置' }}</div>
       <div class="resource-actions"><n-button size="small" type="warning" @click="stop(instance.id)">停止</n-button></div>
     </article>
-    <article v-for="model in store.models.filter(item => !store.instances.some(instance => instance.model_id === item.id && instance.state !== 'stopped'))" :key="model.id" class="glass-panel resource-card">
+    <article v-for="model in store.models.filter(item => !activeInstances.some(instance => instance.model_id === item.id))" :key="model.id" class="glass-panel resource-card">
       <div class="resource-head"><div><strong>{{ model.id }}</strong><span>{{ model.purpose }} · {{ model.validation_state }}</span></div><n-tag>未运行</n-tag></div>
       <div class="resource-actions"><n-select v-model:value="selectedDevices[model.id]" :options="deviceOptions" placeholder="选择设备" /><n-button type="primary" :loading="starting === model.id" @click="start(model.id)">启动</n-button></div>
     </article>
-    <n-empty v-if="!store.instances.length && !store.models.length" description="暂无可部署模型" />
+    <n-empty v-if="!activeInstances.length && !store.models.length" description="暂无可部署模型" />
   </div>
 </template>
 

@@ -29,7 +29,7 @@ _BUILTIN_PROVIDER_DEFAULTS: dict[str, set[str]] = {
 }
 
 
-def validate_model_route(model_id: str, provider: str) -> str | None:
+def validate_model_route(model_id: str, provider: str, provider_service=None) -> str | None:
     """验证模型ID与provider的匹配性。
 
     Args:
@@ -41,6 +41,15 @@ def validate_model_route(model_id: str, provider: str) -> str | None:
     """
     if not model_id or not provider:
         return None
+
+    if provider_service is not None:
+        validation = provider_service.validate_route(provider, model_id)
+        if validation == "missing":
+            return f"provider「{provider}」不存在"
+        if validation in {"disabled", "unavailable"}:
+            return f"provider「{provider}」当前不可用"
+        if validation == "model":
+            return f"模型「{model_id}」不属于 provider「{provider}」"
 
     # 1. 检查已知前缀错误
     for wrong_prefix, correct_prefix in _KNOWN_PREFIX_FIXES.items():

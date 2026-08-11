@@ -13,7 +13,10 @@ const loading = ref(false)
 const saveAsDefault = ref(false)
 
 function resolveEntryPath(entry: string) {
-  if (!path.value) return entry
+  if (!path.value) {
+    if (/^[A-Za-z]:$/.test(entry)) return `${entry}\\`
+    return `/${entry}`
+  }
   const separator = path.value.includes('\\') ? '\\' : '/'
   return path.value.endsWith('\\') || path.value.endsWith('/')
     ? `${path.value}${entry}`

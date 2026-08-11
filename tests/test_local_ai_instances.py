@@ -64,6 +64,20 @@ class FailingStopRuntime(FakeRuntime):
         raise RuntimeError(f"cannot stop {self.name}")
 
 
+class RetryableStopRuntime(FakeRuntime):
+    def __init__(self, events: list[str], name: str, stop_failures: int = 1) -> None:
+        super().__init__(events, name)
+        self.stop_failures = stop_failures
+        self.stop_attempts = 0
+
+    def stop(self) -> None:
+        self.stop_attempts += 1
+        self.events.append(f"stop:{self.name}:{self.stop_attempts}")
+        if self.stop_attempts <= self.stop_failures:
+            raise RuntimeError(f"cannot stop {self.name}")
+        self.running = False
+
+
 class BlockingStartRuntime(FakeRuntime):
     def __init__(
         self,
@@ -73,6 +87,25 @@ class BlockingStartRuntime(FakeRuntime):
         release: threading.Event,
     ) -> None:
         super().__init__(events, name)
+        self.entered = entered
+        self.release = release
+
+    def start(self, profile: RuntimeProfile) -> bool:
+        self.entered.set()
+        self.release.wait()
+        return super().start(profile)
+
+
+class BlockingStartRetryableStopRuntime(RetryableStopRuntime):
+    def __init__(
+        self,
+        events: list[str],
+        name: str,
+        entered: threading.Event,
+        release: threading.Event,
+        stop_failures: int = 1,
+    ) -> None:
+        super().__init__(events, name, stop_failures)
         self.entered = entered
         self.release = release
 
@@ -222,6 +255,10 @@ def catalog_model(purpose: ModelPurpose) -> CatalogModel:
     )
 
 
+def profile_model_name(profile: RuntimeProfile) -> str:
+    return "local:chat" if profile.runtime.value == "ort_genai" else "local:embedding"
+
+
 @pytest.fixture
 def setup_manager():
     events: list[str] = []
@@ -232,7 +269,7 @@ def setup_manager():
     runtimes: list[FakeRuntime] = []
 
     def factory(profile: RuntimeProfile) -> FakeRuntime:
-        runtime = FakeRuntime(events, profile.options["model_id"])
+        runtime = FakeRuntime(events, profile_model_name(profile))
         runtimes.append(runtime)
         return runtime
 
@@ -246,18 +283,19 @@ def setup_manager():
         device_registry,
         runtime_registry,
         database=database,
+        owns_database=True,
     )
     return manager, device_registry, database, runtimes, events
 
 
 def test_runtime_registry_creates_adapter_for_profile():
+    installed = installed_model("local:embedding", ModelPurpose.EMBEDDING)
     profile = RuntimeProfile(
         runtime="ort",
         device_id="cpu:0",
         provider="CPUExecutionProvider",
-        options={"model_dir": "/models/embedding", "purpose": "embedding"},
     )
-    adapter = RuntimeRegistry().create(profile)
+    adapter = RuntimeRegistry().create(profile, installed_model=installed)
     assert type(adapter).__name__ == "EmbeddingRuntime"
 
 
@@ -276,24 +314,23 @@ def test_runtime_registry_rejects_unsupported_runtime():
     [("ort", "chat"), ("ort_genai", "embedding"), ("ort_genai", "reranker")],
 )
 def test_runtime_registry_rejects_unknown_runtime_purpose_combination(runtime, purpose):
+    installed = installed_model("local:test", ModelPurpose(purpose))
     profile = RuntimeProfile(
         runtime=runtime,
         device_id="cpu:0",
         provider="CPUExecutionProvider",
-        options={"model_dir": "/models/test", "purpose": purpose},
     )
     with pytest.raises(RuntimeValidationError, match="unsupported runtime and purpose"):
-        RuntimeRegistry().create(profile)
+        RuntimeRegistry().create(profile, installed_model=installed)
 
 
-def test_runtime_registry_requires_explicit_model_purpose():
+def test_runtime_registry_requires_explicit_installed_model():
     profile = RuntimeProfile(
         runtime="ort",
         device_id="cpu:0",
         provider="CPUExecutionProvider",
-        options={"model_dir": "/models/test"},
     )
-    with pytest.raises(RuntimeValidationError, match="purpose"):
+    with pytest.raises(RuntimeValidationError, match="installed_model"):
         RuntimeRegistry().create(profile)
 
 
@@ -304,7 +341,7 @@ async def test_start_selects_profile_and_honors_backend_override(setup_manager):
     assert devices.overrides == ["gpu:0"]
     assert instance.device_id == "gpu:0"
     assert instance.runtime.value == "ort_genai"
-    assert runtimes[0].profile.options["model_dir"] == "/models/local-chat"
+    assert dict(runtimes[0].profile.options) == {}
 
 
 @pytest.mark.asyncio
@@ -354,7 +391,7 @@ async def test_stop_is_idempotent(setup_manager):
 async def test_failed_runtime_start_does_not_register_instance(setup_manager):
     manager, _, _, _, events = setup_manager
     manager._runtime_registry = RuntimeRegistry(
-        {"ort": lambda profile: FailingStartRuntime(events, profile.options["model_id"])}
+        {"ort": lambda profile: FailingStartRuntime(events, profile_model_name(profile))}
     )
     with pytest.raises(RuntimeError, match="failed to start"):
         await manager.start("local:embedding")
@@ -366,7 +403,7 @@ async def test_failed_runtime_start_does_not_register_instance(setup_manager):
 async def test_raising_runtime_start_rolls_back_runtime_and_instance_state(setup_manager):
     manager, _, _, _, events = setup_manager
     manager._runtime_registry = RuntimeRegistry(
-        {"ort": lambda profile: RaisingStartRuntime(events, profile.options["model_id"])}
+        {"ort": lambda profile: RaisingStartRuntime(events, profile_model_name(profile))}
     )
     with pytest.raises(RuntimeError, match="cannot start"):
         await manager.start("local:embedding")
@@ -456,8 +493,8 @@ async def test_shutdown_closes_database_after_stop_failure(setup_manager):
     manager, _, database, _, events = setup_manager
     manager._runtime_registry = RuntimeRegistry(
         {
-            "ort": lambda profile: FailingStopRuntime(events, profile.options["model_id"]),
-            "ort_genai": lambda profile: FakeRuntime(events, profile.options["model_id"]),
+            "ort": lambda profile: FailingStopRuntime(events, profile_model_name(profile)),
+            "ort_genai": lambda profile: FakeRuntime(events, profile_model_name(profile)),
         }
     )
     await manager.start("local:embedding")
@@ -490,7 +527,7 @@ async def test_shutdown_waits_for_inflight_start_before_database_close(setup_man
         {
             "ort": lambda profile: BlockingStartRuntime(
                 events,
-                profile.options["model_id"],
+                profile_model_name(profile),
                 entered,
                 release,
             )
@@ -569,6 +606,72 @@ async def test_repeated_cancel_during_start_cleanup_finishes_before_shutdown(set
 
 
 @pytest.mark.asyncio
+async def test_cancelled_start_rollback_failure_is_owned_until_shutdown_retry_succeeds(
+    setup_manager,
+):
+    manager, _, database, _, events = setup_manager
+    entered = threading.Event()
+    release = threading.Event()
+    runtime = BlockingStartRetryableStopRuntime(
+        events,
+        "local:embedding",
+        entered,
+        release,
+    )
+    manager._runtime_registry = RuntimeRegistry({"ort": lambda profile: runtime})
+    start_task = asyncio.create_task(manager.start("local:embedding"))
+    await asyncio.to_thread(entered.wait)
+    start_task.cancel()
+    release.set()
+    with pytest.raises(BaseExceptionGroup) as captured:
+        await start_task
+    assert captured.value.subgroup(asyncio.CancelledError) is not None
+    assert captured.value.subgroup(RuntimeError) is not None
+    assert runtime.running is True
+    assert manager.active_count == 0
+    assert len(manager._pending_cleanup) == 1
+    assert database.closed is False
+    await manager.shutdown()
+    assert runtime.stop_attempts == 2
+    assert runtime.running is False
+    assert manager._pending_cleanup == {}
+    assert database.closed is True
+    assert events[-2:] == ["stop:local:embedding:2", "database:close"]
+
+
+@pytest.mark.asyncio
+async def test_shutdown_aggregates_persistent_pending_cleanup_failure(setup_manager):
+    manager, _, database, _, events = setup_manager
+    entered = threading.Event()
+    release = threading.Event()
+    runtime = BlockingStartRetryableStopRuntime(
+        events,
+        "local:embedding",
+        entered,
+        release,
+        stop_failures=3,
+    )
+    manager._runtime_registry = RuntimeRegistry({"ort": lambda profile: runtime})
+    start_task = asyncio.create_task(manager.start("local:embedding"))
+    await asyncio.to_thread(entered.wait)
+    start_task.cancel()
+    release.set()
+    with pytest.raises(BaseExceptionGroup):
+        await start_task
+    with pytest.raises(ExceptionGroup, match="shutdown failed") as first_shutdown:
+        await manager.shutdown()
+    assert first_shutdown.value.subgroup(RuntimeError) is not None
+    assert runtime.running is True
+    assert len(manager._pending_cleanup) == 1
+    assert database.closed is True
+    with pytest.raises(ExceptionGroup, match="shutdown failed"):
+        await manager.shutdown()
+    assert runtime.stop_attempts == 3
+    assert len(manager._pending_cleanup) == 1
+    assert events.count("database:close") == 1
+
+
+@pytest.mark.asyncio
 async def test_health_refresh_does_not_restore_instance_stopped_while_health_blocks(setup_manager):
     manager, _, _, _, events = setup_manager
     entered = threading.Event()
@@ -577,7 +680,7 @@ async def test_health_refresh_does_not_restore_instance_stopped_while_health_blo
         {
             "ort": lambda profile: BlockingHealthRuntime(
                 events,
-                profile.options["model_id"],
+                profile_model_name(profile),
                 entered,
                 release,
             )
@@ -603,7 +706,7 @@ async def test_cancelled_health_keeps_model_lock_until_worker_finishes(setup_man
         {
             "ort": lambda profile: BlockingHealthRuntime(
                 events,
-                profile.options["model_id"],
+                profile_model_name(profile),
                 entered,
                 release,
             )
@@ -639,7 +742,7 @@ async def test_manager_tracks_inflight_runtime_work_per_model(setup_manager):
         {
             "ort": lambda profile: BlockingHealthRuntime(
                 events,
-                profile.options["model_id"],
+                profile_model_name(profile),
                 entered,
                 release,
             )
@@ -647,7 +750,7 @@ async def test_manager_tracks_inflight_runtime_work_per_model(setup_manager):
     )
     await manager.start("local:embedding")
     health_task = asyncio.create_task(manager.refresh_health())
-    await asyncio.to_thread(entered.wait, 2)
+    await asyncio.to_thread(entered.wait)
     assert len(manager._model_tasks["local:embedding"]) == 1
     assert "local:chat" not in manager._model_tasks
     release.set()
@@ -664,7 +767,7 @@ async def test_health_does_not_write_back_after_shutdown_starts(setup_manager):
         {
             "ort": lambda profile: BlockingHealthRuntime(
                 events,
-                profile.options["model_id"],
+                profile_model_name(profile),
                 entered,
                 release,
             )
@@ -674,7 +777,7 @@ async def test_health_does_not_write_back_after_shutdown_starts(setup_manager):
     instances = RecordingInstances(manager, manager._instances)
     manager._instances = instances
     health_task = asyncio.create_task(manager.refresh_health())
-    await asyncio.to_thread(entered.wait, 2)
+    await asyncio.to_thread(entered.wait)
     shutdown_task = asyncio.create_task(manager.shutdown())
     await asyncio.sleep(0)
     release.set()
@@ -691,7 +794,7 @@ async def test_route_cannot_bind_after_stop_has_started(setup_manager):
         {
             "ort_genai": lambda profile: BlockingStopRuntime(
                 events,
-                profile.options["model_id"],
+                profile_model_name(profile),
                 entered,
                 release,
             )
@@ -716,7 +819,7 @@ async def test_cancelled_stop_keeps_ownership_and_shutdown_waits_for_worker(setu
         {
             "ort": lambda profile: BlockingStopRuntime(
                 events,
-                profile.options["model_id"],
+                profile_model_name(profile),
                 entered,
                 release,
             )
@@ -752,7 +855,7 @@ async def test_shutdown_stops_runtime_under_model_lock(setup_manager):
         {
             "ort": lambda profile: BlockingStopRuntime(
                 events,
-                profile.options["model_id"],
+                profile_model_name(profile),
                 entered,
                 release,
             )
@@ -760,7 +863,7 @@ async def test_shutdown_stops_runtime_under_model_lock(setup_manager):
     )
     instance = await manager.start("local:embedding")
     shutdown_task = asyncio.create_task(manager.shutdown())
-    await asyncio.to_thread(entered.wait, 2)
+    await asyncio.to_thread(entered.wait)
     assert manager._model_locks[instance.model_id].locked()
     stop_task = asyncio.create_task(manager.stop(instance.id))
     await asyncio.sleep(0)
@@ -778,7 +881,7 @@ async def test_cancelled_shutdown_finishes_in_order_and_retry_awaits_same_cleanu
         {
             "ort": lambda profile: BlockingStopRuntime(
                 events,
-                profile.options["model_id"],
+                profile_model_name(profile),
                 entered,
                 release,
             )
@@ -786,7 +889,7 @@ async def test_cancelled_shutdown_finishes_in_order_and_retry_awaits_same_cleanu
     )
     await manager.start("local:embedding")
     shutdown_task = asyncio.create_task(manager.shutdown())
-    await asyncio.to_thread(entered.wait, 2)
+    await asyncio.to_thread(entered.wait)
     shutdown_task.cancel()
     retry_task = asyncio.create_task(manager.shutdown())
     await asyncio.sleep(0)
@@ -809,3 +912,77 @@ async def test_catalog_profile_data_can_be_supplied_explicitly(setup_manager):
     manager.catalog_resolver = lambda _: catalog_model(ModelPurpose.EMBEDDING)
     await manager.start("local:embedding")
     assert devices.overrides == [None]
+
+
+@pytest.mark.asyncio
+async def test_health_writeback_preserves_route_bound_during_health_check(setup_manager):
+    manager, _, _, _, events = setup_manager
+    entered = threading.Event()
+    release = threading.Event()
+    manager._runtime_registry = RuntimeRegistry(
+        {
+            "ort_genai": lambda profile: BlockingHealthRuntime(
+                events,
+                profile_model_name(profile),
+                entered,
+                release,
+            )
+        }
+    )
+    instance = await manager.start("local:chat")
+    health_task = asyncio.create_task(manager.refresh_health())
+    await asyncio.to_thread(entered.wait)
+    bound = await asyncio.to_thread(manager.bind_route, instance.id, "chat")
+    release.set()
+    await health_task
+    assert bound.active_routes == ("chat",)
+    assert manager.get(instance.id).active_routes == ("chat",)
+
+
+@pytest.mark.asyncio
+async def test_stop_failure_keeps_instance_and_runtime_for_retry(setup_manager):
+    manager, _, _, _, events = setup_manager
+    runtime = RetryableStopRuntime(events, "local:embedding")
+    manager._runtime_registry = RuntimeRegistry({"ort": lambda profile: runtime})
+    instance = await manager.start("local:embedding")
+    with pytest.raises(RuntimeError, match="cannot stop"):
+        await manager.stop(instance.id)
+    retained = manager.get(instance.id)
+    assert retained is not None
+    assert retained.state == "degraded"
+    assert retained.health == "stop_failed"
+    assert manager._runtimes[instance.id] is runtime
+    await manager.stop(instance.id)
+    assert manager.get(instance.id) is None
+    assert runtime.stop_attempts == 2
+
+
+@pytest.mark.asyncio
+async def test_shutdown_retries_failed_stop_and_closes_owned_database(setup_manager):
+    manager, _, database, _, events = setup_manager
+    runtime = RetryableStopRuntime(events, "local:embedding")
+    manager._runtime_registry = RuntimeRegistry({"ort": lambda profile: runtime})
+    await manager.start("local:embedding")
+    with pytest.raises(ExceptionGroup, match="shutdown failed"):
+        await manager.shutdown()
+    assert manager.active_count == 1
+    assert database.closed is True
+    await manager.shutdown()
+    assert manager.active_count == 0
+    assert runtime.stop_attempts == 2
+
+
+@pytest.mark.asyncio
+async def test_shutdown_does_not_close_borrowed_database(setup_manager):
+    manager, devices, database, _, events = setup_manager
+    borrowed = InstanceManager(
+        manager._model_registry,
+        devices,
+        RuntimeRegistry(
+            {"ort": lambda profile: FakeRuntime(events, profile_model_name(profile))}
+        ),
+        database=database,
+    )
+    await borrowed.start("local:embedding")
+    await borrowed.shutdown()
+    assert database.closed is False

@@ -18,7 +18,6 @@ from web.routers.auth import get_current_user
 from web.schemas import Envelope
 from web.ws_hub import local_ai_event
 
-
 router = APIRouter(tags=["local-ai"], dependencies=[Depends(get_current_user)])
 
 
@@ -46,7 +45,8 @@ class LocalAIServices:
     downloads: DownloadManager
     instances: InstanceManager
     broadcast: Any
-    request_results: dict[str, Any] = field(default_factory=dict)
+    request_results: dict[tuple[str, str], Any] = field(default_factory=dict)
+    request_inputs: dict[tuple[str, str], tuple[Any, ...]] = field(default_factory=dict)
     background_tasks: set[asyncio.Task[Any]] = field(default_factory=set)
 
     def spawn(self, coroutine: Any) -> None:
@@ -94,12 +94,25 @@ def attach_local_ai_services(
     return services
 
 
+async def initialize_local_ai_services(
+    app: Any,
+    core: Any,
+    broadcast: Any,
+    state_path: str | Path,
+) -> LocalAIServices:
+    services = attach_local_ai_services(app, core, broadcast, state_path)
+    await services.downloads.recover()
+    return services
+
+
 def _services(request: Request) -> Any:
     services = getattr(request.app.state, "local_ai", None)
     if services is None:
         raise HTTPException(status_code=503, detail="Local AI services are unavailable")
     if not hasattr(services, "request_results"):
         services.request_results = {}
+    if not hasattr(services, "request_inputs"):
+        services.request_inputs = {}
     if not hasattr(services, "spawn"):
         services.spawn = lambda coroutine: asyncio.create_task(coroutine)
     return services
@@ -124,14 +137,27 @@ def _catalog_model(services: Any, model_id: str) -> Any:
 
 
 async def _start_instance(services: Any, request_id: str, model_id: str, device_id: str | None) -> None:
+    key = ("instance", request_id)
     try:
         instance = await services.instances.start(model_id, device_id)
-        services.request_results[request_id] = instance
+        services.request_results[key] = instance
         await services.broadcast(
             {"type": "local_ai_instance_updated", "instance": instance.to_dict()}
         )
     except Exception as error:
-        services.request_results[request_id] = error
+        services.request_results[key] = error
+        await services.broadcast({
+            "type": "local_ai_instance_updated",
+            "request_id": request_id,
+            "model_id": model_id,
+            "operation": "start",
+            "status": "failed",
+            "error": {
+                "code": "instance_start_failed",
+                "message": str(error),
+                "retryable": True,
+            },
+        })
 
 
 @router.get("/local-ai/devices", response_model=Envelope[list[dict[str, Any]]])
@@ -192,14 +218,19 @@ async def list_downloads(request: Request) -> Any:
 )
 async def create_download(body: DownloadRequest, request: Request) -> Any:
     services = _services(request)
-    existing = services.request_results.get(body.request_id)
+    key = ("download", body.request_id)
+    request_input = (body.model_id, body.destination)
+    existing = services.request_results.get(key)
     if existing is not None:
+        if services.request_inputs.get(key) != request_input:
+            raise HTTPException(status_code=409, detail="request_id conflicts with a different download")
         return Envelope(data={"task": existing.to_dict()})
     task = services.downloads.create(
         _catalog_model(services, body.model_id),
         body.destination,
     )
-    services.request_results[body.request_id] = task
+    services.request_results[key] = task
+    services.request_inputs[key] = request_input
     services.spawn(services.downloads.start(task.id))
     return Envelope(data={"task": task.to_dict()})
 
@@ -243,9 +274,12 @@ async def list_instances(request: Request) -> Any:
 )
 async def start_instance(body: StartInstanceRequest, request: Request) -> Any:
     services = _services(request)
-    existing = services.request_results.get(body.request_id)
+    key = ("instance", body.request_id)
+    request_input = (body.model_id, body.device_id)
+    existing = services.request_results.get(key)
     if existing is None:
-        services.request_results[body.request_id] = body.request_id
+        services.request_results[key] = body.request_id
+        services.request_inputs[key] = request_input
         services.spawn(
             _start_instance(
                 services,
@@ -255,6 +289,8 @@ async def start_instance(body: StartInstanceRequest, request: Request) -> Any:
             )
         )
         return Envelope(data={"task_id": body.request_id})
+    if services.request_inputs.get(key) != request_input:
+        raise HTTPException(status_code=409, detail="request_id conflicts with a different instance start")
     if hasattr(existing, "to_dict"):
         return Envelope(data={"task_id": body.request_id, "instance": existing.to_dict()})
     return Envelope(data={"task_id": body.request_id})

@@ -9,7 +9,14 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from web.routers.auth import get_current_user
-from web.routers.local_ai import attach_local_ai_services, local_ai_event_sink, router as local_ai_router
+from web.routers.local_ai import (
+    attach_local_ai_services,
+    initialize_local_ai_services,
+    local_ai_event_sink,
+)
+from web.routers.local_ai import (
+    router as local_ai_router,
+)
 from web.routers.local_deploy import router as local_deploy_router
 from web.ws_hub import local_ai_event
 
@@ -182,8 +189,10 @@ def test_main_app_mounts_all_local_ai_resource_routes() -> None:
 
 
 def test_local_ai_services_attach_to_application_state(tmp_path) -> None:
+    from unittest.mock import Mock
+
     api = FastAPI()
-    core = SimpleNamespace(db=object())
+    core = SimpleNamespace(db=SimpleNamespace(local_ai=Mock()))
 
     async def broadcast(event: dict[str, Any]) -> None:
         pass
@@ -191,6 +200,25 @@ def test_local_ai_services_attach_to_application_state(tmp_path) -> None:
     services = attach_local_ai_services(api, core, broadcast, tmp_path / "downloads.json")
     assert api.state.local_ai is services
     assert services.downloads._state_path == tmp_path / "downloads.json"
+
+
+def test_local_ai_service_initialization_recovers_downloads(monkeypatch, tmp_path) -> None:
+    recovered: list[bool] = []
+
+    class Downloads:
+        async def recover(self) -> None:
+            recovered.append(True)
+
+    services = SimpleNamespace(downloads=Downloads())
+    monkeypatch.setattr(
+        "web.routers.local_ai.attach_local_ai_services",
+        lambda app, core, broadcast, state_path: services,
+    )
+    result = asyncio.run(
+        initialize_local_ai_services(FastAPI(), object(), object(), tmp_path / "downloads.json")
+    )
+    assert result is services
+    assert recovered == [True]
 
 
 def test_websocket_local_ai_events_have_canonical_resource_keys() -> None:
@@ -240,6 +268,23 @@ def test_download_create_requires_destination_and_is_idempotent_by_request_id(
     assert len(services.downloads.items) == 1
 
 
+def test_reusing_download_request_id_with_different_input_is_rejected(
+    client: TestClient,
+    services: SimpleNamespace,
+) -> None:
+    first = client.post(
+        "/api/v1/local-ai/downloads",
+        json={"model_id": "catalog:qwen", "destination": "/models", "request_id": "request:conflict"},
+    )
+    second = client.post(
+        "/api/v1/local-ai/downloads",
+        json={"model_id": "catalog:qwen", "destination": "/other", "request_id": "request:conflict"},
+    )
+    assert first.status_code == 202
+    assert second.status_code == 409
+    assert len(services.downloads.items) == 1
+
+
 def test_remove_model_requires_confirmation(
     client: TestClient,
     services: SimpleNamespace,
@@ -249,6 +294,33 @@ def test_remove_model_requires_confirmation(
     assert services.models.removed == []
     assert client.delete(path, headers={"X-Confirm": "yes"}).status_code == 204
     assert services.models.removed == ["installed:qwen"]
+
+
+def test_request_id_idempotency_is_scoped_by_resource(
+    client: TestClient,
+    services: SimpleNamespace,
+) -> None:
+    request_id = "shared:one"
+    download = client.post(
+        "/api/v1/local-ai/downloads",
+        json={
+            "model_id": "catalog:qwen",
+            "destination": "/models",
+            "request_id": request_id,
+        },
+    )
+    instance = client.post(
+        "/api/v1/local-ai/instances",
+        json={"model_id": "installed:qwen", "device_id": "cpu:0", "request_id": request_id},
+    )
+    assert download.status_code == 202
+    assert instance.status_code == 202
+    assert instance.json()["data"]["task_id"] == request_id
+    for _ in range(20):
+        if services.instances.items:
+            break
+        asyncio.run(asyncio.sleep(0))
+    assert services.instances.items[0].model_id == "installed:qwen"
 
 
 def test_rescan_and_instance_lifecycle_publish_websocket_events(
@@ -268,6 +340,37 @@ def test_rescan_and_instance_lifecycle_publish_websocket_events(
         asyncio.run(asyncio.sleep(0))
     assert any(event["type"] == "local_ai_device_updated" for event in services.events)
     assert any(event["type"] == "local_ai_instance_updated" for event in services.events)
+
+
+def test_instance_start_failure_publishes_retryable_websocket_event(
+    client: TestClient,
+    services: SimpleNamespace,
+) -> None:
+    async def fail_start(model_id: str, backend_override: str | None = None) -> Record:
+        raise RuntimeError("runtime unavailable")
+
+    services.instances.start = fail_start
+    response = client.post(
+        "/api/v1/local-ai/instances",
+        json={"model_id": "installed:qwen", "device_id": "cpu:0", "request_id": "start:failed"},
+    )
+    assert response.status_code == 202
+    for _ in range(20):
+        if services.events:
+            break
+        asyncio.run(asyncio.sleep(0))
+    assert services.events[-1] == {
+        "type": "local_ai_instance_updated",
+        "request_id": "start:failed",
+        "model_id": "installed:qwen",
+        "operation": "start",
+        "status": "failed",
+        "error": {
+            "code": "instance_start_failed",
+            "message": "runtime unavailable",
+            "retryable": True,
+        },
+    }
 
 
 def test_legacy_devices_endpoint_translates_authoritative_devices(

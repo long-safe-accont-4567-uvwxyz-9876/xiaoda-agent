@@ -774,6 +774,10 @@ async def _init_lifespan_resources(app: FastAPI) -> tuple[Any, bool]:
     from agent_core import AgentCore
     from web.agent_registry import AgentRegistry
     from web.config_service import get_config_service
+    from llm_gateway.provider_service import ProviderService
+    from config import get_provider_catalog
+    from web.routers.local_ai import initialize_local_ai_services
+    from web.ws_hub import manager
 
     core = getattr(app.state, "core", None)
     owns_core = core is None
@@ -782,11 +786,19 @@ async def _init_lifespan_resources(app: FastAPI) -> tuple[Any, bool]:
         await core.init()
     app.state.core = core
 
-    get_config_service()  # 触发加载 overrides
+    config_service = get_config_service()
+    app.state.provider_service = ProviderService(config_service, get_provider_catalog(), core.router)
 
     registry = AgentRegistry(core)
     await registry.load_persisted()
     app.state.agent_registry = registry
+    from config import DATA_DIR
+    await initialize_local_ai_services(
+        app,
+        core,
+        manager.broadcast,
+        Path(DATA_DIR) / "local_ai_downloads.json",
+    )
     return core, owns_core
 
 
@@ -879,6 +891,9 @@ async def _shutdown_lifespan(app: FastAPI, core: Any, owns_core: bool) -> None:
 
     await stop_media_cleanup()
     await manager.shutdown()
+    local_ai = getattr(app.state, "local_ai", None)
+    if local_ai is not None:
+        await local_ai.shutdown()
     qq_task = getattr(app.state, "qq_task", None)
     if qq_task:
         qq_task.cancel()
@@ -999,6 +1014,7 @@ def create_app() -> FastAPI:
     from web.routers.system import router as system_router, public_router as system_public_router
     from web.routers.agents import router as agents_router
     from web.routers.models import router as models_router
+    from web.routers.providers import router as providers_router
     from web.routers.tools import router as tools_router
     from web.routers.mcp import router as mcp_router
     from web.routers.insight import router as insight_router
@@ -1018,7 +1034,7 @@ def create_app() -> FastAPI:
     from web.routers.local_ai_storage import router as local_ai_storage_router
 
     for r in (auth_router, chat_router, system_router, agents_router,
-              models_router, tools_router, mcp_router, insight_router,
+              models_router, providers_router, tools_router, mcp_router, insight_router,
               schedule_router, media_router, health_router, plugins_router,
               setup_router, model_discovery_router, market_router,
               mail_manage_router, workflows_router, workspace_router,

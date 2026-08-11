@@ -313,9 +313,11 @@ class AgentRegistry:
                         # （私有化部署），防止 xiaoke.json 硬编码覆盖 AGNES_BASE_URL 等 env。
                         # json 的 base_url 仅作默认值；env 设置后始终优先。
                         # 同时持久化 api_key_env，避免 json 与 env 解析结果不一致。
-                        if agent.config.provider in self._KNOWN_PROVIDERS:
+                        try:
                             agent.config.base_url, agent.config.api_key_env = self._resolve_provider_info(
                                 agent.config.provider)
+                        except ValueError:
+                            pass
                         # 如果 provider/model/base_url 变了，重建客户端
                         if (agent.config.provider != old_provider
                                 or agent.config.model != old_model
@@ -834,16 +836,6 @@ class AgentRegistry:
 
     # ── 模型一键切换 ────────────────────────────────────
 
-    # 已知 provider → (api_key_env, base_url)
-    # base_url 优先读环境变量覆盖，便于私有化部署
-    _KNOWN_PROVIDERS: ClassVar[dict[str, tuple[str, str]]] = {
-        "mimo": ("MIMO_API_KEY", "https://api.xiaomimimo.com/v1"),
-        "siliconflow": ("SILICONFLOW_API_KEY", "https://api.siliconflow.cn/v1"),
-        "openrouter": ("OPENROUTER_API_KEY", "https://openrouter.ai/api/v1"),
-        "modelscope": ("MODELSCOPE_ACCESS_TOKEN", "https://api-inference.modelscope.cn/v1"),
-        "agnes": ("AGNES_API_KEY", "https://apihub.agnes-ai.cn/v1"),
-    }
-
     @classmethod
     def _resolve_provider_info(cls, provider: str) -> tuple[str, str]:
         """解析 provider 的 (base_url, api_key_env)。
@@ -853,19 +845,23 @@ class AgentRegistry:
         """
         import os
 
-        if provider in cls._KNOWN_PROVIDERS:
-            api_key_env, default_base_url = cls._KNOWN_PROVIDERS[provider]
-            # 允许环境变量覆盖 base_url（私有化部署）
-            base_url = os.getenv(f"{provider.upper()}_BASE_URL", default_base_url)
-            if provider == "mimo":
-                base_url = os.getenv("MIMO_BASE_URL", default_base_url)
-            elif provider == "agnes":
-                base_url = os.getenv("AGNES_BASE_URL", default_base_url)
+        from config import get_provider_catalog
+
+        try:
+            definition = get_provider_catalog().get(provider)
+        except KeyError:
+            definition = None
+        if definition is not None:
+            base_url = os.getenv(f"{provider.upper()}_BASE_URL", definition.endpoint.base_url)
+            api_key_env = next(
+                (alias for alias in definition.auth.environment_aliases if os.getenv(alias, "").strip()),
+                definition.auth.environment_aliases[0] if definition.auth.environment_aliases else "",
+            )
             return base_url, api_key_env
 
         # 自定义 provider → 从 config_service 读取
         from web.config_service import get_config_service
-        from web.routers.models import load_provider_key
+        from web._provider_keys import load_provider_key
         cfg = get_config_service()
         record = cfg.get(f"models.providers.{provider}")
         if not record:

@@ -55,6 +55,42 @@ def test_local_ai_store_normalizes_five_resource_collections():
         assert f"const {collection} = computed" in store
 
 
+def test_local_ai_store_request_id_falls_back_without_random_uuid(tmp_path):
+    entry = tmp_path / "local-ai-request-id.ts"
+    bundle = tmp_path / "local-ai-request-id.mjs"
+    frontend = ROOT / "web/frontend"
+    (tmp_path / "node_modules").symlink_to(frontend / "node_modules", target_is_directory=True)
+    entry.write_text(
+        textwrap.dedent(
+            f"""
+            globalThis.localStorage = {{ getItem: () => null, setItem: () => {{}}, removeItem: () => {{}} }}
+            globalThis.location = {{ protocol: 'http:', host: 'localhost', hash: '' }}
+            Object.defineProperty(globalThis, 'crypto', {{ value: {{}}, configurable: true }})
+            const {{ createPinia, setActivePinia }} = await import('pinia')
+            const {{ useLocalAiStore }} = await import({str(ROOT / 'web/frontend/src/stores/localAi.ts')!r})
+
+            setActivePinia(createPinia())
+            const store = useLocalAiStore()
+            const first = store.createRequestId()
+            const second = store.createRequestId()
+            if (!first || !second || first === second) {{
+              throw new Error('缺少安全上下文时未生成唯一 request ID')
+            }}
+            """
+        ),
+        encoding="utf-8",
+    )
+    subprocess.run(
+        [str(frontend / "node_modules/.bin/esbuild"), str(entry), "--bundle", "--platform=node", "--format=esm", f"--outfile={bundle}"],
+        cwd=frontend,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    result = subprocess.run(["node", str(bundle)], cwd=frontend, capture_output=True, text=True)
+    assert result.returncode == 0, result.stderr
+
+
 def test_local_ai_store_uses_generation_safe_loads():
     store = source("web/frontend/src/stores/localAi.ts")
     assert "let loadGeneration = 0" in store
@@ -276,9 +312,29 @@ def test_storage_picker_resolves_directory_entries_from_current_path():
     storage = source("web/frontend/src/components/local-ai/StoragePickerDialog.vue")
 
     assert "function resolveEntryPath" in storage
+    assert "return `/${entry}`" in storage
+    assert "return `${entry}\\\\`" in storage
     assert "path.value.endsWith('\\\\')" in storage
     assert "path.value.endsWith('/')" in storage
     assert "browse(resolveEntryPath(entry))" in storage
+
+
+def test_model_market_validates_saved_default_for_each_download_before_use():
+    market = source("web/frontend/src/components/local-ai/ModelMarketTab.vue")
+
+    assert "async function choose" in market
+    assert "store.validateStorage(store.defaultStorage, model.download_size)" in market
+    assert "validation.writable && !validation.error" in market
+    assert "showStorage.value = true" in market
+
+
+def test_deployments_tab_filters_stopped_instances_from_cards_and_empty_state():
+    deployments = source("web/frontend/src/components/local-ai/DeploymentsTab.vue")
+
+    assert "const activeInstances = computed" in deployments
+    assert "store.instances.filter(instance => instance.state !== 'stopped')" in deployments
+    assert 'v-for="instance in activeInstances"' in deployments
+    assert "!activeInstances.length && !store.models.length" in deployments
 
 
 def test_local_deploy_summary_is_derived_from_store_resources():

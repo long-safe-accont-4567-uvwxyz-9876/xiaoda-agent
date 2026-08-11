@@ -16,7 +16,7 @@ async function download() {
   if (!props.model || !props.destination) return
   submitting.value = true
   try {
-    await store.download({ model_id: props.model.id, destination: props.destination, request_id: crypto.randomUUID() })
+    await store.download({ model_id: props.model.id, destination: props.destination, request_id: store.createRequestId() })
     message.success('下载任务已创建')
     emit('downloaded')
   } catch (error) {

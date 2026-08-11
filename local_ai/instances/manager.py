@@ -14,7 +14,6 @@ from local_ai.contracts import (
     DeviceState,
     InstalledModel,
     ModelInstance,
-    RuntimeProfile,
 )
 from local_ai.models.registry import ModelNotFoundError, ModelRegistry
 from local_ai.runtimes.registry import RuntimeAdapter, RuntimeRegistry
@@ -36,12 +35,15 @@ class InstanceManager:
         runtime_registry: RuntimeRegistry,
         *,
         database: Any | None = None,
+        owns_database: bool = False,
         catalog_resolver: Callable[[InstalledModel], CatalogModel] | None = None,
     ) -> None:
         self._model_registry = model_registry
         self._device_registry = device_registry
         self._runtime_registry = runtime_registry
         self._database = database
+        self._owns_database = owns_database
+        self._database_closed = False
         self.catalog_resolver = catalog_resolver
         self._instances: dict[str, ModelInstance] = {}
         self._runtimes: dict[str, RuntimeAdapter] = {}
@@ -54,6 +56,7 @@ class InstanceManager:
         self._shutdown_task: asyncio.Task[None] | None = None
         self._lifecycle_tasks: set[asyncio.Task[Any]] = set()
         self._model_tasks: dict[str, set[asyncio.Task[Any]]] = {}
+        self._pending_cleanup: dict[str, tuple[str, RuntimeAdapter]] = {}
 
     @property
     def active_count(self) -> int:
@@ -76,8 +79,7 @@ class InstanceManager:
                 raise ModelNotFoundError(f"model not found: {model_id!r}")
             catalog = await self._catalog_model(installed)
             profile = self._device_registry.recommend(catalog, backend_override)
-            profile = self._runtime_profile(installed, profile)
-            runtime = self._runtime_registry.create(profile)
+            runtime = self._runtime_registry.create(profile, installed_model=installed)
             try:
                 started = await self._run_sync(model_id, runtime.start, profile)
                 if not started:
@@ -101,10 +103,8 @@ class InstanceManager:
                 try:
                     await self._run_sync(model_id, runtime.stop)
                 except BaseException as rollback_error:
-                    if isinstance(start_error, asyncio.CancelledError):
-                        raise start_error
-                    if isinstance(rollback_error, asyncio.CancelledError):
-                        raise rollback_error
+                    cleanup_id = uuid4().hex
+                    self._pending_cleanup[cleanup_id] = (model_id, runtime)
                     group_type = (
                         ExceptionGroup
                         if isinstance(start_error, Exception)
@@ -173,8 +173,11 @@ class InstanceManager:
                 else:
                     state, health = "degraded", "unhealthy"
                 if not self._shutting_down:
+                    latest = self._instances.get(instance_id)
+                    if latest is None:
+                        continue
                     self._instances[instance_id] = replace(
-                        current,
+                        latest,
                         state=state,
                         health=health,
                         updated_at=self._now(),
@@ -193,7 +196,16 @@ class InstanceManager:
                 shutdown_task = self._shutdown_task
         if shutdown_task is None:
             raise RuntimeError("instance manager shutdown state is invalid")
-        await self._await_completion(shutdown_task)
+        try:
+            await self._await_completion(shutdown_task)
+        finally:
+            async with self._shutdown_lock:
+                if (
+                    self._shutdown_task is shutdown_task
+                    and shutdown_task.done()
+                    and not self._shutdown_completed
+                ):
+                    self._shutdown_task = None
 
     async def _shutdown(self) -> None:
         errors: list[Exception] = []
@@ -212,26 +224,55 @@ class InstanceManager:
                     except Exception as error:
                         errors.append(error)
             await self._await_lifecycle_tasks()
-            if self._database is not None:
+            for cleanup_id, (model_id, runtime) in tuple(self._pending_cleanup.items()):
+                try:
+                    await self._run_sync(model_id, runtime.stop)
+                except Exception as error:
+                    errors.append(error)
+                else:
+                    self._pending_cleanup.pop(cleanup_id, None)
+            if self._database is not None and self._owns_database and not self._database_closed:
                 try:
                     await self._database.close()
                 except Exception as error:
                     errors.append(error)
+                else:
+                    self._database_closed = True
             if errors:
                 raise ExceptionGroup("instance manager shutdown failed", errors)
         finally:
-            self._shutdown_completed = True
+            self._shutdown_completed = not self._instances and not self._pending_cleanup
 
     async def _stop_locked(self, instance: ModelInstance) -> None:
         runtime = self._runtimes[instance.id]
         self._stopping_instances.add(instance.id)
         try:
             await self._run_sync(instance.model_id, runtime.stop)
+        except BaseException:
+            stopped = False
+            try:
+                stopped = not runtime.health()
+            except Exception:
+                pass
+            if stopped:
+                self._instances.pop(instance.id, None)
+                self._runtimes.pop(instance.id, None)
+                self._model_instances.pop(instance.model_id, None)
+            else:
+                current = self._instances.get(instance.id)
+                if current is not None:
+                    self._instances[instance.id] = replace(
+                        current,
+                        state="degraded",
+                        health="stop_failed",
+                        updated_at=self._now(),
+                    )
+            raise
         finally:
             self._stopping_instances.discard(instance.id)
-            self._instances.pop(instance.id, None)
-            self._runtimes.pop(instance.id, None)
-            self._model_instances.pop(instance.model_id, None)
+        self._instances.pop(instance.id, None)
+        self._runtimes.pop(instance.id, None)
+        self._model_instances.pop(instance.model_id, None)
 
     async def _run_sync(
         self,
@@ -309,21 +350,6 @@ class InstanceManager:
             download_size=1,
             compatibility=compatibility,
             runtime_requirements=requirements,
-        )
-
-    @staticmethod
-    def _runtime_profile(
-        installed: InstalledModel,
-        profile: RuntimeProfile,
-    ) -> RuntimeProfile:
-        return replace(
-            profile,
-            options={
-                **profile.options,
-                "model_dir": installed.directory,
-                "model_id": installed.id,
-                "purpose": installed.purpose.value,
-            },
         )
 
     def _required_instance(self, instance_id: str) -> ModelInstance:

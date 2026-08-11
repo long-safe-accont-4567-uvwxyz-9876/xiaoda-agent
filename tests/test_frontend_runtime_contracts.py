@@ -14,12 +14,11 @@ def test_websocket_send_reports_delivery_failure():
     assert "return false" in ws
 
 
-def test_chat_does_not_enter_processing_when_websocket_send_fails():
+def test_chat_returns_structured_failure_before_mutating_messages():
     chat = source("web/frontend/src/stores/chat.ts")
-    send_idx = chat.index("ws.send(payload)")
-    processing_idx = chat.index("isProcessing.value = true", chat.index("function sendMessage"))
-    assert send_idx < processing_idx
-    assert "if (!ws.send(payload)) return" in chat
+    assert "export type ChatSendResult" in chat
+    assert "reason: 'DISCONNECTED'" in chat
+    assert chat.index("ws.send(payload)") < chat.index("pushMessage(messages", chat.index("function sendMessage"))
 
 
 def test_sliding_token_renewal_updates_expiry_and_runtime_store():
@@ -40,7 +39,7 @@ def test_sliding_token_renewal_reconnects_websocket_with_new_token():
 
 def test_chat_resend_uses_structured_image_option():
     view = source("web/frontend/src/views/ChatView.vue")
-    assert "chat.sendMessage(msg.content, imageUrl ? { imageUrl } : undefined)" in view
+    assert "chat.retryMessage(msg.id)" in view
     assert "[Image:" not in view[view.index("function resend"):view.index("function clearAll")]
 
 
@@ -66,13 +65,9 @@ def test_terminal_unmount_kills_sessions_and_blocks_delayed_start():
     assert "disposed || !session.alive" in mount
 
 
-def test_local_deploy_polling_stops_on_unmount_and_rejects_stale_status():
+def test_local_deploy_disconnects_websocket_on_unmount():
     view = source("web/frontend/src/views/LocalDeployView.vue")
-    assert "let disposed = false" in view
-    assert "let pollRunning = false" in view
-    assert "statusGeneration" in view
-    assert "generation === statusGeneration" in view
-    mounted_idx = view.index("onMounted(async () =>")
+    mounted_idx = view.index("onMounted(() =>")
     unmount_idx = view.index("onBeforeUnmount(() =>")
-    assert "if (!disposed)" in view[mounted_idx:unmount_idx]
-    assert "disposed = true" in view[unmount_idx:]
+    assert "store.connectWebSocket()" in view[mounted_idx:unmount_idx]
+    assert "store.disconnectWebSocket()" in view[unmount_idx:]

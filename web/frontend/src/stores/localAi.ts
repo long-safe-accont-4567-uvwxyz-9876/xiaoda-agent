@@ -26,6 +26,15 @@ function reconcileSnapshot<T extends { id: string }>(snapshot: T[], current: Rec
   return next
 }
 
+let requestSequence = 0
+
+function createRequestId() {
+  const randomUUID = globalThis.crypto?.randomUUID
+  if (typeof randomUUID === 'function') return randomUUID.call(globalThis.crypto)
+  requestSequence += 1
+  return `local-ai-${Date.now().toString(36)}-${requestSequence.toString(36)}-${Math.random().toString(36).slice(2)}`
+}
+
 export const useLocalAiStore = defineStore('localAi', () => {
   const devicesById = ref<Record<string, ComputeDevice>>({})
   const catalogById = ref<Record<string, CatalogModel>>({})
@@ -185,6 +194,6 @@ export const useLocalAiStore = defineStore('localAi', () => {
     devices, catalog, models, downloads, instances, defaultStorage, loading, error,
     load, rescan, download, pause, resume, cancel, start, stop, remove,
     browseStorage, validateStorage, saveDefaultStorage,
-    upsertDevice, upsertDownload, upsertInstance, connectWebSocket, disconnectWebSocket,
+    createRequestId, upsertDevice, upsertDownload, upsertInstance, connectWebSocket, disconnectWebSocket,
   }
 })

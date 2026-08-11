@@ -1,11 +1,12 @@
 <script setup lang="ts">
 import { computed, ref } from 'vue'
-import { NButton, NEmpty, NInput, NSelect, NTag } from 'naive-ui'
+import { NButton, NEmpty, NInput, NSelect, NTag, useMessage } from 'naive-ui'
 import { useLocalAiStore } from '../../stores/localAi'
 import ModelDetailDrawer from './ModelDetailDrawer.vue'
 import StoragePickerDialog from './StoragePickerDialog.vue'
 
 const store = useLocalAiStore()
+const message = useMessage()
 type CatalogEntry = typeof store.catalog[number]
 const query = ref('')
 const purpose = ref<string | null>(null)
@@ -16,14 +17,24 @@ const showDetail = ref(false)
 const filtered = computed(() => store.catalog.filter(model => (!purpose.value || model.purpose === purpose.value) && `${model.id} ${model.repository}`.toLowerCase().includes(query.value.toLowerCase())))
 const purposeOptions = [{ label: '对话', value: 'chat' }, { label: '向量', value: 'embedding' }, { label: '重排', value: 'reranker' }]
 
-function choose(model: CatalogEntry) {
+async function choose(model: CatalogEntry) {
   selected.value = model
+  destination.value = ''
+  showDetail.value = false
   if (store.defaultStorage) {
-    destination.value = store.defaultStorage
-    showDetail.value = true
-  } else {
-    showStorage.value = true
+    try {
+      const validation = await store.validateStorage(store.defaultStorage, model.download_size)
+      if (validation.writable && !validation.error) {
+        destination.value = validation.path
+        showDetail.value = true
+        return
+      }
+      message.warning(validation.error || validation.reason || '默认目录不可用，请重新选择')
+    } catch (error) {
+      message.warning(error instanceof Error ? error.message : String(error))
+    }
   }
+  showStorage.value = true
 }
 
 function selectStorage(path: string) {

@@ -510,14 +510,16 @@ class MemoryManager:
                  reranker: Any | None=None, query_transformer: Any | None=None,
                  governance: Any | None=None,
                  entity_extractor: Any | None=None,
-                 entity_store: Any | None=None) -> None:
+                 entity_store: Any | None=None,
+                 reranker_service: Any | None=None) -> None:
         self.db = db
         self.memory = memory
         self.vec = vector_store
         self.router = router
         self.kg = knowledge_graph
         self._security_filter = security_filter
-        self._reranker = reranker
+        self._reranker = reranker_service or reranker
+        self._reranker_service = reranker_service
         self._query_transformer = query_transformer
         self._governance = governance
         self.entity_extractor = entity_extractor
@@ -1121,7 +1123,12 @@ class MemoryManager:
         candidates = await self._apply_entity_boost(query, candidates, scope)
 
         # Reranker 精排
-        if use_reranker and self._reranker and self._reranker.available and len(candidates) > k:
+        reranker_available = bool(self._reranker and self._reranker.available)
+        if use_reranker and self._reranker_service is not None and not reranker_available:
+            from local_ai.integration.reranker import LocalModelUnavailableError
+
+            raise LocalModelUnavailableError("selected local reranker model is unavailable")
+        if use_reranker and reranker_available and len(candidates) > k:
             # 根因修复（2026-07-29）：移除外层 5s wait_for 超时（治标）。
             # reranker 已用共享 httpx client（connect=15s）+ 单次请求 5s timeout，
             # _hybrid_rerank 内部有 try/except 返回 None（失败降级到 RRF 排序）。
@@ -1354,6 +1361,23 @@ class MemoryManager:
             logger.debug("memory.candidate_ids_failed", error=str(e))
             return None
 
+    async def rerank_with_selected_local_model(
+        self,
+        query: str,
+        documents: list[str],
+        top_n: int | None = None,
+    ) -> list[dict]:
+        if self._reranker_service is None:
+            from local_ai.integration.reranker import LocalModelUnavailableError
+
+            raise LocalModelUnavailableError("no local reranker model is selected")
+        return await self._reranker_service.rerank(
+            query,
+            documents,
+            top_n=len(documents) if top_n is None else top_n,
+            return_documents=False,
+        )
+
     async def _hybrid_rerank(self, query: str, fused: list[tuple[str, float]],
                               all_items: dict[str, dict], k: int) -> list[dict] | None:
         """Reranker 精排：基于 RRF 融合后的候选池重排序，返回 top_k 结果。
@@ -1385,6 +1409,11 @@ class MemoryManager:
                     results.append(mem)
             return results if results else None
         except Exception as e:
+            if self._reranker_service is not None:
+                from local_ai.integration.reranker import LocalModelUnavailableError
+
+                if isinstance(e, LocalModelUnavailableError):
+                    raise
             logger.warning("memory.rerank_failed", error=str(e))
             return None
 

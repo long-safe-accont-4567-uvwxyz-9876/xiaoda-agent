@@ -107,42 +107,31 @@ async def create_provider(body: dict, request: Request) -> Any:
         allowed, reason = validate_url(base_url)
         if not allowed:
             raise HTTPException(400, f"base_url 安全检查失败: {reason}")
-    cfg = _cfg(request)
-    if pid in (cfg.get("models.providers", {}) or {}):
-        raise HTTPException(400, f"provider {pid} 已存在")
-    record = {
-        "label": body.get("label", pid),
-        "format": fmt,
-        "base_url": base_url,
-        "default_model": body.get("default_model", ""),
-        "enabled": True,
-    }
     api_key = (body.get("api_key") or "").strip()
     if not api_key:
         raise HTTPException(400, "api_key 不能为空")
-    # 先注册客户端，成功后再持久化配置（避免部分失败状态）
     try:
-        _save_key_and_register(request, pid, fmt, base_url, api_key)
+        definition = await request.app.state.provider_service.create(body, {"api_key": api_key})
+    except ValueError as e:
+        raise HTTPException(400, str(e)) from None
     except Exception as e:
-        logger.error("provider.register_failed id={} error={}", pid, str(e))
-        raise HTTPException(500, f"provider 注册失败: {e}") from None
-    cfg.set(f"models.providers.{pid}", record)
+        from llm_gateway.provider_service import ProviderConnectionError
+        if isinstance(e, ProviderConnectionError):
+            raise HTTPException(422, str(e)) from None
+        raise
     await _audit(request, "provider.create", pid)
     await invalidate_discovery_cache()
     await _broadcast_changed()
-    return Envelope(data=dict(record, id=pid, key_masked=_mask(api_key), builtin=False))
+    record = request.app.state.provider_service._record(definition)
+    return Envelope(data=dict(record, key_masked=_mask(api_key), builtin=False))
 
 
 @router.put("/models/providers/{pid}", response_model=Envelope[dict])
 async def update_provider(pid: str, body: dict, request: Request) -> Any:
-    cfg = _cfg(request)
-    record = cfg.get(f"models.providers.{pid}")
+    record = _cfg(request).get(f"models.providers.{pid}")
     if pid in ("mimo",) or not record:
         raise HTTPException(404 if not record else 400,
                             "内置 provider 不可修改" if record else f"provider {pid} 不存在")
-    for f in ("label", "format", "base_url", "default_model", "enabled"):
-        if f in body and body[f] is not None:
-            record[f] = body[f]
     # base_url 变更时同样做 SSRF 校验（本地服务如 Ollama 放行）
     if "base_url" in body and body["base_url"]:
         from security.ssrf_guard import validate_url, is_local_host
@@ -153,32 +142,39 @@ async def update_provider(pid: str, body: dict, request: Request) -> Any:
             allowed, reason = validate_url(_burl)
             if not allowed:
                 raise HTTPException(400, f"base_url 安全检查失败: {reason}")
-    cfg.set(f"models.providers.{pid}", record)
+    credentials = {"api_key": body["api_key"]} if body.get("api_key") else None
+    try:
+        definition = await request.app.state.provider_service.update(pid, body, credentials)
+    except ValueError as e:
+        raise HTTPException(400, str(e)) from None
+    except Exception as e:
+        from llm_gateway.provider_service import ProviderConnectionError
+        if isinstance(e, ProviderConnectionError):
+            raise HTTPException(422, str(e)) from None
+        raise
     key = load_provider_key(pid)
-    if key:
-        _save_key_and_register(request, pid, record["format"], record["base_url"], key)
     await _audit(request, "provider.update", pid)
     await invalidate_discovery_cache()
     await _broadcast_changed()
-    return Envelope(data=dict(record, id=pid, key_masked=_mask(key), builtin=False))
+    updated = request.app.state.provider_service._record(definition)
+    return Envelope(data=dict(updated, key_masked=_mask(key), builtin=False))
 
 
 @router.delete("/models/providers/{pid}", response_model=Envelope[dict])
 async def delete_provider(pid: str, request: Request) -> Any:
     if request.headers.get("X-Confirm") != "yes":
         raise HTTPException(400, "缺少 X-Confirm: yes 确认头")
-    cfg = _cfg(request)
-    if not cfg.get(f"models.providers.{pid}"):
-        raise HTTPException(404, f"provider {pid} 不存在")
-    # 检查是否有路由仍指向它
-    from model_router import ROUTE_TABLE
-    used_by = [t for t, c in ROUTE_TABLE.items() if c.get("client") == pid]
-    if used_by:
-        raise HTTPException(400, f"路由 {', '.join(used_by)} 仍指向该 provider，请先改路由")
-    cfg.delete(f"models.providers.{pid}")
-    _key_file(pid).unlink(missing_ok=True)
-    from web.custom_providers import unregister_from_router
-    unregister_from_router(_router_of(request), pid)
+    try:
+        await request.app.state.provider_service.delete(pid)
+    except KeyError:
+        raise HTTPException(404, f"provider {pid} 不存在") from None
+    except ValueError as e:
+        raise HTTPException(400, str(e)) from None
+    except Exception as e:
+        from llm_gateway.provider_service import ProviderInUseError
+        if isinstance(e, ProviderInUseError):
+            raise HTTPException(409, f"provider 正被路由使用: {e}") from None
+        raise
     await _audit(request, "provider.delete", pid)
     await invalidate_discovery_cache()
     await _broadcast_changed()
@@ -259,17 +255,28 @@ async def update_route(task: str, body: dict, request: Request) -> Any:
         raise HTTPException(404, f"未知路由任务 {task}")
     cfg = _cfg(request)
     provider = body.get("provider")
-    if provider and provider not in ("mimo",) \
+    model_id = str(body["model"]) if body.get("model") else ""
+    effective_model_id = model_id or ROUTE_TABLE[task].get("model", "")
+    provider_service = getattr(request.app.state, "provider_service", None)
+    if provider and provider_service is not None:
+        validation = provider_service.validate_route(provider, effective_model_id)
+        if validation == "missing":
+            raise HTTPException(404, f"provider {provider} 不存在")
+        if validation in {"disabled", "unavailable"}:
+            raise HTTPException(409, f"provider {provider} 当前不可用于路由")
+        if validation == "model":
+            raise HTTPException(409, f"模型 {model_id} 不属于 provider {provider}")
+    elif provider and provider not in ("mimo",) \
             and not cfg.get(f"models.providers.{provider}"):
         raise HTTPException(400, f"provider {provider} 不存在")
 
     router_obj = _router_of(request)
-    registry = router_obj._registry  # ModelRouter.__init__ 保证 _registry 已初始化
+    registry = router_obj._registry
+    current_entry = registry.get_task_ref(task) or {}
 
     # CodeRabbit#5 + m8 修复：走 registry.get_task_ref 而非直接读 ROUTE_TABLE[task]，
     # 保证 replace_table 后语义一致（虽然 replace_table 已保持对象身份，仍统一入口）。
-    current_entry = registry.get_task_ref(task) or {}
-    model_id = str(body["model"]) if body.get("model") else current_entry.get("model", "")
+    model_id = effective_model_id
     final_provider = provider or current_entry.get("client", "mimo")
 
     # CodeRabbit Nit: int 转换加 try/except 返回 400 而非让 ValueError 变成 500
