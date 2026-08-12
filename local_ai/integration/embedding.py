@@ -1,19 +1,15 @@
 from __future__ import annotations
 
-import asyncio
 import os
 from pathlib import Path
 from typing import Any, Callable
 
-from local_ai.integration.reranker import LocalModelUnavailableError
-
-
-class LocalEmbeddingUnavailableError(LocalModelUnavailableError):
-    code = "local_embedding_unavailable"
-
-    def __init__(self, message: str) -> None:
-        super().__init__(message)
-        self.details = {"purpose": "embedding", "mode": "local"}
+from local_ai.integration.errors import (
+    LocalEmbeddingUnavailableError,
+    LocalModelUnavailableError,
+    reject_awaitable_factory_result,
+    run_worker_to_completion,
+)
 
 
 class LocalEmbeddingService:
@@ -100,12 +96,11 @@ class LocalEmbeddingService:
         if self._unavailable_error is not None:
             raise LocalEmbeddingUnavailableError(str(self._unavailable_error))
         runtime, binding = await self._resolve_runtime_for_inference()
-        source = "instance" if runtime is not self._fallback else "bundled"
         try:
-            if source == "bundled":
+            if isinstance(runtime, LocalEmbeddingService):
                 return await runtime.embed(texts)
             if self._instance_manager is not None:
-                result = await asyncio.to_thread(runtime.embed, texts)
+                result = await run_worker_to_completion(runtime.embed, texts)
                 if len(result) != len(texts):
                     raise RuntimeError(
                         f"local embedding returned {len(result)} vectors for {len(texts)} texts"
@@ -114,9 +109,9 @@ class LocalEmbeddingService:
             if not self.available:
                 raise LocalEmbeddingUnavailableError("selected local embedding model is unavailable")
             if self.source == "bundled":
-                result = [await asyncio.to_thread(self._runtime.embed, text) for text in texts]
+                result = [await run_worker_to_completion(self._runtime.embed, text) for text in texts]
             else:
-                result = await asyncio.to_thread(self._runtime.embed, texts)
+                result = await run_worker_to_completion(self._runtime.embed, texts)
             if len(result) != len(texts):
                 raise RuntimeError(
                     f"local embedding returned {len(result)} vectors for {len(texts)} texts"
@@ -143,7 +138,7 @@ class LocalEmbeddingService:
 
     async def _resolve_runtime(self) -> Any:
         if self._instance_manager is None:
-            return self
+            return self._runtime
         from local_ai.contracts import ModelPurpose
 
         try:
@@ -152,10 +147,16 @@ class LocalEmbeddingService:
             raise LocalEmbeddingUnavailableError(str(error)) from error
         if runtime is not None:
             return runtime
-        if self._fallback is None and self._fallback_factory is not None:
-            self._fallback = self._fallback_factory()
-        if self._fallback is not None:
-            return self._fallback
+        if self._instance_manager.selection_identity(ModelPurpose.EMBEDDING) is None:
+            fallback = self._fallback
+            if fallback is None and self._fallback_factory is not None:
+                fallback = reject_awaitable_factory_result(
+                    self._fallback_factory(),
+                    "fallback_factory",
+                )
+                self._fallback = fallback
+            if fallback is not None:
+                return fallback
         raise LocalEmbeddingUnavailableError("no running local embedding instance")
 
     async def _resolve_runtime_for_inference(self) -> tuple[Any, tuple[str, str] | None]:

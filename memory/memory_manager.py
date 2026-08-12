@@ -18,6 +18,7 @@ from config import get_agent_display_name
 # CodeRabbit 复审修复：fire-and-forget 任务必须保持强引用，否则 event loop 仅持有弱引用
 # 可能被 GC 回收导致任务中途消失。_bg_tasks 是 core.background_tasks 维护的全局任务集合。
 from core.background_tasks import _bg_tasks, _spawn
+from local_ai.integration.errors import is_structured_local_unavailable
 
 
 def _stage_log(stage: str, t0: float, query: str = "") -> None:
@@ -1130,9 +1131,9 @@ class MemoryManager:
         # Reranker 精排
         reranker_available = bool(self._reranker and self._reranker.available)
         if use_reranker and self._reranker_service is not None and not reranker_available:
-            from local_ai.integration.reranker import LocalModelUnavailableError
+            from local_ai.integration.reranker import LocalRerankerUnavailableError
 
-            raise LocalModelUnavailableError("selected local reranker model is unavailable")
+            raise LocalRerankerUnavailableError("selected local reranker model is unavailable")
         if use_reranker and reranker_available and len(candidates) > k:
             # 根因修复（2026-07-29）：移除外层 5s wait_for 超时（治标）。
             # reranker 已用共享 httpx client（connect=15s）+ 单次请求 5s timeout，
@@ -1393,25 +1394,46 @@ class MemoryManager:
         children: list[dict],
         importance: float,
     ) -> bool:
-        child_items = []
         child_ids = []
-        try:
-            for child in children:
-                child_id = await self.memory.insert_child_chunk(
-                    parent_id=parent_id,
-                    content=child["content"],
-                    embed_content=child["embed_content"],
-                    chunk_type=child["chunk_type"],
-                    importance=importance * child["weight"],
-                    overlap_hash=child["overlap_hash"],
+        error: BaseException | None = None
+        child_records = [
+            {
+                **child,
+                "importance": importance * child["weight"],
+            }
+            for child in children
+        ]
+
+        async def _insert_batch() -> list[int]:
+            transaction = getattr(getattr(self, "db", None), "write_transaction", None)
+            if transaction is None:
+                return await self.memory.insert_child_chunks(parent_id, child_records)
+            async with transaction():
+                return await self.memory.insert_child_chunks(
+                    parent_id,
+                    child_records,
+                    auto_commit=False,
                 )
-                child_ids.append(child_id)
-                child_items.append((child_id, child["embed_content"]))
+
+        insert_task = asyncio.create_task(_insert_batch())
+        try:
+            child_ids = await asyncio.shield(insert_task)
+            child_items = [
+                (child_id, child["embed_content"])
+                for child_id, child in zip(child_ids, children, strict=True)
+            ]
             if await self.vec.batch_upsert_children(child_items):
                 return True
-        except Exception:
-            pass
-        await self.memory.delete_child_chunks(child_ids)
+        except BaseException as caught:
+            error = caught
+            if isinstance(caught, asyncio.CancelledError):
+                try:
+                    child_ids = await asyncio.shield(insert_task)
+                except Exception:
+                    child_ids = []
+        await asyncio.shield(self.memory.delete_child_chunks(child_ids))
+        if isinstance(error, asyncio.CancelledError):
+            raise error
         return False
 
     async def _hybrid_rerank(self, query: str, fused: list[tuple[str, float]],
@@ -2092,6 +2114,8 @@ class MemoryManager:
         hybrid_results = await asyncio.gather(*hybrid_tasks, return_exceptions=True)
         for i, res in enumerate(hybrid_results):
             if isinstance(res, Exception):
+                if is_structured_local_unavailable(res):
+                    raise res
                 logger.warning("memory.hybrid_search_failed",
                                query=queries[i][:50], error=str(res))
                 continue
@@ -2123,6 +2147,8 @@ class MemoryManager:
                 if reranked_results:
                     all_results = reranked_results
             except Exception as e:
+                if is_structured_local_unavailable(e):
+                    raise
                 logger.warning("memory.batch_rerank_failed", error=str(e))
         return all_results
 
@@ -2140,6 +2166,8 @@ class MemoryManager:
                         seen_ids.add(rid)
                         all_results.append(r)
             except Exception as e:
+                if is_structured_local_unavailable(e):
+                    raise
                 logger.warning("memory.hybrid_search_failed", query=q[:50], error=str(e))
         return all_results
 
@@ -2739,41 +2767,13 @@ class MemoryManager:
                                 self._split_into_children, exchanges, mem_id, summary)
                             if not children or not self.vec:
                                 return
-                            # 批量写入：auto_commit=False 避免每条 commit 占用共享连接
-                            # 根因修复：必须用 try/finally 保证事务总是被 commit 或 rollback。
-                            # aiosqlite 单连接共享事务状态，若 asyncio.wait_for 超时取消本协程，
-                            # 未提交的 INSERT 事务会残留在连接上，后续任意协程的 DB 操作
-                            # （如 merge_entity UPDATE）会在脏事务中执行 → "SQL logic error"。
-                            # CancelledError 是 BaseException 子类，用 finally 确保捕获。
-                            child_items = []
-                            # 根因修复：用 db.write_transaction() 串行化多语句写事务。
-                            # 原版手动 commit + finally shield(rollback) 只防取消，无法防止
-                            # 与并发持久化任务（_run_persistence_tasks）共享连接事务状态交叉。
-                            # write_transaction 的 asyncio.Lock 从源头杜绝交叉，commit/rollback
-                            # 统一由上下文管理器处理。外层 wait_for(25s) 超时 cancel 时，
-                            # finally 的 shield(rollback) 受保护完成，CancelledError 继续传播。
-                            async with self.db.write_transaction():
-                                for child in children:
-                                    child_id = await self.memory.insert_child_chunk(
-                                        parent_id=mem_id,
-                                        content=child['content'],
-                                        embed_content=child['embed_content'],
-                                        chunk_type=child['chunk_type'],
-                                        importance=importance * child['weight'],
-                                        overlap_hash=child['overlap_hash'],
-                                        auto_commit=False,
-                                    )
-                                    child_items.append((child_id, child['embed_content']))
-                            # 向量索引（内层 20s 超时，DB 事务已关闭，不影响连接）
-                            try:
-                                await asyncio.wait_for(
-                                    self.vec.batch_upsert_children(child_items),
-                                    timeout=20.0)
-                            except asyncio.TimeoutError:
-                                logger.error("degradation_triggered memory.encode_children_timeout "
-                                             "hint=batch_upsert_children 20s 超时，跳过子chunk索引")
-                            logger.debug("memory.child_chunks_created",
-                                         parent_id=mem_id, count=len(children))
+                            indexed = await asyncio.wait_for(
+                                self._insert_indexed_children(mem_id, children, importance),
+                                timeout=20.0,
+                            )
+                            if indexed:
+                                logger.debug("memory.child_chunks_created",
+                                             parent_id=mem_id, count=len(children))
                         await asyncio.wait_for(_do_children(), timeout=25.0)
                     except asyncio.TimeoutError:
                         logger.error("degradation_triggered memory.encode_children_section_timeout "

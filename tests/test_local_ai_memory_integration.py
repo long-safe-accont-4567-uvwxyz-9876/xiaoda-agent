@@ -1,8 +1,12 @@
 from __future__ import annotations
 
 import asyncio
+import inspect
 import threading
 from datetime import datetime, timezone
+from pathlib import Path
+from types import SimpleNamespace
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
@@ -10,10 +14,15 @@ import core.bootstrap as bootstrap
 from local_ai.contracts import CatalogModel, ComputeDevice, InstalledModel, ModelPurpose, RuntimeProfile
 from local_ai.instances.manager import InstanceInUseError, InstanceManager
 from local_ai.integration.embedding import LocalEmbeddingService, LocalEmbeddingUnavailableError
-from local_ai.integration.reranker import LocalModelUnavailableError, LocalRerankerService
-from local_ai.runtimes.registry import RuntimeRegistry
+from local_ai.integration.reranker import (
+    LocalModelUnavailableError,
+    LocalRerankerService,
+    LocalRerankerUnavailableError,
+)
 from local_ai.runtimes.base import RuntimeValidationError
+from local_ai.runtimes.registry import RuntimeRegistry
 from memory.memory_manager import MemoryManager
+from memory.query_cache import QueryCache
 from memory.vector_store import VectorStore
 
 
@@ -48,9 +57,10 @@ class FakeRerankerRuntime:
 
 
 class FakeInstanceManager:
-    def __init__(self, runtimes=None, errors=None) -> None:
+    def __init__(self, runtimes=None, errors=None, selections=None) -> None:
         self.runtimes = runtimes or {}
         self.errors = errors or {}
+        self.selections = selections or set()
         self.purposes = []
 
     async def resolve_runtime(self, purpose):
@@ -59,6 +69,14 @@ class FakeInstanceManager:
         if error is not None:
             raise error
         return self.runtimes.get(purpose.value)
+
+    def selection_identity(self, purpose):
+        if purpose.value not in self.selections:
+            return None
+        return (f"selected:{purpose.value}", 1)
+
+    def selection_available(self, purpose):
+        return purpose.value in self.runtimes
 
 
 class FailingBundledRuntime:
@@ -85,6 +103,8 @@ class E2ERuntime:
         self.score_calls: list[tuple[str, list[str]]] = []
         self.embed_entered: threading.Event | None = None
         self.embed_release: threading.Event | None = None
+        self.score_entered: threading.Event | None = None
+        self.score_release: threading.Event | None = None
 
     def start(self, profile: RuntimeProfile) -> bool:
         self.running = True
@@ -106,6 +126,10 @@ class E2ERuntime:
 
     def score(self, query: str, documents: list[str]) -> list[float]:
         self.score_calls.append((query, documents))
+        if self.score_entered is not None:
+            self.score_entered.set()
+        if self.score_release is not None:
+            self.score_release.wait()
         return [self.value + index for index, _ in enumerate(documents)]
 
 
@@ -221,6 +245,44 @@ async def test_production_services_follow_instances_started_after_bootstrap(tmp_
 
 
 @pytest.mark.asyncio
+async def test_production_bootstrap_keeps_default_local_vector_store_enabled(tmp_path, monkeypatch):
+    created = []
+
+    class FakeVectorStore:
+        def __init__(self, **kwargs):
+            self._embed_mode = kwargs["embed_mode"]
+            self.embedding_service = kwargs["embedding_service"]
+            self.initialized = False
+            created.append(self)
+
+        async def init(self):
+            self.initialized = True
+            assert await self.embedding_service.resolve_dimensions() == 1
+
+    bundled = LocalEmbeddingService(FakeEmbeddingRuntime(), source="bundled")
+    monkeypatch.delenv("EMBED_MODE", raising=False)
+    monkeypatch.delenv("EMBED_API_KEY", raising=False)
+    monkeypatch.setattr("memory.vector_store.VectorStore", FakeVectorStore)
+    monkeypatch.setattr(LocalEmbeddingService, "bundled", lambda *args, **kwargs: bundled)
+    monkeypatch.setattr(Path, "exists", lambda self: False)
+    core = SimpleNamespace(
+        db=SimpleNamespace(
+            init=AsyncMock(),
+            analytics=object(),
+            db_path=tmp_path / "agent.db",
+        ),
+        router=SimpleNamespace(set_db=MagicMock(), set_local_transport=MagicMock()),
+        local_ai_instances=FakeInstanceManager(),
+    )
+
+    await bootstrap.AgentCoreBootstrapper(core)._init_infrastructure()
+
+    assert core._vec_store is created[0]
+    assert created[0].initialized
+    assert created[0]._embed_mode == "local"
+
+
+@pytest.mark.asyncio
 async def test_cached_embedding_checks_stopped_selected_instance(tmp_path):
     instances, _ = e2e_instance_manager()
     services = await bootstrap._local_memory_services(
@@ -326,6 +388,82 @@ async def test_embedding_singleflight_shares_same_instance_same_text(tmp_path):
 
     assert results == [[[1.0]], [[1.0]]]
     assert runtime.embed_calls == [["same"]]
+
+
+@pytest.mark.asyncio
+async def test_embedding_singleflight_leader_cancel_finishes_waiter_after_worker_cleanup(tmp_path):
+    instances, runtimes = e2e_instance_manager()
+    services = await bootstrap._local_memory_services(
+        instances,
+        "local",
+        "/models/bge",
+        "",
+    )
+    vector_store = VectorStore(
+        tmp_path / "vectors.db",
+        embed_mode="local",
+        embedding_service=services.embedding,
+    )
+    instance = await instances.start("embedding-a")
+    runtime = runtimes["1.0"]
+    runtime.embed_entered = threading.Event()
+    runtime.embed_release = threading.Event()
+
+    leader = asyncio.create_task(vector_store.embed(["cancelled"]))
+    assert await asyncio.to_thread(runtime.embed_entered.wait, 1)
+    waiter = asyncio.create_task(vector_store.embed(["cancelled"]))
+    await asyncio.sleep(0)
+    leader.cancel()
+    await asyncio.sleep(0)
+    assert not leader.done()
+    runtime.embed_release.set()
+
+    with pytest.raises(asyncio.CancelledError):
+        await asyncio.wait_for(leader, 1)
+    done, pending = await asyncio.wait({waiter}, timeout=0.2)
+    assert done == {waiter}
+    assert pending == set()
+    with pytest.raises(asyncio.CancelledError):
+        await waiter
+    assert instances.get(instance.id).active_routes == ()
+    assert vector_store._inflight == {}
+
+
+@pytest.mark.asyncio
+async def test_embedding_singleflight_accepts_same_text_after_cancelled_generation(tmp_path):
+    instances, runtimes = e2e_instance_manager()
+    services = await bootstrap._local_memory_services(
+        instances,
+        "local",
+        "/models/bge",
+        "",
+    )
+    vector_store = VectorStore(
+        tmp_path / "vectors.db",
+        embed_mode="local",
+        embedding_service=services.embedding,
+    )
+    await instances.start("embedding-a")
+    runtime = runtimes["1.0"]
+    runtime.embed_entered = threading.Event()
+    runtime.embed_release = threading.Event()
+
+    leader = asyncio.create_task(vector_store.embed(["retry"]))
+    assert await asyncio.to_thread(runtime.embed_entered.wait, 1)
+    waiter = asyncio.create_task(vector_store.embed(["retry"]))
+    await asyncio.sleep(0)
+    leader.cancel()
+    await asyncio.sleep(0)
+    assert not leader.done()
+    runtime.embed_release.set()
+    results = await asyncio.gather(leader, waiter, return_exceptions=True)
+    assert all(isinstance(result, asyncio.CancelledError) for result in results)
+
+    runtime.embed_entered = None
+    runtime.embed_release = None
+    assert await asyncio.wait_for(vector_store.embed(["retry"]), 1) == [[1.0]]
+    assert runtime.embed_calls == [["retry"], ["retry"]]
+    assert vector_store._inflight == {}
 
 
 @pytest.mark.asyncio
@@ -527,7 +665,10 @@ def test_bootstrap_keeps_remote_embedding_without_local_service():
 async def test_bootstrap_injects_selected_embedding_and_reranker_runtimes():
     embedding = FakeEmbeddingRuntime()
     reranker = FakeRerankerRuntime()
-    instances = FakeInstanceManager({"embedding": embedding, "reranker": reranker})
+    instances = FakeInstanceManager(
+        {"embedding": embedding, "reranker": reranker},
+        selections={"embedding", "reranker"},
+    )
 
     services = await bootstrap._local_memory_services(
         instances,
@@ -543,7 +684,7 @@ async def test_bootstrap_injects_selected_embedding_and_reranker_runtimes():
 
 
 @pytest.mark.asyncio
-async def test_bootstrap_only_uses_compatibility_paths_without_selection(monkeypatch):
+async def test_bootstrap_uses_bundled_embedding_without_managed_selection(monkeypatch):
     bundled = LocalEmbeddingService(FakeBundledEmbeddingRuntime(), source="bundled")
     remote = LocalRerankerService(FakeRerankerRuntime())
     instances = FakeInstanceManager()
@@ -661,7 +802,7 @@ async def test_vector_store_embed_is_the_batch_embedding_entrypoint(tmp_path):
 async def test_managed_local_embedding_without_running_instance_is_structured_error(tmp_path):
     bundled_calls = []
     service = LocalEmbeddingService.managed(
-        FakeInstanceManager(),
+        FakeInstanceManager(selections={"embedding"}),
         lambda: bundled_calls.append(True),
     )
     vector_store = VectorStore(
@@ -675,8 +816,7 @@ async def test_managed_local_embedding_without_running_instance_is_structured_er
 
     assert exc_info.value.code == "local_embedding_unavailable"
     assert exc_info.value.details == {"purpose": "embedding", "mode": "local"}
-    # 懒回退：无运行实例时先咨询 bundled 回退工厂，无 bundled 模型才报结构化错误。
-    assert bundled_calls == [True]
+    assert bundled_calls == []
 
 
 @pytest.mark.asyncio
@@ -696,17 +836,67 @@ async def test_vector_store_batch_validates_every_embedding_dimension(tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_batch_upsert_children_embeds_once_and_writes_all_rows():
+    connection = MagicMock()
+    vector_store = VectorStore.__new__(VectorStore)
+    vector_store._initialized = True
+    vector_store._closed = False
+    vector_store._vec_conn = connection
+    vector_store._lock = threading.Lock()
+    vector_store._brute = None
+    vector_store._dimensions = 2
+    vector_store.embed = AsyncMock(return_value=[[1.0, 2.0], [3.0, 4.0]])
+
+    assert await vector_store.batch_upsert_children([(11, "first"), (12, "second")])
+    vector_store.embed.assert_awaited_once_with(["first", "second"])
+    inserts = [
+        call for call in connection.execute.call_args_list
+        if "INSERT OR REPLACE" in call.args[0]
+    ]
+    assert [call.args[1][0] for call in inserts] == [11, 12]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "vectors",
+    [
+        [[1.0, 2.0]],
+        [[1.0, 2.0], [3.0]],
+    ],
+)
+async def test_batch_upsert_children_rejects_incomplete_or_wrong_dimension_batch(vectors):
+    connection = MagicMock()
+    vector_store = VectorStore.__new__(VectorStore)
+    vector_store._initialized = True
+    vector_store._closed = False
+    vector_store._vec_conn = connection
+    vector_store._lock = threading.Lock()
+    vector_store._brute = None
+    vector_store._dimensions = 2
+    vector_store.embed = AsyncMock(return_value=vectors)
+
+    assert not await vector_store.batch_upsert_children([(11, "first"), (12, "second")])
+    assert not any(
+        "INSERT OR REPLACE" in call.args[0]
+        for call in connection.execute.call_args_list
+    )
+
+
+@pytest.mark.asyncio
 async def test_child_chunk_insert_is_compensated_when_vector_write_fails():
     class FakeMemory:
         def __init__(self) -> None:
             self.rows = {}
             self.next_id = 1
 
-        async def insert_child_chunk(self, **fields):
-            child_id = self.next_id
-            self.next_id += 1
-            self.rows[child_id] = fields
-            return child_id
+        async def insert_child_chunks(self, parent_id, children, auto_commit=True):
+            child_ids = []
+            for fields in children:
+                child_id = self.next_id
+                self.next_id += 1
+                self.rows[child_id] = {"parent_id": parent_id, **fields}
+                child_ids.append(child_id)
+            return child_ids
 
         async def delete_child_chunks(self, child_ids):
             for child_id in child_ids:
@@ -742,3 +932,283 @@ async def test_child_chunk_insert_is_compensated_when_vector_write_fails():
 
     assert not await manager._insert_indexed_children(7, children, 0.9)
     assert memory.rows == {}
+
+
+@pytest.mark.asyncio
+async def test_hybrid_reranker_uses_remote_when_no_local_instance_is_selected():
+    remote = LocalRerankerService(FakeRerankerRuntime())
+    service = LocalRerankerService.managed(FakeInstanceManager(), remote)
+
+    assert await service.score("q", ["a", "b"]) == [0.0, 1.0]
+
+
+@pytest.mark.asyncio
+async def test_hybrid_reranker_does_not_fallback_when_selected_local_instance_stops():
+    remote_runtime = FakeRerankerRuntime()
+    remote = LocalRerankerService(remote_runtime)
+    instances = FakeInstanceManager(selections={"reranker"})
+    service = LocalRerankerService.managed(instances, remote)
+
+    with pytest.raises(LocalRerankerUnavailableError) as exc_info:
+        await service.score("q", ["a"])
+
+    assert exc_info.value.code == "local_reranker_unavailable"
+    assert exc_info.value.details == {"purpose": "reranker", "mode": "local"}
+    assert remote_runtime.calls == []
+
+
+@pytest.mark.asyncio
+async def test_selected_reranker_route_blocks_stop_until_score_finishes():
+    instances, runtimes = e2e_instance_manager()
+    services = await bootstrap._local_memory_services(instances, "local", "/models/bge", "")
+    instance = await instances.start("reranker-a")
+    runtime = runtimes["1.0"]
+    runtime.score_entered = threading.Event()
+    runtime.score_release = threading.Event()
+
+    task = asyncio.create_task(services.reranker.score("q", ["a"]))
+    assert await asyncio.to_thread(runtime.score_entered.wait, 1)
+    assert instances.get(instance.id).active_routes == ("memory:reranker",)
+    with pytest.raises(InstanceInUseError):
+        await instances.stop(instance.id)
+
+    runtime.score_release.set()
+    assert await task == [1.0]
+    assert instances.get(instance.id).active_routes == ()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("purpose", [ModelPurpose.EMBEDDING, ModelPurpose.RERANKER])
+async def test_cancelled_local_inference_keeps_route_until_worker_finishes(purpose):
+    instances, runtimes = e2e_instance_manager()
+    services = await bootstrap._local_memory_services(instances, "local", "/models/bge", "")
+    model_id = "embedding-a" if purpose is ModelPurpose.EMBEDDING else "reranker-a"
+    instance = await instances.start(model_id)
+    runtime = runtimes["1.0"]
+    entered = threading.Event()
+    release = threading.Event()
+    if purpose is ModelPurpose.EMBEDDING:
+        runtime.embed_entered = entered
+        runtime.embed_release = release
+        inference = services.embedding.embed(["a"])
+    else:
+        runtime.score_entered = entered
+        runtime.score_release = release
+        inference = services.reranker.score("q", ["a"])
+
+    task = asyncio.create_task(inference)
+    assert await asyncio.to_thread(entered.wait, 1)
+    task.cancel()
+    await asyncio.sleep(0)
+
+    with pytest.raises(InstanceInUseError):
+        await instances.stop(instance.id)
+    assert not task.done()
+
+    release.set()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+    await instances.stop(instance.id)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("purpose", [ModelPurpose.EMBEDDING, ModelPurpose.RERANKER])
+@pytest.mark.parametrize("cancel_count", [2, 4])
+async def test_repeatedly_cancelled_local_inference_keeps_route_until_worker_finishes(
+    purpose,
+    cancel_count,
+):
+    instances, runtimes = e2e_instance_manager()
+    services = await bootstrap._local_memory_services(instances, "local", "/models/bge", "")
+    model_id = "embedding-a" if purpose is ModelPurpose.EMBEDDING else "reranker-a"
+    instance = await instances.start(model_id)
+    runtime = runtimes["1.0"]
+    entered = threading.Event()
+    release = threading.Event()
+    if purpose is ModelPurpose.EMBEDDING:
+        runtime.embed_entered = entered
+        runtime.embed_release = release
+        inference = services.embedding.embed(["a"])
+    else:
+        runtime.score_entered = entered
+        runtime.score_release = release
+        inference = services.reranker.score("q", ["a"])
+
+    task = asyncio.create_task(inference)
+    assert await asyncio.to_thread(entered.wait, 1)
+    for _ in range(cancel_count):
+        task.cancel()
+        await asyncio.sleep(0)
+        await asyncio.sleep(0)
+        assert not task.done()
+
+    with pytest.raises(InstanceInUseError):
+        await instances.stop(instance.id)
+
+    release.set()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+    assert instances.get(instance.id).active_routes == ()
+    await instances.stop(instance.id)
+
+
+@pytest.mark.asyncio
+async def test_managed_embedding_rejects_awaitable_fallback_factory():
+    async def fallback_factory():
+        return LocalEmbeddingService(FakeEmbeddingRuntime())
+
+    service = LocalEmbeddingService.managed(FakeInstanceManager(), fallback_factory)
+
+    with pytest.raises(RuntimeValidationError, match="fallback_factory.*awaitable"):
+        await service.embed(["hello"])
+    assert inspect.iscoroutinefunction(fallback_factory)
+
+
+def test_managed_reranker_without_selection_or_fallback_is_unavailable():
+    service = LocalRerankerService.managed(FakeInstanceManager(), None)
+
+    assert service.available is False
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "error",
+    [
+        LocalEmbeddingUnavailableError("embedding stopped"),
+        LocalRerankerUnavailableError("reranker stopped"),
+    ],
+)
+async def test_query_cache_propagates_structured_local_unavailable(error):
+    async def unavailable(_text):
+        raise error
+
+    cache = QueryCache(embed_func=unavailable)
+
+    with pytest.raises(type(error)) as exc_info:
+        await cache.get("query")
+    assert exc_info.value is error
+
+
+@pytest.mark.asyncio
+async def test_message_context_propagates_structured_local_unavailable(monkeypatch):
+    from agent_core.message_processor import MessageProcessorMixin
+
+    processor = MessageProcessorMixin.__new__(MessageProcessorMixin)
+    processor.memory = MagicMock()
+    processor.memory._suggest_k.return_value = 1
+    processor.memory.retrieve_memories = AsyncMock(
+        side_effect=LocalEmbeddingUnavailableError("embedding stopped")
+    )
+    processor._load_notebook_context = AsyncMock()
+    monkeypatch.setattr(
+        "agent_core.message_processor.get_degradation_strategy",
+        lambda: SimpleNamespace(is_feature_available=lambda _feature: True),
+    )
+    monkeypatch.setattr(
+        "memory.scope.current_scope",
+        lambda: SimpleNamespace(user_id="user"),
+    )
+
+    with pytest.raises(LocalEmbeddingUnavailableError):
+        await processor._retrieve_main_memories("query", True, None)
+
+
+@pytest.mark.asyncio
+async def test_insight_rest_propagates_structured_local_unavailable():
+    from web.routers.insight import list_memories
+
+    core = SimpleNamespace(
+        memory=SimpleNamespace(
+            retrieve_memories=AsyncMock(
+                side_effect=LocalRerankerUnavailableError("reranker stopped")
+            )
+        ),
+        db=SimpleNamespace(fetch_all=AsyncMock(return_value=[])),
+    )
+    request = SimpleNamespace(app=SimpleNamespace(state=SimpleNamespace(core=core)))
+
+    with pytest.raises(LocalRerankerUnavailableError):
+        await list_memories(request, q="query", importance_min=0.0, page=0, limit=30)
+
+
+@pytest.mark.parametrize(
+    ("error", "code", "purpose"),
+    [
+        (LocalEmbeddingUnavailableError("embedding stopped"), "local_embedding_unavailable", "embedding"),
+        (LocalRerankerUnavailableError("reranker stopped"), "local_reranker_unavailable", "reranker"),
+    ],
+)
+def test_real_http_response_preserves_local_unavailable_error(error, code, purpose):
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+
+    from web.error_handler import register_error_handlers
+
+    app = FastAPI()
+    register_error_handlers(app)
+
+    @app.get("/local-error")
+    async def local_error():
+        raise error
+
+    response = TestClient(app, raise_server_exceptions=False).get("/local-error")
+
+    assert response.status_code == 503
+    assert response.json() == {
+        "error_code": code,
+        "message": error.message,
+        "retryable": True,
+        "details": {"purpose": purpose, "mode": "local"},
+    }
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("parallel", [True, False])
+async def test_multi_query_propagates_structured_local_unavailable(parallel):
+    manager = MemoryManager.__new__(MemoryManager)
+    unavailable = LocalEmbeddingUnavailableError("embedding stopped")
+    manager.retrieve_memories_hybrid = AsyncMock(side_effect=[[], unavailable])
+    manager._reranker = None
+
+    with pytest.raises(LocalEmbeddingUnavailableError) as exc_info:
+        if parallel:
+            await manager._multi_query_parallel_search(["one", "two"], "original", 2)
+        else:
+            await manager._multi_query_serial_search(["one", "two"], 2)
+    assert exc_info.value is unavailable
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("parallel", [True, False])
+async def test_multi_query_tolerates_ordinary_errors(parallel):
+    manager = MemoryManager.__new__(MemoryManager)
+    manager.retrieve_memories_hybrid = AsyncMock(
+        side_effect=[[{"id": 1, "summary": "ok"}], RuntimeError("ordinary failure")]
+    )
+    manager._reranker = None
+
+    if parallel:
+        result = await manager._multi_query_parallel_search(["one", "two"], "original", 2)
+    else:
+        result = await manager._multi_query_serial_search(["one", "two"], 2)
+
+    assert result == [{"id": 1, "summary": "ok"}]
+
+
+@pytest.mark.asyncio
+async def test_query_cache_adapter_uses_vector_store_batch_embed_entrypoint():
+    class BatchOnlyVectorStore:
+        def __init__(self) -> None:
+            self.calls = []
+
+        async def embed(self, texts):
+            assert isinstance(texts, list)
+            self.calls.append(texts)
+            return [[3.0] for _ in texts]
+
+    vector_store = BatchOnlyVectorStore()
+    manager = MemoryManager.__new__(MemoryManager)
+    manager.vec = vector_store
+
+    assert await manager._get_query_embedding_func()("query") == [3.0]
+    assert vector_store.calls == [["query"]]

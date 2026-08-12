@@ -388,7 +388,6 @@ class VectorStore:
                                 "SELECT embedding FROM memories_vec LIMIT 1"
                             ).fetchone()
                             if row is not None and row[0] is not None:
-                                import struct
                                 raw = row[0]
                                 if isinstance(raw, (bytes, bytearray)):
                                     dims = len(raw) // 4
@@ -411,7 +410,6 @@ class VectorStore:
                                 "SELECT embedding FROM memories_vec LIMIT 1"
                             ).fetchone()
                             if row is not None and row[0] is not None:
-                                import struct
                                 raw = row[0]
                                 if isinstance(raw, (bytes, bytearray)):
                                     existing_dims = len(raw) // 4
@@ -470,8 +468,7 @@ class VectorStore:
                 with self._lock:
                     if self._closed:
                         return
-                    if not self._brute.load():
-                        self._brute.load_from_db(self._vec_conn)
+                    self._brute.load_from_db(self._vec_conn)
 
             try:
                 await asyncio.to_thread(_load_brute)
@@ -596,21 +593,28 @@ class VectorStore:
                     self._cache.put(text, vec)
             future.set_result(vec)
             return vec
+        except asyncio.CancelledError:
+            if not future.done():
+                future.cancel()
+            raise
         except Exception as e:
             if isinstance(e, RuntimeValidationError):
-                future.set_exception(e)
-                future.exception()
+                if not future.done():
+                    future.set_exception(e)
+                    future.exception()
                 raise
             if isinstance(e, LocalEmbeddingUnavailableError) and self._selected_local_service:
-                future.set_exception(e)
-                future.exception()
+                if not future.done():
+                    future.set_exception(e)
+                    future.exception()
                 raise
-            # 等待者同样拿到空结果（不传播异常，调用方均有兜底）
-            future.set_result([])
+            if not future.done():
+                future.set_result([])
             logger.warning("vector_store.embed_singleflight_failed", error=str(e))
             return []
         finally:
-            self._inflight.pop(key, None)
+            if self._inflight.get(key) is future:
+                self._inflight.pop(key, None)
 
     async def _current_selection_key(self) -> Any | None:
         if self._embed_mode == "local" and self._local_provider is not None:
@@ -777,26 +781,20 @@ class VectorStore:
         """批量子chunk向量写入。items = [(child_id, text), ...]"""
         if not self._initialized or not self._vec_conn or not items:
             return False
-        # 并发嵌入，受 semaphore 限制
-        async def _embed_one(cid: int, text: str):
-            """对单条文本执行嵌入，受并发信号量限制。"""
-            async with self._embed_semaphore:
-                vectors = await self.embed([text])
-                vec = vectors[0] if vectors else []
-                return (cid, vec)
-
-        tasks = [_embed_one(cid, text) for cid, text in items]
-        results = await asyncio.gather(*tasks, return_exceptions=True)
-
-        valid: list[tuple[int, list[float]]] = []
-        for result in results:
-            if isinstance(result, Exception):
-                logger.warning("vector.batch_embed_child_failed", error=str(result)[:200])
-                continue
-            cid, vec = result
-            if isinstance(vec, list) and vec:
-                valid.append((cid, vec))
-        if not valid:
+        try:
+            vectors = await self.embed([text for _, text in items])
+            if len(vectors) != len(items):
+                raise RuntimeError(
+                    f"embedding returned {len(vectors)} vectors for {len(items)} child chunks"
+                )
+            valid = []
+            for (child_id, _), vector in zip(items, vectors, strict=True):
+                if not isinstance(vector, list) or not vector:
+                    raise RuntimeError(f"embedding for child {child_id} is empty")
+                self._validate_dimension(vector)
+                valid.append((child_id, vector))
+        except Exception as error:
+            logger.warning("vector.batch_embed_children_failed", error=str(error)[:200])
             return False
 
         def _do_batch() -> bool:
@@ -812,10 +810,14 @@ class VectorStore:
                             "INSERT OR REPLACE INTO memories_child_vec (rowid, embedding) VALUES (?, vec_f32(?))",
                             (cid, vec_json),
                         )
-                        # 双写内存暴力索引（事务内逐条同步，保证一致）
-                        if self._brute is not None:
-                            self._brute.upsert("memories_child_vec", cid, vec)
                     self._vec_conn.commit()
+                    if self._brute is not None:
+                        brute_ok = all(
+                            self._brute.upsert("memories_child_vec", cid, vec)
+                            for cid, vec in valid
+                        )
+                        if not brute_ok:
+                            self._brute.load_from_db(self._vec_conn)
                     return True
                 except Exception as e:
                     try:
