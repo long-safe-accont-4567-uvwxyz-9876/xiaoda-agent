@@ -13,6 +13,7 @@ from loguru import logger
 
 from config import DATA_DIR
 
+from . import db_workflow
 from .db_analytics import AnalyticsDB
 from .db_kg_v2 import KnowledgeDBV2
 from .db_knowledge import KnowledgeDB
@@ -31,7 +32,7 @@ from .session_store import (
 
 DB_DIR = DATA_DIR
 DB_PATH = DB_DIR / "agent.db"
-CURRENT_SCHEMA_VERSION = 26
+CURRENT_SCHEMA_VERSION = 27
 
 
 def _detect_fs_type(path: Path) -> str:
@@ -520,6 +521,7 @@ class DatabaseManager:
             (24, "profile_event_idempotency", self._migrate_v24),
             (25, "installed_models_table", self._migrate_v25),
             (26, "conversation_logs.request_context_json", self._migrate_v26),
+            (27, "workflow_v2_tables", self._migrate_v27),
         ]
         for version, desc, migrate_fn in migrations:
             if current < version:
@@ -1524,6 +1526,10 @@ class DatabaseManager:
                 "ALTER TABLE conversation_logs "
                 "ADD COLUMN request_context_json TEXT DEFAULT '{}'"
             )
+
+    async def _migrate_v27(self) -> None:
+        # workflow_v2 表（CREATE TABLE IF NOT EXISTS，幂等）
+        await db_workflow.create_schema(self._conn)
 
     # SQL 注入防护：允许的 SQL 前缀白名单（仅 SELECT / PRAGMA 只读操作）
     _READONLY_PREFIXES = ("SELECT", "PRAGMA")
