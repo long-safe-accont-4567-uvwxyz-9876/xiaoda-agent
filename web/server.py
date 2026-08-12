@@ -979,7 +979,6 @@ def create_app() -> FastAPI:
     from web.routers.market import router as market_router
     from web.routers.mail_manage import router as mail_manage_router
     from web.routers.workflows import router as workflows_router
-    from web.routers.workflows_v2 import router as workflows_v2_router
     from web.routers.workspace import router as workspace_router
     from web.routers.wechat import router as wechat_router, public_router as wechat_public_router
     from web.routers.local_ai import router as local_ai_router
@@ -990,7 +989,7 @@ def create_app() -> FastAPI:
               models_router, providers_router, tools_router, mcp_router, insight_router,
               schedule_router, media_router, health_router, plugins_router,
               setup_router, model_discovery_router, market_router,
-              mail_manage_router, workflows_router, workflows_v2_router, workspace_router,
+              mail_manage_router, workflows_router, workspace_router,
               wechat_router, local_ai_router, local_deploy_router, local_ai_storage_router,
               system_public_router, wechat_public_router):
         app.include_router(r, prefix="/api/v1")
