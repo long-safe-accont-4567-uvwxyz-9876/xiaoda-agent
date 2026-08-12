@@ -4,6 +4,7 @@ import asyncio
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
+from uuid import uuid4
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
 from pydantic import BaseModel, Field
@@ -13,6 +14,7 @@ from local_ai.devices.registry import DeviceRegistry
 from local_ai.downloads.manager import DownloadManager
 from local_ai.instances.manager import InstanceManager
 from local_ai.models.registry import ModelRegistry
+from local_ai.models.storage import StoragePolicy
 from local_ai.runtimes.registry import RuntimeRegistry
 from web.routers.auth import get_current_user
 from web.schemas import Envelope
@@ -24,7 +26,7 @@ router = APIRouter(tags=["local-ai"], dependencies=[Depends(get_current_user)])
 class DownloadRequest(BaseModel):
     model_id: str = Field(min_length=1)
     destination: str = Field(min_length=1)
-    request_id: str = Field(min_length=1)
+    request_id: str = Field(default_factory=lambda: str(uuid4()), min_length=1)
 
 
 class CancelRequest(BaseModel):
@@ -34,7 +36,7 @@ class CancelRequest(BaseModel):
 class StartInstanceRequest(BaseModel):
     model_id: str = Field(min_length=1)
     device_id: str | None = None
-    request_id: str = Field(min_length=1)
+    request_id: str = Field(default_factory=lambda: str(uuid4()), min_length=1)
 
 
 @dataclass
@@ -45,6 +47,7 @@ class LocalAIServices:
     downloads: DownloadManager
     instances: InstanceManager
     broadcast: Any
+    storage_policy: StoragePolicy = field(default_factory=StoragePolicy)
     request_results: dict[tuple[str, str], Any] = field(default_factory=dict)
     request_inputs: dict[tuple[str, str], tuple[Any, ...]] = field(default_factory=dict)
     background_tasks: set[asyncio.Task[Any]] = field(default_factory=set)
@@ -221,16 +224,26 @@ async def list_downloads(request: Request) -> Any:
 )
 async def create_download(body: DownloadRequest, request: Request) -> Any:
     services = _services(request)
+    model = _catalog_model(services, body.model_id)
+    validation = services.storage_policy.validate_destination(
+        body.destination,
+        model.download_size,
+    )
+    if not validation.writable:
+        raise HTTPException(
+            status_code=422,
+            detail=validation.reason or validation.error or "invalid download destination",
+        )
     key = ("download", body.request_id)
-    request_input = (body.model_id, body.destination)
+    request_input = (body.model_id, validation.path)
     existing = services.request_results.get(key)
     if existing is not None:
         if services.request_inputs.get(key) != request_input:
             raise HTTPException(status_code=409, detail="request_id conflicts with a different download")
         return Envelope(data={"task": existing.to_dict()})
     task = services.downloads.create(
-        _catalog_model(services, body.model_id),
-        body.destination,
+        model,
+        validation.path,
     )
     services.request_results[key] = task
     services.request_inputs[key] = request_input
@@ -268,6 +281,30 @@ async def cancel_download(task_id: str, body: CancelRequest, request: Request) -
 @router.get("/local-ai/instances", response_model=Envelope[list[dict[str, Any]]])
 async def list_instances(request: Request) -> Any:
     return Envelope(data=_records(_services(request).instances.list()))
+
+
+@router.get("/local-ai/instances/tasks/{task_id}", response_model=Envelope[dict[str, Any]])
+async def get_instance_task(task_id: str, request: Request) -> Any:
+    result = _services(request).request_results.get(("instance", task_id))
+    if result is None:
+        raise HTTPException(status_code=404, detail=f"Instance task not found: {task_id}")
+    if isinstance(result, Exception):
+        return Envelope(data={
+            "task_id": task_id,
+            "status": "failed",
+            "error": {
+                "code": "instance_start_failed",
+                "message": str(result),
+                "retryable": True,
+            },
+        })
+    if hasattr(result, "to_dict"):
+        return Envelope(data={
+            "task_id": task_id,
+            "status": "completed",
+            "instance": result.to_dict(),
+        })
+    return Envelope(data={"task_id": task_id, "status": "pending"})
 
 
 @router.post(

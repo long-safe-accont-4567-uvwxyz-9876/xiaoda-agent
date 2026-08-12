@@ -255,6 +255,164 @@ def test_completed_download_model_refresh_failure_is_visible(tmp_path):
     assert result.returncode == 0, result.stderr
 
 
+def test_model_removed_during_refresh_cannot_be_resurrected(tmp_path):
+    entry = tmp_path / "local-ai-refresh-remove-race.ts"
+    bundle = tmp_path / "local-ai-refresh-remove-race.mjs"
+    frontend = ROOT / "web/frontend"
+    (tmp_path / "node_modules").symlink_to(frontend / "node_modules", target_is_directory=True)
+    entry.write_text(
+        textwrap.dedent(
+            f"""
+            globalThis.localStorage = {{ getItem: () => null, setItem: () => {{}}, removeItem: () => {{}} }}
+            globalThis.location = {{ protocol: 'http:', host: 'localhost', hash: '' }}
+            const {{ createPinia, setActivePinia }} = await import('pinia')
+            const {{ localAiApi }} = await import({str(ROOT / 'web/frontend/src/api/localAi.ts')!r})
+            const {{ useLocalAiStore }} = await import({str(ROOT / 'web/frontend/src/stores/localAi.ts')!r})
+
+            let resolveModels
+            Object.assign(localAiApi, {{
+              loadModels: () => new Promise(resolve => {{ resolveModels = resolve }}),
+              removeModel: async () => undefined,
+            }})
+            setActivePinia(createPinia())
+            const store = useLocalAiStore()
+            const refreshing = store.refreshModels()
+            await store.remove('model:removed')
+            resolveModels([
+              {{ id: 'model:removed', purpose: 'chat', validation_state: 'valid', removable: true }},
+              {{ id: 'model:unrelated', purpose: 'chat', validation_state: 'valid', removable: true }},
+            ])
+            await refreshing
+            if (store.modelsById['model:removed']) {{
+              throw new Error('删除期间启动的旧模型刷新使模型复活')
+            }}
+            if (!store.modelsById['model:unrelated']) {{
+              throw new Error('删除模型使同一刷新中的无关新模型丢失')
+            }}
+            process.exit(0)
+            """
+        ),
+        encoding="utf-8",
+    )
+    subprocess.run(
+        [str(frontend / "node_modules/.bin/esbuild"), str(entry), "--bundle", "--platform=node", "--format=esm", f"--outfile={bundle}"],
+        cwd=frontend,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    result = subprocess.run(["node", str(bundle)], cwd=frontend, capture_output=True, text=True)
+    assert result.returncode == 0, result.stderr
+
+
+def test_model_removed_during_load_cannot_be_resurrected(tmp_path):
+    entry = tmp_path / "local-ai-load-remove-race.ts"
+    bundle = tmp_path / "local-ai-load-remove-race.mjs"
+    frontend = ROOT / "web/frontend"
+    (tmp_path / "node_modules").symlink_to(frontend / "node_modules", target_is_directory=True)
+    entry.write_text(
+        textwrap.dedent(
+            f"""
+            globalThis.localStorage = {{ getItem: () => null, setItem: () => {{}}, removeItem: () => {{}} }}
+            globalThis.location = {{ protocol: 'http:', host: 'localhost', hash: '' }}
+            const {{ createPinia, setActivePinia }} = await import('pinia')
+            const {{ localAiApi }} = await import({str(ROOT / 'web/frontend/src/api/localAi.ts')!r})
+            const {{ useLocalAiStore }} = await import({str(ROOT / 'web/frontend/src/stores/localAi.ts')!r})
+
+            let resolveModels
+            Object.assign(localAiApi, {{
+              loadDevices: async () => [],
+              loadCatalog: async () => [],
+              loadModels: () => new Promise(resolve => {{ resolveModels = resolve }}),
+              loadDownloads: async () => [],
+              loadInstances: async () => [],
+              loadDefaultStorage: async () => ({{ default_model_root: '/models' }}),
+              removeModel: async () => undefined,
+            }})
+            setActivePinia(createPinia())
+            const store = useLocalAiStore()
+            const loading = store.load()
+            await store.remove('model:removed')
+            resolveModels([
+              {{ id: 'model:removed', purpose: 'chat', validation_state: 'valid', removable: true }},
+              {{ id: 'model:unrelated', purpose: 'chat', validation_state: 'valid', removable: true }},
+            ])
+            await loading
+            if (store.modelsById['model:removed']) {{
+              throw new Error('删除期间启动的旧 load 使模型复活')
+            }}
+            if (!store.modelsById['model:unrelated']) {{
+              throw new Error('删除模型使旧 load 中的无关新模型丢失')
+            }}
+            process.exit(0)
+            """
+        ),
+        encoding="utf-8",
+    )
+    subprocess.run(
+        [str(frontend / "node_modules/.bin/esbuild"), str(entry), "--bundle", "--platform=node", "--format=esm", f"--outfile={bundle}"],
+        cwd=frontend,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    result = subprocess.run(["node", str(bundle)], cwd=frontend, capture_output=True, text=True)
+    assert result.returncode == 0, result.stderr
+
+
+def test_removed_model_can_be_reinstalled_from_newer_snapshot(tmp_path):
+    entry = tmp_path / "local-ai-remove-reinstall.ts"
+    bundle = tmp_path / "local-ai-remove-reinstall.mjs"
+    frontend = ROOT / "web/frontend"
+    (tmp_path / "node_modules").symlink_to(frontend / "node_modules", target_is_directory=True)
+    entry.write_text(
+        textwrap.dedent(
+            f"""
+            globalThis.localStorage = {{ getItem: () => null, setItem: () => {{}}, removeItem: () => {{}} }}
+            globalThis.location = {{ protocol: 'http:', host: 'localhost', hash: '' }}
+            const {{ createPinia, setActivePinia }} = await import('pinia')
+            const {{ localAiApi }} = await import({str(ROOT / 'web/frontend/src/api/localAi.ts')!r})
+            const {{ useLocalAiStore }} = await import({str(ROOT / 'web/frontend/src/stores/localAi.ts')!r})
+
+            const modelLoads = []
+            Object.assign(localAiApi, {{
+              loadModels: () => new Promise(resolve => modelLoads.push(resolve)),
+              removeModel: async () => undefined,
+            }})
+            setActivePinia(createPinia())
+            const store = useLocalAiStore()
+            const older = store.refreshModels()
+            await store.remove('model:same')
+            const reinstall = store.refreshModels()
+            modelLoads[1]([
+              {{ id: 'model:same', purpose: 'chat', validation_state: 'valid', removable: true }},
+              {{ id: 'model:unrelated', purpose: 'chat', validation_state: 'valid', removable: true }},
+            ])
+            await reinstall
+            modelLoads[0]([{{ id: 'model:same', purpose: 'chat', validation_state: 'valid', removable: true }}])
+            await older
+            if (!store.modelsById['model:same']) {{
+              throw new Error('删除后较新快照未允许同 ID 模型重新安装')
+            }}
+            if (!store.modelsById['model:unrelated']) {{
+              throw new Error('同 ID 重装使较新快照中的无关模型丢失')
+            }}
+            process.exit(0)
+            """
+        ),
+        encoding="utf-8",
+    )
+    subprocess.run(
+        [str(frontend / "node_modules/.bin/esbuild"), str(entry), "--bundle", "--platform=node", "--format=esm", f"--outfile={bundle}"],
+        cwd=frontend,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    result = subprocess.run(["node", str(bundle)], cwd=frontend, capture_output=True, text=True)
+    assert result.returncode == 0, result.stderr
+
+
 def test_local_ai_store_tracks_rescan_loading_independently(tmp_path):
     entry = tmp_path / "local-ai-rescan-loading.ts"
     bundle = tmp_path / "local-ai-rescan-loading.mjs"
@@ -630,6 +788,56 @@ def test_storage_picker_resolves_directory_entries_from_current_path():
     assert "path.value.endsWith('\\\\')" in storage
     assert "path.value.endsWith('/')" in storage
     assert "browse(resolveEntryPath(entry))" in storage
+
+
+def test_storage_picker_ignores_stale_browse_response(tmp_path):
+    frontend = ROOT / "web/frontend"
+    component = source("web/frontend/src/components/local-ai/StoragePickerDialog.vue")
+    script = component.split('<script setup lang="ts">', 1)[1].split("</script>", 1)[0]
+    script = script.replace("'../../stores/localAi'", repr(str(ROOT / "web/frontend/src/stores/localAi.ts")))
+    script = script.replace("const props = defineProps<{ show: boolean; initialPath?: string; requiredBytes?: number }>()", "const props = { show: false, initialPath: '', requiredBytes: 0 }")
+    script = script.replace("const emit = defineEmits<{ select: [path: string]; cancel: [] }>()", "const emit = () => undefined")
+    script = script.replace("const message = useMessage()", "const message = { warning: () => undefined, error: () => undefined }")
+    script = script.replace("async function browse", "export async function browse")
+    script += "\nexport { path, entries, loading, store }\n"
+    instrumented = tmp_path / "StoragePickerDialog.instrumented.ts"
+    entry = tmp_path / "storage-picker-browse-race.ts"
+    bundle = tmp_path / "storage-picker-browse-race.mjs"
+    (tmp_path / "node_modules").symlink_to(frontend / "node_modules", target_is_directory=True)
+    instrumented.write_text(script, encoding="utf-8")
+    entry.write_text(
+        textwrap.dedent(
+            f"""
+            globalThis.localStorage = {{ getItem: () => null, setItem: () => {{}}, removeItem: () => {{}} }}
+            globalThis.location = {{ protocol: 'http:', host: 'localhost', hash: '' }}
+            const {{ createPinia, setActivePinia }} = await import('pinia')
+            setActivePinia(createPinia())
+            const picker = await import({str(instrumented)!r})
+            const browses = []
+            picker.store.browseStorage = target => new Promise(resolve => browses.push({{ target, resolve }}))
+            const older = picker.browse('/old')
+            const newer = picker.browse('/new')
+            browses[1].resolve({{ path: '/new', entries: ['new-child'] }})
+            await newer
+            browses[0].resolve({{ path: '/old', entries: ['old-child'] }})
+            await older
+            if (picker.path.value !== '/new' || picker.entries.value.join(',') !== 'new-child') {{
+              throw new Error('较旧目录浏览响应覆盖了较新浏览结果')
+            }}
+            process.exit(0)
+            """
+        ),
+        encoding="utf-8",
+    )
+    subprocess.run(
+        [str(frontend / "node_modules/.bin/esbuild"), str(entry), "--bundle", "--platform=node", "--format=esm", f"--outfile={bundle}"],
+        cwd=frontend,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    result = subprocess.run(["node", str(bundle)], cwd=frontend, capture_output=True, text=True)
+    assert result.returncode == 0, result.stderr
 
 
 def test_model_market_validates_saved_default_for_each_download_before_use():

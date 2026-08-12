@@ -17,27 +17,18 @@ from loguru import logger
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 
-async def _apply_model_overrides(core: Any) -> None:
+async def _apply_model_overrides(core: Any, provider_service: Any | None = None) -> None:
     """重启后恢复：自定义 provider 注册 + 路由表覆盖。"""
-    import os
     from web.config_service import get_config_service
-    from web.custom_providers import register_into_router
-    from web.routers.models import load_provider_key
     from model_router import ROUTE_TABLE
 
     logger.info("webui._apply_model_overrides_start")
     cfg = get_config_service()
 
-    # 从 .env 文件读取，而非 os.environ，防止构建环境变量泄露到用户安装包
-    try:
-        from setup_wizard import _load_env_values
-        env_values = _load_env_values()
-    except (ImportError, OSError, ValueError):
-        logger.debug("server.load_env_error", exc_info=True)
-        env_values = {}
-
-    _register_env_providers(cfg, env_values, os)
-    _register_all_providers(cfg, core, load_provider_key, register_into_router)
+    if provider_service is None:
+        provider_service = getattr(core, "provider_service", None)
+    if provider_service is not None:
+        core.router = provider_service.runtime_router
     logger.info("webui.before_apply_route_overrides")
     _apply_route_overrides(cfg, core, ROUTE_TABLE)
     logger.info("webui.after_apply_route_overrides")
@@ -102,57 +93,16 @@ def _register_env_providers(cfg: Any, env_values: Any, os_module: Any) -> None:
 
 def _ensure_provider_key_file(pid: Any, api_key: Any, os_module: Any) -> None:
     """确保证书文件存在且内容正确（base64 编码存储，非明文）。"""
-    from config import get_credentials_dir
-    from web._provider_keys import _encode_key, _decode_key
-    cred_dir = get_credentials_dir()
-    cred_dir.mkdir(parents=True, exist_ok=True)
-    fp = cred_dir / f"provider_{pid}.key"
-    # 读取现有值（兼容旧版明文）
-    existing = ""
-    if fp.exists():
-        raw = fp.read_text(encoding="utf-8").strip()
-        existing = _decode_key(raw) or raw if raw else ""
-    if existing != api_key:
-        from utils.atomic_write import atomic_write
-        atomic_write(fp, _encode_key(api_key) + "\n", encoding="utf-8", mode=0o600)
-        with suppress(OSError):
-            os.chmod(fp, 0o600)
+    from llm_gateway.provider_service import ProviderCredentialStore
+
+    credentials = ProviderCredentialStore()
+    if credentials.read(pid) != api_key:
+        credentials.write(pid, api_key)
 
 
 def _provider_sort_key(kv: tuple, key_order: list[str]) -> tuple[int, int]:
     """provider 排序键: order 字段优先, 原始键序兜底."""
     return (kv[1].get("order", 9999), key_order.index(kv[0]))
-
-
-def _register_all_providers(cfg: Any, core: Any, load_provider_key: Any, register_into_router: Any) -> None:
-    """按 order 字段排序后注册所有 provider 到 router 和 credential_pool。"""
-    all_providers = cfg.get("models.providers", {}) or {}
-    all_keys_order = list(all_providers.keys())
-    sorted_providers = sorted(
-        all_providers.items(),
-        key=lambda kv: _provider_sort_key(kv, all_keys_order)
-    )
-    for pid, p in sorted_providers:
-        # P0 修复（ollama 默认启用根因 2/2）：
-        # 即使旧版本 bug 已把 ollama 写入持久化 config（base_url=localhost:11434），
-        # 这里也要拦住：ollama 是本地服务，必须 OLLAMA_BASE_URL 环境变量显式配置才注册。
-        # 云端 provider（siliconflow/openrouter 等）不受此约束 —— 它们的 URL 是固定的 SaaS 端点。
-        if pid == "ollama" and not os.getenv("OLLAMA_BASE_URL", "").strip():
-            logger.info("webui.skip_ollama_no_env reason=OLLAMA_BASE_URL not set, skipping stale config entry")
-            continue
-        key = load_provider_key(pid)
-        if key and p.get("enabled", True):
-            try:
-                register_into_router(core.router, pid, p.get("format", "openai"),
-                                     p.get("base_url", ""), key)
-                from utils.credential_pool import get_credential_pool, Credential
-                pool = get_credential_pool()
-                if pid not in pool._pool:
-                    pool.add_credential(Credential(
-                        api_key=key, provider=pid, base_url=p.get("base_url", ""),
-                    ))
-            except (ImportError, KeyError, ValueError, OSError) as e:
-                logger.warning("webui.provider_restore_failed id={} error={}", pid, str(e))
 
 
 def _apply_route_overrides(cfg: Any, core: Any, ROUTE_TABLE: Any) -> None:
@@ -789,6 +739,7 @@ async def _init_lifespan_resources(app: FastAPI) -> tuple[Any, bool]:
 
     config_service = get_config_service()
     app.state.provider_service = ProviderService(config_service, get_provider_catalog(), core.router)
+    core.provider_service = app.state.provider_service
 
     registry = AgentRegistry(core)
     await registry.load_persisted()

@@ -1388,6 +1388,43 @@ def test_shared_hardware_is_available_when_any_attached_backend_is_healthy():
     ).provider == "TensorrtExecutionProvider"
 
 
+@pytest.mark.parametrize("refresh", [False, True])
+def test_scan_recomputes_degraded_hardware_from_healthy_backend(refresh):
+    fake_ort = FakeOrt()
+    fake_ort.available = ["CUDAExecutionProvider"]
+    state = DeviceState.AVAILABLE if refresh else DeviceState.DEGRADED
+
+    def detected_gpu():
+        return ComputeDevice(
+            id="nvidia:GPU-recovered",
+            name="Detected GPU",
+            kind="gpu",
+            architecture=host_architecture(),
+            state=state,
+            memory_total=8_000,
+            memory_available=6_000,
+            system={"platform": host_platform()},
+            evidence={
+                "vendor": "nvidia",
+                "provider_ordinals": {"CUDAExecutionProvider": 0},
+            },
+        )
+
+    device_registry = DeviceRegistry(
+        ort_module=fake_ort,
+        system_probe=lambda: [cpu_device(), detected_gpu()],
+    )
+    if refresh:
+        device_registry.scan()
+        state = DeviceState.DEGRADED
+
+    devices = device_registry.scan(force=refresh)
+
+    detected = next(device for device in devices if device.id == "nvidia:GPU-recovered")
+    assert detected.state is DeviceState.AVAILABLE
+    assert detected.backends[0].healthy is True
+
+
 def test_shared_hardware_is_degraded_when_all_attached_backends_fail():
     fake_ort = FakeOrt()
     fake_ort.available = ["CUDAExecutionProvider", "TensorrtExecutionProvider"]

@@ -8,6 +8,7 @@ import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
+from web.routers import local_deploy
 from web.routers.auth import get_current_user
 from web.routers.local_ai import (
     attach_local_ai_services,
@@ -17,9 +18,8 @@ from web.routers.local_ai import (
 from web.routers.local_ai import (
     router as local_ai_router,
 )
-from web.routers import local_deploy
-from web.routers.local_deploy import router as local_deploy_router
 from web.routers.local_ai_storage import router as local_ai_storage_router
+from web.routers.local_deploy import router as local_deploy_router
 from web.ws_hub import local_ai_event
 
 
@@ -118,6 +118,16 @@ class FakeInstances:
         return next((item for item in self.items if item.id == instance_id), None)
 
 
+class FakeStoragePolicy:
+    def __init__(self) -> None:
+        self.validations: list[tuple[str, int]] = []
+        self.result: Record | None = None
+
+    def validate_destination(self, path: str, required_bytes: int) -> Record:
+        self.validations.append((path, required_bytes))
+        return self.result or Record(path=path, writable=True, error=None, reason=None)
+
+
 @pytest.fixture
 def services() -> SimpleNamespace:
     events: list[dict[str, Any]] = []
@@ -131,6 +141,7 @@ def services() -> SimpleNamespace:
         models=FakeModels(),
         downloads=FakeDownloads(),
         instances=FakeInstances(),
+        storage_policy=FakeStoragePolicy(),
         broadcast=broadcast,
         events=events,
     )
@@ -142,6 +153,7 @@ def app(services: SimpleNamespace) -> FastAPI:
     api.state.local_ai = services
     api.include_router(local_ai_router, prefix="/api/v1")
     api.include_router(local_deploy_router, prefix="/api/v1")
+    api.include_router(local_ai_storage_router, prefix="/api/v1")
     return api
 
 
@@ -164,6 +176,7 @@ def test_all_local_ai_resources_require_auth(app: FastAPI) -> None:
         "/api/v1/local-ai/models",
         "/api/v1/local-ai/downloads",
         "/api/v1/local-ai/instances",
+        "/api/v1/local-ai/storage",
     ):
         assert client.get(path).status_code == 401
 
@@ -287,6 +300,42 @@ def test_download_create_requires_destination_and_is_idempotent_by_request_id(
     assert len(services.downloads.items) == 1
 
 
+def test_request_id_is_generated_when_omitted(client: TestClient) -> None:
+    download = client.post(
+        "/api/v1/local-ai/downloads",
+        json={"model_id": "catalog:qwen", "destination": "/models"},
+    )
+    instance = client.post(
+        "/api/v1/local-ai/instances",
+        json={"model_id": "installed:qwen", "device_id": "cpu:0"},
+    )
+
+    assert download.status_code == 202
+    assert instance.status_code == 202
+    assert instance.json()["data"]["task_id"]
+
+
+def test_download_uses_storage_policy_before_creating_task(
+    client: TestClient,
+    services: SimpleNamespace,
+) -> None:
+    services.storage_policy.result = Record(
+        path="/models",
+        writable=False,
+        error="insufficient free space",
+        reason="insufficient free space",
+    )
+
+    response = client.post(
+        "/api/v1/local-ai/downloads",
+        json={"model_id": "catalog:qwen", "destination": "/models"},
+    )
+
+    assert response.status_code == 422
+    assert services.storage_policy.validations == [("/models", 4)]
+    assert services.downloads.items == []
+
+
 def test_reusing_download_request_id_with_different_input_is_rejected(
     client: TestClient,
     services: SimpleNamespace,
@@ -392,25 +441,69 @@ def test_instance_start_failure_publishes_retryable_websocket_event(
     }
 
 
+def test_instance_start_task_can_be_queried(client: TestClient, services: SimpleNamespace) -> None:
+    services.request_results = {}
+    services.request_results[("instance", "start:pending")] = "start:pending"
+    services.request_results[("instance", "start:completed")] = Record(id="instance:one")
+    services.request_results[("instance", "start:failed")] = RuntimeError("runtime unavailable")
+
+    pending = data(client.get("/api/v1/local-ai/instances/tasks/start:pending"))
+    completed = data(client.get("/api/v1/local-ai/instances/tasks/start:completed"))
+    failed = data(client.get("/api/v1/local-ai/instances/tasks/start:failed"))
+    missing = client.get("/api/v1/local-ai/instances/tasks/start:missing")
+
+    assert pending == {"task_id": "start:pending", "status": "pending"}
+    assert completed == {
+        "task_id": "start:completed",
+        "status": "completed",
+        "instance": {"id": "instance:one"},
+    }
+    assert failed == {
+        "task_id": "start:failed",
+        "status": "failed",
+        "error": {
+            "code": "instance_start_failed",
+            "message": "runtime unavailable",
+            "retryable": True,
+        },
+    }
+    assert missing.status_code == 404
+
+
 def test_legacy_devices_endpoint_translates_authoritative_devices(
     client: TestClient,
+    monkeypatch,
 ) -> None:
+    monkeypatch.setattr(
+        local_deploy,
+        "get_config_service",
+        lambda: SimpleNamespace(get=lambda *args: "cpu"),
+    )
     response = client.get("/api/v1/local-deploy/devices")
     assert response.status_code == 200
     payload = response.json()["data"]
     assert payload["devices"][0]["id"] == "cpu:0"
     assert payload["devices"][0]["model"] == "Test CPU"
+    assert payload["current"] == "cpu:0"
+    assert payload["devices"][0]["active"] is True
     assert "3 TOPS INT8" not in response.text
 
 
 def test_legacy_device_fallback_does_not_invent_npu_model(monkeypatch) -> None:
-    monkeypatch.setattr("memory.npu_embed.probe_npu", lambda: True)
+    npu_available = True
+    monkeypatch.setattr("memory.npu_embed.probe_npu", lambda: npu_available)
     monkeypatch.setattr(local_deploy, "_detect_cpu_model", lambda: "Test CPU")
     monkeypatch.setattr(local_deploy, "_detect_gpu_model", lambda: "")
     monkeypatch.setattr(local_deploy, "get_config_service", lambda: SimpleNamespace(get=lambda *args: ""))
     local_deploy._DEVICE_CACHE["data"] = None
 
-    payload = local_deploy._detect_devices()
+    available_payload = local_deploy._detect_devices()
+    npu_available = False
+    local_deploy._DEVICE_CACHE["data"] = None
+    unavailable_payload = local_deploy._detect_devices()
 
-    npu = next(device for device in payload["devices"] if device["id"] == "npu")
-    assert npu["model"] == "NPU"
+    available_npu = next(device for device in available_payload["devices"] if device["id"] == "npu")
+    unavailable_npu = next(device for device in unavailable_payload["devices"] if device["id"] == "npu")
+    assert available_npu["model"] == "NPU"
+    assert unavailable_npu["model"] == "未检测到可用 NPU"
+    assert "VIP9000" not in str(unavailable_npu)

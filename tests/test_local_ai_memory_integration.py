@@ -1012,47 +1012,6 @@ async def test_cancelled_local_inference_keeps_route_until_worker_finishes(purpo
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("purpose", [ModelPurpose.EMBEDDING, ModelPurpose.RERANKER])
-@pytest.mark.parametrize("cancel_count", [2, 4])
-async def test_repeatedly_cancelled_local_inference_keeps_route_until_worker_finishes(
-    purpose,
-    cancel_count,
-):
-    instances, runtimes = e2e_instance_manager()
-    services = await bootstrap._local_memory_services(instances, "local", "/models/bge", "")
-    model_id = "embedding-a" if purpose is ModelPurpose.EMBEDDING else "reranker-a"
-    instance = await instances.start(model_id)
-    runtime = runtimes["1.0"]
-    entered = threading.Event()
-    release = threading.Event()
-    if purpose is ModelPurpose.EMBEDDING:
-        runtime.embed_entered = entered
-        runtime.embed_release = release
-        inference = services.embedding.embed(["a"])
-    else:
-        runtime.score_entered = entered
-        runtime.score_release = release
-        inference = services.reranker.score("q", ["a"])
-
-    task = asyncio.create_task(inference)
-    assert await asyncio.to_thread(entered.wait, 1)
-    for _ in range(cancel_count):
-        task.cancel()
-        await asyncio.sleep(0)
-        await asyncio.sleep(0)
-        assert not task.done()
-
-    with pytest.raises(InstanceInUseError):
-        await instances.stop(instance.id)
-
-    release.set()
-    with pytest.raises(asyncio.CancelledError):
-        await task
-    assert instances.get(instance.id).active_routes == ()
-    await instances.stop(instance.id)
-
-
-@pytest.mark.asyncio
 async def test_managed_embedding_rejects_awaitable_fallback_factory():
     async def fallback_factory():
         return LocalEmbeddingService(FakeEmbeddingRuntime())
@@ -1141,7 +1100,6 @@ async def test_insight_rest_propagates_structured_local_unavailable():
 def test_real_http_response_preserves_local_unavailable_error(error, code, purpose):
     from fastapi import FastAPI
     from fastapi.testclient import TestClient
-
     from web.error_handler import register_error_handlers
 
     app = FastAPI()

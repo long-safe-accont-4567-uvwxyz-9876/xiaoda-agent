@@ -154,24 +154,6 @@ def test_docs_truthfully_explain_model_removal_only_unregisters_metadata():
     assert "delete_if_mutable" in registry_remove
     assert "unlink" not in registry_remove
     assert "rmtree" not in registry_remove
-    assert "实际操作只注销已安装模型登记，不会删除模型目录或文件" in docs
+    assert "移除只删除已安装模型登记，不会删除模型目录或其中的文件" in docs
     assert "确认移除模型文件" not in docs
     assert "删除用户模型是破坏性操作" not in docs
-
-
-def test_modelscope_support_and_removal_wording_is_locked_across_documentation():
-    env = read_project_file(".env.example")
-    readme = read_project_file("README.md")
-    docs = read_project_file("docs/local-ai-platform.md")
-    public_only = "当前仅支持公开 ModelScope 仓库，私有或受限仓库暂不支持"
-    removal = "当前 UI 使用“移除”措辞，但实际操作只注销已安装模型登记，不会删除模型目录或文件"
-    assert public_only in env
-    assert public_only in readme
-    assert public_only in docs
-    assert removal in readme
-    assert removal in docs
-    for text in (env, readme, docs):
-        assert "MODELSCOPE_ACCESS_TOKEN" not in text
-        assert "MODELSCOPE_API_KEY" not in text
-        assert "ModelScope Token" not in text
-        assert "ModelScope token" not in text

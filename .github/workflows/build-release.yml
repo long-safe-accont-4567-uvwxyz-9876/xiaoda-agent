@@ -782,37 +782,53 @@ jobs:
           VERSION: ${{ steps.version.outputs.version }}
         shell: bash
         run: |
+          set -euo pipefail
           if [ -z "$GITEE_TOKEN" ]; then
             echo "GITEE_TOKEN secret not set, skipping gitee sync"
             exit 0
           fi
           REPO="liu-runfe/xiaoda-agent"
+          cd artifacts
+          required_patterns=(
+            "xiaoda-agent-windows-x64-*-setup.exe"
+            "xiaoda-agent-windows-x64-*.tar.gz"
+            "xiaoda-agent-linux-x86_64-*.tar.gz"
+            "xiaoda-agent-linux-x86_64-*-install.sh"
+            "xiaoda-agent-linux-x86_64-*.run"
+            "xiaoda-agent-linux-arm64-*.tar.gz"
+            "xiaoda-agent-linux-arm64-*-install.sh"
+            "xiaoda-agent-linux-arm64-*.run"
+          )
+          for pattern in "${required_patterns[@]}"; do
+            compgen -G "$pattern" > /dev/null || { echo "缺少 Gitee 必需文件: $pattern"; exit 1; }
+          done
           echo "=== 创建 gitee release v$VERSION ==="
-          RELEASE_RESP=$(curl -s -X POST "https://gitee.com/api/v5/repos/$REPO/releases" \
+          RELEASE_RESP=$(curl --fail-with-body -sS -X POST "https://gitee.com/api/v5/repos/$REPO/releases" \
             -H "Content-Type: application/json;charset=UTF-8" \
             -d "{\"access_token\":\"$GITEE_TOKEN\",\"tag_name\":\"v$VERSION\",\"name\":\"Release v$VERSION\",\"body\":\"Release v$VERSION (GitHub 镜像，国内下载更快)\",\"target_commitish\":\"main\"}")
           RELEASE_ID=$(echo "$RELEASE_RESP" | python3 -c "import json,sys; print(json.load(sys.stdin).get('id',''))" 2>/dev/null)
           if [ -z "$RELEASE_ID" ]; then
             echo "创建 gitee release 失败: $RELEASE_RESP"
-            exit 0
+            exit 1
           fi
           echo "gitee release ID: $RELEASE_ID"
           echo "=== 上传 assets 到 gitee ==="
-          cd artifacts
           for f in xiaoda-agent-windows-x64-*-setup.exe \
                    xiaoda-agent-windows-x64-*.tar.gz \
                    xiaoda-agent-linux-x86_64-*.tar.gz \
                    xiaoda-agent-linux-x86_64-*-install.sh \
+                   xiaoda-agent-linux-x86_64-*.run \
                    xiaoda-agent-linux-arm64-*.tar.gz \
                    xiaoda-agent-linux-arm64-*-install.sh \
                    xiaoda-agent-linux-arm64-*.run \
                    *.sha256; do
             [ -f "$f" ] || continue
             echo "上传: $f ($(du -h "$f" | cut -f1))"
-            curl -s -X POST "https://gitee.com/api/v5/repos/$REPO/releases/$RELEASE_ID/attach_files" \
+            curl --fail-with-body -sS -X POST "https://gitee.com/api/v5/repos/$REPO/releases/$RELEASE_ID/attach_files" \
               -H "Content-Type: multipart/form-data" \
               -F "access_token=$GITEE_TOKEN" \
-              -F "file=@$f" > /dev/null 2>&1 && echo "  ✓ 成功" || echo "  ✗ 失败"
+              -F "file=@$f" > /dev/null
+            echo "  ✓ 成功"
           done
           echo "=== gitee release 完成 ==="
           echo "https://gitee.com/$REPO/releases/$RELEASE_ID"

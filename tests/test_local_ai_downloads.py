@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import json
 from pathlib import Path
 
 import httpx
@@ -222,6 +223,53 @@ async def test_recover_turns_interrupted_download_into_paused_task(tmp_path):
     assert recovered[0].bytes_downloaded == 3
     completed = await restarted.resume(task.id)
     assert completed.state is TaskState.COMPLETED
+
+
+@pytest.mark.asyncio
+async def test_recover_isolates_corrupt_state_file(tmp_path):
+    state_path = tmp_path / "downloads.json"
+    corrupt = b'{"tasks": ['
+    state_path.write_bytes(corrupt)
+    manager = make_manager(
+        tmp_path,
+        FakeTransport({}),
+        FakeRegistry(),
+        [],
+    )
+
+    recovered = await manager.recover()
+
+    assert recovered == []
+    assert manager.list() == []
+    assert state_path.read_bytes() == corrupt
+
+
+@pytest.mark.asyncio
+async def test_recover_isolates_corrupt_entry_and_keeps_valid_tasks(tmp_path):
+    content = b"restart"
+    first = make_manager(
+        tmp_path,
+        FakeTransport({"nested/model.onnx": content}),
+        FakeRegistry(),
+        [],
+    )
+    valid = first.create(make_model(content), tmp_path / "model")
+    state_path = tmp_path / "downloads.json"
+    payload = json.loads(state_path.read_text(encoding="utf-8"))
+    payload["tasks"].insert(0, {"task": {"id": "broken"}, "model": {}})
+    state_path.write_text(json.dumps(payload), encoding="utf-8")
+    restarted = make_manager(
+        tmp_path,
+        FakeTransport({"nested/model.onnx": content}),
+        FakeRegistry(),
+        [],
+    )
+
+    recovered = await restarted.recover()
+
+    assert [task.id for task in recovered] == [valid.id]
+    persisted = json.loads(state_path.read_text(encoding="utf-8"))
+    assert [entry["task"]["id"] for entry in persisted["tasks"]] == [valid.id]
 
 
 @pytest.mark.asyncio

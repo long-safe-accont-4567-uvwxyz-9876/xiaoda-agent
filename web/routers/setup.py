@@ -2,12 +2,11 @@ from __future__ import annotations
 
 import os
 import shutil
+import asyncio
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
 from zoneinfo import ZoneInfo
-
-import asyncio
 
 import httpx
 from fastapi import APIRouter, Depends, HTTPException, Request
@@ -15,7 +14,6 @@ from loguru import logger
 
 from web.routers.auth import get_current_user
 from web.schemas import Envelope
-import contextlib
 
 # test-key 速率限制：每 IP 最多 10 次/分钟
 _test_key_timestamps: list[float] = []
@@ -670,9 +668,12 @@ async def save_keys(body: dict) -> Any:
         _qq_keys = ("QQBOT_APP_ID", "QQBOT_APP_SECRET", "ENABLE_QQ_BOT")
         _qq_old = {k: os.getenv(k, "") for k in _qq_keys}
 
-        # 写入 .env 文件
-        _write_env_file(updates, ENV_PATH, ENV_EXAMPLE_PATH, _parse_env_lines, _load_env_values, _write_env)
-        _auto_register_providers(updates)
+        provider_snapshots = await _auto_register_providers(updates)
+        try:
+            _write_env_file(updates, ENV_PATH, ENV_EXAMPLE_PATH, _parse_env_lines, _load_env_values, _write_env)
+        except Exception:
+            await _rollback_auto_registered_providers(provider_snapshots)
+            raise
         logger.info("setup.keys_saved count={}", len(updates))
 
         # 重新加载环境变量 + 清除缓存 + 重置凭证池
@@ -964,72 +965,87 @@ _KNOWN_PROVIDERS = {
 }
 
 
-def _auto_register_providers(updates: dict) -> None:
+async def _auto_register_providers(updates: dict) -> list[Any]:
     """当用户配置了免费模型平台的 Key，自动注册为自定义 Provider。"""
-    import os
-    from web.config_service import get_config_service
-    from web.custom_providers import register_into_router
+    from llm_gateway.provider_service import ProviderService
+    from web.app_ref import get_app
 
-    cfg = get_config_service()
-    existing = cfg.get("models.providers", {}) or {}
-    # 基于 _KNOWN_PROVIDERS 插入顺序计算 order 索引
+    service = get_app().state.provider_service
+    existing = {definition.id for definition in service.list()}
     known_keys = list(_KNOWN_PROVIDERS.keys())
+    provider_snapshots = []
 
-    for env_key, provider_info in _KNOWN_PROVIDERS.items():
-        # Ollama 特殊处理：无需 API Key，只需要 base_url
-        if env_key == "OLLAMA_BASE_URL":
-            base_url = updates.get(env_key, "").strip()
-            if not base_url:
-                continue
-            api_key = "ollama"  # 占位 Key
-        else:
-            api_key = updates.get(env_key, "").strip()
-            if not api_key:
-                continue
-            base_url = provider_info.get("base_url", "")
+    try:
+        for env_key, provider_info in _KNOWN_PROVIDERS.items():
+            if env_key == "OLLAMA_BASE_URL":
+                base_url = updates.get(env_key, "").strip()
+                if not base_url:
+                    continue
+                api_key = "ollama"
+            else:
+                api_key = updates.get(env_key, "").strip()
+                if not api_key:
+                    continue
+                base_url = provider_info.get("base_url", "")
 
-        pid = provider_info["id"]
-
-        # 写入凭证文件
-        from config import get_credentials_dir
-        cred_dir = get_credentials_dir()
-        cred_dir.mkdir(parents=True, exist_ok=True)
-        fp = cred_dir / f"provider_{pid}.key"
-        from web._provider_keys import _encode_key
-        fp.write_text(_encode_key(api_key) + "\n", encoding="utf-8")
-        with contextlib.suppress(OSError):
-            os.chmod(fp, 0o600)
-
-        # 注册到配置（如果尚未存在）
-        if pid not in existing:
-            record = {
+            pid = provider_info["id"]
+            definition = service.catalog.get(pid)
+            record = ProviderService._record(definition)
+            record.update({
+                "id": pid,
                 "label": provider_info["label"],
-                "format": provider_info["format"],
                 "base_url": base_url,
-                "default_model": "",
-                "enabled": True,
                 "order": known_keys.index(env_key),
-            }
-            if provider_info.get("builtin"):
-                record["builtin"] = True
-            cfg.set(f"models.providers.{pid}", record)
+            })
+            if pid in existing:
+                if hasattr(service, "snapshot"):
+                    provider_snapshots.append(service.snapshot(pid))
+                else:
+                    provider_snapshots.append((pid, ProviderService._record(definition), service.credentials.read(pid)))
+                if definition.builtin:
+                    await service.bind_builtin(pid, record, {"api_key": api_key})
+                else:
+                    await service.update(pid, record, {"api_key": api_key})
+            else:
+                if hasattr(service, "snapshot"):
+                    provider_snapshots.append(service.snapshot(pid))
+                await service.create(record, {"api_key": api_key})
+                if not hasattr(service, "snapshot"):
+                    provider_snapshots.append((pid, None, ""))
+            existing.add(pid)
             logger.info("setup.auto_provider_registered id={} order={}", pid, known_keys.index(env_key))
+    except Exception:
+        await _rollback_auto_registered_providers(provider_snapshots, service)
+        raise
+    return provider_snapshots
 
-        # 注册到运行时 router（通过 app.state）
+
+async def _rollback_auto_registered_providers(
+    provider_snapshots: list[Any],
+    service: Any | None = None,
+) -> None:
+    if service is None:
+        from web.app_ref import get_app
+        service = get_app().state.provider_service
+    failures = []
+    for snapshot in reversed(provider_snapshots):
         try:
-            from web.app_ref import get_app
-            app = get_app()
-            if hasattr(app, "state") and hasattr(app.state, "core"):
-                router_obj = app.state.core.router
-                register_into_router(
-                    router_obj, pid,
-                    provider_info["format"],
-                    base_url,
-                    api_key,
-                )
-                logger.info("setup.auto_provider_runtime id={}", pid)
-        except (OSError, KeyError, ValueError, RuntimeError, TypeError) as e:
-            logger.debug("setup.auto_provider_runtime_skip error={}", str(e))
+            if hasattr(service, "restore_snapshot"):
+                await service.restore_snapshot(snapshot)
+            else:
+                provider_id, old_record, old_credential = snapshot
+                if old_record is None:
+                    await service.delete(provider_id)
+                else:
+                    definition = service.catalog.get(provider_id)
+                    if definition.builtin:
+                        await service.bind_builtin(provider_id, old_record, {"api_key": old_credential})
+                    else:
+                        await service.update(provider_id, old_record, {"api_key": old_credential})
+        except Exception as error:
+            failures.append(error)
+    if failures:
+        raise ExceptionGroup("provider snapshot rollback failed", failures)
 
 
 # ── USER.md 个人资料配置 ────────────────────────────────────

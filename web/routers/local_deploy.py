@@ -217,7 +217,6 @@ def _detect_devices() -> dict:
     # NPU 实测（probe_npu 会 sudo -n 拉起 runner --probe，约 50ms~15s）
     # 仅报告可用性，不虚构具体型号/算力（型号由权威探测路径提供）
     npu_ok = False
-    npu_model = ""
     try:
         from memory.npu_embed import probe_npu
         npu_ok = probe_npu()
@@ -246,9 +245,9 @@ def _detect_devices() -> dict:
         {
             "id": "npu",
             "name": "NPU",
-            "model": npu_model or ("NPU" if npu_ok else "未检测到 VIP9000"),
+            "model": "NPU" if npu_ok else "未检测到可用 NPU",
             "desc": "NPU 常驻流加速，短文本 CPU / 长文本 NPU 自适应" if npu_ok
-                    else "未检测到可用 NPU（需 Linux + VIP9000 驱动 + sudo 免密）",
+                    else "未检测到可用 NPU（需 Linux 驱动与 sudo 免密）",
             "available": npu_ok,
         },
         {
@@ -289,9 +288,14 @@ async def local_deploy_devices(request: Request) -> Any:
     """算力设备检测：CPU / NPU / GPU 探测结果 + 当前持久化设备 + 实时占用。"""
     services = getattr(request.app.state, "local_ai", None)
     if services is not None:
-        current = str(get_config_service().get("local_deploy.device", "") or "")
+        authoritative = services.devices.scan()
+        configured = str(get_config_service().get("local_deploy.device", "") or "")
+        current = next(
+            (device.id for device in authoritative if device.id == configured),
+            next((device.id for device in authoritative if device.kind == configured), ""),
+        )
         devices = []
-        for device in services.devices.scan():
+        for device in authoritative:
             item = device.to_dict()
             devices.append({
                 "id": item["id"],

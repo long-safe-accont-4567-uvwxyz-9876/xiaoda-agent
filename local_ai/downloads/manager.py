@@ -144,19 +144,27 @@ class DownloadManager:
     async def recover(self) -> list[DownloadTask]:
         if not self._state_path.exists():
             return []
-        data = await asyncio.to_thread(self._read_state)
+        try:
+            data = await asyncio.to_thread(self._read_state)
+        except (OSError, UnicodeError, json.JSONDecodeError):
+            return []
+        if not isinstance(data, dict) or not isinstance(data.get("tasks"), list):
+            return []
         recovered: list[DownloadTask] = []
-        for entry in data.get("tasks", []):
-            task = DownloadTask.from_dict(entry["task"])
-            model = CatalogModel.from_dict(entry["model"])
-            state = TaskState.PAUSED if task.state is TaskState.DOWNLOADING else task.state
-            task = self._replace_task(
-                task,
-                state=state,
-                bytes_downloaded=self._partial_bytes(model, Path(task.destination)),
-                speed_bps=None,
-                eta_seconds=None,
-            )
+        for entry in data["tasks"]:
+            try:
+                task = DownloadTask.from_dict(entry["task"])
+                model = CatalogModel.from_dict(entry["model"])
+                state = TaskState.PAUSED if task.state is TaskState.DOWNLOADING else task.state
+                task = self._replace_task(
+                    task,
+                    state=state,
+                    bytes_downloaded=self._partial_bytes(model, Path(task.destination)),
+                    speed_bps=None,
+                    eta_seconds=None,
+                )
+            except (KeyError, TypeError, ValueError, OSError):
+                continue
             self._tasks[task.id] = task
             self._models[task.id] = model
             recovered.append(task)

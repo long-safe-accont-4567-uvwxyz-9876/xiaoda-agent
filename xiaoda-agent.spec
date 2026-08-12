@@ -31,7 +31,7 @@ def _tree_datas(root, prefix):
         for fn in filenames:
             if fn in _exclude:
                 continue
-            if fn.endswith('.key') or fn.endswith('.secret'):
+            if fn.endswith(('.key', '.secret', '.part')):
                 continue
             src = os.path.join(dirpath, fn)
             rel = os.path.relpath(src, SPECPATH)
