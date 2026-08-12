@@ -29,7 +29,7 @@ def _make_sub_agent():
     )
     agent = SubAgent.__new__(SubAgent)
     agent.config = cfg
-    agent._client = MagicMock()
+    agent._router = MagicMock()
     agent._degraded = False
     agent._initialized = True
     return agent
@@ -59,10 +59,10 @@ async def test_retry_succeeds_on_second_attempt():
     async def _fake_create(**kwargs):
         call_count["n"] += 1
         if call_count["n"] == 1:
-            await asyncio.sleep(1.0)  # hang 住触发超时
+            raise TimeoutError
         return fake_resp
 
-    agent._client.chat.completions.create = AsyncMock(side_effect=_fake_create)
+    agent._router.route_config = AsyncMock(side_effect=_fake_create)
 
     # patch 配置: timeout=0.2s, retry=1
     with patch("config.SUB_AGENT_API_TIMEOUT", 0.2), \
@@ -87,9 +87,9 @@ async def test_retry_also_timeout_returns_prompt():
 
     async def _fake_create(**kwargs):
         call_count["n"] += 1
-        await asyncio.sleep(1.0)  # 每次都 hang
+        raise TimeoutError
 
-    agent._client.chat.completions.create = AsyncMock(side_effect=_fake_create)
+    agent._router.route_config = AsyncMock(side_effect=_fake_create)
 
     with patch("config.SUB_AGENT_API_TIMEOUT", 0.2), \
          patch("config.SUB_AGENT_API_RETRY", 1):
@@ -114,9 +114,9 @@ async def test_no_retry_when_config_zero():
 
     async def _fake_create(**kwargs):
         call_count["n"] += 1
-        await asyncio.sleep(1.0)
+        raise TimeoutError
 
-    agent._client.chat.completions.create = AsyncMock(side_effect=_fake_create)
+    agent._router.route_config = AsyncMock(side_effect=_fake_create)
 
     with patch("config.SUB_AGENT_API_TIMEOUT", 0.2), \
          patch("config.SUB_AGENT_API_RETRY", 0):
@@ -137,7 +137,7 @@ async def test_remaining_too_low_skips_retry():
     agent = _make_sub_agent()
 
     # remaining=3 (< 5), 应直接返回提示, 不调用 LLM
-    agent._client.chat.completions.create = AsyncMock()
+    agent._router.route_config = AsyncMock()
 
     result = await agent._call_llm_one_round(
         working=[{"role": "user", "content": "hi"}],
@@ -147,7 +147,7 @@ async def test_remaining_too_low_skips_retry():
     )
 
     assert "思考时间太长了" in result
-    assert not agent._client.chat.completions.create.called
+    assert not agent._router.route_config.called
 
 
 def test_config_values_loaded():
@@ -173,7 +173,7 @@ async def test_first_call_success_no_retry():
         call_count["n"] += 1
         return fake_resp
 
-    agent._client.chat.completions.create = AsyncMock(side_effect=_fake_create)
+    agent._router.route_config = AsyncMock(side_effect=_fake_create)
 
     result = await agent._call_llm_one_round(
         working=[{"role": "user", "content": "hi"}],
@@ -202,7 +202,7 @@ async def test_negative_retry_count_returns_prompt():
         call_count["n"] += 1
         return fake_resp
 
-    agent._client.chat.completions.create = AsyncMock(side_effect=_fake_create)
+    agent._router.route_config = AsyncMock(side_effect=_fake_create)
 
     with patch("config.SUB_AGENT_API_RETRY", -1):
         result = await agent._call_llm_one_round(

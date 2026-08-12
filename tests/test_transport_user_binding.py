@@ -119,14 +119,45 @@ async def test_web_adapter_binds_web_user_during_process():
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    ("attachment", "expected_text"),
+    ("attachment", "expected_text", "expected_image_data", "expected_context"),
     [
-        ({"image_url": "/media/upload/sample.png"}, "📷 图片"),
-        ({"doc_path": "/tmp/sample.pdf"}, "📄 sample.pdf"),
+        (
+            {"image_url": "/media/upload/sample.png"},
+            "📷 图片",
+            [{"mimeType": "image/png", "data": "a" * 100}],
+            "",
+        ),
+        (
+            {"doc_path": "/tmp/sample.pdf"},
+            "📄 sample.pdf",
+            None,
+            "用户上传了文档：/tmp/sample.pdf。请使用 document_reader 工具读取该文档内容后回答用户的问题。",
+        ),
     ],
 )
-async def test_web_adapter_processes_attachment_only_messages(attachment, expected_text):
+async def test_web_adapter_processes_attachment_only_messages(
+    attachment, expected_text, expected_image_data, expected_context, tmp_path, monkeypatch
+):
+    from utils import text_utils
+    from web import ws_hub
     from web.ws_hub import _handle_chat, manager
+
+    upload_dir = tmp_path / "upload"
+    upload_dir.mkdir()
+    (upload_dir / "sample.png").write_bytes(b"image")
+    if "doc_path" in attachment:
+        doc_path = upload_dir / "sample.pdf"
+        doc_path.write_bytes(b"document")
+        attachment = {**attachment, "doc_path": str(doc_path)}
+        expected_context = (
+            f"用户上传了文档：{doc_path}。请使用 document_reader 工具读取该文档内容后回答用户的问题。"
+        )
+    monkeypatch.setattr(ws_hub, "MEDIA_ROOT", tmp_path)
+    monkeypatch.setattr(
+        text_utils,
+        "encode_image_to_base64",
+        lambda _: ("image/png", "a" * 100),
+    )
 
     fake_core = MagicMock()
     fake_core.process = AsyncMock(return_value=ProcessResult(reply="已处理"))
@@ -140,7 +171,10 @@ async def test_web_adapter_processes_attachment_only_messages(attachment, expect
     try:
         await _handle_chat(conn_id, msg, "test_attachment_only", ws)
         fake_core.process.assert_awaited_once()
-        assert fake_core.process.await_args.kwargs["user_input"] == expected_text
+        process_kwargs = fake_core.process.await_args.kwargs
+        assert process_kwargs["user_input"] == expected_text
+        assert process_kwargs["image_data"] == expected_image_data
+        assert process_kwargs["system_context"] == expected_context
     finally:
         manager._session_map.pop(conn_id, None)
         manager._agent_map.pop(conn_id, None)

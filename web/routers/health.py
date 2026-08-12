@@ -40,7 +40,7 @@ async def agent_self(request: Request) -> Any:
 @router.get("/health/probes", response_model=Envelope[list[dict]])
 async def list_probes(request: Request) -> Any:
     from web.probes import list_probe_ids
-    return Envelope(data=list_probe_ids(request.app.state.core))
+    return Envelope(data=list_probe_ids(request.app.state.core, request.app.state.provider_service))
 
 
 @router.post("/health/test/llm", response_model=Envelope[dict])
@@ -56,7 +56,7 @@ async def test_llm(body: dict, request: Request) -> Any:
 async def _probe_provider(request: Request, provider_id: str) -> dict:
     """对自定义 provider 直连探活（委托给 probes.probe_provider）。"""
     from web.probes import probe_provider
-    return await probe_provider(request.app.state.core, provider_id)
+    return await probe_provider(request.app.state.core, provider_id, request.app.state.provider_service)
 
 
 @router.post("/health/test/tts", response_model=Envelope[dict])
@@ -80,7 +80,7 @@ async def test_mcp(server: str, request: Request) -> Any:
 @router.post("/health/test/{probe_id:path}", response_model=Envelope[dict])
 async def test_one(probe_id: str, request: Request) -> Any:
     from web.probes import run_probe
-    return Envelope(data=await run_probe(request.app.state.core, probe_id))
+    return Envelope(data=await run_probe(request.app.state.core, probe_id, request.app.state.provider_service))
 
 
 @router.post("/health/test-all", response_model=Envelope[dict])
@@ -107,7 +107,11 @@ async def test_all(request: Request) -> Any:
                     "latency_ms": res.get("latency_ms", 0),
                 })
 
-            report = await run_all(core, on_progress=on_progress)
+            report = await run_all(
+                core,
+                on_progress=on_progress,
+                provider_service=request.app.state.provider_service,
+            )
             await manager.broadcast({
                 "type": "health_done",
                 "passed": report["passed"], "total": report["total"],

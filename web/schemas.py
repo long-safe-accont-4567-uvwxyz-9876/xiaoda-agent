@@ -52,6 +52,7 @@ class MessageItem(BaseModel):
     emotion: str | None = None
     timestamp: float
     tool_calls: list | None = None
+    request_context: dict | None = None
 
 
 class SystemStatus(BaseModel):

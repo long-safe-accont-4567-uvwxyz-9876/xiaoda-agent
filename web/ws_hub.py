@@ -691,11 +691,66 @@ def _verify_response(data: dict, msg_id: str, agent: str) -> None:
         logger.warning("ws.chat.verify", issue="degraded_reply", agent=agent, msg_id=msg_id)
 
 
+def build_chat_request_context(msg: dict) -> dict:
+    text = str(msg.get("text") or "").strip()
+    attachments: list[dict[str, str]] = []
+    upload_root = (MEDIA_ROOT / "upload").resolve()
+    image_url = str(msg.get("image_url") or "").strip()
+    if image_url.startswith("/media/upload/"):
+        image_path = (upload_root / Path(image_url).name).resolve()
+        expected_url = f"/media/upload/{image_path.name}"
+        if image_url == expected_url and image_path.parent == upload_root and image_path.is_file():
+            image_name = Path(str(msg.get("image_name") or image_path.name)).name[:255]
+            attachments.append({
+                "kind": "image", "url": image_url, "name": image_name,
+            })
+    doc_path = str(msg.get("doc_path") or "").strip()
+    if not doc_path:
+        import re as _re
+        doc_marker = _re.search(r'\n?\[Doc:\s*([^\]]+)\]\s*', text)
+        if doc_marker:
+            doc_path = doc_marker.group(1).strip()
+            text = text.replace(doc_marker.group(0), "").strip()
+    if doc_path:
+        candidate = Path(doc_path).resolve()
+        if candidate.parent == upload_root and candidate.is_file():
+            doc_name = Path(str(msg.get("doc_name") or candidate.name)).name[:255]
+            attachment = {
+                "kind": "document",
+                "url": f"/media/upload/{candidate.name}",
+                "name": doc_name,
+                "path": str(candidate),
+            }
+            ext = candidate.suffix.lower()
+            if ext:
+                attachment["ext"] = ext
+            attachments.append(attachment)
+    return {
+        "text": text,
+        "search": bool(msg.get("search_mode")),
+        "think": bool(msg.get("think_mode")),
+        "attachments": attachments,
+    }
+
+
 async def _handle_chat(conn_id: str, msg: dict, msg_id: str, ws: WebSocket) -> None:
-    text = (msg.get("text") or "").strip()
-    image_url_field = str(msg.get("image_url") or "").strip()
-    doc_path_field = str(msg.get("doc_path") or "").strip()
+    request_context = build_chat_request_context(msg)
+    text = request_context["text"]
+    image_attachment = next(
+        (item for item in request_context["attachments"] if item["kind"] == "image"),
+        None,
+    )
+    document_attachment = next(
+        (item for item in request_context["attachments"] if item["kind"] == "document"),
+        None,
+    )
+    image_url_field = image_attachment["url"] if image_attachment else ""
+    doc_path_field = document_attachment["path"] if document_attachment else ""
     if not text and not image_url_field and not doc_path_field:
+        await manager.send_to(conn_id, {
+            "type": "error", "msg_id": msg_id,
+            "code": "EMPTY_REQUEST", "message": "消息或附件不能为空",
+        })
         return
     if not text:
         text = "📷 图片" if image_url_field else f"📄 {Path(doc_path_field).name}"
@@ -708,6 +763,11 @@ async def _handle_chat(conn_id: str, msg: dict, msg_id: str, ws: WebSocket) -> N
 
     from web._msg_context import current_msg_id
     token = current_msg_id.set(msg_id)
+    from core.background_tasks import (
+        reset_current_request_context,
+        set_current_request_context,
+    )
+    request_context_token = set_current_request_context(request_context)
 
     # P0 修复（Task 2.1）：提取结构化字段（按钮状态走独立字段，不再从 text 解析 marker）
     # 新客户端发送 search_mode / think_mode / image_url / doc_path 作为独立字段
@@ -834,6 +894,7 @@ async def _handle_chat(conn_id: str, msg: dict, msg_id: str, ws: WebSocket) -> N
             "type": "error", "msg_id": msg_id,
             "code": "CHAT_ERROR", "message": str(e)[:300]})
     finally:
+        reset_current_request_context(request_context_token)
         current_msg_id.reset(token)
 
 

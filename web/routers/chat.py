@@ -2,6 +2,7 @@ from __future__ import annotations
 from typing import Any
 
 import asyncio
+import json
 import os
 import re
 import tempfile
@@ -39,6 +40,49 @@ _ALLOWED_DOC_EXTS = {".pdf", ".docx", ".doc", ".pptx", ".ppt", ".xlsx", ".xls", 
 
 def _strip_tags(text: str) -> str:
     return _EMOTION_TAG.sub("", text or "").strip()
+
+
+def decode_history_context(raw: str | None) -> dict | None:
+    if not raw:
+        return None
+    try:
+        value = json.loads(raw)
+    except (json.JSONDecodeError, TypeError):
+        return None
+    if not isinstance(value, dict) or set(value) != {"text", "search", "think", "attachments"}:
+        return None
+    if not isinstance(value["text"], str):
+        return None
+    if not isinstance(value["search"], bool) or not isinstance(value["think"], bool):
+        return None
+    if not isinstance(value["attachments"], list):
+        return None
+    upload_root = UPLOAD_DIR.resolve()
+    for attachment in value["attachments"]:
+        if not isinstance(attachment, dict):
+            return None
+        kind = attachment.get("kind")
+        allowed_keys = {"kind", "url", "name"} if kind == "image" else {"kind", "url", "name", "path", "ext"}
+        required_keys = {"kind", "url", "name"} if kind == "image" else {"kind", "url", "name", "path"}
+        if kind not in {"image", "document"} or not required_keys <= set(attachment) <= allowed_keys:
+            return None
+        name = attachment.get("name")
+        url = attachment.get("url")
+        if not isinstance(name, str) or not name or len(name) > 255 or Path(name).name != name:
+            return None
+        if not isinstance(url, str) or url != f"/media/upload/{Path(url).name}":
+            return None
+        local_path = (upload_root / Path(url).name).resolve()
+        if local_path.parent != upload_root or not local_path.is_file():
+            return None
+        if kind == "document":
+            path = attachment.get("path")
+            if not isinstance(path, str) or Path(path).resolve() != local_path:
+                return None
+            ext = attachment.get("ext")
+            if ext is not None and (not isinstance(ext, str) or ext != local_path.suffix.lower()):
+                return None
+    return value
 
 
 def _infer_emotion(text: str) -> dict:
@@ -123,14 +167,15 @@ async def get_messages(session_id: str, request: Request,
             cond += " AND timestamp<?"
             params = (session_id, before)
         rows = await core.db.fetch_all(
-            f"SELECT id, timestamp, user_message, assistant_reply, emotion_label "
+            f"SELECT id, timestamp, user_message, assistant_reply, emotion_label, request_context_json "
             f"FROM conversation_logs WHERE {cond} ORDER BY timestamp DESC LIMIT ?",
             (*params, limit))
         for row in reversed(rows):
             if row["user_message"]:
                 messages.append(MessageItem(
                     id=row["id"] * 2, role="user", content=row["user_message"],
-                    emotion=None, timestamp=row["timestamp"]))
+                    emotion=None, timestamp=row["timestamp"],
+                    request_context=decode_history_context(row["request_context_json"])))
             if row["assistant_reply"]:
                 messages.append(MessageItem(
                     id=row["id"] * 2 + 1, role="assistant",

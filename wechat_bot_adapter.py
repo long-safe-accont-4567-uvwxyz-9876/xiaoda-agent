@@ -991,10 +991,13 @@ class WeChatBotAdapter:
             )
             return ret == 0
         except SessionExpiredError:
-            logger.warning("wechat_bot.send_media_session_expired")
-            self._expired = True
+            # W5：与 send_message 对齐——不立即清除凭证，也不置 _expired。
+            # 可能是服务端瞬时状态，poll 循环会指数退避重试，连续失败后才判定
+            # 真正过期并清凭证。这里仅标记未连接，等待 poll 判定恢复。
+            logger.warning(
+                "wechat_bot.send_media_session_expired pending_poll_recovery"
+            )
             self._connected = False
-            self._clear_credentials()
             return False
         except Exception as e:
             logger.error(

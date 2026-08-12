@@ -72,6 +72,10 @@ class QueryCache:
             logger.warning("query_cache.embed_timeout", text_preview=text[:50])
             return None
         except Exception as e:
+            from local_ai.integration.reranker import is_structured_local_unavailable
+
+            if is_structured_local_unavailable(e):
+                raise
             logger.debug("query_cache.embed_failed", error=str(e))
             return None
         if not vec:

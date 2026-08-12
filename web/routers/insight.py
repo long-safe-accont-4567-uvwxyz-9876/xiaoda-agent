@@ -196,6 +196,10 @@ async def list_memories(request: Request,
                 for r in results
                 if (r.get("importance") or 0) >= importance_min])
         except (OSError, RuntimeError, ConnectionError, TimeoutError) as e:
+            from local_ai.integration.reranker import is_structured_local_unavailable
+
+            if is_structured_local_unavailable(e):
+                raise
             logger.warning("webui.memories.search_failed error={}", str(e))
     rows = await core.db.fetch_all(
         "SELECT id, timestamp, summary, importance, emotion_label "

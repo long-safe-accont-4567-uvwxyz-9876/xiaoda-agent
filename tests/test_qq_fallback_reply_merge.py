@@ -23,7 +23,7 @@ from __future__ import annotations
 import os
 import sys
 from pathlib import Path
-from unittest.mock import patch, MagicMock
+from unittest.mock import AsyncMock, patch, MagicMock
 
 import pytest
 
@@ -152,11 +152,9 @@ async def test_first_part_failure_merges_remaining():
             await bot._send_fallback_reply_with_sticker(msg, long_text, result)
 
         # 验证：第 1 段失败后，应合并 parts[0:] 为单条发送（包含失败的段）
-        # msg.replies 应该只有 1 条（合并的全部内容）
-        assert len(msg.replies) == 1, f"合并后应只发 1 条，实际 {len(msg.replies)}"
-        # 合并内容应等于 parts[:] 的拼接（i=0 时合并全部）
+        assert all(len(reply.encode("utf-8")) <= 7800 for reply in msg.replies)
         expected_merged = "".join(parts)
-        assert msg.replies[0] == expected_merged, "合并内容应等于 parts[:] 全部拼接"
+        assert "".join(msg.replies) == expected_merged, "合并内容应等于 parts[:] 全部拼接"
 
 
 # ──────────────────────────────────────────────────────────────
@@ -184,11 +182,9 @@ async def test_middle_part_failure_merges_remaining():
         with _patch_c2c_check():
             await bot._send_fallback_reply_with_sticker(msg, long_text, result)
 
-        # 验证：第 1 段成功 + 合并 parts[1:] = 2 条 reply
-        # 第 1 条 = parts[0]，第 2 条 = parts[1:] 拼接
-        assert len(msg.replies) == 2, f"应有 2 条 reply，实际 {len(msg.replies)}"
         assert msg.replies[0] == parts[0], "第 1 条应是 parts[0]"
-        assert msg.replies[1] == "".join(parts[1:]), "第 2 条应是 parts[1:] 拼接"
+        assert all(len(reply.encode("utf-8")) <= 7800 for reply in msg.replies)
+        assert "".join(msg.replies[1:]) == "".join(parts[1:]), "剩余内容应完整"
 
 
 # ──────────────────────────────────────────────────────────────
@@ -250,6 +246,19 @@ async def test_normal_send_path_not_affected():
             assert msg.replies[i] == expected, f"第 {i} 段内容不匹配"
 
 
+@pytest.mark.asyncio
+async def test_failed_merge_is_resplit_to_7800_bytes():
+    bot = _make_bot()
+    long_text = "中文内容" * 5000
+    result = FakeResult(reply=long_text, sticker_path=None)
+    msg = FakeC2CMessage(fail_on_call=1)
+    bot._send_reply_with_media = AsyncMock()
+    with _patch_c2c_check():
+        await bot._send_fallback_reply_with_sticker(msg, long_text, result)
+    assert msg.replies
+    assert all(len(part.encode("utf-8")) <= 7800 for part in msg.replies)
+
+
 # ──────────────────────────────────────────────────────────────
 # 测试 5：短回复（1 段）走单条发送路径
 # ──────────────────────────────────────────────────────────────
@@ -302,9 +311,8 @@ async def test_merge_success_sends_sticker_separately_no_empty_message():
             await bot._send_fallback_reply_with_sticker(msg, long_text, result)
 
         # 验证：合并发送成功后
-        # 1. msg.replies 应该只有 1 条（合并的全部内容 parts[0:]）
-        assert len(msg.replies) == 1, f"应只发 1 条 reply（合并的全部内容），实际 {len(msg.replies)}"
-        assert msg.replies[0] == "".join(parts), "合并内容应等于 parts[:] 全部拼接"
+        assert all(len(reply.encode("utf-8")) <= 7800 for reply in msg.replies)
+        assert "".join(msg.replies) == "".join(parts), "合并内容应等于 parts[:] 全部拼接"
         # 2. sticker 应通过 _send_reply_with_media 单独发送一次，content 为空字符串
         assert len(send_media_calls) == 1, f"sticker 应单独发送 1 次，实际 {len(send_media_calls)}"
         assert send_media_calls[0] == "", "合并成功后 final_text 应为空字符串"

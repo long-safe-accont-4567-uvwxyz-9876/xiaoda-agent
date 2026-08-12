@@ -10,9 +10,11 @@
 """
 import asyncio
 import os
+import subprocess
 import sys
+from types import SimpleNamespace
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
@@ -31,6 +33,7 @@ class FakeMessage:
 
     def __init__(self) -> None:
         self.replies: list[dict] = []
+        self.author = SimpleNamespace(user_openid="user")
 
     async def reply(self, content: str = "", msg_seq: int = 0) -> None:
         self.replies.append({"content": content, "msg_seq": msg_seq})
@@ -43,6 +46,7 @@ class FlakyMessage:
         self.replies: list[dict] = []
         self.call_count = 0
         self.fail_on_call = fail_on_call
+        self.author = SimpleNamespace(user_openid="user")
 
     async def reply(self, content: str = "", msg_seq: int = 0) -> None:
         self.call_count += 1
@@ -77,6 +81,7 @@ def _make_bot():
     from qq_bot_adapter import AIQQBot
     bot = AIQQBot.__new__(AIQQBot)
     bot.agent = FakeAgent()
+    bot.api = SimpleNamespace(post_c2c_message=AsyncMock(return_value=SimpleNamespace()))
     return bot
 
 
@@ -114,11 +119,11 @@ def test_long_reply_split():
     with patch("qq_bot_adapter.asyncio.sleep", _no_sleep):
         asyncio.run(bot._send_streaming_reply(msg, long_text))
 
-    # 应有打字指示 + 至少 2 个分片
-    assert len(msg.replies) >= 3
+    assert len(msg.replies) == 2
     assert msg.replies[0]["content"] == f"{_XD_NAME}正在打字..."
-    # 验证分片内容能拼回原文（去掉打字指示）
-    actual = "".join(r["content"] for r in msg.replies[1:])
+    actual = msg.replies[1]["content"] + "".join(
+        call.kwargs["content"] for call in bot.api.post_c2c_message.await_args_list
+    )
     assert actual == long_text
 
 
@@ -197,8 +202,8 @@ def test_stream_disabled_when_env_false():
 def test_exception_recovery():
     """分片发送失败时，应合并剩余内容为最终片发送，并记录日志。"""
     bot = _make_bot()
-    # 第 3 次调用失败（即第 2 个分片失败：1=typing, 2=seg0 ok, 3=seg1 fail）
-    msg = FlakyMessage(fail_on_call=3)
+    msg = FlakyMessage(fail_on_call=-1)
+    bot.api.post_c2c_message = AsyncMock(side_effect=[TimeoutError("模拟网络超时"), SimpleNamespace()])
     long_text = "小妲来啦～" + ("今天天气真好呀，我们一起出去玩吧～" * 40)
 
     async def _no_sleep(_):
@@ -207,18 +212,12 @@ def test_exception_recovery():
     with patch("qq_bot_adapter.asyncio.sleep", _no_sleep):
         asyncio.run(bot._send_streaming_reply(msg, long_text))
 
-    # 调用顺序：1=typing(ok), 2=seg0(ok), 3=seg1(fail), 4=recovery(ok)
-    assert msg.call_count == 4
-    # 成功记录应有 3 条：typing + seg0 + 合并剩余
-    assert len(msg.replies) == 3
-    # 第 1 条是打字指示
+    assert msg.call_count == 2
+    assert len(msg.replies) == 2
     assert msg.replies[0]["content"] == f"{_XD_NAME}正在打字..."
-    # 最后一条是合并剩余内容（应包含 long_text 的部分内容）
-    final_content = msg.replies[-1]["content"]
-    assert "今天天气真好呀" in final_content
-    # 拼接所有成功内容应能还原原文（去掉打字指示）
-    actual = "".join(r["content"] for r in msg.replies[1:])
-    assert actual == long_text
+    assert bot.api.post_c2c_message.await_count == 2
+    recovered = bot.api.post_c2c_message.await_args_list[-1].kwargs["content"]
+    assert recovered == long_text[600:]
 
 
 # ──────────────────────────────────────────────────────────────
@@ -257,3 +256,188 @@ def test_stream_enabled_by_default():
 
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])
+
+
+@pytest.mark.asyncio
+async def test_sticker_timeout_skips_uncertain_current_segment():
+    bot = _make_bot()
+    result = FakeResult("A" * 300 + "B" * 300 + "C" * 300)
+    result.sticker_path = Path("/tmp/sticker.png")
+    sent = []
+
+    class Message:
+        group_openid = "group"
+        calls = 0
+
+        async def reply(self, content="", msg_seq=0):
+            self.calls += 1
+            if self.calls == 1:
+                raise TimeoutError("unknown delivery")
+            sent.append(content)
+
+    async def send_media(message, reply, image_path=None, image_url=None):
+        sent.append(reply)
+
+    bot._send_reply_with_media = send_media
+    with patch("qq_bot_adapter.C2CMessage", Message), patch("qq_bot_adapter.asyncio.sleep", AsyncMock()):
+        await bot._send_streaming_reply_with_sticker(Message(), result.reply, result)
+
+    assert sent
+    assert not sent[0].startswith("A")
+    assert "B" in sent[0]
+
+
+def test_split_text_by_bytes_never_exceeds_limit_with_code_fences():
+    bot = _make_bot()
+    text = "```python\n" + ("打印内容😀\n" * 2000) + "```"
+    segments = bot._split_text_by_bytes(text, 7800)
+    assert segments
+    assert all(len(segment.encode("utf-8")) <= 7800 for segment in segments)
+
+
+@pytest.mark.asyncio
+async def test_c2c_stream_uses_passive_first_segment_then_proactive():
+    bot = _make_bot()
+    bot.api = SimpleNamespace(post_c2c_message=AsyncMock())
+
+    class Message:
+        id = "msg"
+        author = SimpleNamespace(user_openid="user")
+
+        def __init__(self):
+            self.replies = []
+
+        async def reply(self, content="", msg_seq=0):
+            self.replies.append(content)
+
+    message = Message()
+    with patch("qq_bot_adapter.C2CMessage", Message), patch("qq_bot_adapter.asyncio.sleep", AsyncMock()):
+        await bot._send_streaming_reply(message, "甲" * 900)
+
+    assert message.replies[-1] == "甲" * 300
+    assert bot.api.post_c2c_message.await_count == 2
+    assert all(call.kwargs.get("msg_id") is None for call in bot.api.post_c2c_message.await_args_list)
+
+
+@pytest.mark.asyncio
+async def test_upload_none_response_is_retried_then_fails(tmp_path):
+    bot = _make_bot()
+    path = tmp_path / "a.png"
+    path.write_bytes(b"png")
+    bot.api = SimpleNamespace(_http=SimpleNamespace(request=AsyncMock(return_value=None)))
+    with patch("qq_bot_adapter.asyncio.sleep", AsyncMock()):
+        with pytest.raises(RuntimeError, match="已重试3次"):
+            await bot._upload_c2c_base64("user", path)
+    assert bot.api._http.request.await_count == 3
+
+
+@pytest.mark.asyncio
+async def test_post_media_none_falls_back_to_text():
+    bot = _make_bot()
+
+    class Message:
+        id = "msg"
+        author = SimpleNamespace(user_openid="user")
+
+        def __init__(self):
+            self.replies = []
+
+        async def reply(self, content="", msg_seq=0):
+            self.replies.append(content)
+
+    message = Message()
+    bot.api = SimpleNamespace(post_c2c_file=AsyncMock(return_value=None), post_c2c_message=AsyncMock())
+    with patch("qq_bot_adapter.C2CMessage", Message):
+        await bot._send_reply_with_media(message, "fallback", image_url="https://example.test/a.png")
+    assert message.replies == ["fallback"]
+    bot.api.post_c2c_message.assert_not_awaited()
+
+
+def test_rgba_large_image_resize_uses_rgb(tmp_path):
+    from PIL import Image
+
+    source = tmp_path / "rgba.png"
+    Image.new("RGBA", (120, 120), (255, 0, 0, 128)).save(source)
+    output = None
+    try:
+        output = _make_bot()._compress_image(source, max_size=100, quality=30)
+        with Image.open(output) as compressed:
+            assert compressed.mode == "RGB"
+    finally:
+        if output and output.exists():
+            output.unlink()
+
+
+@pytest.mark.asyncio
+async def test_silk_timeout_cleans_pcm_and_silk(tmp_path, monkeypatch):
+    audio = tmp_path / "voice.wav"
+    audio.write_bytes(b"wav")
+    pcm = audio.with_suffix(".pcm")
+    silk = audio.with_suffix(".silk")
+    pcm.write_bytes(b"pcm")
+    silk.write_bytes(b"silk")
+    monkeypatch.setitem(sys.modules, "pilk", SimpleNamespace(encode=lambda *args, **kwargs: None))
+    with patch("subprocess.run", side_effect=subprocess.TimeoutExpired("ffmpeg", 30)):
+        result = await _make_bot()._convert_to_silk(audio)
+    assert result is None
+    assert not pcm.exists()
+    assert not silk.exists()
+
+
+@pytest.mark.asyncio
+async def test_run_qq_bot_reconnects_after_generic_exception(monkeypatch):
+    import qq_bot_adapter
+
+    starts = 0
+
+    class Client:
+        def __init__(self, **kwargs):
+            pass
+
+        async def start(self, **kwargs):
+            nonlocal starts
+            starts += 1
+            if starts == 1:
+                raise LookupError("sdk failure")
+            raise asyncio.CancelledError
+
+        async def close(self):
+            pass
+
+    monkeypatch.setenv("QQBOT_APP_ID", "id")
+    monkeypatch.setenv("QQBOT_APP_SECRET", "secret")
+    with patch.object(qq_bot_adapter, "AIQQBot", Client), patch("qq_bot_adapter.asyncio.sleep", AsyncMock()):
+        with pytest.raises(asyncio.CancelledError):
+            await qq_bot_adapter.run_qq_bot(MagicMock())
+    assert starts == 2
+
+
+def test_lock_cleanup_removes_idle_entries():
+    bot = _make_bot()
+    bot._c2c_locks = {"u": asyncio.Lock()}
+    bot._group_locks = {"g": asyncio.Lock()}
+    bot._cleanup_message_lock(bot._c2c_locks, "u")
+    bot._cleanup_message_lock(bot._group_locks, "g")
+    assert bot._c2c_locks == {}
+    assert bot._group_locks == {}
+
+
+@pytest.mark.asyncio
+async def test_group_media_budget_limits_multiple_images():
+    bot = _make_bot()
+    result = FakeResult("text")
+    result.image_paths = [Path(f"/{i}.png") for i in range(10)]
+
+    class Group:
+        group_openid = "group"
+
+    sent = []
+
+    async def send_media(message, reply, image_path=None, image_url=None):
+        sent.append(image_path)
+
+    bot._send_reply_with_media = send_media
+    with patch("qq_bot_adapter.GroupMessage", Group):
+        tasks = bot._gather_media_send_tasks(Group(), result)
+        await asyncio.gather(*tasks)
+    assert len(sent) == 3

@@ -448,12 +448,13 @@ async def test_invocation_timeout_logs_structured_details_without_content():
 
     assert result.status == "timeout"
     record = next(record for record in records if record["message"] == "dispatcher.invocation_timeout")
-    assert record["extra"] == {
+    expected_extra = {
         "target": "xiaoke",
         "request_id": "request-timeout-1",
         "timeout_seconds": 0.01,
         "memory_scope": "isolated",
     }
+    assert {key: record["extra"].get(key) for key in expected_extra} == expected_extra
     rendered = str(record)
     assert "绝不能进入日志的任务" not in rendered
     assert "绝不能进入日志的背景" not in rendered

@@ -1,5 +1,7 @@
-from typing import Any
+import asyncio
 import time
+from typing import Any
+
 import aiosqlite
 from loguru import logger
 
@@ -1329,6 +1331,47 @@ class MemoryDB:
         if auto_commit:
             await self._conn.commit()
         return child_id
+
+    async def insert_child_chunks(
+        self,
+        parent_id: int,
+        children: list[dict],
+        auto_commit: bool = True,
+    ) -> list[int]:
+        import time as _time
+
+        child_ids = []
+        try:
+            if auto_commit:
+                await self._conn.execute("BEGIN")
+            for child in children:
+                cursor = await self._conn.execute(
+                    """INSERT INTO memory_child_chunks
+                       (parent_id, content, embed_content, chunk_type, importance, overlap_hash, created_at)
+                       VALUES (?, ?, ?, ?, ?, ?, ?)""",
+                    (
+                        parent_id,
+                        child["content"],
+                        child.get("embed_content", ""),
+                        child.get("chunk_type", "segment"),
+                        child.get("importance", 0.5),
+                        child.get("overlap_hash", ""),
+                        _time.time(),
+                    ),
+                )
+                child_id = cursor.lastrowid
+                child_ids.append(child_id)
+                await self._conn.execute(
+                    "INSERT INTO memory_child_chunks_fts (rowid, content) VALUES (?, ?)",
+                    (child_id, child["content"]),
+                )
+            if auto_commit:
+                await self._conn.commit()
+            return child_ids
+        except BaseException:
+            if auto_commit:
+                await asyncio.shield(self._conn.rollback())
+            raise
 
     async def search_child_fts(self, query: str, limit: int = 20) -> list[dict]:
         """子chunk FTS5全文检索，返回包含 parent_id 的记录列表。

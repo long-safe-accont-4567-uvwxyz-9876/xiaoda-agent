@@ -14,6 +14,8 @@
 import asyncio
 import sys
 from pathlib import Path
+from types import SimpleNamespace
+from unittest.mock import AsyncMock
 
 import pytest
 
@@ -25,6 +27,8 @@ if str(PROJECT_ROOT) not in sys.path:
 from security.human_approval import (
     ApprovalRequest, ApprovalStatus, RiskLevel, IMApprovalChannel,
 )
+
+from qq_bot_adapter import AIQQBot
 
 
 def _make_req(user_id: str = "u1", operation: str = "delete_file",
@@ -251,10 +255,52 @@ async def test_send_callback_invoked():
     assert len(sent) == 1
     assert "restart_service" in sent[0]
     assert "高危操作" in sent[0]
-    # 超时提示
-    assert "0" in sent[0]  # timeout 秒数
+    assert "0" in sent[0]
 
-    await task  # 等待超时清理
+    await task
+
+
+@pytest.mark.asyncio
+async def test_approval_message_context_isolated_between_concurrent_requests():
+    bot = AIQQBot.__new__(AIQQBot)
+    bot.hitl_enabled = True
+    bot._approval_message_ctx = bot._new_approval_context()
+    waiting = {}
+
+    class Approval:
+        async def request_approval(self, req, is_owner=False):
+            waiting[req.user_id] = asyncio.Event()
+            await bot._send_approval_message(req.user_id)
+            await waiting[req.user_id].wait()
+            return ApprovalStatus.APPROVED
+
+    bot.im_approval = Approval()
+    first = SimpleNamespace(reply=AsyncMock())
+    second = SimpleNamespace(reply=AsyncMock())
+    result1 = SimpleNamespace(reply="__HIGH_RISK_OP__: delete_file one")
+    result2 = SimpleNamespace(reply="__HIGH_RISK_OP__: delete_file two")
+    task1 = asyncio.create_task(bot._check_high_risk_approval(result1, first, "u1", False))
+    task2 = asyncio.create_task(bot._check_high_risk_approval(result2, second, "u2", False))
+    while len(waiting) < 2:
+        await asyncio.sleep(0)
+    waiting["u1"].set()
+    waiting["u2"].set()
+    await asyncio.gather(task1, task2)
+    assert first.reply.await_args.args == ()
+    assert first.reply.await_args.kwargs["content"] == "u1"
+    assert second.reply.await_args.kwargs["content"] == "u2"
+
+
+@pytest.mark.asyncio
+async def test_marker_only_approval_returns_default_feedback():
+    bot = AIQQBot.__new__(AIQQBot)
+    bot.hitl_enabled = True
+    bot._approval_message_ctx = bot._new_approval_context()
+    bot.im_approval = SimpleNamespace(request_approval=AsyncMock(return_value=ApprovalStatus.APPROVED))
+    result = SimpleNamespace(reply="__HIGH_RISK_OP__: delete_file")
+    message = SimpleNamespace(reply=AsyncMock())
+    approved = await bot._check_high_risk_approval(result, message, "u", False)
+    assert approved.reply == "✅ 高危操作已确认"
 
 
 # ── pending 清理 ───────────────────────────────────────────────

@@ -3,7 +3,9 @@ import os
 import sys
 import asyncio
 import base64
+import contextvars
 import sqlite3
+import subprocess
 import threading
 import time
 import random
@@ -184,9 +186,8 @@ async def _patched_pool_init(self, token: Any, session_interval: Any) -> Any:
                 return coroutine
             await coroutine
             recon_attempts = 0
-        except KeyboardInterrupt:
-            _botpy_log.info("[botpy] 服务强行停止!")
-            return None
+            if not self._closed:
+                await asyncio.sleep(0.1)
         except (TimeoutError, OSError, RuntimeError, ConnectionError) as e:
             recon_attempts += 1
             delay = min(5 * (2 ** min(recon_attempts - 1, 4)), max_recon_delay)
@@ -218,6 +219,7 @@ _qq_cfg = AGENT_CONFIG.get("qq_bot", {})
 MAX_REPLY_LEN = _qq_cfg.get("max_reply_length", 8000)
 QQ_C2C_MAX_SEGMENTS = 4
 QQ_GROUP_MAX_SEGMENTS = 4
+QQ_GROUP_MEDIA_BUDGET = 3
 
 # HITL: Agent 输出中嵌入的高危操作标记，QQ 适配器拦截后触发两段式确认
 _HIGH_RISK_OP_MARKER = "__HIGH_RISK_OP__:"
@@ -323,7 +325,7 @@ async def run_qq_bot(agent: "AgentCore", *, sandbox: bool = False) -> None:
             except (OSError, RuntimeError) as e:
                 logger.warning(f"qq_bot.close_on_cancel_failed: {e}")
             raise
-        except (TimeoutError, OSError, RuntimeError, ConnectionError) as e:
+        except Exception as e:
             logger.error("qq_bot.crashed_retrying error={} delay={}", str(e)[:200], delay)
             await asyncio.sleep(delay)
             delay = min(delay * 2, 120)
@@ -365,7 +367,7 @@ class AIQQBot(botpy.Client):
             send_callback=self._send_approval_message,
             timeout=_safe_float(os.getenv("QQ_HITL_TIMEOUT", "60"), 60),
         )
-        self._approval_message_ctx: Any = None  # 当前审批消息上下文（per-request 设置）
+        self._approval_message_ctx = self._new_approval_context()
         global _ACTIVE_BOT
         _ACTIVE_BOT = self
 
@@ -380,6 +382,16 @@ class AIQQBot(botpy.Client):
             return True
         self._processed_msg_ids[msg_id] = now
         return False
+
+    @staticmethod
+    def _new_approval_context() -> contextvars.ContextVar[Any]:
+        return contextvars.ContextVar("qq_approval_message", default=None)
+
+    @staticmethod
+    def _cleanup_message_lock(locks: dict[str, asyncio.Lock], key: str) -> None:
+        lock = locks.get(key)
+        if lock is not None and not lock.locked():
+            locks.pop(key, None)
 
     def _prune_c2c_session_cache(self) -> None:
         """P1-1: 清理 C2C session 缓存中的过期与超限条目。
@@ -498,7 +510,7 @@ class AIQQBot(botpy.Client):
 
     async def _send_approval_message(self, text: str) -> None:
         """通过当前消息上下文发送审批确认请求消息（供 IMApprovalChannel 回调）。"""
-        msg = self._approval_message_ctx
+        msg = self._approval_message_ctx.get()
         if msg is None:
             logger.warning("qq_bot.approval_no_message_context text=%s", text[:80])
             return
@@ -535,14 +547,14 @@ class AIQQBot(botpy.Client):
             risk_level=risk_level,
             reason=f"High-risk operation: {operation}",
         )
-        self._approval_message_ctx = message
+        token = self._approval_message_ctx.set(message)
         try:
             status = await self.im_approval.request_approval(req, is_owner=is_owner)
         finally:
-            self._approval_message_ctx = None
+            self._approval_message_ctx.reset(token)
         if status in (ApprovalStatus.APPROVED, ApprovalStatus.AUTO_APPROVED):
             # 确认通过：去除标记后继续发送
-            result.reply = _HIGH_RISK_OP_RE.sub("", reply).strip()
+            result.reply = _HIGH_RISK_OP_RE.sub("", reply).strip() or "✅ 高危操作已确认"
         else:
             # 取消或超时
             result.reply = "⚠️ 高危操作已取消"
@@ -619,8 +631,6 @@ class AIQQBot(botpy.Client):
         if self.nudge_engine:
             self.nudge_engine.poke()
 
-        session_id = await self._get_or_create_c2c_session(user_openid)
-
         msg_id = getattr(message, 'id', '') or getattr(message, 'message_id', '')
         if msg_id and self._is_duplicate_msg(msg_id):
             return
@@ -633,8 +643,12 @@ class AIQQBot(botpy.Client):
             self._c2c_locks[user_openid] = asyncio.Lock()
 
         async def _c2c_reply_with_lock() -> None:
-            async with self._c2c_locks[user_openid]:
-                await self._process_c2c_reply(message, user_input, user_id, user_openid, session_id, is_master, image_data)
+            try:
+                async with self._c2c_locks[user_openid]:
+                    session_id = await self._get_or_create_c2c_session(user_openid)
+                    await self._process_c2c_reply(message, user_input, user_id, user_openid, session_id, is_master, image_data)
+            finally:
+                self._cleanup_message_lock(self._c2c_locks, user_openid)
 
         # 同类副作用修复：裸 create_task 无强引用会被 GC 回收导致回复丢失，
         # 改 _spawn（跟踪引用 + 完成回收），保证用户一定收到回复。
@@ -790,7 +804,14 @@ class AIQQBot(botpy.Client):
 
             # 绑定 QQUser 到 EventBus
             async def _qq_reply(content: str, msg_seq: int = 0) -> None:
-                await message.reply(content=content, msg_seq=msg_seq)
+                response = await self.api.post_c2c_message(
+                    openid=user_openid,
+                    content=content,
+                    msg_type=0,
+                    msg_seq=msg_seq,
+                )
+                if response is None:
+                    raise RuntimeError("C2C状态消息接口返回None")
             qq_user = QQUser(reply_fn=_qq_reply, msg_seq_fn=_next_msg_seq)
             token = event_bus.bind_user(qq_user)
             try:
@@ -831,8 +852,10 @@ class AIQQBot(botpy.Client):
                 logger.error(f"qq_bot.c2c_fallback_reply_failed: {e}")
 
     async def on_group_at_message_create(self, message: GroupMessage) -> None:
-        # 并发处理消息（per-group 锁保证同群同用户串行，不同用户并发，避免堵塞）
-        _group_lock_key = getattr(message.author, 'member_openid', '') if hasattr(message, 'author') else ''
+        msg_id = getattr(message, 'id', '') or getattr(message, 'message_id', '')
+        if msg_id and self._is_duplicate_msg(msg_id):
+            return
+        _group_lock_key = getattr(message, 'group_openid', '')
         if not _group_lock_key:
             _group_lock_key = "qq_unknown"
         if _group_lock_key not in self._group_locks:
@@ -844,8 +867,8 @@ class AIQQBot(botpy.Client):
             # 在闭包入口预置默认值，保证异常分支可安全引用（对齐 c2c 的参数绑定）。
             user_id = "qq_unknown"
             user_input = ""
-            async with self._group_locks[_group_lock_key]:
-                try:
+            try:
+                async with self._group_locks[_group_lock_key]:
                     content = (getattr(message, 'content', None) or "").strip()
                     content = strip_qq_face_tags(content)  # 剥离 QQ 表情标签，防止污染 LLM 上下文被模仿
 
@@ -872,10 +895,6 @@ class AIQQBot(botpy.Client):
 
                     if self.nudge_engine:
                         self.nudge_engine.poke()
-
-                    msg_id = getattr(message, 'id', '') or getattr(message, 'message_id', '')
-                    if msg_id and self._is_duplicate_msg(msg_id):
-                        return
 
                     # /whoami 指令：回复发送者的 openid（用于主人在 Setup 中填写）
                     if content.strip() in ("/whoami", "/whoami "):
@@ -927,21 +946,22 @@ class AIQQBot(botpy.Client):
                         result, message, member_openid or user_id, is_master)
                     if result.reply:
                         await self._send_reply_with_sticker(message, result)
-                except TimeoutError:
-                    logger.warning("qq_bot.group_timeout user=%s", user_id)
-                    # 记录失败状态，供下次消息恢复上下文
-                    if hasattr(self.agent, 'context') and self.agent.context:
-                        self.agent.context.record_failure("处理超时", user_input)
-                    try:
-                        await message.reply(content=f"{get_agent_display_name('xiaoda')}想得太入神了……能再说一次吗？🌱", msg_seq=_next_msg_seq())
-                    except (OSError, RuntimeError, ConnectionError) as _e:
-                        logger.debug("qq_bot.group_timeout_reply_failed", error=str(_e))
-                except (TimeoutError, RuntimeError, OSError, ValueError) as e:
-                    logger.error(f"qq_bot.group_error: {e}", exc_info=True)
-                    try:
-                        await message.reply(content="嗯……出了点小问题，等会儿再聊好不好？", msg_seq=_next_msg_seq())
-                    except (OSError, RuntimeError, ConnectionError) as e2:
-                        logger.error(f"qq_bot.group_fallback_reply_failed: {e2}")
+            except TimeoutError:
+                logger.warning("qq_bot.group_timeout user=%s", user_id)
+                if hasattr(self.agent, 'context') and self.agent.context:
+                    self.agent.context.record_failure("处理超时", user_input)
+                try:
+                    await message.reply(content=f"{get_agent_display_name('xiaoda')}想得太入神了……能再说一次吗？🌱", msg_seq=_next_msg_seq())
+                except (OSError, RuntimeError, ConnectionError) as _e:
+                    logger.debug("qq_bot.group_timeout_reply_failed", error=str(_e))
+            except (RuntimeError, OSError, ValueError) as e:
+                logger.error(f"qq_bot.group_error: {e}", exc_info=True)
+                try:
+                    await message.reply(content="嗯……出了点小问题，等会儿再聊好不好？", msg_seq=_next_msg_seq())
+                except (OSError, RuntimeError, ConnectionError) as e2:
+                    logger.error(f"qq_bot.group_fallback_reply_failed: {e2}")
+            finally:
+                self._cleanup_message_lock(self._group_locks, _group_lock_key)
 
 
         # 同类副作用修复：裸 create_task 无强引用会被 GC 回收导致回复丢失。
@@ -963,12 +983,16 @@ class AIQQBot(botpy.Client):
                     media = await self.api.post_c2c_file(
                         openid=openid, file_type=1, url=image_url
                     )
-                    file_info = media.file_info
-                await self.api.post_c2c_message(
+                    file_info = getattr(media, "file_info", "")
+                if not file_info:
+                    raise RuntimeError("C2C媒体接口返回空file_info")
+                response = await self.api.post_c2c_message(
                     openid=openid, msg_id=message.id,
                     msg_type=7, content=reply,
                     media={"file_info": file_info}, msg_seq=_next_msg_seq()
                 )
+                if response is None:
+                    raise RuntimeError("C2C消息接口返回None")
             elif isinstance(message, GroupMessage):
                 group_openid = message.group_openid
                 if image_path:
@@ -977,7 +1001,9 @@ class AIQQBot(botpy.Client):
                     media = await self.api.post_group_file(
                         group_openid=group_openid, file_type=1, url=image_url
                     )
-                    file_info = media.file_info
+                    file_info = getattr(media, "file_info", "")
+                if not file_info:
+                    raise RuntimeError("群媒体接口返回空file_info")
                 try:
                     # 被动回复（需要 msg_id）；无主动消息权限，超限直接失败
                     await self.api.post_group_message(
@@ -1065,7 +1091,7 @@ class AIQQBot(botpy.Client):
             for attempt in range(3):
                 try:
                     result = await self.api._http.request(route, json=payload)
-                    file_info = result.get("file_info", "") if isinstance(result, dict) else result.file_info
+                    file_info = result.get("file_info", "") if isinstance(result, dict) else getattr(result, "file_info", "")
                     if not file_info:
                         raise RuntimeError(f"{desc}返回空file_info (target={target})")
                     return file_info
@@ -1096,48 +1122,43 @@ class AIQQBot(botpy.Client):
 
         tmp_path: Path | None = None
 
-        with Image.open(image_path) as img:
-            save_img = img.convert("RGB") if img.mode in ("RGBA", "P") else img
+        try:
+            with Image.open(image_path) as img:
+                save_img = img.convert("RGB") if img.mode in ("RGBA", "P") else img.copy()
 
-            # 逐步降低质量直到满足大小要求
-            for q in range(quality, 20, -10):
-                prev_tmp = tmp_path
-                with tempfile.NamedTemporaryFile(delete=False, suffix=".jpg") as f:
-                    tmp_path = Path(f.name)
-                save_img.save(tmp_path, "JPEG", quality=q)
-                # 清理上一次的临时文件
-                if prev_tmp is not None:
-                    try:
-                        prev_tmp.unlink()
-                    except (OSError, RuntimeError) as e:
-                        logger.warning(f"qq_bot.compress_temp_cleanup_failed: {e}")
-                if tmp_path.stat().st_size <= max_size:
-                    logger.info("qq_bot.image_compressed", original=str(image_path),
-                                original_size=image_path.stat().st_size,
-                                compressed_size=tmp_path.stat().st_size, quality=q)
-                    return tmp_path
+                for q in range(quality, 20, -10):
+                    prev_tmp = tmp_path
+                    with tempfile.NamedTemporaryFile(delete=False, suffix=".jpg") as f:
+                        tmp_path = Path(f.name)
+                    save_img.save(tmp_path, "JPEG", quality=q)
+                    if prev_tmp is not None:
+                        prev_tmp.unlink(missing_ok=True)
+                    if tmp_path.stat().st_size <= max_size:
+                        logger.info("qq_bot.image_compressed", original=str(image_path),
+                                    original_size=image_path.stat().st_size,
+                                    compressed_size=tmp_path.stat().st_size, quality=q)
+                        return tmp_path
 
-            # 如果质量降到 20 还是太大，缩小尺寸
-            scale = 0.75
-            while scale >= 0.25:
-                new_w = int(img.width * scale)
-                new_h = int(img.height * scale)
-                resized = img.resize((new_w, new_h), Image.LANCZOS)
-                prev_tmp = tmp_path
-                with tempfile.NamedTemporaryFile(delete=False, suffix=".jpg") as f:
-                    tmp_path = Path(f.name)
-                resized.save(tmp_path, "JPEG", quality=60)
-                # 清理上一次的临时文件
-                if prev_tmp is not None:
-                    try:
-                        prev_tmp.unlink()
-                    except (OSError, RuntimeError) as e:
-                        logger.warning(f"qq_bot.resize_temp_cleanup_failed: {e}")
-                if tmp_path.stat().st_size <= max_size:
-                    logger.info("qq_bot.image_resized", original=f"{img.width}x{img.height}",
-                                resized=f"{new_w}x{new_h}", size=tmp_path.stat().st_size)
-                    return tmp_path
-                scale -= 0.1
+                scale = 0.75
+                while scale >= 0.25:
+                    new_w = int(save_img.width * scale)
+                    new_h = int(save_img.height * scale)
+                    resized = save_img.resize((new_w, new_h), Image.LANCZOS)
+                    prev_tmp = tmp_path
+                    with tempfile.NamedTemporaryFile(delete=False, suffix=".jpg") as f:
+                        tmp_path = Path(f.name)
+                    resized.save(tmp_path, "JPEG", quality=60)
+                    if prev_tmp is not None:
+                        prev_tmp.unlink(missing_ok=True)
+                    if tmp_path.stat().st_size <= max_size:
+                        logger.info("qq_bot.image_resized", original=f"{save_img.width}x{save_img.height}",
+                                    resized=f"{new_w}x{new_h}", size=tmp_path.stat().st_size)
+                        return tmp_path
+                    scale -= 0.1
+        except Exception:
+            if tmp_path is not None:
+                tmp_path.unlink(missing_ok=True)
+            raise
 
         # 最终兜底：返回最小版本
         return tmp_path
@@ -1185,12 +1206,14 @@ class AIQQBot(botpy.Client):
                 best_pos = target_chars
 
             chunk = remaining[:best_pos]
-            # 闭合未结束的代码块
+            while len((chunk.rstrip() + ('\n```' if chunk.count('```') % 2 else '')).encode('utf-8')) > byte_limit:
+                best_pos -= 1
+                chunk = remaining[:best_pos]
+            tail = remaining[best_pos:]
             if chunk.count('```') % 2 != 0:
                 chunk = chunk.rstrip() + '\n```'
-                remaining = '```\n' + remaining[best_pos:]
-            else:
-                remaining = remaining[best_pos:]
+                tail = '```\n' + tail
+            remaining = tail
             segments.append(chunk)
 
         return segments
@@ -1230,6 +1253,19 @@ class AIQQBot(botpy.Client):
                 end = min(pos + chunk_size, text_len)
             segments.append(text[pos:end])
             pos = end
+        return segments
+
+    def _split_group_text(self, text: str) -> list[str]:
+        from utils.text_utils import split_for_group_passive
+
+        segments = split_for_group_passive(text)
+        if "".join(segments).replace("\n```\n```\n", "\n") == text:
+            return segments
+        marker = "\n（内容已截断）"
+        last = segments[-1].rstrip()
+        while len((last + marker).encode("utf-8")) > 4000:
+            last = last[:-1]
+        segments[-1] = last + marker
         return segments
 
     def _adjust_boundary_for_code_block(self, text: str, start: int, end: int) -> int:
@@ -1316,14 +1352,14 @@ class AIQQBot(botpy.Client):
 
         # 群聊：按字节上限切片（最多 4 片，ACK+4片=5次配额）；C2C 按 300 字符切片
         if is_group:
-            from utils.text_utils import split_for_group_passive
-            segments = split_for_group_passive(full_text)
+            segments = self._split_group_text(full_text)
         else:
             segments = self._split_text_for_streaming(full_text, chunk_size=300)
 
         # P0-10: C2C 被动回复最多 4 次，超出部分合并到最后一片
         max_segs = QQ_GROUP_MAX_SEGMENTS if is_group else QQ_C2C_MAX_SEGMENTS
         if len(segments) > max_segs:
+            original_segment_count = len(segments)
             merged_tail = "".join(segments[max_segs - 1:])
             # P1-6 修复：合并后调用字节分割再逐片发送，避免单条消息超 QQ API 8000 字节上限。
             # C2C 按 300 字符切片，合并后可能远超 8000 字节（中文 3 字节/字符，
@@ -1333,22 +1369,32 @@ class AIQQBot(botpy.Client):
                 resplit = self._split_text_by_bytes(merged_tail, 7800)
                 segments = segments[:max_segs - 1] + resplit
                 logger.info("qq_bot.stream_capped_resplit original={} final={} max_segs={}",
-                            len(segments) + 1, len(segments), max_segs)
+                            original_segment_count, len(segments), max_segs)
             else:
                 segments = segments[:max_segs - 1] + [merged_tail]
                 logger.info("qq_bot.stream_capped original={} capped={}",
-                            len(segments) + 1 if len(segments) > max_segs else len(segments), max_segs)
+                            original_segment_count, max_segs)
 
         _group_no_proactive = ("被动回复", "超过限制", "无权限", "40034105")
 
-        async def _send_segment(text: str) -> bool:
+        async def _send_segment(text: str, *, passive: bool) -> bool:
             """发送单个分片。返回 True 表示真发送成功，False 表示配额耗尽被静默拒绝。
 
             群聊无主动消息权限，被动超限时不再抛异常而是返回 False，
             让外层循环能合并剩余内容为单条最终消息发送，避免后续段全部丢失。
             """
             try:
-                await message.reply(content=text, msg_seq=_next_msg_seq())
+                if is_group or passive:
+                    await message.reply(content=text, msg_seq=_next_msg_seq())
+                else:
+                    response = await self.api.post_c2c_message(
+                        openid=message.author.user_openid,
+                        content=text,
+                        msg_type=0,
+                        msg_seq=_next_msg_seq(),
+                    )
+                    if response is None:
+                        raise RuntimeError("C2C主动消息接口返回None")
                 return True
             except (TimeoutError, OSError, RuntimeError, ValueError) as e:
                 err_str = str(e)
@@ -1364,7 +1410,7 @@ class AIQQBot(botpy.Client):
             try:
                 single = segments[0] if segments else full_text
                 t0 = time.monotonic()
-                ok = await _send_segment(single)
+                ok = await _send_segment(single, passive=True)
                 elapsed = (time.monotonic() - t0) * 1000
                 if ok:
                     logger.info("qq_bot.stream_single",
@@ -1393,7 +1439,7 @@ class AIQQBot(botpy.Client):
                 if i > 0:
                     await asyncio.sleep(random.uniform(0.8, 1.2))
                 t0 = time.monotonic()
-                ok = await _send_segment(seg)
+                ok = await _send_segment(seg, passive=i == 0)
                 seg_ms = (time.monotonic() - t0) * 1000
                 if ok:
                     sent_count += 1
@@ -1410,7 +1456,7 @@ class AIQQBot(botpy.Client):
                     recovery_pieces = self._split_text_by_bytes(remaining, 7800)
                     for piece in recovery_pieces:
                         try:
-                            ok2 = await _send_segment(piece)
+                            ok2 = await _send_segment(piece, passive=False)
                             if ok2:
                                 sent_count += 1
                             else:
@@ -1445,7 +1491,7 @@ class AIQQBot(botpy.Client):
                 recovery_sent = 0
                 for piece in recovery_pieces:
                     try:
-                        await _send_segment(piece)
+                        await _send_segment(piece, passive=False)
                         recovery_sent += 1
                     except (TimeoutError, OSError, RuntimeError) as e2:
                         logger.error("qq_bot.stream_final_failed", error=str(e2))
@@ -1496,14 +1542,14 @@ class AIQQBot(botpy.Client):
         is_group = isinstance(message, GroupMessage)
         # 群聊：按字节上限切片（最多 4 片，ACK+4片=5次配额）；C2C：按 300 字符切片
         if is_group:
-            from utils.text_utils import split_for_group_passive
-            segments = split_for_group_passive(clean_reply)
+            segments = self._split_group_text(clean_reply)
         else:
             segments = self._split_text_for_streaming(clean_reply, chunk_size=300)
 
         # P0-10: C2C 被动回复最多 4 次，超出部分合并到最后一片
         max_segs = QQ_GROUP_MAX_SEGMENTS if is_group else QQ_C2C_MAX_SEGMENTS
         if len(segments) > max_segs:
+            original_segment_count = len(segments)
             merged_tail = "".join(segments[max_segs - 1:])
             # Q3 修复：合并后按字节上限重切分，避免单条超 QQ API 8000 字节上限被拒绝
             #（与 _send_streaming_reply 对齐；群聊 split_for_group_passive 每段 ≤4000
@@ -1512,11 +1558,11 @@ class AIQQBot(botpy.Client):
                 resplit = self._split_text_by_bytes(merged_tail, 7800)
                 segments = segments[:max_segs - 1] + resplit
                 logger.info("qq_bot.stream_sticker_capped_resplit original={} final={} max_segs={}",
-                            len(segments) + 1, len(segments), max_segs)
+                            original_segment_count, len(segments), max_segs)
             else:
                 segments = segments[:max_segs - 1] + [merged_tail]
                 logger.info("qq_bot.stream_sticker_capped original={} capped={}",
-                            len(segments) + 1 if len(segments) > max_segs else len(segments), max_segs)
+                            original_segment_count, max_segs)
 
         if len(segments) <= 1:
             # 短回复：文字+表情包合并为一条消息发送
@@ -1586,16 +1632,22 @@ class AIQQBot(botpy.Client):
             except (TimeoutError, OSError, RuntimeError) as e:
                 logger.warning("qq_bot.stream_sticker_segment_failed", error=str(e))
                 # 异常恢复：合并剩余内容（含最后一片）与 sticker 一起发送
-                remaining = "".join(segments[i:])
+                remaining = "".join(segments[i+1:] if isinstance(e, TimeoutError) else segments[i:])
+                if not remaining:
+                    return
                 try:
+                    pieces = self._split_text_by_bytes(remaining, 7800)
+                    for piece in pieces[:-1]:
+                        await _send_segment(piece)
                     await self._send_reply_with_media(
-                        message, remaining, image_path=result.sticker_path)
+                        message, pieces[-1], image_path=result.sticker_path)
                     logger.info("qq_bot.stream_sticker_recovery_done_with_merge")
                 except (OSError, RuntimeError, ConnectionError) as e2:
                     logger.error("qq_bot.stream_sticker_recovery_failed", error=str(e2))
                     # 兜底：放弃 sticker，仅发送合并文本
                     try:
-                        await _send_segment(remaining)
+                        for piece in self._split_text_by_bytes(remaining, 7800):
+                            await _send_segment(piece)
                     except (TimeoutError, OSError, RuntimeError) as e3:
                         logger.error("qq_bot.stream_sticker_recovery_final_failed",
                                      error=str(e3))
@@ -1707,7 +1759,8 @@ class AIQQBot(botpy.Client):
                         else:
                             remaining = "".join(parts[i:])
                         try:
-                            await message.reply(content=remaining, msg_seq=_next_msg_seq())
+                            for piece in self._split_text_by_bytes(remaining, 7800):
+                                await message.reply(content=piece, msg_seq=_next_msg_seq())
                             logger.info("qq_bot.long_reply_merge_recovered",
                                         merged_from=len(parts) - i)
                             merge_done = True
@@ -1780,7 +1833,8 @@ class AIQQBot(botpy.Client):
         # 图片发送
         if result.image_paths:
             async def _send_images() -> None:
-                for img_path in result.image_paths:
+                image_paths = result.image_paths[:QQ_GROUP_MEDIA_BUDGET] if isinstance(message, GroupMessage) else result.image_paths
+                for img_path in image_paths:
                     try:
                         await self._send_reply_with_media(message, "", image_path=img_path)
                     except (OSError, RuntimeError, ConnectionError) as e:
@@ -1889,9 +1943,10 @@ class AIQQBot(botpy.Client):
 
     async def _convert_to_silk(self, audio_path: Path) -> Path | None:
         pcm_path = None
+        silk_path = None
+        converted = False
         try:
             import pilk
-            import subprocess
 
             pcm_path = audio_path.with_suffix('.pcm')
             silk_path = audio_path.with_suffix('.silk')
@@ -1909,28 +1964,23 @@ class AIQQBot(botpy.Client):
 
             ok = await asyncio.to_thread(_do_convert)
 
-            # 无论成功失败，都清理 pcm 中间文件
-            try:
-                pcm_path.unlink(missing_ok=True)
-            except (OSError, RuntimeError) as e:
-                logger.warning(f"qq_bot.pcm_cleanup_failed: {e}")
-
             if ok and silk_path.exists() and silk_path.stat().st_size > 0:
+                converted = True
                 logger.info("qq_bot.silk_convert_ok", input=str(audio_path), output=str(silk_path),
                             size_kb=silk_path.stat().st_size // 1024)
                 return silk_path
-            # 转换失败时清理可能残留的 silk 文件
-            try:
-                silk_path.unlink(missing_ok=True)
-            except (OSError, RuntimeError) as e:
-                logger.warning(f"qq_bot.silk_cleanup_failed: {e}")
             return None
         except ImportError:
             logger.warning("qq_bot.pilk_not_installed")
             return None
-        except (OSError, RuntimeError, ValueError) as e:
+        except (OSError, RuntimeError, ValueError, subprocess.TimeoutExpired) as e:
             logger.warning("qq_bot.silk_convert_failed", error=str(e))
             return None
+        finally:
+            if pcm_path is not None:
+                pcm_path.unlink(missing_ok=True)
+            if silk_path is not None and not converted:
+                silk_path.unlink(missing_ok=True)
 
 
 if __name__ == "__main__":

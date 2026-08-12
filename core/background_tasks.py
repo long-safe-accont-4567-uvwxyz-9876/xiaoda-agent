@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import asyncio
 import contextvars
+import json
 import sqlite3
 import time
 from typing import Any, TYPE_CHECKING
@@ -38,6 +39,17 @@ _bg_tasks: set[asyncio.Task] = set()
 _task_owner_var: contextvars.ContextVar[Any] = contextvars.ContextVar(
     "background_task_owner", default=None,
 )
+_request_context_var: contextvars.ContextVar[dict | None] = contextvars.ContextVar(
+    "background_request_context", default=None,
+)
+
+
+def set_current_request_context(context: dict | None) -> contextvars.Token:
+    return _request_context_var.set(context)
+
+
+def reset_current_request_context(token: contextvars.Token) -> None:
+    _request_context_var.reset(token)
 
 
 def _on_bg_task_done(task: asyncio.Task) -> None:
@@ -228,6 +240,9 @@ class BackgroundTaskManager:
         try_idle_encode 涉及向量存储，不纳入批量提交。
         """
         any_write_ok = False
+        request_context_json = json.dumps(
+            _request_context_var.get() or {}, ensure_ascii=False,
+        )
         # 1. 对话日志（不立即 commit）
         # P0 修复（Task 3.1）：空回复不入库，避免上下文割裂
         # 根因：call_failed 时 reply="" 仍写入 conversation_logs，
@@ -274,6 +289,7 @@ class BackgroundTaskManager:
                             emotion_label=emotion.get("primary", ""),
                             model_used=model_used,
                             session_id=session_id,
+                            request_context_json=request_context_json,
                             auto_commit=False,
                         )
                         any_write_ok = True

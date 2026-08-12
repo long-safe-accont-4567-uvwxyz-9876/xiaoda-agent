@@ -8,6 +8,12 @@ def source(relative_path: str) -> str:
     return (ROOT / relative_path).read_text(encoding="utf-8")
 
 
+def function_source(source_text: str, name: str, next_name: str) -> str:
+    start = source_text.index(f"async function {name}")
+    end = source_text.index(f"function {next_name}", start)
+    return source_text[start:end]
+
+
 def test_prompt_keeps_draft_until_parent_confirms_success():
     prompt = source("web/frontend/src/components/chat/PromptInput.vue")
     view = source("web/frontend/src/views/ChatView.vue")
@@ -63,7 +69,20 @@ def test_chat_feedback_has_matching_bilingual_copy():
 
 def test_workflow_preview_uses_chat_request_snapshot_signature():
     workflow = source("web/frontend/src/views/WorkflowView.vue")
-    preview = workflow[workflow.index("async function testWorkflow"):]
-    assert "chatStore.sendMessage({" in preview
+    preview = function_source(workflow, "testWorkflow", "addNode")
+    assert "const sendResult = chatStore.sendMessage({" in preview
     assert "text: result.prompt || JSON.stringify(result)" in preview
     assert "attachments: []" in preview
+
+
+def test_workflow_preview_stays_put_and_reports_chat_send_failure():
+    workflow = source("web/frontend/src/views/WorkflowView.vue")
+    zh = source("web/frontend/src/i18n/zh.ts")
+    en = source("web/frontend/src/i18n/en.ts")
+    preview = function_source(workflow, "testWorkflow", "addNode")
+    failure_check = preview.index("if (!sendResult.ok)")
+    assert failure_check < preview.index("router.push('/')")
+    assert failure_check < preview.index("message.success(t('workflowView.sentToChat'))")
+    assert "message.warning(t('workflowView.chatSendFailed'))" in preview[failure_check:]
+    assert "chatSendFailed:" in zh
+    assert "chatSendFailed:" in en

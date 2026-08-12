@@ -1,6 +1,11 @@
+import ast
+import os
+import subprocess
 import tomllib
 from pathlib import Path
 
+import pytest
+import yaml
 from packaging.requirements import Requirement
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -8,6 +13,50 @@ ROOT = Path(__file__).resolve().parents[1]
 
 def read_project_file(relative_path: str) -> str:
     return (ROOT / relative_path).read_text(encoding="utf-8")
+
+
+def gitee_release_script() -> str:
+    workflow = yaml.safe_load(read_project_file(".github/workflows/build-release.yml"))
+    steps = workflow["jobs"]["release"]["steps"]
+    return next(step["run"] for step in steps if step["name"].startswith("Sync release to Gitee"))
+
+
+def run_gitee_release_script(tmp_path: Path, curl_body: str) -> subprocess.CompletedProcess[str]:
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    curl = bin_dir / "curl"
+    curl.write_text(curl_body, encoding="utf-8")
+    curl.chmod(0o755)
+    env = os.environ | {
+        "GITEE_TOKEN": "test-token",
+        "VERSION": "1.2.3",
+        "PATH": f"{bin_dir}:{os.environ['PATH']}",
+    }
+    return subprocess.run(
+        ["bash", "-c", gitee_release_script()],
+        cwd=tmp_path,
+        env=env,
+        capture_output=True,
+        text=True,
+    )
+
+
+def create_required_gitee_artifacts(tmp_path: Path) -> None:
+    (tmp_path / "artifacts").mkdir()
+    names = (
+        "xiaoda-agent-windows-x64-v1.2.3-setup.exe",
+        "xiaoda-agent-windows-x64-v1.2.3.tar.gz",
+        "xiaoda-agent-linux-x86_64-v1.2.3.tar.gz",
+        "xiaoda-agent-linux-x86_64-v1.2.3-install.sh",
+        "xiaoda-agent-linux-x86_64-v1.2.3.run",
+        "xiaoda-agent-linux-arm64-v1.2.3.tar.gz",
+        "xiaoda-agent-linux-arm64-v1.2.3-install.sh",
+        "xiaoda-agent-linux-arm64-v1.2.3.run",
+    )
+    for name in names:
+        artifact = tmp_path / "artifacts" / name
+        artifact.write_text("artifact", encoding="utf-8")
+        (artifact.parent / f"{name}.sha256").write_text("checksum", encoding="utf-8")
 
 
 def test_local_ai_dependency_marker_matches_supported_release_platforms():
@@ -47,6 +96,28 @@ def test_docker_build_context_excludes_partial_downloads_globally():
         if line.strip() and not line.lstrip().startswith("#")
     ]
     assert "*.part" in patterns
+
+
+def test_pyinstaller_tree_datas_excludes_partial_downloads_by_behavior(tmp_path):
+    module = ast.parse(read_project_file("xiaoda-agent.spec"))
+    function = next(
+        node
+        for node in module.body
+        if isinstance(node, ast.FunctionDef) and node.name == "_tree_datas"
+    )
+    source_root = tmp_path / "config"
+    source_root.mkdir()
+    (source_root / "ready.bin").write_text("ready", encoding="utf-8")
+    (source_root / "downloading.bin.part").write_text("partial", encoding="utf-8")
+    namespace = {"os": os, "SPECPATH": str(tmp_path)}
+    exec(
+        compile(ast.Module(body=[function], type_ignores=[]), "xiaoda-agent.spec", "exec"),
+        namespace,
+    )
+
+    bundled = namespace["_tree_datas"](str(source_root), "config")
+
+    assert bundled == [(str(source_root / "ready.bin"), "config")]
 
 
 def test_python_distribution_includes_local_ai_and_gateway_packages():
@@ -129,6 +200,55 @@ def test_gitee_release_sync_uploads_all_linux_arm64_artifacts():
     assert "xiaoda-agent-linux-arm64-*.tar.gz" in gitee_section
     assert "xiaoda-agent-linux-arm64-*-install.sh" in gitee_section
     assert "xiaoda-agent-linux-arm64-*.run" in gitee_section
+
+
+def test_gitee_release_sync_fails_when_required_artifact_is_missing(tmp_path):
+    create_required_gitee_artifacts(tmp_path)
+    (tmp_path / "artifacts" / "xiaoda-agent-linux-arm64-v1.2.3.run").unlink()
+
+    result = run_gitee_release_script(
+        tmp_path,
+        "#!/usr/bin/env bash\nprintf '{\"id\": 42}'\n",
+    )
+
+    assert result.returncode != 0
+
+
+@pytest.mark.parametrize("failed_operation", ["create", "upload"])
+def test_gitee_release_sync_fails_on_http_error(tmp_path, failed_operation):
+    create_required_gitee_artifacts(tmp_path)
+    curl_body = """#!/usr/bin/env bash
+if [[ "$*" == *"attach_files"* ]]; then
+  [[ "${FAILED_OPERATION}" == "upload" ]] && exit 22
+  printf '{"id": 43}'
+  exit 0
+fi
+[[ "${FAILED_OPERATION}" == "create" ]] && exit 22
+printf '{"id": 42}'
+"""
+    bin_dir = tmp_path / "bin"
+    artifacts = tmp_path / "artifacts"
+    bin_dir.mkdir(exist_ok=True)
+    artifacts.mkdir(exist_ok=True)
+    curl = bin_dir / "curl"
+    curl.write_text(curl_body, encoding="utf-8")
+    curl.chmod(0o755)
+    env = os.environ | {
+        "FAILED_OPERATION": failed_operation,
+        "GITEE_TOKEN": "test-token",
+        "VERSION": "1.2.3",
+        "PATH": f"{bin_dir}:{os.environ['PATH']}",
+    }
+
+    result = subprocess.run(
+        ["bash", "-c", gitee_release_script()],
+        cwd=tmp_path,
+        env=env,
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode != 0
 
 
 def test_release_never_bundles_market_model_storage_or_partial_downloads():

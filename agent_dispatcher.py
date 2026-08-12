@@ -2,10 +2,10 @@ import asyncio
 import json
 from dataclasses import dataclass, field
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any, Protocol, runtime_checkable
 
 from loguru import logger
-from openai import AsyncOpenAI
 
 from config import get_agent_display_name
 from core.message import AgentMessage
@@ -188,7 +188,7 @@ class SubAgent:
         self._tool_repair = tool_repair
         self._delegate_callback = delegate_callback
         self._core = core
-        self._client: AsyncOpenAI | None = None
+        self._router = getattr(core, "router", None)
         self._personality: str = ""
         self._initialized = False
         self._degraded = False  # 探活失败时进入降级模式：仍注册但不可实际调用
@@ -197,13 +197,9 @@ class SubAgent:
         self._communicating_with: str | None = None  # 子代理间直接通信防循环标记
 
     async def init(self) -> None:
-        api_key = _read_env_key(self.config.api_key_env)
-        if api_key and self.config.base_url:
-            self._client = AsyncOpenAI(api_key=api_key, base_url=self.config.base_url)
-
         self._load_personality()
 
-        self._initialized = self._client is not None
+        self._initialized = self._router is not None
         if self._initialized:
             # 探活已禁用：max_tokens=1 在某些 API 上会被拒绝，
             # 而 4 个子 Agent 串行探活会消耗配额/触发限流。
@@ -211,11 +207,8 @@ class SubAgent:
             logger.info("sub_agent.initialized", name=self.config.name,
                         provider=self.config.provider, model=self.config.model)
         else:
-            # 客户端创建失败（API Key 未找到或 base_url 缺失），
-            # 标记为降级模式：仍注册但实际调用时回退到主 Agent
             self._degraded = True
-            logger.warning("sub_agent.degraded_no_client", name=self.config.name,
-                           reason="api_key_missing" if not _read_env_key(self.config.api_key_env) else "no_base_url")
+            logger.warning("sub_agent.degraded_no_router", name=self.config.name)
 
     def _load_personality(self) -> None:
         """加载人格文件并应用全局名称替换。"""
@@ -252,13 +245,7 @@ class SubAgent:
         self._credential_pool = pool
 
     async def close(self) -> None:
-        """关闭 AsyncOpenAI 客户端, 释放 TCP 连接."""
-        if self._client is not None:
-            try:
-                await self._client.close()
-            except (OSError, RuntimeError):
-                logger.debug("agent_dispatcher.close_client_error", exc_info=True)
-            self._client = None
+        return None
 
     async def reload_model_config(self, provider: str, model: str,
                                   base_url: str, api_key_env: str) -> bool:
@@ -266,21 +253,12 @@ class SubAgent:
 
         用于一键切换子 Agent 模型时避免服务重启。
         """
-        api_key = _read_env_key(api_key_env)
-        if not api_key or not base_url:
+        if self._router is None:
             logger.warning("sub_agent.reload_failed",
                            name=self.config.name,
-                           reason="missing_api_key_or_base_url",
+                           reason="router_unavailable",
                            api_key_env=api_key_env)
             return False
-        try:
-            new_client = AsyncOpenAI(api_key=api_key, base_url=base_url)
-        except (ValueError, OSError, RuntimeError) as e:
-            logger.warning("sub_agent.reload_client_failed",
-                           name=self.config.name, error=str(e)[:200])
-            return False
-        # 原子替换：先就位再切，避免半成品状态
-        self._client = new_client
         self.config.provider = provider
         self.config.model = model
         self.config.base_url = base_url
@@ -293,7 +271,7 @@ class SubAgent:
 
     @property
     def available(self) -> bool:
-        return self._initialized and self._client is not None and not self._degraded
+        return self._initialized and self._router is not None and not self._degraded
 
     @property
     def degraded(self) -> bool:
@@ -375,24 +353,12 @@ class SubAgent:
         return names
 
     async def chat(self, message: str, context: str = "", status_callback: Any | None=None, address_term: str = "爸爸", extra_system_prompt: str = "", invocation: Any | None = None) -> str:
-        # 降级模式下尝试自动恢复：用最新环境变量中的 Key 重建客户端
         if self._degraded:
-            api_key = _read_env_key(self.config.api_key_env)
-            if api_key and self.config.base_url:
-                old_client = self._client
-                try:
-                    self._client = AsyncOpenAI(api_key=api_key, base_url=self.config.base_url)
-                    self._degraded = False
-                    self._initialized = True
-                    logger.info("sub_agent.auto_recovered", name=self.config.name)
-                    # 关闭旧客户端释放连接
-                    if old_client is not None:
-                        try:
-                            await old_client.close()
-                        except (OSError, RuntimeError):
-                            logger.debug("agent_dispatcher.close_old_client_error", exc_info=True)
-                except (ImportError, ValueError, OSError) as e:
-                    logger.debug("sub_agent.recover_failed", name=self.config.name, error=str(e)[:80])
+            self._router = getattr(self._core, "router", None)
+            if self._router is not None:
+                self._degraded = False
+                self._initialized = True
+                logger.info("sub_agent.auto_recovered", name=self.config.name)
 
         if not self.available:
             return f"{self.config.display_name}现在有点累了...等会儿再来吧！💤"
@@ -648,34 +614,35 @@ class SubAgent:
                 return f"{self.config.display_name}思考时间太长了，请稍后再试吧～"
             try:
                 t0 = loop.time()
-                # 为 agnes 模型读取全局 thinking 配置
-                extra_body = None
+                route_config = {
+                    "client": self.config.provider,
+                    "model": self.config.model,
+                    "max_tokens": 6144 if tools else 3072,
+                }
                 if self.config.provider == "agnes":
-                    # 读取 ROUTE_TABLE 中 chat 任务的 thinking 配置（全局开关）
                     from model_router import ROUTE_TABLE
                     chat_config = ROUTE_TABLE.get("chat", {})
-                    # 修复：必须检查 type == "enabled"，而非 "is not None"
-                    # 否则 thinking={"type":"disabled"} 时 is not None 返回 True，反而开启 thinking
-                    _thinking_cfg = chat_config.get("thinking") or {}
-                    thinking_enabled = _thinking_cfg.get("type") == "enabled"
-                    extra_body = {"chat_template_kwargs": {"enable_thinking": thinking_enabled}}
+                    route_config["thinking"] = chat_config.get("thinking")
                 from config import get_temperature
-                response = await asyncio.wait_for(
-                    self._client.chat.completions.create(
-                        model=self.config.model,
+                response = await self._router.route_config(
+                        config=route_config,
                         messages=working,
-                        max_tokens=6144 if tools else 3072,
                         temperature=get_temperature(default=0.9),
+                        max_tokens=route_config["max_tokens"],
                         tools=tools,
                         tool_choice="auto" if tools else None,
-                        extra_body=extra_body,
-                    ),
                     timeout=cur_timeout,
-                )
+                    )
+                if isinstance(response, str):
+                    response = SimpleNamespace(
+                        choices=[SimpleNamespace(
+                            message=SimpleNamespace(content=response, tool_calls=None),
+                        )],
+                    )
                 elapsed = loop.time() - t0
                 logger.info("sub_agent.api_ok", name=self.config.name,
                             round=round_idx, attempt=attempt, elapsed=f"{elapsed:.1f}s",
-                            thinking=extra_body.get("chat_template_kwargs", {}).get("enable_thinking") if extra_body else None)
+                            thinking=(route_config.get("thinking") or {}).get("type") == "enabled")
                 return response
             except TimeoutError:
                 if attempt < retry_count:
@@ -886,27 +853,24 @@ class SubAgent:
             })
 
         try:
-            # 为 agnes 模型读取全局 thinking 配置
-            extra_body = None
+            route_config = {
+                "client": self.config.provider,
+                "model": self.config.model,
+                "max_tokens": 3072,
+            }
             if self.config.provider == "agnes":
                 from model_router import ROUTE_TABLE
                 chat_config = ROUTE_TABLE.get("chat", {})
-                # 修复：必须检查 type == "enabled"，而非 "is not None"
-                _thinking_cfg = chat_config.get("thinking") or {}
-                thinking_enabled = _thinking_cfg.get("type") == "enabled"
-                extra_body = {"chat_template_kwargs": {"enable_thinking": thinking_enabled}}
+                route_config["thinking"] = chat_config.get("thinking")
             from config import get_temperature
-            response = await asyncio.wait_for(
-                self._client.chat.completions.create(
-                    model=self.config.model,
+            response = await self._router.route_config(
+                    config=route_config,
                     messages=working,
-                    max_tokens=3072,
                     temperature=get_temperature(default=0.7),
-                    extra_body=extra_body,
-                ),
+                    max_tokens=3072,
                 timeout=min(api_timeout, remaining),
-            )
-            reply = response.choices[0].message.content or ""
+                )
+            reply = response if isinstance(response, str) else response.choices[0].message.content or ""
             # 不使用 reasoning_content 代替 content（防止推理泄漏）
             result = strip_reasoning(strip_dsml(reply)).strip()
             # 兜底：如果过滤后为空（如模型只输出推理泄露），返回提示
@@ -1079,7 +1043,6 @@ class AgentDispatcher:
         return True
 
     async def close(self) -> None:
-        """关闭所有 SubAgent 的 AsyncOpenAI 客户端."""
         for agent in self._agents.values():
             if hasattr(agent, 'close'):
                 try:
@@ -1180,23 +1143,14 @@ class AgentDispatcher:
         return list(self._agents.keys())
 
     def refresh_all_clients(self) -> int:
-        """刷新所有子 Agent 的客户端（Setup 保存新 Key 后调用）。
-
-        清除降级标记，用最新环境变量中的 Key 重建客户端。
-        返回成功刷新的子 Agent 数量。
-        """
         count = 0
         for name, agent in self._agents.items():
-            try:
-                api_key = _read_env_key(agent.config.api_key_env)
-                if api_key and agent.config.base_url:
-                    agent._client = AsyncOpenAI(api_key=api_key, base_url=agent.config.base_url)
-                    agent._initialized = True
-                    agent._degraded = False  # 清除降级标记
-                    count += 1
-                    logger.info("sub_agent.client_refreshed", name=name)
-            except (ValueError, OSError, RuntimeError) as e:
-                logger.warning("sub_agent.client_refresh_failed", name=name, error=str(e)[:200])
+            agent._router = getattr(self._core, "router", None)
+            agent._initialized = agent._router is not None
+            agent._degraded = not agent._initialized
+            if agent._initialized:
+                count += 1
+                logger.info("sub_agent.router_refreshed", name=name)
         return count
 
     def route_task(self, task_type: str, input_text: str) -> str:

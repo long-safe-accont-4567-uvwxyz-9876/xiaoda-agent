@@ -1203,6 +1203,10 @@ class MessageProcessorMixin:
                                    query_preview=user_input[:50])
                     results = None
                 except Exception as e:
+                    from local_ai.integration.reranker import is_structured_local_unavailable
+
+                    if is_structured_local_unavailable(e):
+                        raise
                     logger.warning("memory.retrieve_failed", error=str(e))
                     results = None
                 if results is not None:
