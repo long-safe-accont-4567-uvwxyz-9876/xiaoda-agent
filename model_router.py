@@ -1215,6 +1215,24 @@ class ModelRouter:
                     or "agnes" in getattr(self, "_custom_clients", {}))
         return provider in getattr(self, "_custom_clients", {})
 
+    def bind_builtin(self, provider: str, client: Any) -> Any:
+        if provider == "mimo":
+            old_client = self._client
+            self._client = client
+            return old_client
+        if provider == "agnes":
+            old_client = self._agnes_client
+            self._agnes_client = client
+            return old_client
+        raise ValueError(f"unsupported builtin provider: {provider}")
+
+    def get_builtin_client(self, provider: str) -> Any:
+        if provider == "mimo":
+            return self._client
+        if provider == "agnes":
+            return self._agnes_client
+        raise ValueError(f"unsupported builtin provider: {provider}")
+
     async def _try_fallback_chain(self, e: Exception, task_type: str,
                                   messages: list[dict], temperature: float,
                                   stream: bool, tools: list[dict] | None,
@@ -1497,6 +1515,16 @@ class ModelRouter:
                 self._bg_llm_semaphore.release()
             elif task_type == "chat":
                 self._chat_idle.set()
+
+    async def route_config(self, config: dict, messages: list[dict],
+                           temperature: float = 0.7, max_tokens: int = 4096,
+                           tools: list[dict] | None = None,
+                           tool_choice: str | None = None,
+                           timeout: int = 30) -> str | object:
+        return await self._route_with_retry(
+            "chat", config, messages, temperature, max_tokens, False,
+            tools, tool_choice, timeout, "", "",
+        )
 
     def _apply_prompt_caching(self, provider: str, messages: list[dict]) -> list[dict]:
         """应用 Prompt Caching（仅 Anthropic 兼容接口）。

@@ -8,6 +8,20 @@ def source(relative_path: str) -> str:
     return (ROOT / relative_path).read_text(encoding="utf-8")
 
 
+def method_source(source_text: str, signature: str) -> str:
+    start = source_text.index(signature)
+    body_start = source_text.index("{", start)
+    depth = 0
+    for index in range(body_start, len(source_text)):
+        if source_text[index] == "{":
+            depth += 1
+        elif source_text[index] == "}":
+            depth -= 1
+            if depth == 0:
+                return source_text[start:index + 1]
+    raise ValueError(f"Unclosed method body: {signature}")
+
+
 def test_websocket_send_reports_delivery_failure():
     ws = source("web/frontend/src/api/ws.ts")
     assert "send(data: Record<string, unknown>): boolean" in ws
@@ -16,7 +30,7 @@ def test_websocket_send_reports_delivery_failure():
 
 def test_websocket_send_converts_transport_exceptions_to_failure():
     ws = source("web/frontend/src/api/ws.ts")
-    send = ws[ws.index("send(data: Record<string, unknown>): boolean"):ws.index("  on(type:")]
+    send = method_source(ws, "send(data: Record<string, unknown>): boolean")
     assert "try {" in send
     assert "catch" in send
     assert send.index("this.ws.send") < send.index("catch") < send.rindex("return false")

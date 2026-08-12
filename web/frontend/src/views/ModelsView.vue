@@ -3,8 +3,8 @@ import { ref, onMounted, onBeforeUnmount, computed } from 'vue'
 import {
   NButton, NSwitch, NInputNumber, NSelect, NTag, NPopconfirm, NSlider, useMessage,
 } from 'naive-ui'
-import { get, post, put } from '../api'
-import type { ProviderDefinition } from '../api/providers'
+import { api, get, put } from '../api'
+import type { CapabilityReport, ProviderDefinition } from '../api/providers'
 import ProviderWizard from '../components/models/ProviderWizard.vue'
 import { useProvidersStore } from '../stores/providers'
 import { t } from '../i18n'
@@ -26,7 +26,7 @@ const credentials = ref<any[]>([])
 const usage = ref<any>({ series: [], total: {} })
 const providerWizardOpen = ref(false)
 const editingProvider = ref<ProviderDefinition | null>(null)
-const testResults = ref<Record<string, any>>({})
+const testResults = ref<Record<string, CapabilityReport | { ok: boolean; error?: string }>>({})
 const testingId = ref('')
 const chartEl = ref<HTMLElement | null>(null)
 let usageChart: echarts.ECharts | null = null
@@ -137,9 +137,9 @@ async function removeProvider(id: string) {
 async function testProvider(id: string) {
   testingId.value = id
   try {
-    testResults.value[id] = await post('/health/test/llm', { provider_id: id })
+    testResults.value[id] = await providersStore.loadCapabilities(id)
   } catch (e: any) {
-    testResults.value[id] = { ok: false, error: e.message }
+    testResults.value[id] = { available: false, capabilities: { tools: false, vision: false, streaming: false, model_discovery: false, json_mode: false }, models: [], error: e.message }
   } finally {
     testingId.value = ''
   }
@@ -167,7 +167,7 @@ async function saveRoute(task: string) {
 async function testRoute(task: string) {
   testingId.value = `route:${task}`
   try {
-    testResults.value[`route:${task}`] = await post('/health/test/llm', { route: task })
+    testResults.value[`route:${task}`] = await api.testModelRoute(task)
   } catch (e: any) {
     testResults.value[`route:${task}`] = { ok: false, error: e.message }
   } finally {
@@ -335,8 +335,8 @@ function setPresPreset(val: number) {
           </div>
           <div class="provider-ops">
             <span v-if="testResults[p.id]" class="test-badge"
-                  :class="{ ok: testResults[p.id].ok }">
-              {{ testResults[p.id].ok ? `✓ ${testResults[p.id].latency_ms}ms` : `✗ ${testResults[p.id].error?.slice(0, 60)}` }}
+                  :class="{ ok: 'available' in testResults[p.id] && testResults[p.id].available }">
+              {{ 'available' in testResults[p.id] && testResults[p.id].available ? `✓ ${testResults[p.id].models.length} 个模型` : `✗ ${testResults[p.id].error?.slice(0, 60)}` }}
             </span>
             <n-button size="tiny" :loading="testingId === p.id" @click="testProvider(p.id)">{{ t('modelsView.test') }}</n-button>
           </div>
@@ -351,8 +351,8 @@ function setPresPreset(val: number) {
               </div>
               <div class="provider-ops">
                 <span v-if="testResults[p.id]" class="test-badge"
-                      :class="{ ok: testResults[p.id].ok }">
-                  {{ testResults[p.id].ok ? `✓ ${testResults[p.id].latency_ms}ms` : `✗ ${testResults[p.id].error?.slice(0, 60)}` }}
+                      :class="{ ok: 'available' in testResults[p.id] && testResults[p.id].available }">
+                  {{ 'available' in testResults[p.id] && testResults[p.id].available ? `✓ ${testResults[p.id].models.length} 个模型` : `✗ ${testResults[p.id].error?.slice(0, 60)}` }}
                 </span>
                 <n-button size="tiny" :loading="testingId === p.id" @click="testProvider(p.id)">{{ t('modelsView.test') }}</n-button>
                 <n-button v-if="!p.builtin" size="tiny" @click="openProviderForm(p)">{{ t('modelsView.edit') }}</n-button>
@@ -522,16 +522,6 @@ function setPresPreset(val: number) {
 .p-label { font-weight: 600; }
 .p-url { font-size: 12px; color: var(--moon-dim); font-family: 'JetBrains Mono', monospace; }
 .provider-ops { display: flex; align-items: center; gap: 6px; }
-
-.drag-handle {
-  cursor: grab;
-  color: var(--moon-dim);
-  font-size: 14px;
-  user-select: none;
-  padding: 0 4px;
-  line-height: 1;
-}
-.drag-handle:active { cursor: grabbing; }
 
 .test-badge { font-size: 12px; color: var(--alert); max-width: 260px; }
 .test-badge.ok { color: var(--dendro); }

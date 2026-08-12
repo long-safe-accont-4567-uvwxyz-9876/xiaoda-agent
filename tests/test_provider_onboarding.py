@@ -320,6 +320,43 @@ async def test_failed_create_commit_rolls_back_credential_catalog_and_runtime():
 
 
 @pytest.mark.asyncio
+async def test_failed_create_config_write_restores_existing_same_id_snapshots():
+    config = FailingConfig("set")
+    old_record = draft(label="Existing")
+    credentials = MemoryCredentials()
+    old_client = object()
+    runtime = SimpleNamespace(_custom_clients={})
+    service = ProviderService(
+        config,
+        builtin_catalog(),
+        runtime,
+        credential_store=credentials,
+        transport_factory=lambda definition, credential: FakeTransport(CapabilityReport(
+            True,
+            definition.capabilities,
+            models=(definition.default_model,),
+        )),
+        runtime_client_factory=lambda definition, credential: object(),
+    )
+    old_definition = service._definition(old_record)
+    old_report = CapabilityReport(True, ProviderCapabilities(), models=("existing-model",))
+    config.providers["custom"] = old_record
+    credentials.values["custom"] = "old-key"
+    runtime._custom_clients["custom"] = old_client
+    service.catalog.register(old_definition)
+    service._reports["custom"] = old_report
+
+    with pytest.raises(OSError, match="config write failed"):
+        service._commit_create(service._definition(draft()), "new-key", object())
+
+    assert config.get("models.providers.custom") == old_record
+    assert credentials.read("custom") == "old-key"
+    assert runtime._custom_clients["custom"] is old_client
+    assert service._reports["custom"] is old_report
+    assert service.catalog.get("custom") is old_definition
+
+
+@pytest.mark.asyncio
 async def test_compensation_failure_is_isolated_and_preserves_original_error():
     class FailingDeleteCredentials(MemoryCredentials):
         def delete(self, provider_id):
@@ -673,6 +710,26 @@ def test_custom_mapping_rejects_literal_secret_headers(service):
         provider_service._definition(custom_mapping_draft(headers={"Authorization": "Bearer real-secret"}))
 
 
+@pytest.mark.parametrize(
+    "headers",
+    [
+        {"": "{api_key}"},
+        {"Bad Header": "{api_key}"},
+        {"X-Test\nInjected": "{api_key}"},
+        {"X-Test": "{api_key}\r\nInjected: yes"},
+        {"Host": "{base_url}"},
+        {"content-length": "{api_key}"},
+        {"Transfer-Encoding": "{api_key}"},
+        {"CONNECTION": "{api_key}"},
+    ],
+)
+def test_provider_service_rejects_unsafe_custom_headers(service, headers):
+    provider_service, _, _, _ = service
+
+    with pytest.raises(ValueError, match="header"):
+        provider_service._definition(custom_mapping_draft(headers=headers))
+
+
 def test_non_ollama_loopback_localhost_internal_service_is_rejected(service):
     """SSRF 收窄契约：仅 Ollama 允许 loopback；非 Ollama 协议指向 localhost 内部服务应被拒绝。
 
@@ -889,6 +946,426 @@ def test_builtin_route_accepts_configured_runtime_client(service):
     assert provider_service.validate_route("mimo", "mimo-v2.5") is None
 
 
+@pytest.mark.asyncio
+async def test_bind_builtin_activates_runtime_without_replacing_builtin_definition():
+    config = MemoryConfig()
+    credentials = MemoryCredentials()
+    runtime = SimpleNamespace(_client=None, _custom_clients={})
+
+    def bind_builtin(provider_id, client):
+        old_client = runtime._client
+        runtime._client = client
+        return old_client
+
+    runtime.bind_builtin = bind_builtin
+    provider_service = ProviderService(
+        config,
+        builtin_catalog(),
+        runtime,
+        credential_store=credentials,
+        transport_factory=lambda definition, credential: FakeTransport(CapabilityReport(
+            True,
+            definition.capabilities,
+            models=(definition.default_model,),
+        )),
+        runtime_client_factory=lambda definition, credential: (definition.id, credential),
+    )
+
+    definition = await provider_service.bind_builtin(
+        "mimo",
+        {"base_url": "https://example.com/v1"},
+        {"api_key": "secret"},
+    )
+
+    assert definition.builtin is True
+    assert provider_service.catalog.get("mimo").builtin is True
+    assert credentials.read("mimo") == "secret"
+    assert runtime._client == ("mimo", "secret")
+
+
+def test_ollama_definition_normalizes_openai_compatible_suffix():
+    definition = ProviderService._definition(draft(
+        id="ollama",
+        protocol="ollama",
+        base_url="http://localhost:11434/v1/",
+    ))
+
+    assert definition.endpoint.base_url == "http://localhost:11434"
+    client = ProviderService._build_runtime_client(definition, "")
+    assert str(client.base_url) == "http://localhost:11434/v1/"
+
+
+@pytest.mark.asyncio
+async def test_setup_auto_registration_delegates_to_application_provider_service(monkeypatch):
+    from web.routers import setup
+
+    calls = []
+
+    class Catalog:
+        def get(self, provider_id):
+            return ProviderService._definition(draft(
+                id=provider_id,
+                label="SiliconFlow",
+                base_url="https://api.siliconflow.cn/v1",
+            ))
+
+    class Service:
+        catalog = Catalog()
+
+        def list(self):
+            return ()
+
+        async def create(self, provider_draft, credentials):
+            calls.append((provider_draft, credentials))
+
+    app = SimpleNamespace(state=SimpleNamespace(provider_service=Service()))
+    monkeypatch.setattr("web.app_ref.get_app", lambda: app)
+
+    await setup._auto_register_providers({"SILICONFLOW_API_KEY": "secret"})
+
+    assert calls[0][0]["id"] == "siliconflow"
+    assert calls[0][0]["protocol"] == "openai_compatible"
+    assert calls[0][0]["capabilities"]["tools"] is True
+    assert calls[0][1] == {"api_key": "secret"}
+
+
+@pytest.mark.asyncio
+async def test_setup_auto_registration_binds_existing_builtin(monkeypatch):
+    from web.routers import setup
+
+    definition = builtin_catalog().get("mimo")
+    calls = []
+
+    class Service:
+        catalog = SimpleNamespace(get=lambda provider_id: definition)
+        credentials = SimpleNamespace(read=lambda provider_id: "old-key")
+
+        def list(self):
+            return (definition,)
+
+        async def bind_builtin(self, provider_id, provider_draft, credentials):
+            calls.append((provider_id, provider_draft, credentials))
+
+    app = SimpleNamespace(state=SimpleNamespace(provider_service=Service()))
+    monkeypatch.setattr("web.app_ref.get_app", lambda: app)
+
+    await setup._auto_register_providers({"MIMO_API_KEY": "new-key"})
+
+    assert calls[0][0] == "mimo"
+    assert calls[0][1]["protocol"] == "openai_compatible"
+    assert calls[0][2] == {"api_key": "new-key"}
+
+
+@pytest.mark.asyncio
+async def test_setup_health_check_failure_does_not_persist_env_or_activate_provider(monkeypatch):
+    from web.routers import setup
+
+    writes = []
+
+    class Catalog:
+        def get(self, provider_id):
+            return ProviderService._definition(draft(
+                id=provider_id,
+                label="SiliconFlow",
+                base_url="https://api.siliconflow.cn/v1",
+            ))
+
+    class Service:
+        catalog = Catalog()
+
+        def list(self):
+            return ()
+
+        async def create(self, provider_draft, credentials):
+            raise ProviderConnectionError("health check failed")
+
+    app = SimpleNamespace(state=SimpleNamespace(provider_service=Service()))
+    monkeypatch.setattr("web.app_ref.get_app", lambda: app)
+    monkeypatch.setattr(setup, "_write_env_file", lambda *args: writes.append(args))
+
+    result = await setup.save_keys({"keys": {"SILICONFLOW_API_KEY": "invalid"}})
+
+    assert result.ok is False
+    assert writes == []
+    assert app.state.provider_service.list() == ()
+
+
+@pytest.mark.asyncio
+async def test_setup_env_write_failure_rolls_back_newly_activated_provider(monkeypatch):
+    from web.routers import setup
+
+    providers = set()
+
+    class Catalog:
+        def get(self, provider_id):
+            return ProviderService._definition(draft(
+                id=provider_id,
+                label="SiliconFlow",
+                base_url="https://api.siliconflow.cn/v1",
+            ))
+
+    class Service:
+        catalog = Catalog()
+
+        def list(self):
+            return tuple(SimpleNamespace(id=provider_id) for provider_id in providers)
+
+        async def create(self, provider_draft, credentials):
+            providers.add(provider_draft["id"])
+
+        async def delete(self, provider_id):
+            providers.remove(provider_id)
+
+    app = SimpleNamespace(state=SimpleNamespace(provider_service=Service()))
+    monkeypatch.setattr("web.app_ref.get_app", lambda: app)
+    monkeypatch.setattr(setup, "_write_env_file", lambda *args: (_ for _ in ()).throw(OSError("env write failed")))
+
+    result = await setup.save_keys({"keys": {"SILICONFLOW_API_KEY": "valid"}})
+
+    assert result.ok is False
+    assert providers == set()
+
+
+@pytest.mark.asyncio
+async def test_setup_existing_provider_key_requires_health_check_before_env_persistence(monkeypatch):
+    from web.routers import setup
+
+    writes = []
+    old_definition = SimpleNamespace(id="siliconflow")
+
+    class Catalog:
+        def get(self, provider_id):
+            return ProviderService._definition(draft(
+                id=provider_id,
+                label="SiliconFlow",
+                base_url="https://api.siliconflow.cn/v1",
+            ))
+
+    class Service:
+        catalog = Catalog()
+
+        def list(self):
+            return (old_definition,)
+
+        async def update(self, provider_id, provider_draft, credentials):
+            raise ProviderConnectionError("health check failed")
+
+    app = SimpleNamespace(state=SimpleNamespace(provider_service=Service()))
+    monkeypatch.setattr("web.app_ref.get_app", lambda: app)
+    monkeypatch.setattr(setup, "_write_env_file", lambda *args: writes.append(args))
+
+    result = await setup.save_keys({"keys": {"SILICONFLOW_API_KEY": "invalid-new-key"}})
+
+    assert result.ok is False
+    assert writes == []
+    assert app.state.provider_service.list() == (old_definition,)
+
+
+@pytest.mark.asyncio
+async def test_setup_env_write_failure_restores_existing_provider_state(monkeypatch):
+    from web.routers import setup
+
+    current_key = "old-key"
+    old_definition = ProviderService._definition(draft(
+        id="siliconflow",
+        label="SiliconFlow",
+        base_url="https://api.siliconflow.cn/v1",
+    ))
+
+    class Service:
+        catalog = SimpleNamespace(get=lambda provider_id: old_definition)
+        credentials = SimpleNamespace(read=lambda provider_id: current_key)
+
+        def list(self):
+            return (old_definition,)
+
+        async def update(self, provider_id, provider_draft, credentials):
+            nonlocal current_key
+            current_key = credentials["api_key"]
+
+    service = Service()
+    app = SimpleNamespace(state=SimpleNamespace(provider_service=service))
+    monkeypatch.setattr("web.app_ref.get_app", lambda: app)
+    monkeypatch.setattr(setup, "_write_env_file", lambda *args: (_ for _ in ()).throw(OSError("env write failed")))
+
+    result = await setup.save_keys({"keys": {"SILICONFLOW_API_KEY": "new-key"}})
+
+    assert result.ok is False
+    assert current_key == "old-key"
+
+
+@pytest.mark.asyncio
+async def test_setup_env_write_failure_restores_real_provider_snapshot_when_old_credential_is_unavailable(monkeypatch):
+    from web.routers import setup
+
+    old_record = draft(
+        id="siliconflow",
+        label="Old SiliconFlow",
+        base_url="https://api.siliconflow.cn/v1",
+    )
+    old_definition = ProviderService._definition(old_record)
+    old_client = object()
+    old_report = CapabilityReport(True, old_definition.capabilities, models=("old-model",))
+    config = MemoryConfig()
+    config.providers["siliconflow"] = old_record
+    credentials = MemoryCredentials()
+    credentials.values["siliconflow"] = "old-key"
+    runtime = SimpleNamespace(_custom_clients={"siliconflow": old_client})
+
+    def transport_factory(definition, credential):
+        return FakeTransport(CapabilityReport(
+            credential == "new-key",
+            definition.capabilities,
+            models=(definition.default_model,),
+            error="old unavailable" if credential == "old-key" else "",
+        ))
+
+    service = ProviderService(
+        config,
+        ProviderCatalog((old_definition,)),
+        runtime,
+        credential_store=credentials,
+        transport_factory=transport_factory,
+        runtime_client_factory=lambda definition, credential: (definition.id, credential),
+    )
+    runtime._custom_clients["siliconflow"] = old_client
+    service._reports["siliconflow"] = old_report
+    app = SimpleNamespace(state=SimpleNamespace(provider_service=service))
+    monkeypatch.setattr("web.app_ref.get_app", lambda: app)
+    monkeypatch.setattr(setup, "_write_env_file", lambda *args: (_ for _ in ()).throw(OSError("env write failed")))
+
+    result = await setup.save_keys({"keys": {"SILICONFLOW_API_KEY": "new-key"}})
+
+    assert result.ok is False
+    assert config.get("models.providers.siliconflow") == old_record
+    assert credentials.read("siliconflow") == "old-key"
+    assert service.catalog.get("siliconflow") is old_definition
+    assert runtime._custom_clients["siliconflow"] is old_client
+    assert service._reports["siliconflow"] is old_report
+
+
+@pytest.mark.asyncio
+async def test_setup_env_write_failure_restores_builtin_client_without_old_credential_health_check(monkeypatch):
+    from web.routers import setup
+
+    old_client = object()
+    old_report = CapabilityReport(True, ProviderCapabilities(), models=("mimo-v2.5",))
+    config = MemoryConfig()
+    credentials = MemoryCredentials()
+    credentials.values["mimo"] = "old-key"
+    runtime = SimpleNamespace(_client=old_client, _custom_clients={})
+    runtime.bind_builtin = lambda provider_id, client: setattr(runtime, "_client", client) or old_client
+    runtime.get_builtin_client = lambda provider_id: runtime._client
+
+    def transport_factory(definition, credential):
+        return FakeTransport(CapabilityReport(
+            credential == "new-key",
+            definition.capabilities,
+            models=(definition.default_model,),
+            error="old unavailable" if credential == "old-key" else "",
+        ))
+
+    service = ProviderService(
+        config,
+        builtin_catalog(),
+        runtime,
+        credential_store=credentials,
+        transport_factory=transport_factory,
+        runtime_client_factory=lambda definition, credential: (definition.id, credential),
+    )
+    service._reports["mimo"] = old_report
+    app = SimpleNamespace(state=SimpleNamespace(provider_service=service))
+    monkeypatch.setattr("web.app_ref.get_app", lambda: app)
+    monkeypatch.setattr(setup, "_write_env_file", lambda *args: (_ for _ in ()).throw(OSError("env write failed")))
+
+    result = await setup.save_keys({"keys": {"MIMO_API_KEY": "new-key"}})
+
+    assert result.ok is False
+    assert credentials.read("mimo") == "old-key"
+    assert runtime._client is old_client
+    assert service._reports["mimo"] is old_report
+
+
+@pytest.mark.asyncio
+async def test_setup_provider_rollback_continues_after_single_snapshot_restore_failure():
+    from web.routers import setup
+
+    restored = []
+
+    class Service:
+        async def restore_snapshot(self, snapshot):
+            restored.append(snapshot)
+            if snapshot == "second":
+                raise OSError("second restore failed")
+
+    with pytest.raises(ExceptionGroup, match="provider snapshot rollback failed"):
+        await setup._rollback_auto_registered_providers(["first", "second", "third"], Service())
+
+    assert restored == ["third", "second", "first"]
+
+
+@pytest.mark.asyncio
+async def test_model_switch_consumes_provider_service_without_direct_registration():
+    from web.routers.model_discovery import set_chat_model
+
+    checked = []
+    switched = []
+
+    class Service:
+        def validate_route(self, provider_id, model_id):
+            checked.append((provider_id, model_id))
+            return None
+
+    class Runtime:
+        def set_chat_model(self, provider_id, model_id):
+            switched.append((provider_id, model_id))
+            return {"provider": provider_id, "model_id": model_id}
+
+    request = SimpleNamespace(app=SimpleNamespace(state=SimpleNamespace(
+        core=SimpleNamespace(router=Runtime()),
+        provider_service=Service(),
+    )))
+
+    result = await set_chat_model({"provider": "custom", "model_id": "custom-chat"}, request)
+
+    assert result.ok is True
+    assert checked == [("custom", "custom-chat")]
+    assert switched == [("custom", "custom-chat")]
+
+
+@pytest.mark.asyncio
+async def test_startup_override_uses_provider_service_restored_runtime(monkeypatch):
+    from web import server
+
+    config = MemoryConfig()
+    runtime = SimpleNamespace(_custom_clients={"custom": object()})
+    core = SimpleNamespace(router=runtime)
+    service = SimpleNamespace(runtime_router=runtime)
+    monkeypatch.setattr("web.config_service.get_config_service", lambda: config)
+    monkeypatch.setattr(server, "_apply_route_overrides", lambda *args: None)
+    monkeypatch.setattr(server, "_restore_chat_model", lambda *args: None)
+
+    await server._apply_model_overrides(core, service)
+
+    assert service.runtime_router._custom_clients["custom"] is runtime._custom_clients["custom"]
+
+
+def test_migrated_provider_call_sites_have_no_direct_runtime_registration():
+    from pathlib import Path
+
+    root = Path(__file__).parents[1]
+    for relative_path in (
+        "web/routers/setup.py",
+        "web/server.py",
+        "web/routers/model_discovery.py",
+    ):
+        source = (root / relative_path).read_text(encoding="utf-8")
+        assert "register_into_router" not in source
+
+    setup_source = (root / "web/routers/setup.py").read_text(encoding="utf-8")
+    assert "provider_{pid}.key" not in setup_source
+
+
 def test_route_update_unknown_provider_returns_404(service, monkeypatch):
     provider_service, config, _, runtime = service
     app = FastAPI()
@@ -1037,6 +1514,57 @@ def test_provider_api_maps_missing_conflict_and_validation_errors(service):
     assert invalid.status_code == 400
     assert missing.status_code == 404
     assert conflict.status_code == 409
+
+
+@pytest.mark.parametrize("operation", ["test", "create", "update"])
+@pytest.mark.parametrize(
+    "headers",
+    [
+        {"": "{api_key}"},
+        {"Bad Header": "{api_key}"},
+        {"X-Test": "{api_key}\nInjected: yes"},
+        {"Host": "{base_url}"},
+        {"Content-Length": "{api_key}"},
+        {"Transfer-Encoding": "{api_key}"},
+        {"Connection": "{api_key}"},
+    ],
+)
+def test_provider_api_rejects_unsafe_custom_headers_with_stable_400(service, operation, headers):
+    provider_service, config, credentials, runtime = service
+    if operation == "update":
+        config.providers["mapped"] = custom_mapping_draft()
+        credentials.values["mapped"] = "old-key"
+        runtime._custom_clients["mapped"] = object()
+        provider_service.catalog.register(provider_service._definition(config.providers["mapped"]))
+    app = FastAPI()
+    app.state.provider_service = provider_service
+    app.dependency_overrides[get_current_user] = lambda: "test-user"
+    app.include_router(providers_router, prefix="/api/v1")
+    client = TestClient(app)
+    body = {"draft": custom_mapping_draft(headers=headers), "credentials": {"api_key": "secret"}}
+
+    if operation == "test":
+        response = client.post("/api/v1/providers/test", json=body)
+    elif operation == "create":
+        response = client.post("/api/v1/providers", json=body)
+    else:
+        response = client.put("/api/v1/providers/mapped", json=body)
+
+    assert response.status_code == 400
+    assert "header" in response.json()["detail"].lower()
+
+
+def test_provider_api_delete_builtin_returns_stable_400(service):
+    provider_service, _, _, _ = service
+    app = FastAPI()
+    app.state.provider_service = provider_service
+    app.dependency_overrides[get_current_user] = lambda: "test-user"
+    app.include_router(providers_router, prefix="/api/v1")
+
+    response = TestClient(app).delete("/api/v1/providers/mimo", headers={"X-Confirm": "yes"})
+
+    assert response.status_code == 400
+    assert response.json()["detail"] == "builtin provider cannot be removed: mimo"
 
 
 def test_provider_api_rejects_private_network_endpoint(service):

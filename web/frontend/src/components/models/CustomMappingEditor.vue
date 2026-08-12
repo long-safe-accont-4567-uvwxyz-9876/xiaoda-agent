@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { NFormItem, NGrid, NGridItem, NInput } from 'naive-ui'
+import { NButton, NFormItem, NGrid, NGridItem, NInput, NSpace } from 'naive-ui'
 import type { ProviderDraft } from '../../api/providers'
 
 const props = defineProps<{ modelValue: ProviderDraft }>()
@@ -23,14 +23,25 @@ function updateModels(value: string) {
   emit('update:modelValue', { ...props.modelValue, mapping: { ...props.modelValue.mapping, models: value } })
 }
 
-function updateHeaderName(name: string) {
-  const value = Object.values(props.modelValue.headers)[0] || '{api_key}'
-  emit('update:modelValue', { ...props.modelValue, headers: name ? { [name]: value } : {} })
+function updateHeader(index: number, name: string, value: string) {
+  const entries = Object.entries(props.modelValue.headers)
+  entries[index] = [name, value]
+  emit('update:modelValue', { ...props.modelValue, headers: Object.fromEntries(entries.filter(([key]) => key)) })
 }
 
-function updateHeaderValue(value: string) {
-  const name = Object.keys(props.modelValue.headers)[0] || 'Authorization'
-  emit('update:modelValue', { ...props.modelValue, headers: { [name]: value } })
+function addHeader() {
+  const entries = Object.entries(props.modelValue.headers)
+  let name = 'X-Custom-Header'
+  let suffix = 2
+  while (name in props.modelValue.headers) name = `X-Custom-Header-${suffix++}`
+  emit('update:modelValue', { ...props.modelValue, headers: Object.fromEntries([...entries, [name, '']]) })
+}
+
+function removeHeader(name: string) {
+  emit('update:modelValue', {
+    ...props.modelValue,
+    headers: Object.fromEntries(Object.entries(props.modelValue.headers).filter(([key]) => key !== name)),
+  })
 }
 </script>
 
@@ -43,7 +54,17 @@ function updateHeaderValue(value: string) {
     <n-grid-item><n-form-item label="响应文本路径"><n-input :value="modelValue.mapping.response.text" @update:value="updateMap('response', 'text', $event)" /></n-form-item></n-grid-item>
     <n-grid-item><n-form-item label="流式文本路径"><n-input :value="modelValue.mapping.stream.text" @update:value="updateMap('stream', 'text', $event)" /></n-form-item></n-grid-item>
     <n-grid-item><n-form-item label="模型列表路径"><n-input :value="modelValue.mapping.models" @update:value="updateModels" /></n-form-item></n-grid-item>
-    <n-grid-item><n-form-item label="认证 Header"><n-input :value="Object.keys(modelValue.headers)[0] || ''" @update:value="updateHeaderName" /></n-form-item></n-grid-item>
-    <n-grid-item><n-form-item label="Header 模板"><n-input :value="Object.values(modelValue.headers)[0] || ''" @update:value="updateHeaderValue" /></n-form-item></n-grid-item>
+    <n-grid-item span="1 m:2">
+      <n-form-item label="请求 Headers">
+        <n-space vertical style="width: 100%">
+          <n-space v-for="([name, value], index) in Object.entries(modelValue.headers)" :key="`${index}-${name}`" :wrap="false">
+            <n-input :value="name" placeholder="Header 名称" @update:value="updateHeader(index, $event, value)" />
+            <n-input :value="value" placeholder="Header 模板" @update:value="updateHeader(index, name, $event)" />
+            <n-button type="error" quaternary @click="removeHeader(name)">删除</n-button>
+          </n-space>
+          <n-button dashed @click="addHeader">添加 Header</n-button>
+        </n-space>
+      </n-form-item>
+    </n-grid-item>
   </n-grid>
 </template>

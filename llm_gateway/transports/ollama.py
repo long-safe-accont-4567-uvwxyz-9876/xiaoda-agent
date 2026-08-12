@@ -12,7 +12,7 @@ from llm_gateway.transports.base import (
     CompletionChunk,
     CompletionRequest,
     ProviderTransport,
-    TransportError,
+    map_http_error,
     normalize_finish_reason,
     parse_tool_calls,
 )
@@ -62,7 +62,7 @@ class OllamaTransport(ProviderTransport):
                 raw=data,
             )
         except Exception as error:
-            raise TransportError("completion request failed") from error
+            raise map_http_error(error, "completion request failed") from error
 
     async def stream(self, request: CompletionRequest) -> AsyncIterator[CompletionChunk]:
         try:
@@ -81,7 +81,7 @@ class OllamaTransport(ProviderTransport):
                         raw=data,
                     )
         except Exception as error:
-            raise TransportError("stream request failed") from error
+            raise map_http_error(error, "stream request failed") from error
 
     async def discover_models(self) -> tuple[str, ...]:
         try:

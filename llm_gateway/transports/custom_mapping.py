@@ -18,6 +18,35 @@ from security.ssrf_guard import build_secure_async_client, resolve_and_pin
 
 _PATH = re.compile(r"^[A-Za-z][A-Za-z0-9_-]*(?:\.(?:[A-Za-z][A-Za-z0-9_-]*|[0-9]+|\*))*$")
 _HEADER = re.compile(r"^(?:[^{}]|\{(?:api_key|base_url)\})*$")
+_HEADER_NAME = re.compile(r"^[!#$%&'*+\-.^_`|~0-9A-Za-z]+$")
+_RESERVED_HEADERS = {
+    "connection",
+    "content-length",
+    "host",
+    "keep-alive",
+    "proxy-connection",
+    "te",
+    "trailer",
+    "transfer-encoding",
+    "upgrade",
+}
+
+
+def validate_custom_headers(headers: Mapping[str, str]) -> dict[str, str]:
+    if not isinstance(headers, Mapping):
+        raise ValueError("headers must be an object")
+    result = {}
+    for name, template in headers.items():
+        if not isinstance(name, str) or not _HEADER_NAME.fullmatch(name):
+            raise ValueError("invalid header name")
+        if name.lower() in _RESERVED_HEADERS:
+            raise ValueError(f"reserved header is not allowed: {name}")
+        if not isinstance(template, str) or not _HEADER.fullmatch(template):
+            raise ValueError("invalid header template")
+        if any(ord(character) < 32 or ord(character) == 127 for character in template):
+            raise ValueError("invalid header value")
+        result[name] = template
+    return result
 
 
 class CustomMappingTransport(ProviderTransport):
@@ -91,12 +120,10 @@ class CustomMappingTransport(ProviderTransport):
         return path
 
     def _render_headers(self, headers: Mapping[str, str], api_key: str) -> dict[str, str]:
-        result = {}
-        for name, template in headers.items():
-            if not isinstance(name, str) or not isinstance(template, str) or not _HEADER.fullmatch(template):
-                raise ValueError("invalid header template")
-            result[name] = template.replace("{api_key}", api_key).replace("{base_url}", self._base_url)
-        return result
+        return {
+            name: template.replace("{api_key}", api_key).replace("{base_url}", self._base_url)
+            for name, template in validate_custom_headers(headers).items()
+        }
 
     @staticmethod
     def _safe_endpoint(path: str) -> str:

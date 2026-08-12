@@ -6,7 +6,7 @@ import re
 import sys
 import urllib.parse
 from collections.abc import Callable, Mapping
-from dataclasses import asdict
+from dataclasses import asdict, dataclass
 from typing import Any
 
 from loguru import logger
@@ -27,6 +27,7 @@ from llm_gateway.transports import (
     OpenAICompatibleTransport,
     ProviderTransport,
 )
+from llm_gateway.transports.custom_mapping import validate_custom_headers
 from security.ssrf_guard import build_secure_async_client, validate_url
 
 
@@ -36,6 +37,19 @@ class ProviderConnectionError(RuntimeError):
 
 class ProviderInUseError(RuntimeError):
     pass
+
+
+@dataclass(frozen=True)
+class ProviderSnapshot:
+    provider_id: str
+    definition: ProviderDefinition | None
+    record: dict[str, Any] | None
+    credential: str
+    report_present: bool
+    report: CapabilityReport | None
+    runtime_kind: str
+    client_present: bool
+    client: Any
 
 
 _OLLAMA_ALLOWED_HOSTS = {
@@ -138,6 +152,60 @@ class ProviderService:
             self._reports[provider_id] = report
             return definition
 
+    async def bind_builtin(
+        self,
+        provider_id: str,
+        draft: Mapping[str, Any] | None = None,
+        credentials: Mapping[str, Any] | None = None,
+    ) -> ProviderDefinition:
+        async with self._lock(provider_id):
+            definition = self.catalog.get(provider_id)
+            if not definition.builtin:
+                raise ValueError(f"provider is not builtin: {provider_id}")
+            merged = self._record(definition)
+            merged.update(draft or {})
+            merged["id"] = definition.id
+            candidate = self._definition(merged)
+            candidate = ProviderDefinition(
+                id=candidate.id,
+                protocol=candidate.protocol,
+                endpoint=candidate.endpoint,
+                auth=candidate.auth,
+                capabilities=candidate.capabilities,
+                builtin=True,
+                default_model=candidate.default_model,
+                default_pro_model=definition.default_pro_model,
+                max_tokens_cap=candidate.max_tokens_cap,
+                metadata=candidate.metadata,
+            )
+            credential = self._credential(candidate, credentials)
+            report, client = await self._stage(candidate, credential)
+            old_credential = self.credentials.read(provider_id)
+            old_report = self._reports.get(provider_id)
+            old_client = None
+            bound = False
+            try:
+                self.credentials.write(provider_id, credential)
+                binder = getattr(self.runtime_router, "bind_builtin", None)
+                if binder is None:
+                    raise RuntimeError("runtime router does not support builtin binding")
+                old_client = binder(provider_id, client)
+                bound = True
+                self._reports[provider_id] = report
+            except Exception:
+                if old_credential:
+                    self.credentials.write(provider_id, old_credential)
+                else:
+                    self.credentials.delete(provider_id)
+                if bound:
+                    binder(provider_id, old_client)
+                if old_report is None:
+                    self._reports.pop(provider_id, None)
+                else:
+                    self._reports[provider_id] = old_report
+                raise
+            return candidate
+
     async def delete(self, provider_id: str) -> None:
         async with self._lock(provider_id):
             definition = self.catalog.get(provider_id)
@@ -185,6 +253,91 @@ class ProviderService:
     def list(self) -> tuple[ProviderDefinition, ...]:
         return self.catalog.list()
 
+    def snapshot(self, provider_id: str) -> ProviderSnapshot:
+        try:
+            definition = self.catalog.get(provider_id)
+        except KeyError:
+            definition = None
+        record = self.config.get(f"models.providers.{provider_id}")
+        credential = self.credentials.read(provider_id)
+        report_present = provider_id in self._reports
+        report = self._reports.get(provider_id)
+        if definition is not None and definition.builtin:
+            getter = getattr(self.runtime_router, "get_builtin_client", None)
+            if getter is None:
+                raise RuntimeError("runtime router does not support builtin snapshots")
+            client = getter(provider_id)
+            runtime_kind = "builtin"
+            client_present = client is not None
+        else:
+            clients = self._runtime_clients()
+            runtime_kind = "custom"
+            client_present = provider_id in clients
+            client = clients.get(provider_id)
+        return ProviderSnapshot(
+            provider_id=provider_id,
+            definition=definition,
+            record=record,
+            credential=credential,
+            report_present=report_present,
+            report=report,
+            runtime_kind=runtime_kind,
+            client_present=client_present,
+            client=client,
+        )
+
+    async def restore_snapshot(self, snapshot: ProviderSnapshot) -> None:
+        async with self._lock(snapshot.provider_id):
+            provider_id = snapshot.provider_id
+            path = f"models.providers.{provider_id}"
+
+            def restore_config() -> None:
+                if snapshot.record is None:
+                    self.config.delete(path)
+                else:
+                    self.config.set(path, snapshot.record)
+
+            def restore_credential() -> None:
+                if snapshot.credential:
+                    self.credentials.write(provider_id, snapshot.credential)
+                else:
+                    self.credentials.delete(provider_id)
+
+            def restore_catalog() -> None:
+                if snapshot.definition is None:
+                    self._safe_unregister(provider_id)
+                else:
+                    self.catalog.register(snapshot.definition, replace_existing=True)
+
+            def restore_runtime() -> None:
+                if snapshot.runtime_kind == "builtin":
+                    binder = getattr(self.runtime_router, "bind_builtin", None)
+                    if binder is None:
+                        raise RuntimeError("runtime router does not support builtin binding")
+                    binder(provider_id, snapshot.client if snapshot.client_present else None)
+                    return
+                clients = self._runtime_clients()
+                if snapshot.client_present:
+                    clients[provider_id] = snapshot.client
+                else:
+                    clients.pop(provider_id, None)
+
+            def restore_report() -> None:
+                if snapshot.report_present:
+                    self._reports[provider_id] = snapshot.report
+                else:
+                    self._reports.pop(provider_id, None)
+
+            failures = self._collect_failures([
+                restore_config,
+                restore_credential,
+                restore_catalog,
+                restore_runtime,
+                restore_report,
+            ])
+            if failures:
+                raise ExceptionGroup(f"provider snapshot restore failed: {provider_id}", failures)
+
     def validate_route(self, provider_id: str, model_id: str) -> str | None:
         try:
             definition = self.catalog.get(provider_id)
@@ -215,17 +368,60 @@ class ProviderService:
 
     def _commit_create(self, definition: ProviderDefinition, credential: str, client: Any) -> None:
         path = f"models.providers.{definition.id}"
+        old_record = self.config.get(path)
+        old_credential = self.credentials.read(definition.id)
+        clients = self._runtime_clients()
+        had_client = definition.id in clients
+        old_client = clients.get(definition.id)
+        had_report = definition.id in self._reports
+        old_report = self._reports.get(definition.id)
+        try:
+            old_definition = self.catalog.get(definition.id)
+        except KeyError:
+            old_definition = None
+
+        def restore_config() -> None:
+            if old_record is None:
+                self.config.delete(path)
+            else:
+                self.config.set(path, old_record)
+
+        def restore_credential() -> None:
+            if old_credential:
+                self.credentials.write(definition.id, old_credential)
+            else:
+                self.credentials.delete(definition.id)
+
+        def restore_catalog() -> None:
+            if old_definition is None:
+                self._safe_unregister(definition.id)
+            else:
+                self.catalog.register(old_definition, replace_existing=True)
+
+        def restore_runtime() -> None:
+            if had_client:
+                clients[definition.id] = old_client
+            else:
+                clients.pop(definition.id, None)
+
+        def restore_report() -> None:
+            if had_report:
+                self._reports[definition.id] = old_report
+            else:
+                self._reports.pop(definition.id, None)
+
         try:
             self.credentials.write(definition.id, credential)
             self.config.set(path, self._record(definition))
             self.catalog.register(definition)
-            self._runtime_clients()[definition.id] = client
+            clients[definition.id] = client
         except Exception:
             self._run_rollback([
-                lambda: self.credentials.delete(definition.id),
-                lambda: self.config.delete(path) if self.config.get(path) is not None else None,
-                lambda: self._safe_unregister(definition.id),
-                lambda: self._runtime_clients().pop(definition.id, None),
+                restore_credential,
+                restore_config,
+                restore_catalog,
+                restore_runtime,
+                restore_report,
             ])
             raise
 
@@ -313,6 +509,8 @@ class ProviderService:
         }
         protocol = ProviderProtocol(protocol_aliases.get(str(protocol_value), str(protocol_value)))
         base_url = str(draft.get("base_url", "")).strip()
+        if protocol is ProviderProtocol.OLLAMA:
+            base_url = ProviderService._normalize_ollama_base_url(base_url)
         if protocol is not ProviderProtocol.LOCAL_ORT and not base_url.startswith(("http://", "https://")):
             raise ValueError("base_url must be an http(s) URL")
         if protocol is not ProviderProtocol.LOCAL_ORT:
@@ -329,7 +527,7 @@ class ProviderService:
                 allowed, reason = validate_url(base_url)
                 if not allowed:
                     raise ValueError(f"base_url safety check failed: {reason}")
-        headers = dict(draft.get("headers") or {})
+        headers = validate_custom_headers(draft.get("headers") or {})
         for header_name, header_value in headers.items():
             if "{api_key}" not in str(header_value) and "{base_url}" not in str(header_value):
                 raise ValueError(
@@ -412,17 +610,9 @@ class ProviderService:
         return lock
 
     def _run_rollback(self, actions: list[Callable[[], None]]) -> None:
-        failures: list[BaseException] = []
-        for action in actions:
-            try:
-                action()
-            except Exception as error:
-                failures.append(error)
-                logger.warning("provider_service.rollback_action_failed", exc_info=True)
+        failures = self._collect_failures(actions)
         if not failures:
             return
-        # 补偿步骤全部尝试后，将补偿失败聚合到当前主异常的 __context__ 链：
-        # 原始提交异常仍保持为主异常，链遍历可看到全部补偿失败。
         primary = sys.exc_info()[1]
         if primary is None:
             return
@@ -439,6 +629,17 @@ class ProviderService:
             node.__context__ = error
             node = error
             seen.add(id(error))
+
+    @staticmethod
+    def _collect_failures(actions: list[Callable[[], None]]) -> list[Exception]:
+        failures: list[Exception] = []
+        for action in actions:
+            try:
+                action()
+            except Exception as error:
+                failures.append(error)
+                logger.warning("provider_service.rollback_action_failed", exc_info=True)
+        return failures
 
     def _safe_unregister(self, provider_id: str) -> None:
         try:
@@ -485,6 +686,13 @@ class ProviderService:
             return host in _OLLAMA_ALLOWED_HOSTS and parsed.port == 11434
         except ValueError:
             return False
+
+    @staticmethod
+    def _normalize_ollama_base_url(base_url: str) -> str:
+        value = base_url.rstrip("/")
+        if value.endswith("/v1"):
+            value = value[:-3].rstrip("/")
+        return value
 
     @staticmethod
     def _build_transport(definition: ProviderDefinition, credential: str) -> ProviderTransport:

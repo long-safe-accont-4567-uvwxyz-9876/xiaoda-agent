@@ -52,26 +52,31 @@ export interface CapabilityReport {
 }
 
 export interface ProviderCredentials {
-  api_key: string
+  api_key?: string
 }
 
 export const providerApi = {
   list: () => get<ProviderDefinition[]>("/providers"),
-  test: (draft: ProviderDraft, credentials: ProviderCredentials) => post<CapabilityReport>("/providers/test", { draft, credentials }),
-  create: (draft: ProviderDraft, credentials: ProviderCredentials) => post<ProviderDefinition>("/providers", { draft, credentials }),
-  update: (id: string, draft: ProviderDraft, credentials: ProviderCredentials) => put<ProviderDefinition>(`/providers/${id}`, { draft, credentials }),
+  test: (draft: ProviderDraft, credentials?: ProviderCredentials) => post<CapabilityReport>("/providers/test", { draft, credentials: credentials ?? {} }),
+  create: (draft: ProviderDraft, credentials?: ProviderCredentials) => post<ProviderDefinition>("/providers", { draft, credentials: credentials ?? {} }),
+  update: (id: string, draft: ProviderDraft, credentials?: ProviderCredentials) => put<ProviderDefinition>(`/providers/${id}`, { draft, credentials: credentials ?? {} }),
   delete: (id: string) => del<{ deleted: string }>(`/providers/${id}`, true),
   capabilities: (id: string) => get<CapabilityReport>(`/providers/${id}` + "/capabilities"),
   models: (id: string) => get<{ provider: string; models: string[] }>(`/providers/${id}` + "/models"),
 }
 
-export function fingerprintProviderDraft(draft: ProviderDraft): string {
-  const ordered = (value: unknown): unknown => {
-    if (Array.isArray(value)) return value.map(ordered)
-    if (value && typeof value === 'object') {
-      return Object.fromEntries(Object.entries(value).sort(([a], [b]) => a.localeCompare(b)).map(([key, item]) => [key, ordered(item)]))
-    }
-    return value
+function ordered(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map(ordered)
+  if (value && typeof value === 'object') {
+    return Object.fromEntries(Object.entries(value).sort(([a], [b]) => a.localeCompare(b)).map(([key, item]) => [key, ordered(item)]))
   }
-  return JSON.stringify(ordered(draft))
+  return value
+}
+
+export function normalizeProviderDraft(draft: ProviderDraft): ProviderDraft {
+  return ordered(draft) as ProviderDraft
+}
+
+export function fingerprintProviderDraft(draft: ProviderDraft): string {
+  return JSON.stringify(normalizeProviderDraft(draft))
 }

@@ -63,6 +63,29 @@ class TransportError(RuntimeError):
     pass
 
 
+def map_http_error(error: BaseException, fallback: str) -> TransportError:
+    try:
+        import httpx
+    except ImportError:
+        return TransportError(fallback)
+    if isinstance(error, httpx.HTTPStatusError):
+        status = error.response.status_code
+        if status in {401, 403}:
+            return TransportError("provider authentication failed")
+        if status == 404:
+            return TransportError("provider endpoint or model not found")
+        if status == 429:
+            return TransportError("provider rate limit exceeded")
+        if 400 <= status < 500:
+            return TransportError(f"provider rejected request with HTTP {status}")
+        return TransportError(f"provider upstream failed with HTTP {status}")
+    if isinstance(error, httpx.TimeoutException):
+        return TransportError("provider request timed out")
+    if isinstance(error, httpx.RequestError):
+        return TransportError("provider connection failed")
+    return TransportError(fallback)
+
+
 class ProviderTransport(ABC):
     def __init__(
         self,

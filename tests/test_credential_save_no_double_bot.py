@@ -244,6 +244,9 @@ class TestSaveKeysSingleTask:
     @staticmethod
     def _mock_save_helpers(monkeypatch):
         """mock save_keys 的辅助函数，避免副作用。"""
+        async def mock_auto_register_providers(updates):
+            return []
+
         async def mock_reload_env_and_cache(updates, env_path):
             # 模拟真实 _reload_env_and_cache 的 os.environ 更新
             for k, v in updates.items():
@@ -254,7 +257,7 @@ class TestSaveKeysSingleTask:
         monkeypatch.setattr("web.routers.setup._reload_env_and_cache", mock_reload_env_and_cache)
         monkeypatch.setattr("web.routers.setup._reset_credential_pool", lambda updates: None)
         monkeypatch.setattr("web.routers.setup._update_config_and_refresh_clients", lambda updates: None)
-        monkeypatch.setattr("web.routers.setup._auto_register_providers", lambda updates: None)
+        monkeypatch.setattr("web.routers.setup._auto_register_providers", mock_auto_register_providers)
 
     async def test_save_keys_qq_changed_creates_single_task(self, monkeypatch):
         """保存新 QQ 凭证时 save_keys 应只 create_task 一次，且 qq_changed=True。

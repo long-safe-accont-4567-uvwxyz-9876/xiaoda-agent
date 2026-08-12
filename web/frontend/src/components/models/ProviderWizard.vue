@@ -48,7 +48,7 @@ watch(() => props.show, show => {
   providers.invalidateTest()
 })
 
-watch(draft, () => providers.invalidateTest(), { deep: true })
+watch(draft, () => providers.invalidateTest(), { deep: true, flush: 'sync' })
 
 function closeWizard() {
   credentials.api_key = ''
@@ -121,7 +121,7 @@ async function save() {
       </template>
       <template v-else>
         <capability-matrix :report="providers.testReport" />
-        <n-alert v-if="!providers.canSave(draft)" type="warning">配置已变化，请重新测试。</n-alert>
+        <n-alert v-if="!providers.canSave(draft, credentials)" type="warning">配置已变化，请重新测试。</n-alert>
       </template>
     </n-form>
     <template #footer>
@@ -130,7 +130,7 @@ async function save() {
         <n-button v-if="stepIndex > 1" @click="stepIndex--">上一步</n-button>
         <n-button v-if="stepIndex < 3" type="primary" @click="stepIndex++">下一步</n-button>
         <n-button v-else-if="stepIndex === 3" type="primary" @click="verify">测试配置</n-button>
-        <n-button v-else type="primary" :disabled="!providers.canSave(draft)" :loading="providers.mutating" @click="save">保存</n-button>
+        <n-button v-else type="primary" :disabled="!providers.canSave(draft, credentials)" :loading="providers.mutating" @click="save">保存</n-button>
       </n-space>
     </template>
   </n-modal>

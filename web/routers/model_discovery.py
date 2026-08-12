@@ -1,11 +1,9 @@
 """模型发现路由：自动发现所有已注册 provider 的可用模型，标注免费/付费。"""
 from __future__ import annotations
-from typing import Any
 
 import asyncio
-
-import os
 import time
+from typing import Any
 
 from fastapi import APIRouter, Depends, Request
 from loguru import logger
@@ -492,11 +490,14 @@ async def set_chat_model(body: dict, request: Request) -> Any:
 
     router_obj = request.app.state.core.router
 
-    # 非 mimo 的 provider 需要自动注册为自定义 provider
-    if provider not in ("mimo",):
-        _ensure_custom_provider(provider, router_obj)
-
     try:
+        validation = request.app.state.provider_service.validate_route(provider, model_id)
+        if validation == "missing":
+            raise ValueError(f"provider {provider} 不存在")
+        if validation in {"disabled", "unavailable"}:
+            raise ValueError(f"provider {provider} 当前不可用于路由")
+        if validation == "model":
+            raise ValueError(f"模型 {model_id} 不属于 provider {provider}")
         info = router_obj.set_chat_model(provider, model_id)
         logger.info("discover.chat_model_set provider={} model={}", provider, model_id)
         # 广播 config_changed WS 事件，通知前端刷新 Agent 模型选项
@@ -512,51 +513,3 @@ async def set_chat_model(body: dict, request: Request) -> Any:
     except Exception as e:
         logger.error("discover.set_chat_model_failed error={}", str(e))
         return Envelope(ok=False, error={"code": "set_failed", "message": str(e)})
-
-
-def _ensure_custom_provider(provider: str, router_obj: Any) -> None:
-    """确保自定义 provider 已注册到 router。
-
-    从 config_service 动态读取 provider 配置，不再硬编码。
-    """
-    if hasattr(router_obj, "_custom_clients") and provider in router_obj._custom_clients:
-        return
-
-    # 先尝试从 config_service 读取
-    try:
-        from web.config_service import get_config_service
-        from web._provider_keys import load_provider_key
-        cfg = get_config_service()
-        record = cfg.get(f"models.providers.{provider}")
-        if record:
-            api_key = load_provider_key(provider)
-            if api_key:
-                from web.custom_providers import register_into_router
-                register_into_router(
-                    router_obj, provider,
-                    record.get("format", "openai"),
-                    record.get("base_url", ""),
-                    api_key,
-                )
-                return
-    except Exception as e:
-        logger.debug("discover.config_service_lookup_failed provider={} error={}", provider, str(e))
-
-    # 回退：从环境变量读取已知 provider
-    from web.custom_providers import register_into_router
-
-    _ENV_FALLBACK = {
-        "siliconflow": ("SILICONFLOW_API_KEY", "https://api.siliconflow.cn/v1"),
-        "openrouter": ("OPENROUTER_API_KEY", "https://openrouter.ai/api/v1"),
-        "modelscope": ("MODELSCOPE_ACCESS_TOKEN", "https://api-inference.modelscope.cn/v1"),
-        "agnes": ("AGNES_API_KEY", os.getenv("AGNES_BASE_URL", "https://apihub.agnes-ai.cn/v1")),
-    }
-
-    if provider in _ENV_FALLBACK:
-        env_key, base_url = _ENV_FALLBACK[provider]
-        api_key = os.getenv(env_key, "")
-        if api_key:
-            register_into_router(router_obj, provider, "openai", base_url, api_key)
-            return
-
-    logger.warning("discover.unknown_provider provider={}", provider)

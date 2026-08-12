@@ -95,6 +95,8 @@ async def delete_provider(provider_id: str, request: Request) -> Any:
         raise HTTPException(404, f"provider {provider_id} not found") from None
     except ProviderInUseError as error:
         raise HTTPException(409, f"provider is used by routes: {error}") from None
+    except ValueError as error:
+        raise HTTPException(400, str(error)) from None
     return Envelope(data={"deleted": provider_id})
 
 

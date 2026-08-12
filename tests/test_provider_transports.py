@@ -3,6 +3,7 @@ from __future__ import annotations
 from types import SimpleNamespace
 from typing import Any
 
+import httpx
 import pytest
 
 from llm_gateway.contracts import ProviderCapabilities
@@ -391,6 +392,24 @@ def test_custom_mapping_rejects_executable_or_unsafe_templates():
         CustomMappingTransport("https://custom.test", mapping={}, headers={"X-Key": "{api_key.__class__}"})
 
 
+@pytest.mark.parametrize(
+    "headers",
+    [
+        {"": "{api_key}"},
+        {"Bad Header": "{api_key}"},
+        {"X-Test\nInjected": "{api_key}"},
+        {"X-Test": "{api_key}\r\nInjected: yes"},
+        {"Host": "{base_url}"},
+        {"content-length": "{api_key}"},
+        {"Transfer-Encoding": "{api_key}"},
+        {"CONNECTION": "{api_key}"},
+    ],
+)
+def test_custom_mapping_rejects_unsafe_header_names_values_and_reserved_headers(headers):
+    with pytest.raises(ValueError, match="header"):
+        CustomMappingTransport("https://custom.test", mapping={}, headers=headers)
+
+
 class RecordingHttpClient:
     """记录发起请求的 URL/headers 的内存 httpx 替身。"""
 
@@ -499,6 +518,23 @@ async def test_transport_normalizes_protocol_errors():
 
     with pytest.raises(TransportError, match="completion request failed"):
         await transport.complete(sample_request())
+
+
+@pytest.mark.asyncio
+async def test_ollama_transport_maps_http_status_without_leaking_response_body():
+    request = httpx.Request("POST", "http://ollama.test/api/chat")
+    response = httpx.Response(401, request=request, text="secret upstream response")
+
+    class UnauthorizedClient(HttpClient):
+        async def post(self, url: str, **kwargs: Any) -> JsonResponse:
+            raise httpx.HTTPStatusError("unauthorized", request=request, response=response)
+
+    transport = OllamaTransport("http://ollama.test", http_client=UnauthorizedClient("ollama"))
+
+    with pytest.raises(TransportError, match="provider authentication failed") as captured:
+        await transport.complete(sample_request())
+
+    assert "secret upstream response" not in str(captured.value)
 
 
 @pytest.mark.asyncio
