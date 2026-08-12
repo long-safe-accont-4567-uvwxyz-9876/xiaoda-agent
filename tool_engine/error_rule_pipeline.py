@@ -80,12 +80,32 @@ class ErrorRulePipeline:
         self._free_api_key = os.getenv("SILICONFLOW_API_KEY", "") or os.getenv("EMBED_API_KEY", "")
         self._free_base_url = "https://api.siliconflow.cn/v1"
         self._free_model = "THUDM/GLM-4-9B-0414"  # 非思考模型，避免 Z1 思考碎片
+        self._disabled = False          # backend=off：完全禁用
+        self._backend = "auto"          # auto/local/api/off（local=走主 LLM）
+        self._backup_free_api_key = ""  # backend=local 时的 key 备份
 
     def set_free_model_client(self, api_key: str, base_url: str, model: str) -> None:
         """配置硅基流动免费模型客户端（与 InstinctManager 接口一致）"""
         self._free_api_key = api_key
         self._free_base_url = base_url
         self._free_model = model
+
+    def set_backend(self, backend: str) -> None:
+        """热更新后端选择：off=禁用；local=禁用免费模型走主 LLM；api/auto=恢复免费模型。"""
+        if backend not in ("auto", "local", "api", "off"):
+            return
+        self._backend = backend
+        if backend == "off":
+            self._disabled = True
+            return
+        self._disabled = False
+        if backend == "local":
+            self._backup_free_api_key = self._free_api_key
+            self._free_api_key = ""
+        else:
+            if self._backup_free_api_key:
+                self._free_api_key = self._backup_free_api_key
+        logger.info("error_rule.backend_set backend={} disabled={}", backend, self._disabled)
 
     async def _call_free_model(self, messages: list, temperature: float = 0.3,
                                 max_tokens: int = 200) -> str | None:
@@ -122,7 +142,7 @@ class ErrorRulePipeline:
         返回规则 dict 或 None（未提取到 / 去重命中 / 节流命中 / 失败）。
         永不抛异常。
         """
-        if not self._available:
+        if not self._available or self._disabled:
             return None
         if not error or len(error.strip()) < 2:
             return None

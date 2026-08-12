@@ -30,6 +30,10 @@ from llm_gateway.transports import (
 from llm_gateway.transports.custom_mapping import validate_custom_headers
 from security.ssrf_guard import build_secure_async_client, validate_url
 
+# 本地 ONNX Runtime GenAI chat provider（与 model_router._LOCAL_ORT_PROVIDER 一致，
+# 不经 provider catalog 注册，由 LocalChatService 提供推理）
+_LOCAL_ORT_PROVIDER = "local-ort"
+
 
 class ProviderConnectionError(RuntimeError):
     pass
@@ -339,6 +343,17 @@ class ProviderService:
                 raise ExceptionGroup(f"provider snapshot restore failed: {provider_id}", failures)
 
     def validate_route(self, provider_id: str, model_id: str) -> str | None:
+        # 本地 ORT GenAI chat provider：不经 provider catalog 注册，
+        # 只要本地 chat transport 已配置且模型名为 local:<id> 形式即可路由。
+        # 实际推理由 LocalChatService 选取已启动的 chat 实例，未选中时
+        # 会给出明确的 LocalModelUnavailableError，不做静默回退。
+        if provider_id == _LOCAL_ORT_PROVIDER:
+            get_transport = getattr(self.runtime_router, "get_transport", None)
+            if get_transport is None or get_transport(_LOCAL_ORT_PROVIDER) is None:
+                return "unavailable"
+            if not model_id.startswith("local:"):
+                return "model"
+            return None
         try:
             definition = self.catalog.get(provider_id)
         except KeyError:

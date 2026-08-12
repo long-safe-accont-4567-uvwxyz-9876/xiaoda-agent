@@ -697,6 +697,17 @@ async def lifespan(app: FastAPI) -> AsyncIterator[Any]:
         from core.background_tasks import _spawn
         _spawn(_prewarm_connections())
 
+        # 恢复常驻本地推理：重启后自动启动 backend=local 节点绑定的模型实例
+        async def _restore_local_node_instances():
+            try:
+                from web.local_deploy_nodes import restore_local_instances
+                from web.config_service import get_config_service
+                await restore_local_instances(core, get_config_service())
+                logger.info("local_deploy.instances_restored")
+            except Exception as _e:
+                logger.warning("local_deploy.instances_restore_failed error={}", _e)
+        _spawn(_restore_local_node_instances())
+
     # 启动事件循环阻塞 watchdog：检测同步阻塞并打印线程栈定位根因
     # 根因：后台任务集体卡 257-265s，_spawn timeout 无法取消同步阻塞
     _stop_watchdog = None

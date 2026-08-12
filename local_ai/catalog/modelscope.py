@@ -41,6 +41,8 @@ _HEX_REVISION_RE = re.compile(r"[0-9a-fA-F]{7,64}")
 _SHA256_RE = re.compile(r"[0-9a-fA-F]{64}")
 _PAGE_SIZE = 200
 _MAX_PAGES = 1000
+# 仓库目录树递归深度上限（防止恶意/异常仓库制造无限深目录拖垮请求）。
+_MAX_DEPTH = 6
 
 # Private / loopback / link-local / reserved IP ranges (IPv4 + IPv6).
 _BLOCKED_NETWORKS = (
@@ -258,14 +260,31 @@ class ModelScopeRepository:
         token: str | None,
     ) -> list[RemoteFile]:
         _validate_revision(revision)
+        # 顶层与子目录（Type == "tree"）全部递归列出：常见 ONNX 仓库把模型文件
+        # 放在 onnx/ 子目录，只列顶层会漏掉 model.onnx，导致布局识别误判。
+        return await self._walk_repository(
+            repository, revision, token, root="", depth=0, visited=set()
+        )
+
+    async def _walk_repository(
+        self,
+        repository: str,
+        revision: str,
+        token: str | None,
+        *,
+        root: str,
+        depth: int,
+        visited: set[str],
+    ) -> list[RemoteFile]:
         headers = self._auth_headers(token)
         files: list[RemoteFile] = []
+        subdirs: list[str] = []
         page_number = 1
         while page_number <= _MAX_PAGES:
             url = f"{self._base_url}models/{repository}/repo/files"
             params = {
                 "Revision": revision,
-                "Root": "",
+                "Root": root,
                 "PageNumber": str(page_number),
                 "PageSize": str(_PAGE_SIZE),
             }
@@ -273,7 +292,12 @@ class ModelScopeRepository:
             data = payload.get("Data") or {}
             page_entries = data.get("Files") or []
             for entry in page_entries:
-                files.append(self._parse_file_entry(entry))
+                if entry.get("Type") == "tree" and depth < _MAX_DEPTH:
+                    path = entry.get("Path") or entry.get("Name") or ""
+                    if isinstance(path, str) and path and path not in visited:
+                        subdirs.append(path)
+                else:
+                    files.append(self._parse_file_entry(entry))
             total_pages = data.get("TotalPages")
             if total_pages is not None:
                 if page_number >= int(total_pages):
@@ -281,6 +305,18 @@ class ModelScopeRepository:
             elif len(page_entries) < _PAGE_SIZE:
                 break
             page_number += 1
+        for subdir in subdirs:
+            visited.add(subdir)
+            files.extend(
+                await self._walk_repository(
+                    repository,
+                    revision,
+                    token,
+                    root=subdir,
+                    depth=depth + 1,
+                    visited=visited,
+                )
+            )
         return files
 
     async def inspect(

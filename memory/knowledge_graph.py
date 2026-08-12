@@ -100,6 +100,13 @@ class KnowledgeGraph:
         self._query_entity_lru: list[str] = []
         # 规则提取器（jieba，<10ms）用于实体前置短路，避免对无实体查询调用 LLM
         self._rule_extractor: Any = None
+        # 节点后端选择：auto/local/api/off（local=走主 LLM；off=禁用提取）
+        self._free_api_key = ""
+        self._free_base_url = ""
+        self._free_model = ""
+        self._disabled = False
+        self._backend = "auto"
+        self._backup_free_api_key = ""
 
     def set_db(self, db: Any) -> None:
         self._db = db
@@ -115,6 +122,23 @@ class KnowledgeGraph:
         self._free_api_key = api_key
         self._free_base_url = base_url
         self._free_model = model
+
+    def set_backend(self, backend: str) -> None:
+        """热更新后端选择：off=禁用提取；local=禁用免费模型走主 LLM；api/auto=恢复免费模型。"""
+        if backend not in ("auto", "local", "api", "off"):
+            return
+        self._backend = backend
+        if backend == "off":
+            self._disabled = True
+            return
+        self._disabled = False
+        if backend == "local":
+            self._backup_free_api_key = self._free_api_key
+            self._free_api_key = ""
+        else:
+            if self._backup_free_api_key:
+                self._free_api_key = self._backup_free_api_key
+        logger.info("kg.backend_set backend={} disabled={}", backend, self._disabled)
 
     async def _call_free_model(self, messages: list, temperature: float = 0.1,
                                 max_tokens: int = 800) -> str | None:
@@ -152,7 +176,7 @@ class KnowledgeGraph:
             return None
 
     async def extract_from_summary(self, summary: str) -> dict:
-        if not summary:
+        if not summary or self._disabled:
             return {"entities": [], "relations": []}
 
         try:

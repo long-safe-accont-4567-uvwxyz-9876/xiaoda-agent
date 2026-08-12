@@ -30,6 +30,16 @@ class InstanceInUseError(RuntimeError):
     pass
 
 
+class _BenchmarkCancelToken:
+    """测速用无操作取消令牌：ORT GenAI stream 需要的 cancel_token 协议。"""
+
+    def is_cancelled(self) -> bool:
+        return False
+
+    def check(self) -> None:
+        return
+
+
 class InstanceManager:
     def __init__(
         self,
@@ -71,6 +81,19 @@ class InstanceManager:
         with self._state_lock:
             return len(self._instances)
 
+    def model_in_use(self, model_id: str) -> bool:
+        """Return True if a running instance is bound to the given model."""
+        with self._state_lock:
+            return model_id in self._model_instances
+
+    def instance_for_model(self, model_id: str) -> ModelInstance | None:
+        """Return the running instance bound to ``model_id``, or None."""
+        with self._state_lock:
+            instance_id = self._model_instances.get(model_id)
+            if instance_id is None:
+                return None
+            return self._instances.get(instance_id)
+
     async def start(
         self,
         model_id: str,
@@ -88,7 +111,11 @@ class InstanceManager:
             if installed is None:
                 raise ModelNotFoundError(f"model not found: {model_id!r}")
             catalog = await self._catalog_model(installed)
-            profile = self._device_registry.recommend(catalog, backend_override)
+            # recommend() 内部触发设备 scan（subprocess + onnxruntime 会话创建），
+            # 是重同步操作，必须在线程池执行避免阻塞事件循环
+            profile = await asyncio.to_thread(
+                self._device_registry.recommend, catalog, backend_override
+            )
             runtime = self._runtime_registry.create(profile, installed_model=installed)
             try:
                 started = await self._run_sync(model_id, runtime.start, profile)
@@ -158,6 +185,117 @@ class InstanceManager:
     def list(self) -> list[ModelInstance]:
         with self._state_lock:
             return list(self._instances.values())
+
+    async def benchmark(
+        self,
+        model_id: str,
+        *,
+        iterations: int = 3,
+    ) -> dict[str, Any]:
+        """对已部署模型执行真实推理测速。
+
+        仅允许对已启动的实例测速（直接复用其 runtime）；模型未启动时
+        拒绝测速并给出明确提示，不再自动临时启动（避免无意义的冷启动
+        结果干扰用户对运行中负载的观测）。
+        返回 {ok, purpose, latency_ms, throughput, device_id, provider, error, ...}。
+        """
+        if type(iterations) is not int or iterations <= 0:
+            raise ValueError("iterations must be a positive integer")
+        lock = self._model_locks.setdefault(model_id, asyncio.Lock())
+        async with lock:
+            with self._state_lock:
+                existing_id = self._model_instances.get(model_id)
+                runtime: RuntimeAdapter | None = None
+                instance: ModelInstance | None = None
+                purpose: ModelPurpose | None = None
+                if existing_id is not None:
+                    instance = self._instances.get(existing_id)
+                    runtime = self._runtimes.get(existing_id)
+                    purpose = self._instance_purposes.get(existing_id)
+            if runtime is None or instance is None or purpose is None:
+                return {
+                    "ok": False,
+                    "model_id": model_id,
+                    "purpose": None,
+                    "error": "模型尚未启动，无法测速。请先在「部署」中启动该模型后再测速。",
+                }
+            result = await self._benchmark_runtime(model_id, runtime, purpose, iterations)
+            result["device_id"] = instance.device_id
+            result["model_id"] = model_id
+            return result
+
+    async def _benchmark_runtime(
+        self,
+        model_id: str,
+        runtime: RuntimeAdapter | None,
+        purpose: ModelPurpose | None,
+        iterations: int,
+    ) -> dict[str, Any]:
+        import time as time_module
+
+        result: dict[str, Any] = {"ok": False, "purpose": purpose.value if purpose else None, "error": None}
+        if runtime is None or purpose is None:
+            result["error"] = "runtime unavailable"
+            return result
+        try:
+            if purpose == ModelPurpose.EMBEDDING:
+                samples = [
+                    "本地向量模型推理性能基准测试：请将这句话编码为向量。",
+                    "跨设备测速样本：语义检索与重排服务的延迟观测。",
+                ]
+                start = time_module.perf_counter()
+                vectors = None
+                for _ in range(iterations):
+                    vectors = await self._run_sync(model_id, runtime.embed, samples)
+                elapsed = max(time_module.perf_counter() - start, 1e-9)
+                result["ok"] = True
+                result["iterations"] = iterations
+                result["samples"] = len(samples)
+                result["latency_ms"] = round(elapsed / iterations * 1000, 2)
+                result["samples_per_second"] = round(iterations * len(samples) / elapsed, 1)
+                if vectors:
+                    result["dimensions"] = len(vectors[0])
+            elif purpose == ModelPurpose.RERANKER:
+                query = "本地语义重排测速"
+                documents = [
+                    "本地向量模型推理性能基准测试文档一。",
+                    "语义重排服务的延迟观测文档二。",
+                    "跨设备测速样本文档三。",
+                ]
+                start = time_module.perf_counter()
+                for _ in range(iterations):
+                    scores = await self._run_sync(model_id, runtime.score, query, documents)
+                elapsed = max(time_module.perf_counter() - start, 1e-9)
+                result["ok"] = True
+                result["iterations"] = iterations
+                result["documents"] = len(documents)
+                result["latency_ms"] = round(elapsed / iterations * 1000, 2)
+                result["samples_per_second"] = round(iterations * len(documents) / elapsed, 1)
+                if isinstance(scores, list):
+                    result["scores"] = [round(float(score), 4) for score in scores]
+            elif purpose == ModelPurpose.CHAT:
+                messages = [{"role": "user", "content": "请用一句话回答：你叫什么？"}]
+                tokens = 0
+                start = time_module.perf_counter()
+                for _ in range(iterations):
+                    async for _chunk in runtime.stream(
+                        messages,
+                        {"max_tokens": 24},
+                        _BenchmarkCancelToken(),
+                    ):
+                        tokens += 1
+                elapsed = max(time_module.perf_counter() - start, 1e-9)
+                result["ok"] = True
+                result["iterations"] = iterations
+                result["tokens"] = tokens
+                result["latency_ms"] = round(elapsed / iterations * 1000, 2)
+                result["tokens_per_second"] = round(tokens / elapsed, 1)
+            else:
+                result["error"] = f"unsupported benchmark purpose: {purpose.value}"
+        except Exception as error:  # noqa: BLE001
+            result["ok"] = False
+            result["error"] = str(error)
+        return result
 
     async def resolve_runtime(
         self,

@@ -288,15 +288,19 @@ async def local_deploy_devices(request: Request) -> Any:
     """算力设备检测：CPU / NPU / GPU 探测结果 + 当前持久化设备 + 实时占用。"""
     services = getattr(request.app.state, "local_ai", None)
     if services is not None:
-        authoritative = services.devices.scan()
+        # scan() 内部执行 subprocess 系统探测 + onnxruntime 会话创建，
+        # 必须在线程池执行，避免阻塞事件循环
+        authoritative = await asyncio.to_thread(services.devices.scan)
         configured = str(get_config_service().get("local_deploy.device", "") or "")
         current = next(
             (device.id for device in authoritative if device.id == configured),
             next((device.id for device in authoritative if device.kind == configured), ""),
         )
         devices = []
+        kinds: set[str] = set()
         for device in authoritative:
             item = device.to_dict()
+            kinds.add(str(item["kind"]))
             devices.append({
                 "id": item["id"],
                 "name": item["kind"].upper(),
@@ -311,18 +315,42 @@ async def local_deploy_devices(request: Request) -> Any:
                     "memory_available": item["memory_available"],
                 },
             })
+        # 保证 CPU/NPU/GPU 三卡位 UI 一致性：权威列表只含实测硬件，
+        # 未探测到 NPU/GPU 时补置灰卡位（与 _detect_devices fallback 行为对齐）
+        if "npu" not in kinds:
+            devices.append({
+                "id": "npu",
+                "name": "NPU",
+                "model": "未检测到可用 NPU",
+                "desc": "未检测到可用 NPU（需 Linux 驱动与 sudo 免密）",
+                "available": False,
+                "active": current == "npu",
+                "stats": {"status": "unavailable"},
+            })
+        if "gpu" not in kinds:
+            devices.append({
+                "id": "gpu",
+                "name": "GPU",
+                "model": "未检测到独立显卡",
+                "desc": "此模型暂不支持 GPU 推理",
+                "available": False,
+                "active": current == "gpu",
+                "stats": {"status": "unavailable"},
+            })
         return Envelope(data={
             "current": current,
             "devices": devices,
             "runtime_backend": os.getenv("LOCAL_EMBED_BACKEND", "auto"),
         })
-    data = _detect_devices()
+    # _detect_devices 内含 sudo -n NPU 探测（最长 15s）等同步重操作，
+    # 必须在线程池执行，避免阻塞事件循环
+    data = await asyncio.to_thread(_detect_devices)
     data["runtime_backend"] = os.getenv("LOCAL_EMBED_BACKEND", "auto")
     vs = _get_vector_store(request)
     # 附加实时性能/占用数据（不做 5 分钟缓存，保持页面 5s 轮询下的新鲜度）
     for dev in data.get("devices", []):
         if dev["id"] == "cpu":
-            dev["stats"] = _cpu_stats()
+            dev["stats"] = await asyncio.to_thread(_cpu_stats)
         elif dev["id"] == "npu":
             dev["stats"] = _npu_stats(vs)
         else:
@@ -341,7 +369,8 @@ async def local_deploy_set_device(request: Request, body: dict) -> Any:
         raise HTTPException(status_code=422, detail="device must be 'cpu' or 'npu'")
     if device == "npu":
         from memory.npu_embed import probe_npu
-        if not probe_npu():
+        # sudo -n 探测最长 15s，必须在线程池执行避免阻塞事件循环
+        if not await asyncio.to_thread(probe_npu):
             raise HTTPException(status_code=409, detail="未检测到可用 NPU 设备")
     get_config_service().set("local_deploy.device", device)
     # 清空探测缓存，下次查询立即反映新选择
@@ -396,6 +425,67 @@ async def local_deploy_stop(request: Request) -> Any:
         raise HTTPException(status_code=409, detail="Vector store not initialized")
     status = await asyncio.to_thread(vs.stop_local_engine)
     return Envelope(data=status)
+
+
+@router.get("/local-deploy/model-nodes", response_model=Envelope[list[dict]])
+async def local_deploy_model_nodes(request: Request) -> Any:
+    """功能节点清单与状态：每个节点的后端选择 + API/本地可用性。
+
+    system 服务节点（主 LLM 除外）——RAG 与系统内部 AI 功能依赖的免费模型入口，
+    前端按节点选择「本地模型 / API」。
+    """
+    from web.local_deploy_nodes import build_status
+    core = getattr(request.app.state, "core", None)
+    vs = _get_vector_store(request)
+    nodes = await build_status(core, vs, get_config_service())
+    return Envelope(data=nodes)
+
+
+@router.put("/local-deploy/model-nodes", response_model=Envelope[dict])
+async def local_deploy_set_model_node(request: Request, body: dict) -> Any:
+    """设置功能节点的后端选择（local/api），持久化 + 热生效。
+
+    选择 local 时可附 local_model 指定具体本地模型（如已安装的 bge 仓库）。
+    """
+    from web.local_deploy_nodes import (
+        apply_to_runtime,
+        ensure_local_instance,
+        get_backend,
+        get_local_model,
+        set_backend,
+        stop_node_instance,
+    )
+    node_id = str((body or {}).get("node_id", "")).strip()
+    backend = str((body or {}).get("backend", "")).strip().lower()
+    local_model = (body or {}).get("local_model")
+    local_model = str(local_model).strip() if local_model is not None else None
+    prev_backend = get_backend(get_config_service(), node_id)
+    prev_model = get_local_model(get_config_service(), node_id)
+    try:
+        normalized = set_backend(
+            get_config_service(), node_id, backend, local_model=local_model
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=422, detail=str(e)) from e
+    core = getattr(request.app.state, "core", None)
+    vs = _get_vector_store(request)
+    if core is not None:
+        # 常驻服务：切本地 → 启动对应模型实例；切 API → 关闭本地推理实例
+        if normalized == "local" and local_model:
+            await ensure_local_instance(core, node_id, local_model)
+        elif normalized == "api" and prev_backend == "local" and prev_model:
+            await stop_node_instance(core, node_id, prev_model)
+        # 热生效（embedding 引擎切换走线程池，避免阻塞事件循环）
+        if node_id == "embedding":
+            from web.local_deploy_nodes import apply_to_runtime as _apply
+            await asyncio.to_thread(_apply, core, vs, node_id, normalized)
+        else:
+            apply_to_runtime(core, vs, node_id, normalized)
+    return Envelope(data={
+        "node_id": node_id,
+        "backend": normalized,
+        "effective": get_backend(get_config_service(), node_id),
+    })
 
 
 @router.get("/local-deploy/logs", response_model=Envelope[list[str]])

@@ -383,7 +383,11 @@ class AgentCoreBootstrapper:
 
         core = self.core
 
-        # 1. Reranker + QueryTransformer（硅基流动免费模型）
+        # 1. Reranker + QueryTransformer（硅基流动免费模型，可按节点选择本地/API）
+        from web.config_service import get_config_service
+        from web.local_deploy_nodes import get_backend
+        _cfg_svc = get_config_service()
+
         reranker = self._init_reranker(config)
         from local_ai.integration.reranker import LocalRerankerService
         from memory.vector_store import _default_local_model_dir
@@ -395,7 +399,10 @@ class AgentCoreBootstrapper:
             os.getenv("LOCAL_EMBED_QUERY_PREFIX", ""),
             remote_reranker=reranker,
         )
-        query_transformer = self._init_query_transformer(config)
+        # 应用 reranker 节点后端选择（auto/local/api/off）
+        if isinstance(memory_services.reranker, LocalRerankerService):
+            memory_services.reranker.set_backend(get_backend(_cfg_svc, "reranker"))
+        query_transformer = self._init_query_transformer(config, router=core.router)
 
         # 2. Memory + KnowledgeGraph
         core.memory = MemoryManager(
@@ -420,7 +427,12 @@ class AgentCoreBootstrapper:
             logger.warning("bootstrap.governance_init_failed", error=str(e))
         core.knowledge_graph = KnowledgeGraph(db=core.db, knowledge_db=core.db.knowledge, router=core.router)
         sf_key = os.getenv("SILICONFLOW_API_KEY", "") or os.getenv("EMBED_API_KEY", "")
-        if sf_key:
+        kg_backend = get_backend(get_config_service(), "kg_extract")
+        if kg_backend == "off":
+            core.knowledge_graph.set_backend("off")
+        elif kg_backend == "local":
+            core.knowledge_graph.set_backend("local")
+        elif sf_key:
             core.knowledge_graph.set_free_model_client(
                 api_key=sf_key,
                 base_url="https://api.siliconflow.cn/v1",
@@ -438,8 +450,13 @@ class AgentCoreBootstrapper:
                     vector_store=core._vec_store,
                     router=core.router,
                 )
-                # 复用 v1 的免费模型配置，确保 KG v2 提取也走免费模型
-                if sf_key:
+                # 复用 v1 的免费模型配置，确保 KG v2 提取也走相同后端
+                kg_v2_set_backend = getattr(kg_v2, "set_backend", None)
+                if kg_backend == "off" and kg_v2_set_backend is not None:
+                    kg_v2_set_backend("off")
+                elif kg_backend == "local" and kg_v2_set_backend is not None:
+                    kg_v2_set_backend("local")
+                elif sf_key:
                     kg_v2.set_free_model_client(
                         api_key=sf_key,
                         base_url="https://api.siliconflow.cn/v1",
@@ -505,20 +522,34 @@ class AgentCoreBootstrapper:
         )
 
     @staticmethod
-    def _init_query_transformer(config: Any) -> Any:
-        """初始化 QueryTransformer（硅基流动免费模型）。无 API Key 时返回 None。"""
+    def _init_query_transformer(config: Any, router: Any = None) -> Any:
+        """初始化 QueryTransformer（硅基流动免费模型，可按节点选本地=主 LLM）。"""
         from memory.query_transform import QueryTransformer
+        from web.config_service import get_config_service
+        from web.local_deploy_nodes import get_backend
         if not getattr(config, "QUERY_TRANSFORM_ENABLED", True):
             logger.info("query_transformer.disabled_by_config")
             return None
+        backend = get_backend(get_config_service(), "query_transform")
+        if backend == "off":
+            logger.info("query_transformer.disabled_by_node_off")
+            return QueryTransformer(router=router, backend="off")
+        if backend == "local":
+            if router is None:
+                logger.info("query_transformer.disabled_no_router")
+                return None
+            logger.info("query_transformer.local_router_mode")
+            return QueryTransformer(router=router, backend="local")
         qt_api_key = os.getenv("SILICONFLOW_API_KEY", "") or os.getenv("EMBED_API_KEY", "")
         if not qt_api_key:
             logger.info("query_transformer.disabled_no_api_key")
             return None
         logger.info("query_transformer.enabled", model="THUDM/GLM-4-9B-0414 (free)")
         return QueryTransformer(
+            router=router,
             api_key=qt_api_key,
             base_url="https://api.siliconflow.cn/v1",
+            backend=backend,
         )
 
     async def _init_instinct_and_pipeline(self, core: Any, sf_key: str) -> None:
@@ -526,8 +557,16 @@ class AgentCoreBootstrapper:
         from instinct_manager import InstinctManager
         core.instinct_manager = InstinctManager(db=core.db, router=core.router)
         await core.instinct_manager.init()
-        # Instinct 提取改用硅基流动免费模型（非思考模型，避免 Z1 思考碎片）
-        if sf_key:
+        # Instinct 提取：按节点后端选择注入免费模型（local=主 LLM / off=禁用）
+        from web.config_service import get_config_service
+        from web.local_deploy_nodes import get_backend
+        instinct_backend = get_backend(get_config_service(), "instinct")
+        if instinct_backend == "off":
+            core.instinct_manager.set_backend("off")
+        elif instinct_backend == "local":
+            core.instinct_manager.set_backend("local")
+        elif sf_key:
+            # Instinct 提取改用硅基流动免费模型（非思考模型，避免 Z1 思考碎片）
             core.instinct_manager.set_free_model_client(
                 api_key=sf_key,
                 base_url="https://api.siliconflow.cn/v1",
@@ -543,7 +582,12 @@ class AgentCoreBootstrapper:
         try:
             from tool_engine.error_rule_pipeline import ErrorRulePipeline
             core.error_pipeline = ErrorRulePipeline(db=core.db, router=core.router)
-            if sf_key:
+            error_backend = get_backend(get_config_service(), "error_rule")
+            if error_backend == "off":
+                core.error_pipeline.set_backend("off")
+            elif error_backend == "local":
+                core.error_pipeline.set_backend("local")
+            elif sf_key:
                 core.error_pipeline.set_free_model_client(
                     api_key=sf_key,
                     base_url="https://api.siliconflow.cn/v1",

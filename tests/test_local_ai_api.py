@@ -62,11 +62,14 @@ class FakeCatalog:
 
 class FakeModels:
     def __init__(self) -> None:
-        self.items = [Record(id="installed:qwen", removable=True)]
+        self.items = [Record(id="installed:qwen", removable=True, directory="/tmp/models/installed:qwen")]
         self.removed: list[str] = []
 
     async def list(self) -> list[Record]:
         return self.items
+
+    async def get(self, model_id: str) -> Record | None:
+        return next((item for item in self.items if item.id == model_id), None)
 
     async def remove(self, model_id: str) -> None:
         self.removed.append(model_id)
@@ -79,6 +82,14 @@ class FakeDownloads:
 
     def list(self) -> list[Record]:
         return self.items
+
+    def active_for_model(self, model_id: str) -> list[Record]:
+        terminal = {"completed", "failed", "cancelled", "quarantined"}
+        return [
+            item
+            for item in self.items
+            if item.model_id == model_id and item.state not in terminal
+        ]
 
     def create(self, model: Record, destination: str) -> Record:
         task = Record(id="download:one", model_id=model.id, destination=destination, state="pending")
@@ -113,6 +124,9 @@ class FakeInstances:
 
     async def stop(self, instance_id: str) -> None:
         self.items = [item for item in self.items if item.id != instance_id]
+
+    def model_in_use(self, model_id: str) -> bool:
+        return any(item.model_id == model_id for item in self.items)
 
     def get(self, instance_id: str) -> Record | None:
         return next((item for item in self.items if item.id == instance_id), None)
@@ -362,6 +376,91 @@ def test_remove_model_requires_confirmation(
     assert services.models.removed == []
     assert client.delete(path, headers={"X-Confirm": "yes"}).status_code == 204
     assert services.models.removed == ["installed:qwen"]
+
+
+def test_remove_model_rejects_unknown_model(
+    client: TestClient,
+) -> None:
+    response = client.delete(
+        "/api/v1/local-ai/models/installed:missing",
+        headers={"X-Confirm": "yes"},
+    )
+    assert response.status_code == 404
+
+
+def test_remove_model_rejects_running_instance(
+    client: TestClient,
+    services: SimpleNamespace,
+) -> None:
+    await_instance = asyncio.run(services.instances.start("installed:qwen", "cpu:0"))
+    assert await_instance.id == "instance:one"
+    response = client.delete(
+        "/api/v1/local-ai/models/installed:qwen",
+        headers={"X-Confirm": "yes"},
+    )
+    assert response.status_code == 409
+    assert services.models.removed == []
+
+
+def test_remove_model_rejects_active_download(
+    client: TestClient,
+    services: SimpleNamespace,
+) -> None:
+    task = services.downloads.create(services.catalog.items[0], "/models")
+    assert task.id == "download:one"
+    task.model_id = "installed:qwen"
+    response = client.delete(
+        "/api/v1/local-ai/models/installed:qwen",
+        headers={"X-Confirm": "yes"},
+    )
+    assert response.status_code == 409
+    assert services.models.removed == []
+
+
+def test_remove_model_cleans_disk_directory(
+    client: TestClient,
+    services: SimpleNamespace,
+    tmp_path,
+) -> None:
+    model_dir = tmp_path / "installed:qwen"
+    model_dir.mkdir(parents=True)
+    (model_dir / "model.onnx").write_text("fake")
+    services.models.items[0].directory = str(model_dir)
+    response = client.delete(
+        "/api/v1/local-ai/models/installed:qwen",
+        headers={"X-Confirm": "yes"},
+    )
+    assert response.status_code == 204
+    assert not model_dir.exists()
+
+
+def test_spawn_reports_background_task_failure(
+    services: SimpleNamespace,
+    caplog,
+) -> None:
+    from web.routers.local_ai import LocalAIServices
+
+    ai = LocalAIServices(
+        devices=services.devices,
+        catalog=services.catalog,
+        models=services.models,
+        downloads=services.downloads,
+        instances=services.instances,
+        broadcast=services.broadcast,
+        storage_policy=services.storage_policy,
+    )
+
+    async def failing() -> None:
+        raise RuntimeError("boom")
+
+    async def run() -> None:
+        ai.spawn(failing())
+        await asyncio.sleep(0.05)
+        assert not ai.background_tasks
+
+    asyncio.run(run())
+    assert "background task failed" in caplog.text
+    assert "boom" in caplog.text
 
 
 def test_request_id_idempotency_is_scoped_by_resource(

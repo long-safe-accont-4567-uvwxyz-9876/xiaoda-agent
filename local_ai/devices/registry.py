@@ -32,6 +32,11 @@ def _provider_device_id(provider: str) -> str:
     return f"ort:{suffix}"
 
 
+# 云端/远程推理提供器不属于本地算力设备，探测时必须排除，
+# 否则会以 degraded 状态混入设备列表误导用户
+_NON_LOCAL_PROVIDERS = frozenset({"AzureExecutionProvider"})
+
+
 def _string_values(value: Any) -> tuple[str, ...]:
     if isinstance(value, str):
         return (value,)
@@ -115,7 +120,8 @@ def _hardware_for_backend(
             if device.kind == "gpu" and device.evidence.get("vendor") == vendor
         ]
     if backend.provider == "DmlExecutionProvider":
-        return [device for device in devices if device.kind == "gpu"]
+        # DirectML 可承载 Windows GPU 与 NPU（Intel AI Boost / Qualcomm Hexagon）
+        return [device for device in devices if device.kind in ("gpu", "npu")]
     return []
 
 
@@ -130,6 +136,10 @@ def _backend_for_hardware(
         "ROCMExecutionProvider",
         "DmlExecutionProvider",
     }:
+        # Windows NPU（ComputeAccelerator PnP 设备）无 CUDA 式设备序号，
+        # DirectML 直接承载即可，无需 device_id 绑定。
+        if backend.provider == "DmlExecutionProvider" and hardware.kind == "npu":
+            return backend
         provider_ordinals = hardware.evidence.get("provider_ordinals")
         if not isinstance(provider_ordinals, Mapping):
             return None
@@ -188,6 +198,11 @@ class DeviceRegistry:
         previous_backends = self._backends
         system_devices = list(self._system_probe())
         available_providers = self._provider_probe.list_available()
+        available_providers = tuple(
+            provider
+            for provider in available_providers
+            if provider not in _NON_LOCAL_PROVIDERS
+        )
         current_providers = set(available_providers)
         cpu = next((device for device in system_devices if device.kind == "cpu"), None)
         if cpu is None and "CPUExecutionProvider" in current_providers:
@@ -369,7 +384,7 @@ class DeviceRegistry:
                         hardware,
                         backends=hardware.backends + (bound_backend,),
                         state=(
-                            hardware.state
+                            DeviceState.AVAILABLE
                             if backend.healthy
                             else DeviceState.DEGRADED
                         ),
@@ -568,8 +583,14 @@ class DeviceRegistry:
         if len(providers) > 1:
             options["providers"] = providers
             options["provider_options"] = provider_options
+        # ORT GenAI 模型由 CPU backend 承载：runtime 以模型清单为准（ort_genai），
+        # 而不是 ORT 设备扫描注册的 ort runtime
+        runtime = backend.runtime
+        model_runtimes = _allowed(model.compatibility, "runtimes", "runtime")
+        if runtime == "ort" and "ort_genai" in model_runtimes:
+            runtime = "ort_genai"
         return RuntimeProfile(
-            runtime=backend.runtime,
+            runtime=runtime,
             device_id=device.id,
             provider=backend.provider,
             options=options,
@@ -662,8 +683,15 @@ class DeviceRegistry:
             return False
         if providers and backend.provider not in providers:
             return False
-        if runtimes and backend.runtime.value not in runtimes:
-            return False
+        if runtimes:
+            # CPU 可承载 ORT GenAI 模型：CPUExecutionProvider 能加载 ort_genai 运行时，
+            # 只是 runtime 标识不同（ORT 设备扫描只注册 ort runtime backend）。
+            ort_genai_on_cpu = (
+                "ort_genai" in runtimes
+                and backend.provider == "CPUExecutionProvider"
+            )
+            if not ort_genai_on_cpu and backend.runtime.value not in runtimes:
+                return False
         if purposes and model.purpose.value not in purposes:
             return False
         if backend.purposes and model.purpose not in backend.purposes:

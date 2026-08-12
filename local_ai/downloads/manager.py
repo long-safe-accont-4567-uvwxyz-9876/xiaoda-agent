@@ -43,6 +43,10 @@ class DownloadManager:
         self._models: dict[str, CatalogModel] = {}
         self._tokens: dict[str, CancelToken] = {}
         self._locks: dict[str, asyncio.Lock] = {}
+        # 正在运行下载循环的 task_id 集合：pause/cancel 据此判断是否可立即
+        # 删除 .part，还是需要等循环退出（关闭文件句柄）后再清理。
+        self._running: set[str] = set()
+        self._discard_on_exit: set[str] = set()
 
     def create(self, model: CatalogModel, destination: str | Path) -> DownloadTask:
         destination_path = Path(destination).expanduser().resolve()
@@ -65,56 +69,88 @@ class DownloadManager:
     def list(self) -> list[DownloadTask]:
         return list(self._tasks.values())
 
+    def active_for_model(self, model_id: str) -> list[DownloadTask]:
+        """Return non-terminal download tasks referencing the given model.
+
+        completed / failed / cancelled / quarantined 视为终态，不再占用模型。
+        """
+        terminal = {
+            TaskState.COMPLETED,
+            TaskState.FAILED,
+            TaskState.CANCELLED,
+            TaskState.QUARANTINED,
+        }
+        return [
+            task
+            for task in self._tasks.values()
+            if task.model_id == model_id and task.state not in terminal
+        ]
+
     async def start(self, task_id: str) -> DownloadTask:
         self._require_task(task_id)
         lock = self._locks.setdefault(task_id, asyncio.Lock())
-        async with lock:
-            task = self._require_task(task_id)
-            if task.state is TaskState.COMPLETED:
-                return task
-            token = CancelToken(timeout=None)
-            self._tokens[task_id] = token
-            await self._update(task_id, state=TaskState.DOWNLOADING, error=None)
-            started = time.monotonic()
-            starting_bytes = self._tasks[task_id].bytes_downloaded
-            try:
-                model = self._models[task_id]
-                for manifest in model.files:
+        self._running.add(task_id)
+        try:
+            async with lock:
+                task = self._require_task(task_id)
+                if task.state is TaskState.COMPLETED:
+                    return task
+                token = CancelToken(timeout=None)
+                self._tokens[task_id] = token
+                await self._update(task_id, state=TaskState.DOWNLOADING, error=None)
+                started = time.monotonic()
+                starting_bytes = self._tasks[task_id].bytes_downloaded
+                try:
+                    model = self._models[task_id]
+                    for manifest in model.files:
+                        token.check()
+                        await self._download_file(task_id, model, manifest, token, started, starting_bytes)
                     token.check()
-                    await self._download_file(task_id, model, manifest, token, started, starting_bytes)
-                token.check()
-                await self._register(task_id, model)
-                return await self._update(
-                    task_id,
-                    state=TaskState.COMPLETED,
-                    bytes_downloaded=self._tasks[task_id].total_bytes,
-                    speed_bps=None,
-                    eta_seconds=None,
+                    await self._register(task_id, model)
+                    return await self._update(
+                        task_id,
+                        state=TaskState.COMPLETED,
+                        bytes_downloaded=self._tasks[task_id].total_bytes,
+                        speed_bps=None,
+                        eta_seconds=None,
+                    )
+                except CancellationError:
+                    # pause/cancel 已设置目标状态（PAUSED/CANCELLED），此处只返回
+                    # 不覆盖，避免状态被下载循环的异常路径改写成 FAILED。
+                    return self._tasks[task_id]
+                except HashMismatchError as error:
+                    return await self._update(
+                        task_id,
+                        state=TaskState.QUARANTINED,
+                        speed_bps=None,
+                        eta_seconds=None,
+                        error=str(error),
+                    )
+                except Exception as error:
+                    return await self._update(
+                        task_id,
+                        state=TaskState.FAILED,
+                        speed_bps=None,
+                        eta_seconds=None,
+                        error=str(error),
+                    )
+                finally:
+                    token.cleanup()
+                    self._tokens.pop(task_id, None)
+        finally:
+            self._running.discard(task_id)
+            # 循环退出（文件句柄已关闭）后再清理 .part，避免与 cancel(discard)
+            # 交错导致 os.replace 抛 FileNotFoundError。
+            if task_id in self._discard_on_exit:
+                self._discard_on_exit.discard(task_id)
+                self._discard_partials(
+                    self._models[task_id], Path(self._tasks[task_id].destination)
                 )
-            except CancellationError:
-                return self._tasks[task_id]
-            except HashMismatchError as error:
-                return await self._update(
-                    task_id,
-                    state=TaskState.QUARANTINED,
-                    speed_bps=None,
-                    eta_seconds=None,
-                    error=str(error),
-                )
-            except Exception as error:
-                return await self._update(
-                    task_id,
-                    state=TaskState.FAILED,
-                    speed_bps=None,
-                    eta_seconds=None,
-                    error=str(error),
-                )
-            finally:
-                token.cleanup()
-                self._tokens.pop(task_id, None)
 
     async def pause(self, task_id: str) -> DownloadTask:
         self._require_task(task_id)
+        # 不能等待下载循环退出：循环可能阻塞在慢 IO 上（互相等待即死锁）。
+        # 只取消 token 并立即置 PAUSED，循环在下一次 token.check() 退出且不覆盖状态。
         token = self._tokens.get(task_id)
         if token is not None:
             token.cancel("pause")
@@ -128,11 +164,17 @@ class DownloadManager:
 
     async def cancel(self, task_id: str, discard_partials: bool = False) -> DownloadTask:
         task = self._require_task(task_id)
+        # 与 pause 同理：不等待下载循环，直接取消 token 并置 CANCELLED。
         token = self._tokens.get(task_id)
         if token is not None:
             token.cancel("cancel")
         if discard_partials:
-            self._discard_partials(self._models[task_id], Path(task.destination))
+            if task_id in self._running:
+                # 下载循环仍可能持有 .part 文件句柄：标记为退出后清理，
+                # 由 start() 的外层 finally 在句柄关闭后执行删除。
+                self._discard_on_exit.add(task_id)
+            else:
+                self._discard_partials(self._models[task_id], Path(task.destination))
         return await self._update(
             task_id,
             state=TaskState.CANCELLED,
@@ -140,6 +182,23 @@ class DownloadManager:
             speed_bps=None,
             eta_seconds=None,
         )
+
+    async def delete(self, task_id: str) -> None:
+        """删除任务记录（不可恢复）。
+
+        若仍在下载则取消下载循环，随后移除任务与模型映射并持久化。
+        已下载的文件/分片不会删除（仅移除任务登记）。
+        """
+        self._require_task(task_id)
+        token = self._tokens.get(task_id)
+        if token is not None:
+            token.cancel("deleted")
+        self._tasks.pop(task_id, None)
+        self._models.pop(task_id, None)
+        self._tokens.pop(task_id, None)
+        self._running.discard(task_id)
+        self._discard_on_exit.discard(task_id)
+        await self._persist()
 
     async def recover(self) -> list[DownloadTask]:
         if not self._state_path.exists():
@@ -181,6 +240,9 @@ class DownloadManager:
         started: float,
         starting_bytes: int,
     ) -> None:
+        if model.source == "hf-mirror":
+            await self._download_file_hf(task_id, model, manifest, token, started, starting_bytes)
+            return
         destination = Path(self._tasks[task_id].destination)
         final_path = self._safe_file_path(destination, manifest.path)
         part_path = final_path.with_name(final_path.name + ".part")
@@ -219,8 +281,9 @@ class DownloadManager:
         with part_path.open(mode) as handle:
             async for chunk in stream.chunks:
                 token.check()
+                # 逐块 flush() 是同步磁盘 IO，会阻塞事件循环；依赖文件缓冲，
+                # 写满自动落盘，close 时统一 flush
                 handle.write(chunk)
-                handle.flush()
                 current += len(chunk)
                 elapsed = max(time.monotonic() - started, 1e-9)
                 downloaded = max(self._tasks[task_id].bytes_downloaded, completed_before + current)
@@ -246,6 +309,102 @@ class DownloadManager:
         self._reject_symlink(final_path)
         self._reject_symlink(part_path)
         os.replace(part_path, final_path)
+
+    async def _download_file_hf(
+        self,
+        task_id: str,
+        model: CatalogModel,
+        manifest: CatalogFile,
+        token: CancelToken,
+        started: float,
+        starting_bytes: int,
+    ) -> None:
+        """用官方 huggingface_hub 从 hf-mirror.com 镜像下载单个文件。
+
+        - 镜像与禁用 Xet 通过环境变量指定（Xet 存储国内不可达）；
+        - 官方库自动断点续传（.incomplete）与已存在文件跳过；
+        - 进度通过 tqdm_class 上报任务；取消在进度回调里用 KeyboardInterrupt
+          （BaseException）中断官方下载线程，外层转成 CancellationError。
+        """
+        import os as _os
+        from huggingface_hub import hf_hub_download
+
+        _os.environ.setdefault("HF_ENDPOINT", "https://hf-mirror.com")
+        _os.environ.setdefault("HF_HUB_DISABLE_XET", "1")
+        _os.environ.setdefault("HF_HUB_ENABLE_HF_TRANSFER", "0")
+        from huggingface_hub.utils import tqdm as hf_tqdm
+
+        destination = Path(self._tasks[task_id].destination)
+        final_path = self._safe_file_path(destination, manifest.path)
+        final_path.parent.mkdir(parents=True, exist_ok=True)
+        self._reject_symlink(final_path)
+        if final_path.exists() and await sha256_file(final_path) == manifest.sha256.lower():
+            return
+        completed_before = self._completed_bytes_before(model, destination, manifest.path)
+        loop = asyncio.get_running_loop()
+
+        class _ProgressBar(hf_tqdm):
+            """官方下载进度条：上报任务进度 + 检查取消。"""
+
+            def __init__(self, *args: Any, **kwargs: Any) -> None:
+                self._cancelled = False
+                super().__init__(*args, **kwargs)
+
+            def update(self, n: int = 1) -> None:
+                if token.cancelled:
+                    self._cancelled = True
+                    raise KeyboardInterrupt("cancelled")
+                super().update(n)
+                # 当前文件内已下载字节 = completed_before + self.n
+                downloaded = max(
+                    self._tasks[task_id].bytes_downloaded,
+                    completed_before + self.n,
+                )
+                elapsed = max(time.monotonic() - started, 1e-9)
+                speed = max(downloaded - starting_bytes, 0) / elapsed
+                remaining = max(self._tasks[task_id].total_bytes - downloaded, 0)
+                try:
+                    asyncio.run_coroutine_threadsafe(
+                        self._update(
+                            task_id,
+                            bytes_downloaded=downloaded,
+                            speed_bps=speed,
+                            eta_seconds=remaining / speed if speed else None,
+                        ),
+                        loop,
+                    )
+                except Exception:  # noqa: BLE001 — 进度上报失败不影响下载
+                    pass
+
+            def close(self) -> None:
+                try:
+                    if token.cancelled:
+                        self._cancelled = True
+                        raise KeyboardInterrupt("cancelled")
+                finally:
+                    super().close()
+
+        try:
+            await asyncio.to_thread(
+                hf_hub_download,
+                model.repository,
+                manifest.path,
+                revision=model.revision,
+                local_dir=str(destination),
+                force_download=False,
+                token=None,
+                tqdm_class=_ProgressBar,
+            )
+        except KeyboardInterrupt:
+            raise CancellationError("cancelled by user") from None
+        actual = await sha256_file(final_path)
+        if actual != manifest.sha256.lower():
+            quarantine = destination / ".quarantine"
+            quarantine.mkdir(parents=True, exist_ok=True)
+            target = quarantine / f"{Path(manifest.path).name}.{uuid.uuid4().hex}.bad"
+            self._reject_symlink(final_path)
+            os.replace(final_path, target)
+            raise HashMismatchError(manifest.path, manifest.sha256, actual)
 
     async def _register(self, task_id: str, model: CatalogModel) -> None:
         checksum = hashlib.sha256(

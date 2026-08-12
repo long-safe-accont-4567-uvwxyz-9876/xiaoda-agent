@@ -207,12 +207,21 @@ class _OrtRuntimeBase(Runtime):
         )
 
     def _resolve_onnx_path(self) -> Path:
-        onnx_path = self._model_dir / "model.onnx"
-        if not onnx_path.exists():
-            onnx_path = self._model_dir / "onnx" / "model.onnx"
-        if not onnx_path.exists():
-            raise FileNotFoundError(f"model.onnx not found in {self._model_dir}")
-        return onnx_path
+        # 标准布局 model.onnx / onnx/model.onnx 优先；缺省时按量化变体降级，
+        # 兼容 onnx-community 等仓库只提供 int8/uint8 版本（体积小一个数量级）。
+        for candidate in (
+            self._model_dir / "model.onnx",
+            self._model_dir / "onnx" / "model.onnx",
+            self._model_dir / "model_quantized.onnx",
+            self._model_dir / "onnx" / "model_quantized.onnx",
+            self._model_dir / "model_int8.onnx",
+            self._model_dir / "onnx" / "model_int8.onnx",
+            self._model_dir / "model_uint8.onnx",
+            self._model_dir / "onnx" / "model_uint8.onnx",
+        ):
+            if candidate.exists():
+                return candidate
+        raise FileNotFoundError(f"model.onnx not found in {self._model_dir}")
 
     def _load_from_profile(self, profile: RuntimeProfile) -> bool:
         try:

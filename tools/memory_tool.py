@@ -190,7 +190,7 @@ async def recall(query: str, top_k: int = 8) -> ToolResult:
         return ToolResult.ok(output)
     except Exception as e:
         metrics.inc("memory.recall.failure")
-        logger.error("memory_tool.recall_failed", error=str(e))
+        logger.error("memory_tool.recall_failed", error=str(e), exc_info=True)
         return ToolResult.fail(f"检索记忆失败：{e!s}")
 
 

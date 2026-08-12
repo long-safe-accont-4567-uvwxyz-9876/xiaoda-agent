@@ -55,7 +55,19 @@ class OrtGenAiChatRuntime(Runtime):
             raise RuntimeValidationError("model_dir is required for ORT GenAI runtime")
         config_path = resolved_model_dir / "genai_config.json"
         if not config_path.is_file():
-            raise RuntimeValidationError(f"genai_config.json not found in {resolved_model_dir}")
+            # ModelScope 官方 ONNX 仓库（如 microsoft/Phi-3-*-onnx）把
+            # genai_config.json 放在 cpu_and_mobile/<variant>/ 等子目录，
+            # 递归定位第一个 genai_config.json 所在目录作为模型根。
+            found = next(
+                (path for path in resolved_model_dir.rglob("genai_config.json") if path.is_file()),
+                None,
+            )
+            if found is None:
+                raise RuntimeValidationError(
+                    f"genai_config.json not found in {resolved_model_dir}"
+                )
+            resolved_model_dir = found.parent
+            config_path = found
         if genai_module is None:
             try:
                 import onnxruntime_genai as genai_module

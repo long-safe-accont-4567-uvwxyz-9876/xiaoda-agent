@@ -6,6 +6,7 @@ import DeploymentsTab from '../components/local-ai/DeploymentsTab.vue'
 import DownloadTasksTab from '../components/local-ai/DownloadTasksTab.vue'
 import InstalledModelsTab from '../components/local-ai/InstalledModelsTab.vue'
 import ModelMarketTab from '../components/local-ai/ModelMarketTab.vue'
+import SystemModelNodesTab from '../components/local-ai/SystemModelNodesTab.vue'
 import { useLocalAiStore } from '../stores/localAi'
 
 const store = useLocalAiStore()
@@ -31,9 +32,10 @@ onBeforeUnmount(() => store.disconnectWebSocket())
     <n-spin :show="store.loading && !store.devices.length && !store.catalog.length">
       <n-tabs v-model:value="activeTab" type="line" animated display-directive="show" class="local-ai-tabs">
         <n-tab-pane name="deployments" tab="部署"><DeploymentsTab /></n-tab-pane>
-        <n-tab-pane name="market" tab="模型市场"><ModelMarketTab /></n-tab-pane>
+        <n-tab-pane name="market" tab="模型广场"><ModelMarketTab /></n-tab-pane>
         <n-tab-pane name="installed" tab="已安装"><InstalledModelsTab /></n-tab-pane>
         <n-tab-pane name="devices" tab="算力设备"><ComputeDevicesTab /></n-tab-pane>
+        <n-tab-pane name="nodes" tab="功能节点"><SystemModelNodesTab /></n-tab-pane>
         <n-tab-pane name="downloads" tab="下载任务"><DownloadTasksTab /></n-tab-pane>
       </n-tabs>
     </n-spin>

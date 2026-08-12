@@ -10,6 +10,7 @@ from local_ai.runtimes.ort_genai import (
     OrtGenAiChatRuntime,
 )
 from local_ai.runtimes.ort_reranker import RerankerRuntime
+from local_ai.runtimes.vip_embedding import VIPEmbeddingRuntime
 
 RuntimeAdapter = Runtime
 RuntimeFactory = Callable[[RuntimeProfile], RuntimeAdapter]
@@ -48,6 +49,7 @@ class RuntimeRegistry:
             (RuntimeKind.ORT, ModelPurpose.EMBEDDING),
             (RuntimeKind.ORT, ModelPurpose.RERANKER),
             (RuntimeKind.ORT_GENAI, ModelPurpose.CHAT),
+            (RuntimeKind.VIP, ModelPurpose.EMBEDDING),
         }
         if combination not in supported:
             raise RuntimeValidationError(
@@ -64,6 +66,8 @@ class RuntimeRegistry:
             return EmbeddingRuntime(resolved_model_dir)
         if combination == (RuntimeKind.ORT, ModelPurpose.RERANKER):
             return RerankerRuntime(resolved_model_dir)
+        if combination == (RuntimeKind.VIP, ModelPurpose.EMBEDDING):
+            return VIPEmbeddingRuntime(resolved_model_dir)
         raise RuntimeValidationError(
             "unsupported runtime and purpose combination: "
             f"{profile.runtime.value}/{resolved_purpose.value}"

@@ -51,18 +51,38 @@ class QueryTransformer:
     TRANSFORM_CACHE_TTL = 600  # 10 分钟（秒）
 
     def __init__(self, router: Any | None=None, api_key: str = "", base_url: str = "",
-                 model: str = "") -> None:
-        self._router = router  # 保留兼容，但不再用于查询变换
+                 model: str = "", backend: str = "auto") -> None:
+        # backend: auto=有 key 用 API；local=用主 LLM(router) 执行；api=强制 API；off=禁用
+        self._router = router
         self._api_key = api_key or os.getenv("SILICONFLOW_API_KEY", "") or os.getenv("EMBED_API_KEY", "")
         self._base_url = base_url or "https://api.siliconflow.cn/v1"
         self._model = model or os.getenv("QUERY_TRANSFORM_MODEL", "THUDM/GLM-4-9B-0414")
-        self._available = bool(self._api_key)
+        self._backend = backend if backend in ("auto", "local", "api", "off") else "auto"
+        if self._backend == "off":
+            self._available = False
+        elif self._backend == "local":
+            self._available = bool(router)
+        else:
+            self._available = bool(self._api_key)
 
         # G15: LRU + TTL 缓存，避免重复调 LLM
         # key -> (result, expire_at_monotonic)
         self._rewrite_cache: OrderedDict[str, tuple[str, float]] = OrderedDict()
         self._expand_cache: OrderedDict[str, tuple[list[str], float]] = OrderedDict()
         self._hyde_cache: OrderedDict[str, tuple[str | None, float]] = OrderedDict()
+
+    def set_backend(self, backend: str) -> None:
+        """热更新后端选择（auto/local/api/off）。"""
+        if backend not in ("auto", "local", "api", "off"):
+            return
+        self._backend = backend
+        if backend == "off":
+            self._available = False
+        elif backend == "local":
+            self._available = bool(self._router)
+        else:
+            self._available = bool(self._api_key)
+        logger.info("query_transform.backend_set backend={} available={}", backend, self._available)
 
     def _cache_get(self, cache: OrderedDict, key: str) -> Any:
         """G15: 从缓存取值，TTL 过期或未命中返回 _CACHE_MISS sentinel。
@@ -105,9 +125,28 @@ class QueryTransformer:
 
     async def _call_free_model(self, prompt: str, temperature: float = 0.1,
                                 max_tokens: int = 150) -> str | None:
-        """调用硅基流动免费模型"""
+        """执行查询变换：backend=local 时用主 LLM(router)，否则走硅基流动免费模型。"""
         if not self._available:
             return None
+        if self._backend == "local":
+            if self._router is None:
+                return None
+            messages = [{"role": "user", "content": prompt}]
+            try:
+                # 主 LLM 执行（后台任务类型，自动让路于主对话）
+                return await asyncio.wait_for(
+                    self._router.route(
+                        task_type="memory_encoding",
+                        messages=messages,
+                        temperature=temperature,
+                        max_tokens=max_tokens,
+                    ),
+                    timeout=5.0,
+                )
+            except Exception as e:
+                logger.debug("query_transform.router_failed error={} error_type={}",
+                             str(e)[:200], type(e).__name__)
+                return None
         try:
             # G4: 共享 httpx.AsyncClient（连接池复用 + HTTP/2），单次请求级别覆盖 timeout
             # 修复：15s→4s。根因：检索整体只有 8s 超时，free model 15s 超时远超预算，

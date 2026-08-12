@@ -104,11 +104,12 @@ def _normalize_wallpaper(url: str) -> str:
 
 
 def _ensure_default_wallpapers() -> None:
-    """确保 MEDIA_DIR/wallpapers/ 中的默认壁纸与安装包内置一致。
+    """确保 MEDIA_DIR/wallpapers/ 存在内置默认壁纸（仅首次安装播种）。
 
-    仅管理"默认壁纸文件名"（来自 DEFAULT_WALLPAPERS 配置的 {agent}.jpg 与
-    webui_background.jpg）。用户通过 WebUI 上传的壁纸始终命名为
-    {agent}_{时间戳}.jpg，不在管理范围内，天然不会被触碰。
+    铁律：**任何已存在的文件一律绝不覆盖**（含用户手动放置/上传的自定义
+    壁纸、以及旧版本遗留图）。默认壁纸只在目标文件缺失时才从安装包内置
+    复制一份；一旦 MEDIA_DIR 里已有同名文件，无论内容是否与内置一致都
+    原样保留。WebUI 上传的自定义壁纸（{agent}_{时间戳}.jpg）不受影响。
 
     源目录优先级：
     1. web/frontend/public/assets/wallpapers/（dev 模式，agent 壁纸）
@@ -116,27 +117,8 @@ def _ensure_default_wallpapers() -> None:
     3. web/dist/assets/wallpapers/（vite build 产物）
     4. web/dist/assets/
     5. _MEIPASS（PyInstaller 打包）
-
-    覆盖策略（非硬编码，依据配置与文件系统事实）：
-    - 默认文件缺失 → 从安装包内置复制（首次安装生效）；
-    - 默认文件已存在但与安装包内置内容不一致（如旧版安装包残留的旧角色图）→
-      用内置内容覆盖，修复升级安装后仍加载旧图的问题；
-    - 某 agent 已存在用户上传的壁纸文件（{agent}_*.jpg）→ 用户已自行配置壁纸，
-      跳过该 agent 默认文件的覆盖，绝不覆盖用户配置。
     """
     target_dir = MEDIA_DIR / "wallpapers"
-
-    def _md5(p: Path) -> str:
-        """计算文件内容哈希，用于判断与安装包内置是否一致。"""
-        h = hashlib.md5()
-        with p.open("rb") as f:
-            for chunk in iter(lambda: f.read(1 << 16), b""):
-                h.update(chunk)
-        return h.hexdigest()
-
-    def _has_user_upload(name: str) -> bool:
-        """是否存在该 agent 的 WebUI 上传壁纸（{name}_{时间戳}.jpg）。"""
-        return any(target_dir.glob(f"{name}_*.*"))
 
     # 收集所有需要确保存在的默认壁纸文件名（不含用户上传的带时间戳文件）
     needed: set[str] = set()
@@ -157,7 +139,7 @@ def _ensure_default_wallpapers() -> None:
 
     target_dir.mkdir(parents=True, exist_ok=True)
     copied = 0
-    replaced = 0
+    skipped = 0
     for fname in needed:
         src: Path | None = None
         for src_dir in search_dirs:
@@ -168,28 +150,18 @@ def _ensure_default_wallpapers() -> None:
         if src is None:
             continue
         target = target_dir / fname
-        agent_name = Path(fname).stem  # 默认文件名 → 对应 agent（webui_background 无对应 agent）
-        user_configured = agent_name != "webui_background" and _has_user_upload(agent_name)
-        if not target.exists():
-            try:
-                shutil.copy2(src, target)
-                copied += 1
-            except OSError as e:
-                logger.debug("agent_registry.wallpaper_copy_failed {}: {}", fname, e)
+        if target.exists():
+            # 已存在（用户自定义/手动放置/历史遗留）→ 绝不覆盖
+            skipped += 1
             continue
-        # 用户已上传过该 agent 的壁纸 → 其默认文件不再覆盖，用户配置优先
-        if user_configured:
-            continue
-        # 已存在但与安装包内置内容不一致（如旧版安装包残留的角色图）→ 用内置覆盖
         try:
-            if _md5(target) != _md5(src):
-                shutil.copy2(src, target)
-                replaced += 1
-        except OSError:
-            pass
+            shutil.copy2(src, target)
+            copied += 1
+        except OSError as e:
+            logger.debug("agent_registry.wallpaper_copy_failed {}: {}", fname, e)
 
-    if copied or replaced:
-        logger.info("agent_registry.wallpaper_init: copied={} replaced={} defaults in {}", copied, replaced, target_dir)
+    if copied or skipped:
+        logger.info("agent_registry.wallpaper_init: copied={} skipped={} defaults in {}", copied, skipped, target_dir)
 
 
 _ensure_default_wallpapers()

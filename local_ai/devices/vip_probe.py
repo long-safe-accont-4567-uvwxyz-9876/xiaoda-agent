@@ -7,7 +7,13 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
-from local_ai.contracts import ComputeDevice, DeviceState, ExecutionBackend, RuntimeKind
+from local_ai.contracts import (
+    ComputeDevice,
+    DeviceState,
+    ExecutionBackend,
+    ModelPurpose,
+    RuntimeKind,
+)
 
 
 def _reject_non_finite(value: str) -> None:
@@ -40,6 +46,7 @@ def parse_vip_probe(payload: str) -> ComputeDevice | None:
                 runtime=RuntimeKind.VIP,
                 provider="VIPLite",
                 healthy=True,
+                purposes=(ModelPurpose.EMBEDDING,),
                 evidence=evidence,
             ),
         ),
@@ -72,6 +79,13 @@ def probe_vip_backend(
     if result.returncode != 0:
         return None
     stdout = result.stdout.strip()
-    if stdout:
-        return parse_vip_probe(stdout)
-    return parse_vip_probe('{"available":true,"probe":"runner_exit_code"}')
+    if not stdout:
+        # runner 成功退出且无输出：按退出状态认定为可用（不虚构型号/算力）
+        return parse_vip_probe('{"available":true,"probe":"runner_exit_code"}')
+    try:
+        json.loads(stdout, parse_constant=_reject_non_finite)
+    except (json.JSONDecodeError, TypeError, ValueError):
+        # runner 成功退出但 stdout 非 JSON（驱动库打印版本横幅到 stdout）：
+        # 不能因解析失败而否定退出状态，按退出状态认定为可用
+        return parse_vip_probe('{"available":true,"probe":"runner_exit_code"}')
+    return parse_vip_probe(stdout)

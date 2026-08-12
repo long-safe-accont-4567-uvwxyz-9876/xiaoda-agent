@@ -42,6 +42,7 @@ export const useLocalAiStore = defineStore('localAi', () => {
   const downloadsById = ref<Record<string, DownloadTask>>({})
   const instancesById = ref<Record<string, ModelInstance>>({})
   const defaultStorage = ref('')
+  const catalogAdvanced = ref(false)
   const loading = ref(false)
   const rescanning = ref(false)
   const error = ref<string | null>(null)
@@ -139,7 +140,7 @@ export const useLocalAiStore = defineStore('localAi', () => {
     try {
       const [nextDevices, nextCatalog, nextModels, nextDownloads, nextInstances, storage] = await Promise.all([
         localAiApi.loadDevices(),
-        localAiApi.loadCatalog(),
+        localAiApi.loadCatalog(catalogAdvanced.value),
         localAiApi.loadModels(),
         localAiApi.loadDownloads(),
         localAiApi.loadInstances(),
@@ -174,6 +175,12 @@ export const useLocalAiStore = defineStore('localAi', () => {
     }
   }
 
+  /** 切换"显示大模型"开关时仅刷新目录，避免重复触发设备扫描 */
+  async function refreshCatalog(advanced: boolean) {
+    catalogAdvanced.value = advanced
+    catalogById.value = indexById(await localAiApi.loadCatalog(advanced))
+  }
+
   async function download(request: DownloadRequest) {
     const response = await localAiApi.createDownload(request)
     upsertDownload(response.task)
@@ -184,10 +191,35 @@ export const useLocalAiStore = defineStore('localAi', () => {
   async function resume(id: string) { upsertDownload(await localAiApi.resumeDownload(id)) }
   async function cancel(id: string, discardPartials = false) { upsertDownload(await localAiApi.cancelDownload(id, discardPartials)) }
 
+  async function removeDownload(id: string) {
+    await localAiApi.deleteDownload(id)
+    const next = { ...downloadsById.value }
+    delete next[id]
+    downloadsById.value = next
+  }
+
   async function start(request: StartInstanceRequest) {
     const response = await localAiApi.startInstance(request)
-    if (response.instance) upsertInstance(response.instance)
-    return response
+    if (response.instance) {
+      upsertInstance(response.instance)
+      return response
+    }
+    // 202 首启仅返回 task_id：轮询任务状态直至完成/失败（约 60s 超时），
+    // 避免启动失败对用户完全静默（WS 未连接或事件丢失时仍有兜底）
+    const taskId = response.task_id
+    const deadline = Date.now() + 60_000
+    while (Date.now() < deadline) {
+      await new Promise(resolve => setTimeout(resolve, 1000))
+      const task = await localAiApi.getInstanceTask(taskId)
+      if (task.status === 'completed' && task.instance) {
+        upsertInstance(task.instance)
+        return { task_id: taskId, instance: task.instance }
+      }
+      if (task.status === 'failed') {
+        throw new Error(task.error?.message || `实例启动失败（${taskId}）`)
+      }
+    }
+    throw new Error(`实例启动超时（${taskId}）`)
   }
 
   async function stop(id: string) { upsertInstance(await localAiApi.stopInstance(id)) }
@@ -233,9 +265,9 @@ export const useLocalAiStore = defineStore('localAi', () => {
 
   return {
     devicesById, catalogById, modelsById, downloadsById, instancesById,
-    devices, catalog, models, downloads, instances, defaultStorage, loading, rescanning, error,
-    load, rescan, download, pause, resume, cancel, start, stop, remove,
-    refreshModels, browseStorage, validateStorage, saveDefaultStorage,
+    devices, catalog, models, downloads, instances, defaultStorage, catalogAdvanced, loading, rescanning, error,
+    load, rescan, download, pause, resume, cancel, removeDownload, start, stop, remove,
+    refreshModels, refreshCatalog, browseStorage, validateStorage, saveDefaultStorage,
     createRequestId, upsertDevice, upsertDownload, upsertInstance, connectWebSocket, disconnectWebSocket,
   }
 })

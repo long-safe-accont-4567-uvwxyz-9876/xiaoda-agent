@@ -350,6 +350,41 @@ def _build_mimo_provider() -> dict:
     return {"provider": "mimo", "models": models}
 
 
+async def _build_local_ort_group(request: Request) -> dict:
+    """构建本地 ORT GenAI chat 模型组（provider=local-ort）。
+
+    已安装的本地 chat 模型（如 Phi-3 系列，经 ORT GenAI 在 CPU 运行）
+    作为主模型选择之一展示。未安装任何 chat 模型时返回空组，
+    由调用方决定是否注入结果。
+    """
+    core = getattr(request.app.state, "core", None)
+    instances = getattr(core, "local_ai_instances", None) if core is not None else None
+    registry = getattr(instances, "_model_registry", None)
+    models = []
+    if registry is not None:
+        try:
+            installed = await registry.list()
+        except Exception as e:  # noqa: BLE001
+            logger.warning("discover.local_ort_list_failed error={}", str(e))
+            installed = []
+        for item in installed:
+            purpose = getattr(item, "purpose", None)
+            if purpose is None or str(purpose) != "chat":
+                continue
+            catalog_id = getattr(item, "catalog_id", "") or getattr(item, "id", "")
+            if not catalog_id:
+                continue
+            models.append({
+                "id": f"local:{catalog_id}",
+                "display_name": catalog_id,
+                "free": True,
+                "tool_calling": False,
+                "vision": False,
+                "provider": "local-ort",
+            })
+    return {"provider": "local-ort", "label": "本地模型", "models": models}
+
+
 # ── 获取所有已注册 provider 信息 ──────────────────────────────────
 
 
@@ -398,82 +433,92 @@ def _get_all_providers() -> list[dict]:
 
 
 @router.get("/models/discover", response_model=Envelope[list[dict]])
-async def discover_models() -> Any:
+async def discover_models(request: Request) -> Any:
     """发现所有已注册 provider 的可用模型，结果缓存 30 分钟。
 
     自动发现所有已注册的 provider（包括内置 MiMo 和自定义 provider），
     通过 OpenAI 兼容的 /v1/models 接口获取模型列表。
     OpenRouter 和 SiliconFlow 有特殊处理逻辑，其他 provider 使用通用获取方法。
     每个模型标注 free（免费/付费）。
+    已安装的本地 ORT GenAI chat 模型（provider=local-ort）不缓存，
+    每次请求实时注入，安装/删除后立即生效。
     """
     now = time.time()
     async with _cache_lock:
         if _cache["data"] is not None and (now - _cache["ts"]) < _CACHE_TTL:
-            return Envelope(data=_cache["data"])
-
-    all_providers = _get_all_providers()
-
-    # 并发获取所有 provider 的模型
-    tasks = []
-    provider_ids = []
-    for p in all_providers:
-        pid = p["id"]
-        provider_ids.append(pid)
-
-        if pid == "mimo":
-            # MiMo 不需要 API 调用，直接构建
-            async def _mimo_task() -> Any:
-                return _build_mimo_provider()
-            tasks.append(_mimo_task())
-        elif pid == "openrouter":
-            tasks.append(_fetch_openrouter_models(p["api_key"]))
-        elif pid == "siliconflow":
-            tasks.append(_fetch_siliconflow_models(p["api_key"]))
+            result = _cache["data"]
         else:
-            # 通用 OpenAI 兼容 provider
-            tasks.append(_fetch_openai_compatible_models(
-                provider_id=pid,
-                base_url=p["base_url"],
-                api_key=p["api_key"],
-                label=p.get("label", pid),
-            ))
+            result = None
 
-    results = await asyncio.gather(*tasks, return_exceptions=True)
+    if result is None:
+        all_providers = _get_all_providers()
 
-    # 对标注为内置降级的 provider，若 results 中返回异常或空列表，使用 fallback
-    for i, (pid, models_or_exc) in enumerate(zip(provider_ids, results, strict=False)):
-        if pid in BUILTIN_FALLBACK_MODELS:
-            if isinstance(models_or_exc, Exception) or (isinstance(models_or_exc, list) and not models_or_exc):
-                results[i] = BUILTIN_FALLBACK_MODELS[pid]
+        # 并发获取所有 provider 的模型
+        tasks = []
+        provider_ids = []
+        for p in all_providers:
+            pid = p["id"]
+            provider_ids.append(pid)
 
-    result = []
-    for pid, models_or_exc in zip(provider_ids, results, strict=False):
-        if isinstance(models_or_exc, Exception):
-            logger.warning("discover.provider_failed provider={} error={}", pid, str(models_or_exc))
-            continue
+            if pid == "mimo":
+                # MiMo 不需要 API 调用，直接构建
+                async def _mimo_task() -> Any:
+                    return _build_mimo_provider()
+                tasks.append(_mimo_task())
+            elif pid == "openrouter":
+                tasks.append(_fetch_openrouter_models(p["api_key"]))
+            elif pid == "siliconflow":
+                tasks.append(_fetch_siliconflow_models(p["api_key"]))
+            else:
+                # 通用 OpenAI 兼容 provider
+                tasks.append(_fetch_openai_compatible_models(
+                    provider_id=pid,
+                    base_url=p["base_url"],
+                    api_key=p["api_key"],
+                    label=p.get("label", pid),
+                ))
 
-        # MiMo 返回的是完整的 provider dict
-        if pid == "mimo" and isinstance(models_or_exc, dict):
-            result.append(models_or_exc)
-            continue
+        results = await asyncio.gather(*tasks, return_exceptions=True)
 
-        # 其他 provider 返回模型列表
-        if isinstance(models_or_exc, list) and models_or_exc:
-            # 找到对应的 provider label
-            label = ""
-            for p in all_providers:
-                if p["id"] == pid:
-                    label = p.get("label", pid)
-                    break
-            result.append({
-                "provider": pid,
-                "label": label,
-                "models": models_or_exc,
-            })
+        # 对标注为内置降级的 provider，若 results 中返回异常或空列表，使用 fallback
+        for i, (pid, models_or_exc) in enumerate(zip(provider_ids, results, strict=False)):
+            if pid in BUILTIN_FALLBACK_MODELS:
+                if isinstance(models_or_exc, Exception) or (isinstance(models_or_exc, list) and not models_or_exc):
+                    results[i] = BUILTIN_FALLBACK_MODELS[pid]
 
-    async with _cache_lock:
-        _cache["data"] = result
-        _cache["ts"] = now
+        result = []
+        for pid, models_or_exc in zip(provider_ids, results, strict=False):
+            if isinstance(models_or_exc, Exception):
+                logger.warning("discover.provider_failed provider={} error={}", pid, str(models_or_exc))
+                continue
+
+            # MiMo 返回的是完整的 provider dict
+            if pid == "mimo" and isinstance(models_or_exc, dict):
+                result.append(models_or_exc)
+                continue
+
+            # 其他 provider 返回模型列表
+            if isinstance(models_or_exc, list) and models_or_exc:
+                # 找到对应的 provider label
+                label = ""
+                for p in all_providers:
+                    if p["id"] == pid:
+                        label = p.get("label", pid)
+                        break
+                result.append({
+                    "provider": pid,
+                    "label": label,
+                    "models": models_or_exc,
+                })
+
+        async with _cache_lock:
+            _cache["data"] = result
+            _cache["ts"] = now
+
+    # 本地 ORT GenAI chat 组实时注入（不缓存，避免安装/删除后 30 分钟内不出现）
+    local_group = await _build_local_ort_group(request)
+    if local_group["models"]:
+        result = [*result, local_group]
     return Envelope(data=result)
 
 

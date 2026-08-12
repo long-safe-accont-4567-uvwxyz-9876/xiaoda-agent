@@ -544,7 +544,7 @@ def test_vip_backend_uses_exit_status_without_inventing_specs(tmp_path):
     assert device.evidence == {"available": True, "probe": "runner_exit_code"}
     assert calls[0][0] == ["sudo", "-n", str(runner), "--probe", "--quiet"]
 
-    for stdout in ('{"available":false}', "not-json"):
+    for stdout in ('{"available":false}',):
         device = probe_vip_backend(
             str(runner),
             platform="linux",
@@ -554,6 +554,18 @@ def test_vip_backend_uses_exit_status_without_inventing_specs(tmp_path):
         )
 
         assert device is None
+
+    # 成功退出但 stdout 非 JSON（驱动横幅等）：按退出状态认定为可用
+    device = probe_vip_backend(
+        str(runner),
+        platform="linux",
+        command_runner=lambda *args, **kwargs: SimpleNamespace(
+            returncode=0, stdout="VIPLite driver software version 2.0.3.2\n", stderr=""
+        ),
+    )
+    assert device is not None
+    assert device.name == "VIP NPU"
+    assert device.evidence == {"available": True, "probe": "runner_exit_code"}
 
 
 def test_vip_backend_returns_none_for_unsupported_or_failed_probe(tmp_path):

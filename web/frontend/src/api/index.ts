@@ -39,6 +39,10 @@ async function request<T>(path: string, options?: RequestInit, confirm = false):
     }))
   }
   let body: ApiEnvelope<T>
+  // 204/205 无响应体（如模型删除），跳过 JSON 解析避免 SyntaxError
+  if (res.status === 204 || res.status === 205) {
+    return undefined as T
+  }
   try {
     body = await res.json()
   } catch {

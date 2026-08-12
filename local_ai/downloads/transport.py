@@ -26,7 +26,10 @@ class DownloadTransport(Protocol):
 
 class HttpDownloadTransport:
     def __init__(self, client: httpx.AsyncClient | None = None, chunk_size: int = 256 * 1024) -> None:
-        self._client = client or httpx.AsyncClient(follow_redirects=True, timeout=None)
+        # 显式超时而非 timeout=None：连接挂起/断流时不能无限等待，
+        # 否则下载任务永久卡在 downloading 状态。
+        timeout = httpx.Timeout(connect=15.0, read=30.0, write=30.0, pool=15.0)
+        self._client = client or httpx.AsyncClient(follow_redirects=True, timeout=timeout)
         self._chunk_size = chunk_size
 
     async def open(self, model: CatalogModel, path: str, offset: int) -> DownloadStream:

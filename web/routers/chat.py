@@ -301,6 +301,17 @@ async def speech_to_text(file: UploadFile = File(...)) -> Any:
     if len(content) > 20 * 1024 * 1024:  # 20MB
         raise HTTPException(400, "音频大小不能超过 20MB")
 
+    # 功能节点后端控制：asr=off 时禁用语音识别
+    try:
+        from web.config_service import get_config_service
+        from web.local_deploy_nodes import get_backend
+        if get_backend(get_config_service(), "asr") == "off":
+            raise HTTPException(503, "ASR 已关闭（语音识别节点设置为关闭）")
+    except HTTPException:
+        raise
+    except Exception:  # noqa: BLE001
+        pass
+
     try:
         from config import ASR_API_KEY, ASR_BASE_URL, ASR_MODEL
         if not ASR_API_KEY:

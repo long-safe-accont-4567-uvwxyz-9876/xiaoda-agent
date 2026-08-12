@@ -377,11 +377,26 @@ def _windows_payload() -> dict[str, Any]:
         "$os=Get-CimInstance Win32_OperatingSystem;"
         "$gpu=@(Get-CimInstance Win32_VideoController | Select-Object "
         "Name,AdapterRAM,PNPDeviceID,DriverVersion);"
+        # NPU（Intel AI Boost / Qualcomm Hexagon 等注册为 ComputeAccelerator 类）
+        "$npu=@(Get-PnpDevice -PresentOnly -ErrorAction SilentlyContinue | "
+        "Where-Object {$_.Class -eq 'ComputeAccelerator' -or "
+        "$_.FriendlyName -match 'NPU|Neural'} | "
+        "Select-Object FriendlyName,InstanceId);"
+        # GPU 真实显存：AdapterRAM 是 32 位 DWORD，4GB+ 会溢出，
+        # 用注册表 HardwareInformation.qwMemorySize（QWORD）修正。
+        "$adapterRam=@{};"
+        "$cls='HKLM:\\SYSTEM\\CurrentControlSet\\Control\\Class\\{4d36e968-e325-11ce-bfc1-08002be10318}';"
+        "Get-ChildItem $cls -ErrorAction SilentlyContinue | ForEach-Object {"
+        "$p=Get-ItemProperty $_.PSPath -ErrorAction SilentlyContinue;"
+        "if($p.'HardwareInformation.AdapterString'){"
+        "$adapterRam[$p.'HardwareInformation.AdapterString']="
+        "[int64]$p.'HardwareInformation.qwMemorySize'}};"
         "[pscustomobject]@{cpu=[pscustomobject]@{Name=$cpu.Name;"
         "Architecture=$cpu.Architecture;"
         "TotalPhysicalMemory=$os.TotalVisibleMemorySize*1KB;"
         "FreePhysicalMemory=$os.FreePhysicalMemory};"
-        "video_controllers=$gpu} | ConvertTo-Json -Compress -Depth 4"
+        "video_controllers=$gpu;npu_devices=$npu;adapter_ram=$adapterRam}"
+        " | ConvertTo-Json -Compress -Depth 6"
     )
     raw = _run_command(["powershell", "-NoProfile", "-Command", script])
     try:
@@ -460,6 +475,9 @@ def _windows_gpus(payload: dict[str, Any]) -> list[ComputeDevice]:
         controllers = [controllers]
     if not isinstance(controllers, list):
         return []
+    adapter_ram = payload.get("adapter_ram")
+    if not isinstance(adapter_ram, dict):
+        adapter_ram = {}
     devices = []
     for index, controller in enumerate(controllers):
         if not isinstance(controller, dict):
@@ -470,7 +488,16 @@ def _windows_gpus(payload: dict[str, Any]) -> list[ComputeDevice]:
         pnp_device_id = controller.get("PNPDeviceID")
         if not isinstance(pnp_device_id, str):
             pnp_device_id = ""
+        # AdapterRAM（DWORD）在 4GB+ 显存溢出为 0/负数，用注册表 QWORD 修正
         total = _non_negative_int(controller.get("AdapterRAM"))
+        for key, value in adapter_ram.items():
+            if not isinstance(key, str):
+                continue
+            if key.strip().casefold() == name.strip().casefold():
+                qword = _non_negative_int(value)
+                if qword > total:
+                    total = qword
+                break
         device_id, vendor, identity_persistent = _windows_gpu_id(
             pnp_device_id,
             index,
@@ -503,11 +530,113 @@ def _windows_gpus(payload: dict[str, Any]) -> list[ComputeDevice]:
     return devices
 
 
+def _windows_npu_devices(payload: dict[str, Any]) -> list[ComputeDevice]:
+    """Windows NPU 探测：ComputeAccelerator 类 PnP 设备（Intel AI Boost /
+    Qualcomm Hexagon NPU 等）。DirectML 可经 DmlExecutionProvider 承载，
+    由 DeviceRegistry 的 DML backend 挂载到 npu 设备。
+    """
+    npu_devices = payload.get("npu_devices", ())
+    if isinstance(npu_devices, dict):
+        npu_devices = [npu_devices]
+    if not isinstance(npu_devices, list):
+        return []
+    devices = []
+    for index, entry in enumerate(npu_devices):
+        if not isinstance(entry, dict):
+            continue
+        friendly_name = entry.get("FriendlyName")
+        if not isinstance(friendly_name, str) or not friendly_name.strip():
+            continue
+        instance_id = entry.get("InstanceId")
+        if not isinstance(instance_id, str):
+            instance_id = ""
+        evidence = {"source": "pnp_compute_accelerator"}
+        if instance_id:
+            evidence["pnp_device_id"] = instance_id
+        digest = hashlib.sha256(
+            (friendly_name.strip() + "|" + instance_id).encode("utf-8")
+        ).hexdigest()[:16]
+        devices.append(
+            ComputeDevice(
+                id=f"windows-npu:{digest}",
+                name=friendly_name.strip(),
+                kind="npu",
+                architecture=_machine_architecture(),
+                state=DeviceState.AVAILABLE,
+                memory_total=0,
+                memory_available=0,
+                system={"platform": "windows"},
+                evidence=evidence,
+            )
+        )
+    return devices
+
+
+def _darwin_cpu() -> ComputeDevice:
+    """macOS CPU：sysctl 读取型号与物理内存（不依赖 psutil）。"""
+    architecture = _machine_architecture()
+    name = _run_command(
+        ["sysctl", "-n", "machdep.cpu.brand_string"]
+    ).strip() or "CPU"
+    model = _run_command(["sysctl", "-n", "hw.model"]).strip()
+    mem_bytes = 0
+    raw = _run_command(["sysctl", "-n", "hw.memsize"]).strip()
+    if raw.isdigit():
+        mem_bytes = int(raw)
+    evidence = {}
+    if model:
+        evidence["sysctl_hw_model"] = model
+    return ComputeDevice(
+        id="cpu:0",
+        name=name,
+        kind="cpu",
+        architecture=architecture,
+        state=DeviceState.AVAILABLE,
+        memory_total=mem_bytes,
+        memory_available=mem_bytes,
+        system={"platform": "darwin"},
+        evidence=evidence,
+    )
+
+
+def probe_npu_device(runner_path: str = "") -> ComputeDevice | None:
+    """探测 NPU 设备（VIP9000 等，经 runner --probe 实测）。
+
+    失败快速返回 None（runner 不存在 / sudo -n 不可用 / 探测超时），
+    不抛异常；成功时返回带 VIPLite backend 的 npu 设备。
+    """
+    try:
+        from local_ai.devices.vip_probe import probe_vip_backend
+
+        path = runner_path or os.getenv(
+            "NPU_RUNNER",
+            str(
+                Path(__file__).resolve().parent.parent.parent
+                / "scripts" / "npu" / "bge_npu_runner"
+            ),
+        )
+        return probe_vip_backend(path)
+    except Exception:  # noqa: BLE001
+        return None
+
+
 def probe_system_devices(platform: str | None = None) -> list[ComputeDevice]:
     target = (platform or sys.platform).casefold()
     if target.startswith("linux"):
-        return [_linux_cpu(), *_linux_nvidia_gpus(), *_linux_amd_gpus()]
+        npu = probe_npu_device()
+        return [
+            _linux_cpu(),
+            *_linux_nvidia_gpus(),
+            *_linux_amd_gpus(),
+            *([npu] if npu is not None else []),
+        ]
     if target.startswith("win"):
         payload = _windows_payload()
-        return [_windows_cpu_from_payload(payload), *_windows_gpus(payload)]
+        return [
+            _windows_cpu_from_payload(payload),
+            *_windows_gpus(payload),
+            *_windows_npu_devices(payload),
+        ]
+    if target.startswith("darwin") or target.startswith("mac"):
+        return [_darwin_cpu()]
     return []

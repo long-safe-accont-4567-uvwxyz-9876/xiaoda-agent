@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, onMounted, onBeforeUnmount, watch } from 'vue'
+import { ref, onMounted } from 'vue'
 import SideBar from './SideBar.vue'
 import TopBar from './TopBar.vue'
 import AgentBackdrop from './AgentBackdrop.vue'
@@ -7,28 +7,13 @@ import { useAuthStore } from '../../stores/auth'
 import { useAgentsStore } from '../../stores/agents'
 import { useUiStore } from '../../stores/ui'
 import { getWsClient } from '../../api/ws'
-import { useRoute, useRouter } from 'vue-router'
-import { t } from '../../i18n'
+import { useRouter } from 'vue-router'
 
 const auth = useAuthStore()
 const agentsStore = useAgentsStore()
 const ui = useUiStore()
 const router = useRouter()
-const route = useRoute()
-const desktopSidebarExpanded = ref(false)
-const mobileSidebarOpen = ref(false)
-
-const closeMobileSidebar = () => { mobileSidebarOpen.value = false }
-
-function onShellKeydown(event: KeyboardEvent) {
-  // 仅当移动侧栏打开时消费 Escape；斜杠面板等内层已 stopPropagation，不会冒泡到此
-  if (event.key === 'Escape' && mobileSidebarOpen.value) closeMobileSidebar()
-}
-
-watch(() => route.fullPath, closeMobileSidebar)
-
-onMounted(() => document.addEventListener('keydown', onShellKeydown))
-onBeforeUnmount(() => document.removeEventListener('keydown', onShellKeydown))
+const sidebarExpanded = ref(false)
 
 if (!auth.isLoggedIn) {
   router.replace('/login')
@@ -47,13 +32,9 @@ if (!auth.isLoggedIn) {
 <template>
   <div class="app-layout">
     <AgentBackdrop />
-    <button v-if="mobileSidebarOpen" class="sidebar-overlay" :aria-label="t('nav.closeNavigation')"
-            @click="closeMobileSidebar"></button>
-    <SideBar :expanded="desktopSidebarExpanded" :mobile-open="mobileSidebarOpen"
-             @update:expanded="desktopSidebarExpanded = $event" @close="closeMobileSidebar" />
+    <SideBar :expanded="sidebarExpanded" @update:expanded="sidebarExpanded = $event" />
     <div class="main-area">
-      <TopBar :mobile-sidebar-open="mobileSidebarOpen"
-              @toggle-sidebar="mobileSidebarOpen = !mobileSidebarOpen" />
+      <TopBar />
       <main class="content">
         <router-view v-slot="{ Component }">
           <transition name="leaf-flip" mode="out-in">
@@ -71,7 +52,6 @@ if (!auth.isLoggedIn) {
 .app-layout {
   display: flex;
   height: 100vh;
-  height: 100dvh;
   width: 100vw;
   overflow: hidden;
   position: relative;
@@ -87,10 +67,6 @@ if (!auth.isLoggedIn) {
   z-index: 1;
 }
 
-.sidebar-overlay {
-  display: none;
-}
-
 .content {
   flex: 1;
   overflow: auto;
@@ -102,15 +78,6 @@ if (!auth.isLoggedIn) {
 
 @media (max-width: 768px) {
   .content { padding: 8px; }
-  .sidebar-overlay {
-    display: block;
-    position: fixed;
-    inset: 0;
-    z-index: var(--z-overlay);
-    padding: 0;
-    border: 0;
-    background: rgba(5, 15, 10, 0.62);
-  }
 }
 </style>
 
@@ -164,7 +131,6 @@ if (!auth.isLoggedIn) {
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .leaf-flip-enter-active, .leaf-flip-leave-active { transition: none; }
   .leaf-flip-enter-from, .leaf-flip-leave-to { transform: none; filter: none; }
   .leaf-flip-enter-active > * { animation: none; }
 }

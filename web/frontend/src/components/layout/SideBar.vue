@@ -1,43 +1,10 @@
 <script setup lang="ts">
-import { computed, ref, onMounted, onBeforeUnmount } from 'vue'
 import SumeruIcon from '../fx/SumeruIcon.vue'
 import DendroEmblem from '../fx/DendroEmblem.vue'
 import { t, tf, state as i18nState } from '../../i18n'
 
-const props = defineProps<{ expanded: boolean; mobileOpen: boolean }>()
-const emit = defineEmits<{
-  'update:expanded': [value: boolean]
-  'close': []
-}>()
-
-// 移动视口下侧栏以浮层形式呈现；关闭时须从 Tab 序与辅助技术中移除。
-const isMobileViewport = ref(false)
-// 粗指针（触屏）设备不应触发 hover 展开，避免误展开与抖动。
-const isFinePointer = ref(true)
-let mqViewport: MediaQueryList | null = null
-let mqPointer: MediaQueryList | null = null
-const syncViewport = () => { isMobileViewport.value = !!mqViewport?.matches }
-const syncPointer = () => { isFinePointer.value = !!mqPointer?.matches }
-
-onMounted(() => {
-  if (typeof window === 'undefined' || !window.matchMedia) return
-  mqViewport = window.matchMedia('(max-width: 768px)')
-  mqPointer = window.matchMedia('(pointer: fine)')
-  syncViewport(); syncPointer()
-  mqViewport.addEventListener('change', syncViewport)
-  mqPointer.addEventListener('change', syncPointer)
-})
-onBeforeUnmount(() => {
-  mqViewport?.removeEventListener('change', syncViewport)
-  mqPointer?.removeEventListener('change', syncPointer)
-})
-
-// 仅在移动浮层关闭时隔离焦点；桌面常驻侧栏始终可交互。
-const focusIsolated = computed(() => isMobileViewport.value && !props.mobileOpen)
-// 仅在细指针（鼠标/触控板）且非移动视口时启用 hover 展开。
-const hoverCapable = computed(() => isFinePointer.value && !isMobileViewport.value)
-function onEnter() { if (hoverCapable.value) emit('update:expanded', true) }
-function onLeave() { if (hoverCapable.value) emit('update:expanded', false) }
+defineProps<{ expanded: boolean }>()
+const emit = defineEmits<{ 'update:expanded': [value: boolean] }>()
 
 const navItems = [
   { icon: 'chat', labelKey: 'nav.chat', route: '/' },
@@ -60,18 +27,13 @@ const navItems = [
 </script>
 
 <template>
-  <nav id="app-sidebar" class="sidebar" :class="{ expanded, 'mobile-open': mobileOpen }"
-       :aria-label="t('nav.mainNavigation')"
-       :inert="focusIsolated"
-       :aria-hidden="focusIsolated || undefined"
-       @mouseenter="onEnter"
-       @mouseleave="onLeave">
+  <nav class="sidebar" :class="{ expanded }"
+       @mouseenter="emit('update:expanded', true)"
+       @mouseleave="emit('update:expanded', false)">
     <div class="sidebar-inner">
       <div class="sidebar-logo">
         <DendroEmblem :size="30" spin />
-        <span v-if="expanded || mobileOpen" class="logo-text">{{ t('brand') }}</span>
-        <button class="sidebar-close" type="button" :aria-label="t('nav.closeNavigation')"
-                @click="emit('close')">×</button>
+        <span v-if="expanded" class="logo-text">{{ t('brand') }}</span>
       </div>
 
       <div class="nav-items">
@@ -81,23 +43,22 @@ const navItems = [
           :to="item.route"
           class="nav-item"
           :title="t(item.labelKey)"
-          @click="emit('close')"
         >
           <span class="nav-icon"><SumeruIcon :name="item.icon" :size="20" /></span>
-          <span v-if="expanded || mobileOpen" class="nav-label">{{ t(item.labelKey) }}</span>
+          <span v-if="expanded" class="nav-label">{{ t(item.labelKey) }}</span>
           <span class="nav-glow"></span>
         </router-link>
       </div>
 
-      <div class="sidebar-foot" v-if="expanded || mobileOpen">
-        <router-link to="/sponsor" class="sponsor-entry" :title="t('sponsor.navTitle')" @click="emit('close')">
+      <div class="sidebar-foot" v-if="expanded">
+        <router-link to="/sponsor" class="sponsor-entry" :title="t('sponsor.navTitle')">
           <span class="sponsor-icon"><SumeruIcon name="tea" :size="14" /></span>
           <span class="sponsor-label">{{ t('sponsor.navTitle') }}</span>
         </router-link>
         <span class="foot-text">{{ t('tagline') }}</span>
         <span class="foot-signature">{{ t('brand_signature.full') }}</span>
       </div>
-      <router-link v-else to="/sponsor" class="sponsor-entry-collapsed" :title="t('sponsor.navTitle')" @click="emit('close')">
+      <router-link v-else to="/sponsor" class="sponsor-entry-collapsed" :title="t('sponsor.navTitle')">
         <span class="sponsor-icon"><SumeruIcon name="tea" :size="18" /></span>
       </router-link>
     </div>
@@ -108,7 +69,6 @@ const navItems = [
 .sidebar {
   width: var(--sidebar-width);
   height: 100vh;
-  height: 100dvh;
   background: rgba(15, 31, 23, 0.7);
   backdrop-filter: blur(10px);
   border-right: 1px solid var(--glass-border);
@@ -121,19 +81,6 @@ const navItems = [
 .sidebar.expanded {
   width: var(--sidebar-expanded);
   animation: door-open 0.3s ease-out;
-}
-
-.sidebar-close {
-  display: none;
-  margin-left: auto;
-  width: 36px;
-  height: 36px;
-  border: 1px solid var(--glass-border);
-  border-radius: 9px;
-  background: rgba(20, 40, 28, 0.6);
-  color: var(--moon);
-  font-size: 24px;
-  cursor: pointer;
 }
 
 @keyframes door-open {
@@ -303,22 +250,6 @@ const navItems = [
 }
 
 @media (max-width: 768px) {
-  .sidebar {
-    position: fixed;
-    left: 0;
-    top: 0;
-    width: var(--sidebar-mobile-width);
-    z-index: var(--z-sidebar);
-    transform: translateX(-100%);
-    transition: transform var(--motion-normal) var(--ease-smooth);
-  }
-  .sidebar.expanded { width: var(--sidebar-mobile-width); animation: none; }
-  .sidebar.mobile-open { transform: translateX(0); }
-  .sidebar-close { display: inline-flex; align-items: center; justify-content: center; }
-}
-
-@media (prefers-reduced-motion: reduce) {
-  .sidebar, .sidebar.expanded, .nav-item, .nav-icon { transition: none; animation: none; }
-  .nav-item:hover, .nav-item:active, .nav-item:hover .nav-icon { transform: none; }
+  .sidebar { position: fixed; left: 0; top: 0; }
 }
 </style>

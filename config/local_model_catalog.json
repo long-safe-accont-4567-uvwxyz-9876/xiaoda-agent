@@ -1,5 +1,216 @@
 {
   "schema_version": 1,
   "remote_catalog_url": null,
-  "models": []
+  "models": [
+    {
+      "id": "bge-small-zh-v1.5",
+      "source": "modelscope",
+      "repository": "onnx-community/bge-small-zh-v1.5-ONNX",
+      "revision": "5b414c2c2d177d066e7bdc32b6ad2a4518a59333",
+      "purpose": "embedding",
+      "parameter_count": 24000000,
+      "quantization": "fp32",
+      "files": [
+        {
+          "path": "onnx/model.onnx",
+          "size": 41689,
+          "sha256": "69b353bb2aa2d09ab606ddbbc35437b03c843615a6bff28216a37fee7309c2aa"
+        },
+        {
+          "path": "onnx/model.onnx_data",
+          "size": 94765056,
+          "sha256": "e72da961b03613124aa11317470c995ca197651a9d7f6be2b0e90aad92f71df0"
+        },
+        {
+          "path": "config.json",
+          "size": 904,
+          "sha256": "34fa1ea6278c257de3cc8ce7e9bdc48647b802145a9da0fc32e95db620efd04f"
+        },
+        {
+          "path": "tokenizer.json",
+          "size": 362603,
+          "sha256": "3d09c84ebd10306706a79a8276b3ab736a40d8ec03251c7639f4e52c3a1a4f8e"
+        },
+        {
+          "path": "tokenizer_config.json",
+          "size": 414,
+          "sha256": "7e3bd6113f18c20975eaa8e8cc03c95b727fd83d6357f8e171e22b3736bf706d"
+        }
+      ],
+      "download_size": 95170666,
+      "license": "MIT",
+      "compatibility": {
+        "architectures": ["bert"],
+        "platforms": ["linux", "windows", "macos"],
+        "providers": ["cpu", "cuda", "dml"],
+        "runtimes": ["ort"],
+        "purposes": ["embedding"],
+        "precisions": ["fp32"]
+      },
+      "runtime_requirements": {
+        "minimum_ram": 1024,
+        "recommended_ram": 2048
+      }
+    },
+    {
+      "id": "bge-small-en-v1.5",
+      "source": "modelscope",
+      "repository": "onnx-community/bge-small-en-v1.5-ONNX",
+      "revision": "f246b360b061b613fe0b449f2e14de12f875dad7",
+      "purpose": "embedding",
+      "parameter_count": 24000000,
+      "quantization": "fp32",
+      "files": [
+        {
+          "path": "onnx/model.onnx",
+          "size": 106880,
+          "sha256": "a2825cd804c4c2d144c517f493370170f871db75975bee55014cfc6eb358c857"
+        },
+        {
+          "path": "onnx/model.onnx_data",
+          "size": 132848640,
+          "sha256": "aa8184d029db68ff515cc5254a2d5e57ec2a3a89c7479b14c61e0df19ea4006a"
+        },
+        {
+          "path": "config.json",
+          "size": 867,
+          "sha256": "26ad1d93a1ba37422fc25472191cfa230010631fa6a01f9d9f81fa13df2d0917"
+        },
+        {
+          "path": "tokenizer.json",
+          "size": 533603,
+          "sha256": "ea77de727ef7fd34d177b83b4b1f1d3bb8884c95c90b6554a0adb0b3b65350a9"
+        },
+        {
+          "path": "tokenizer_config.json",
+          "size": 1271,
+          "sha256": "eebe14d184cfbd65f6a11d2a5ff39385c4044c8a670a89acf1a13331e04faa60"
+        },
+        {
+          "path": "vocab.txt",
+          "size": 231508,
+          "sha256": "07eced375cec144d27c900241f3e339478dec958f92fddbc551f295c992038a3"
+        },
+        {
+          "path": "special_tokens_map.json",
+          "size": 695,
+          "sha256": "5d5b662e421ea9fac075174bb0688ee0d9431699900b90662acd44b2a350503a"
+        }
+      ],
+      "download_size": 133723464,
+      "license": "MIT",
+      "compatibility": {
+        "architectures": ["bert"],
+        "platforms": ["linux", "windows", "macos"],
+        "providers": ["cpu", "cuda", "dml"],
+        "runtimes": ["ort"],
+        "purposes": ["embedding"],
+        "precisions": ["fp32"]
+      },
+      "runtime_requirements": {
+        "minimum_ram": 1024,
+        "recommended_ram": 2048
+      }
+    },
+    {
+      "id": "bge-reranker-base",
+      "source": "modelscope",
+      "repository": "onnx-community/bge-reranker-base-ONNX",
+      "revision": "47990c5c98b8e113ea906826791aba8c2e7ec3d0",
+      "purpose": "reranker",
+      "parameter_count": 278000000,
+      "quantization": "int8",
+      "files": [
+        {
+          "path": "onnx/model_int8.onnx",
+          "size": 279252659,
+          "sha256": "46a1bb4cf46ff1e300d27589d620141fbf04fc0eaf8e7bb6dea5e044475ff387"
+        },
+        {
+          "path": "config.json",
+          "size": 845,
+          "sha256": "e019267cbd01ffff9e3994d735b8b7784b95610c5696e66fe4debab9e3b5ff27"
+        },
+        {
+          "path": "tokenizer.json",
+          "size": 17082798,
+          "sha256": "14917dd757b81bc44d4af6b028367351702656670c1954e055dabdfcf21593cf"
+        },
+        {
+          "path": "tokenizer_config.json",
+          "size": 1201,
+          "sha256": "8f0e65f245d8e127fb2796272e044e0764601b02237f2089b03b24ea317398c4"
+        },
+        {
+          "path": "special_tokens_map.json",
+          "size": 963,
+          "sha256": "66e573bfc6c3b062381e41274f7fd4143daaf01926888ffbd880c87aa6368443"
+        }
+      ],
+      "download_size": 296338466,
+      "license": "MIT",
+      "compatibility": {
+        "architectures": ["xlm-roberta"],
+        "platforms": ["linux", "windows", "macos"],
+        "providers": ["cpu", "cuda", "dml"],
+        "runtimes": ["ort"],
+        "purposes": ["reranker"],
+        "precisions": ["int8"]
+      },
+      "runtime_requirements": {
+        "minimum_ram": 2048,
+        "recommended_ram": 4096
+      }
+    },
+    {
+      "id": "bge-m3",
+      "source": "modelscope",
+      "repository": "onnx-community/bge-m3-ONNX",
+      "revision": "930d6d4eeca1066781b7d5114578fc2dd7f26896",
+      "purpose": "embedding",
+      "parameter_count": 568000000,
+      "quantization": "int8",
+      "files": [
+        {
+          "path": "onnx/model_int8.onnx",
+          "size": 568479395,
+          "sha256": "2237f770aad5c71bbc1fc2d361a57f9a37400574cc9eff32626f0cdb49234730"
+        },
+        {
+          "path": "config.json",
+          "size": 658,
+          "sha256": "70dae5884ced999af00244f776ac9eaa71538d68497d3d6a6091e0318cd32905"
+        },
+        {
+          "path": "tokenizer.json",
+          "size": 17082799,
+          "sha256": "249df0778f236f6ece390de0de746838ef25b9d6954b68c2ee71249e0a9d8fd4"
+        },
+        {
+          "path": "tokenizer_config.json",
+          "size": 1203,
+          "sha256": "b87c8703482b0300d3da30e201519aa641f6a450f5eb5bf1e624afbf70c74d80"
+        },
+        {
+          "path": "special_tokens_map.json",
+          "size": 964,
+          "sha256": "8c785abebea9ae3257b61681b4e6fd8365ceafde980c21970d001e834cf10835"
+        }
+      ],
+      "download_size": 585565019,
+      "license": "MIT",
+      "compatibility": {
+        "architectures": ["xlm-roberta"],
+        "platforms": ["linux", "windows", "macos"],
+        "providers": ["cpu", "cuda", "dml"],
+        "runtimes": ["ort"],
+        "purposes": ["embedding"],
+        "precisions": ["int8"]
+      },
+      "runtime_requirements": {
+        "minimum_ram": 4096,
+        "recommended_ram": 8192
+      }
+    }
+  ]
 }
