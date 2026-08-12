@@ -62,8 +62,16 @@ class WorkflowV2Service:
             "updated_at": row["updated_at"],
         }
 
-    async def patch_definition(self, wf_id: str, body: dict) -> dict:
-        """Update identity fields (name/description) and bump etag + updated_at."""
+    async def patch_definition(self, wf_id: str, body: dict, etag: str) -> dict | None:
+        """Update identity fields (name/description) guarded by an atomic etag CAS.
+
+        The etag comparison happens inside the SAME UPDATE statement (``WHERE
+        workflow_id=? AND etag=?``), so two concurrent PATCHes with the same
+        If-Match can never both pass: exactly one sees ``rowcount == 1`` and the
+        loser gets 0 rows. Returns the updated definition (fresh etag) on
+        success, or ``None`` when the etag moved / the definition is gone —
+        the route maps that to 409 ETAG_CONFLICT.
+        """
         sets: list[str] = []
         params: list = []
         if "name" in body:
@@ -77,9 +85,13 @@ class WorkflowV2Service:
         sets.append("updated_at=?")
         params.append(time.time())
         params.append(wf_id)
-        await self.repo.conn.execute(
-            f"UPDATE wf_definition SET {', '.join(sets)} WHERE workflow_id=?", params
+        params.append(etag)
+        cur = await self.repo.conn.execute(
+            f"UPDATE wf_definition SET {', '.join(sets)} WHERE workflow_id=? AND etag=?",
+            params,
         )
+        if cur.rowcount != 1:
+            return None  # etag moved (or definition deleted) — no blind overwrite
         await self.repo.conn.commit()
         return await self.get_definition(wf_id)
 

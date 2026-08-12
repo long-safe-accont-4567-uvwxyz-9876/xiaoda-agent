@@ -60,9 +60,13 @@ async def patch_definition(wf_id: str, body: dict, request: Request,
     current = await svc.get_definition(wf_id)
     if current is None:
         return _err("WORKFLOW_NOT_FOUND", "definition not found", 404)
-    if if_match is None or if_match != current["etag"]:
+    if if_match is None:
+        return _err("ETAG_CONFLICT", "If-Match header is required", 409)
+    # Atomic CAS: the etag guard lives inside the UPDATE (service), so two
+    # concurrent PATCHes with the same If-Match cannot both win the race.
+    updated = await svc.patch_definition(wf_id, body, etag=if_match)
+    if updated is None:
         return _err("ETAG_CONFLICT", "definition was modified by another client", 409)
-    updated = await svc.patch_definition(wf_id, body)
     return Envelope(data=updated)
 
 

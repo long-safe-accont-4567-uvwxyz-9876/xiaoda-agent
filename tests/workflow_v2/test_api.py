@@ -8,7 +8,12 @@ dependency is overridden, so any Authorization header value is accepted.
 """
 from __future__ import annotations
 
+import time
+
+from fastapi import FastAPI
 from httpx import AsyncClient
+
+from workflow_v2.repository import WorkflowRepository
 
 
 async def test_run_requires_idempotency_key(client: AsyncClient, auth_headers):
@@ -26,6 +31,49 @@ async def test_patch_definition_etag_conflict(client: AsyncClient, seeded_defini
     assert r.status_code == 409
     assert r.json()["error"]["code"] == "ETAG_CONFLICT"
     assert r.json()["ok"] is False
+
+
+async def test_patch_definition_missing_if_match_conflict(client: AsyncClient, seeded_definition, auth_headers):
+    """Brief test: PATCH with NO If-Match header -> 409 ETAG_CONFLICT (same as mismatch)."""
+    r = await client.patch("/api/v1/workflows/w1", headers=auth_headers, json={"name": "new"})
+    assert r.status_code == 409
+    assert r.json()["error"]["code"] == "ETAG_CONFLICT"
+    assert r.json()["ok"] is False
+
+
+async def test_patch_definition_cas_atomic(client: AsyncClient, app: FastAPI, repo: WorkflowRepository,
+                                          seeded_definition, auth_headers):
+    """CAS: a concurrent write between the etag read and the UPDATE must be detected.
+
+    Simulates the TOCTOU window: the route/service reads etag 'etag-abc' (matches the
+    If-Match header), then another client bumps the etag before patch_definition's
+    UPDATE runs. A blind update would overwrite it -> 200 (lost update); the atomic
+    CAS must see 0 matched rows -> 409 ETAG_CONFLICT and leave the row untouched.
+    """
+    svc = app.state.workflow_v2
+    original_get = svc.get_definition
+
+    async def racing_get(wf_id: str):
+        row = await original_get(wf_id)
+        # concurrent writer lands between our read and our write
+        await repo.conn.execute(
+            "UPDATE wf_definition SET etag=?, updated_at=? WHERE workflow_id=?",
+            ("etag-stolen", time.time(), wf_id),
+        )
+        await repo.conn.commit()
+        return row
+
+    svc.get_definition = racing_get  # instance-level shadow to open the race window
+    h = {**auth_headers, "If-Match": "etag-abc"}
+    r = await client.patch("/api/v1/workflows/w1", headers=h, json={"name": "new"})
+    assert r.status_code == 409
+    assert r.json()["error"]["code"] == "ETAG_CONFLICT"
+    row = await repo.conn.execute(
+        "SELECT etag, name FROM wf_definition WHERE workflow_id='w1'"
+    )
+    got = await row.fetchone()
+    assert got["etag"] == "etag-stolen"  # the concurrent write survived, no lost update
+    assert got["name"] == "wf"
 
 
 async def test_create_run_happy_path_and_idempotency(client: AsyncClient, seeded_definition, auth_headers):
