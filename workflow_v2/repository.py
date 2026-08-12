@@ -86,6 +86,46 @@ class WorkflowRepository:
             await self.conn.rollback()
             raise
 
+    async def claim_step_with_event(self, run_id: str, node_id: str, expected_lock: int,
+                                    lease_owner: str, lease_ttl: float,
+                                    event: WorkflowRunEvent):
+        """Atomically claim a step and append its starting event in ONE transaction.
+
+        A crash between a plain claim and a separate append_event would leave the
+        step RUNNING with no step_started event; doing both under the same
+        BEGIN/COMMIT makes the state transition + RunEvent atomic. The event's
+        seq and attempt are owned by this method (next-seq + new attempt row).
+        Returns the claimed WorkflowStepRun, or None on CAS lock conflict.
+        """
+        await self.conn.execute("BEGIN")
+        try:
+            cur = await self.conn.execute(
+                "UPDATE wf_run SET lock_version=lock_version+1, status=?, updated_at=? "
+                "WHERE run_id=? AND lock_version=?",
+                (RunStatus.RUNNING.value, time.time(), run_id, expected_lock),
+            )
+            if cur.rowcount != 1:
+                await self.conn.rollback()
+                return None
+            cur2 = await self.conn.execute(
+                "SELECT COALESCE(MAX(attempt),0)+1 FROM wf_step_run WHERE run_id=? AND node_id=?",
+                (run_id, node_id),
+            )
+            attempt = int((await cur2.fetchone())[0])
+            step = WorkflowStepRun(
+                run_id=run_id, node_id=node_id, attempt=attempt, status=StepStatus.RUNNING,
+                lease_owner=lease_owner, lease_expires_at=time.time() + lease_ttl,
+            )
+            await self._insert_step(step)
+            await self._insert_event(event.model_copy(update={
+                "seq": await self.next_seq(run_id), "step_id": node_id, "attempt": attempt,
+            }))
+            await self.conn.commit()
+            return step
+        except Exception:
+            await self.conn.rollback()
+            raise
+
     async def commit_step_result(self, run_id: str, node_id: str, attempt: int,
                                  step_status: StepStatus, step_patch: dict,
                                  run_status: RunStatus, expected_lock: int,

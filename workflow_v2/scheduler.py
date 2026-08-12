@@ -62,13 +62,16 @@ class Scheduler:
             return run.status
         for node in ready:
             run = await self.repo.get_run(run_id)
-            claimed = await self.repo.claim_step(run_id, node.id, run.lock_version, "worker", self.lease_ttl)
+            if run.status in (RunStatus.SUCCEEDED, RunStatus.FAILED, RunStatus.CANCELLED):
+                break  # terminal run: no new work (claim would regress status)
+            claimed = await self.repo.claim_step_with_event(
+                run_id, node.id, run.lock_version, "worker", self.lease_ttl,
+                WorkflowRunEvent(run_id=run_id, seq=0, event_type="step_started",
+                                 run_status=RunStatus.RUNNING, step_id=node.id,
+                                 attempt=1, timestamp=time.time()),
+            )
             if claimed is None:
                 continue
-            await self.repo.append_event(WorkflowRunEvent(
-                run_id=run_id, seq=await self.repo.next_seq(run_id),
-                event_type="step_started", run_status=RunStatus.RUNNING,
-                step_id=node.id, attempt=claimed.attempt, timestamp=time.time()))
             result = await self.executor(node, claimed, {"run": run.input})
             await self._commit(run_id, node, claimed.attempt, result)
         return (await self.repo.get_run(run_id)).status
@@ -80,10 +83,13 @@ class Scheduler:
 
     async def _commit(self, run_id: str, node: NodeSpec, attempt: int, result: NodeResult) -> None:
         run = await self.repo.get_run(run_id)
-        run_status = RunStatus.RUNNING
+        # Terminal-state guard: never regress an already-terminal run (e.g. a
+        # FAILED run must stay FAILED even if another diamond branch later
+        # succeeds) — otherwise the run never terminates.
+        run_status = (run.status if run.status in (RunStatus.SUCCEEDED, RunStatus.FAILED, RunStatus.CANCELLED)
+                      else (RunStatus.FAILED if result.status == StepStatus.FAILED and node.failure_policy == FailurePolicy.FAIL_RUN
+                            else RunStatus.RUNNING))
         event_type = f"step_{result.status.value}"
-        if result.status == StepStatus.FAILED and node.failure_policy == FailurePolicy.FAIL_RUN:
-            run_status = RunStatus.FAILED
         await self.repo.commit_step_result(
             run_id, node.id, attempt, result.status,
             {"output": result.output, "error_code": result.error_code, "error_message": result.error_message},
@@ -109,9 +115,22 @@ class Scheduler:
             if s.status != StepStatus.RUNNING:
                 continue
             node = by_id.get(s.node_id)
-            idempotent = node and node.idempotency.mode == "required"
-            if idempotent:
-                # eligible to re-run: mark back to skipped-of-attempt so compute_ready re-picks
+            if node and node.idempotency.mode == "required":
+                # Conservative recovery: idempotent leftover-running nodes stay
+                # eligible to resume — reset the stuck step back to PENDING
+                # (attempt row stays) and record a step_retry_scheduled event so
+                # compute_ready re-picks it on the next tick; the run stays
+                # RUNNING. waiting_input nodes are left untouched (deferred:
+                # they resume when the input arrives).
+                run = await self.repo.get_run(run_id)
+                await self.repo.commit_step_result(
+                    run_id, s.node_id, s.attempt, StepStatus.PENDING,
+                    {"output": {}, "error_code": None, "error_message": None},
+                    RunStatus.RUNNING, run.lock_version,
+                    WorkflowRunEvent(run_id=run_id, seq=await self.repo.next_seq(run_id),
+                                     event_type="step_retry_scheduled", run_status=RunStatus.RUNNING,
+                                     step_id=s.node_id, attempt=s.attempt, timestamp=time.time(),
+                                     payload={"reason": "recovered after restart"}))
                 continue
             run = await self.repo.get_run(run_id)
             await self.repo.commit_step_result(
