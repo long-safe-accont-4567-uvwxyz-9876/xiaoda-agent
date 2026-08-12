@@ -10,29 +10,27 @@ from __future__ import annotations
 
 from httpx import AsyncClient
 
-_AUTH = {"Authorization": "Bearer test"}
 
-
-async def test_run_requires_idempotency_key(client: AsyncClient):
+async def test_run_requires_idempotency_key(client: AsyncClient, auth_headers):
     """Brief test 1: missing Idempotency-Key header -> 400 IDEMPOTENCY_KEY_REQUIRED."""
-    r = await client.post("/api/v1/workflows/w1/runs", headers=_AUTH, json={"input": {}})
+    r = await client.post("/api/v1/workflows/w1/runs", headers=auth_headers, json={"input": {}})
     assert r.status_code == 400
     assert r.json()["error"]["code"] == "IDEMPOTENCY_KEY_REQUIRED"
     assert r.json()["ok"] is False and r.json()["data"] is None
 
 
-async def test_patch_definition_etag_conflict(client: AsyncClient, seeded_definition):
+async def test_patch_definition_etag_conflict(client: AsyncClient, seeded_definition, auth_headers):
     """Brief test 2: mismatched If-Match -> 409 ETAG_CONFLICT (definition untouched)."""
-    h = {**_AUTH, "If-Match": "stale-etag"}
+    h = {**auth_headers, "If-Match": "stale-etag"}
     r = await client.patch("/api/v1/workflows/w1", headers=h, json={"name": "new"})
     assert r.status_code == 409
     assert r.json()["error"]["code"] == "ETAG_CONFLICT"
     assert r.json()["ok"] is False
 
 
-async def test_create_run_happy_path_and_idempotency(client: AsyncClient, seeded_definition):
+async def test_create_run_happy_path_and_idempotency(client: AsyncClient, seeded_definition, auth_headers):
     """Happy path: create run with Idempotency-Key -> 200 Envelope; same key -> same run_id."""
-    h = {**_AUTH, "Idempotency-Key": "key-1"}
+    h = {**auth_headers, "Idempotency-Key": "key-1"}
     r1 = await client.post("/api/v1/workflows/w1/runs", headers=h, json={"input": {"a": 1}})
     assert r1.status_code == 200, r1.text
     body1 = r1.json()

@@ -8,8 +8,12 @@ Note: this router carries NO path prefix (project convention — web/server.py
 mounts every router under ``/api/v1``), so the real paths are e.g.
 ``/api/v1/workflows/{wf_id}/runs``.
 
-WebSocket ``/stream`` and ``POST .../signals/{node_id}`` are explicitly
-deferred to a later task and are NOT implemented here.
+Deferred (explicitly out of scope for this task, per the plan's Self-Review
+Notes — return 501 ``NOT_IMPLEMENTED`` stubs so they never crash):
+revision create/publish and the structured-signal handler. WebSocket
+``/stream`` live push + per-session auth filtering and the V2 create-definition
+flow are also deferred (the legacy ``web/routers/workflows.py`` still owns
+``POST /api/v1/workflows`` during the transition).
 """
 from __future__ import annotations
 
@@ -86,3 +90,37 @@ async def cancel(run_id: str, request: Request) -> Any:
     except KeyError:
         return _err("RUN_NOT_FOUND", "run not found", 404)
     return Envelope(data=result)
+
+
+# --- deferred endpoints (501 stubs; see module docstring) -------------------
+
+def _not_implemented(what: str) -> JSONResponse:
+    return JSONResponse(
+        status_code=501,
+        content=Envelope(
+            ok=False,
+            data=None,
+            error=ErrorDetail(
+                code="NOT_IMPLEMENTED",
+                message=f"{what} is deferred to a follow-up task",
+            ),
+        ).model_dump(),
+    )
+
+
+@router.post("/workflows/{wf_id}/revisions", response_model=Envelope[dict])
+async def create_revision(wf_id: str, body: dict, request: Request) -> Any:
+    """Validate + store an immutable revision — DEFERRED (501 stub)."""
+    return _not_implemented("revision creation")
+
+
+@router.post("/workflows/{wf_id}/revisions/{rev}/publish", response_model=Envelope[dict])
+async def publish_revision(wf_id: str, rev: str, request: Request) -> Any:
+    """Set the current revision — DEFERRED (501 stub)."""
+    return _not_implemented("revision publish")
+
+
+@router.post("/workflow-runs/{run_id}/signals/{node_id}", response_model=Envelope[dict])
+async def send_signal(run_id: str, node_id: str, body: dict, request: Request) -> Any:
+    """Structured signal + signal_token — DEFERRED (501 stub)."""
+    return _not_implemented("structured signal delivery")

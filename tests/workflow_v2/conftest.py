@@ -24,6 +24,17 @@ from workflow_v2.service import WorkflowV2Service
 
 
 @pytest.fixture
+def auth_headers() -> dict[str, str]:
+    """Dummy auth header.
+
+    The router is auth-gated via dependencies=[Depends(get_current_user)];
+    the app fixture overrides get_current_user, so any header value is fine
+    and no real token issuance happens.
+    """
+    return {"Authorization": "Bearer x"}
+
+
+@pytest.fixture
 async def repo() -> WorkflowRepository:
     conn = await aiosqlite.connect(":memory:")
     conn.row_factory = aiosqlite.Row
