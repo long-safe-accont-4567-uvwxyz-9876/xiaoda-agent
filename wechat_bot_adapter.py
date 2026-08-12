@@ -14,6 +14,7 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+import threading
 import time
 from pathlib import Path
 from typing import Any, Optional
@@ -63,6 +64,15 @@ def save_credentials(bot_token: str, ilink_bot_id: str, ilink_user_id: str, base
         )
         os.chmod(tmp_path, 0o600)
         tmp_path.replace(CREDENTIALS_PATH)
+        # m4：写入新凭证意味着新会话开始，清除陈旧游标，避免服务端按旧游标
+        # 重放上一会话的历史积压消息（串话/重复回复根因之一）。
+        try:
+            cursor_path = CREDENTIALS_PATH.with_name("wechat_cursor.json")
+            if cursor_path.exists():
+                cursor_path.unlink()
+                logger.info("wechat_bot.stale_cursor_cleared path={}", cursor_path)
+        except Exception as ce:
+            logger.warning("wechat_bot.cursor_clear_failed error={}", str(ce)[:120])
         logger.info("wechat_bot.credentials_saved path={}", CREDENTIALS_PATH)
     except Exception as e:
         logger.error(
@@ -127,7 +137,7 @@ async def send_proactive_message(text: str) -> bool:
 
     微信 iLink 协议要求 context_token 才能路由消息，该 token 只能在
     bot 轮询收到用户消息时缓存。因此主动发送依赖活跃 bot 实例
-    （_ACTIVE_BOT 已缓存最近 _last_from_user_id / _last_context_token）。
+    （_ACTIVE_BOT 已按 per-user 缓存最近 _last_from_user_id 及其 _ctx_by_user token）。
 
     Raises:
         RuntimeError: bot 未启动 / 尚未收到过用户消息（无 context_token）
@@ -152,7 +162,24 @@ async def send_proactive_message(text: str) -> bool:
 
 # 串行化 start() 中活跃实例的 check→stop→assign 过渡，
 # 避免并发 start() 交错产生多个 poller 或覆盖未停止的旧实例。
-_START_LOCK: "asyncio.Lock" = asyncio.Lock()
+#
+# M3：不能在 import 期创建 asyncio.Lock()——它会绑定到 import 时的（或无）
+# 事件循环，在测试/重启等跨 loop 场景复用会抛 "bound to a different event
+# loop"。改为 per-loop 惰性创建：每个运行中的事件循环各持一把锁，
+# 用 threading.Lock 保护映射的读写。
+_START_LOCKS: "dict[asyncio.AbstractEventLoop, asyncio.Lock]" = {}
+_START_LOCKS_GUARD = threading.Lock()
+
+
+def _get_start_lock() -> "asyncio.Lock":
+    """返回绑定当前运行事件循环的 start 锁（首次使用时惰性创建）。"""
+    loop = asyncio.get_running_loop()
+    with _START_LOCKS_GUARD:
+        lock = _START_LOCKS.get(loop)
+        if lock is None:
+            lock = asyncio.Lock()
+            _START_LOCKS[loop] = lock
+        return lock
 
 
 class WeChatBotAdapter:
@@ -216,7 +243,11 @@ class WeChatBotAdapter:
 
         # 最近一条消息的上下文（send_message 回复时使用）
         # W1 修复：改为 per-user 映射，避免多用户并发覆盖导致串话/发错人。
+        # m2：附带时间戳与上限，超时/超量时清理，避免长期运行无界增长（镜像 _user_locks）。
         self._ctx_by_user: dict[str, str] = {}
+        self._ctx_by_user_ts: dict[str, float] = {}
+        self._CTX_TTL = 3600  # 上下文缓存 1 小时
+        self._CTX_MAX = 256   # 硬上限，超出时按时间戳淘汰最旧项
         self._last_from_user_id: str = ""
 
         # 消息去重缓存：msg_id → 时间戳，保留最近 1 小时（对齐 qq_bot_adapter）。
@@ -291,6 +322,28 @@ class WeChatBotAdapter:
         except Exception as e:
             logger.warning("wechat_bot.cursor_save_failed error={}", str(e)[:120])
 
+    def _remember_ctx(self, user_id: str, token: str) -> None:
+        """记录 per-user 上下文 token（m2：带 TTL + 上限清理，避免无界增长）。
+
+        镜像 _user_locks 的清理策略：写入前先剔除过期项，再按硬上限淘汰最旧项。
+        """
+        if not user_id or not token:
+            return
+        now = time.time()
+        # 剔除过期项
+        expired = [k for k, ts in self._ctx_by_user_ts.items() if now - ts > self._CTX_TTL]
+        for k in expired:
+            self._ctx_by_user.pop(k, None)
+            self._ctx_by_user_ts.pop(k, None)
+        # 写入/刷新目标项
+        self._ctx_by_user[user_id] = token
+        self._ctx_by_user_ts[user_id] = now
+        # 硬上限：仍超量时按时间戳淘汰最旧项
+        while len(self._ctx_by_user) > self._CTX_MAX:
+            oldest = min(self._ctx_by_user_ts, key=self._ctx_by_user_ts.get)
+            self._ctx_by_user.pop(oldest, None)
+            self._ctx_by_user_ts.pop(oldest, None)
+
     # ------------------------------------------------------------------
     # 生命周期
     # ------------------------------------------------------------------
@@ -309,7 +362,7 @@ class WeChatBotAdapter:
         # W2 修复：_running/_closed 状态赋值必须在锁内完成——
         # 否则并发 start 时旧实例被 stop 后，锁外代码会把 _closed 覆盖回 False，
         # 继续拉起来第二个 poller（同凭证同游标 → 同条消息双份 ACK + 双份回复）。
-        async with _START_LOCK:
+        async with _get_start_lock():
             # 幂等：同一实例已在运行则直接返回，避免重复建 poller / 覆盖 client
             if _ACTIVE_BOT is self and self._running and not self._closed:
                 logger.info("wechat_bot.start_already_running")
@@ -347,6 +400,8 @@ class WeChatBotAdapter:
         if self._core is not None and not getattr(self._core, "_initialized", False):
             try:
                 await self._core.init()
+                # m1：成功初始化后复位失败标志，避免残留的旧故障状态误报。
+                self._init_failed = False
                 logger.info("wechat_bot.agent_core_initialized")
             except Exception as e:
                 # W7 修复：记录失败状态并在 /wechat/status 暴露，故障可见。
@@ -363,6 +418,10 @@ class WeChatBotAdapter:
         if self._closed:
             logger.info("wechat_bot.start_aborted_stopped_concurrently")
             return
+
+        # m9：成功启动到此处即认为一次干净的生命周期开始，复位过期重试计数，
+        # 避免上次会话遗留的退避计数让新会话过早判定"真过期"。
+        self._expire_retries = 0
 
         # 加载凭证
         creds = self._load_credentials()
@@ -514,6 +573,9 @@ class WeChatBotAdapter:
                     )
                     self._expired = True
                     self._clear_credentials()
+                    # M4：真正过期后收敛到干净终态，使 /wechat/status 与重启逻辑
+                    # 口径一致（不再残留 _running=True / 悬空 client/task 引用）。
+                    await self._converge_terminal_expired()
                     break
                 delay = min(
                     5 * (2 ** (self._expire_retries - 1)),
@@ -547,10 +609,9 @@ class WeChatBotAdapter:
                 self._cursor = next_cursor
                 self._save_cursor()
 
-            # 更新上下文 token（用于后续 send_message）——绑定最近用户
-            ctx_token = result.get("context_token", "") or ""
-            if ctx_token and self._last_from_user_id:
-                self._ctx_by_user[self._last_from_user_id] = ctx_token
+            # m3：不在轮询批次层面绑定 context_token——一个批次可能包含多个用户的
+            # 消息，批次级 token 绑到 _last_from_user_id 会 shadow per-user 的正确绑定
+            # （串话根因）。上下文 token 一律由 _process_message 按各自 from_user_id 绑定。
 
             # 分发消息（用 asyncio.create_task 避免阻塞轮询）
             msgs = result.get("msgs", []) or []
@@ -573,6 +634,34 @@ class WeChatBotAdapter:
             self._running,
             _poll_count,
         )
+
+    async def _converge_terminal_expired(self) -> None:
+        """会话确认过期后收敛到干净终态（M4）。
+
+        poll 循环内调用：不 cancel/await 自身 poll_task（会自等死锁），
+        仅置生命周期标志、关闭并释放 client、释放 poll_task/_ACTIVE_BOT 引用，
+        使 /wechat/status 与 /wechat/start 重启逻辑对同一实例口径一致。
+        """
+        global _ACTIVE_BOT
+        self._running = False
+        self._connected = False
+        self._expired = True
+        self._closed = True
+        # 关闭并释放 ILinkClient（best-effort）
+        if self._ilink_client is not None:
+            try:
+                await self._ilink_client.close()
+            except Exception as e:
+                logger.warning(
+                    "wechat_bot.terminal_close_error error={}",
+                    str(e)[:200],
+                )
+            self._ilink_client = None
+        # 释放 poll_task 引用（当前正是该 task 在执行，勿 cancel/await 自身）
+        self._poll_task = None
+        if _ACTIVE_BOT is self:
+            _ACTIVE_BOT = None
+        logger.info("wechat_bot.terminal_state_converged expired=True")
 
     # ------------------------------------------------------------------
     # 消息处理
@@ -614,13 +703,13 @@ class WeChatBotAdapter:
             return
 
         # 缓存上下文（send_message 回复时使用）——per-user 隔离（W4 修复）
+        # m2：经 _remember_ctx 写入，带 TTL + 上限清理避免无界增长。
         if from_user_id:
             self._last_from_user_id = from_user_id
-            if context_token:
-                self._ctx_by_user[from_user_id] = context_token
+            self._remember_ctx(from_user_id, context_token)
         elif context_token and self._last_from_user_id:
             # 消息未带 from_user_id 时兜底：沿用最近用户（仅更新 token）
-            self._ctx_by_user[self._last_from_user_id] = context_token
+            self._remember_ctx(self._last_from_user_id, context_token)
 
         # W3：per-user 串行锁——同一用户的消息串行处理，不同用户并发。
         # 防止同用户连发消息时并发调用 AgentCore（会话/记忆上下文竞争、回复乱序）。
@@ -853,7 +942,7 @@ class WeChatBotAdapter:
             content: 消息内容
             msg_type: 消息类型（目前仅支持 text）
             to_user_id: 接收方用户 ID（为空时使用缓存的 _last_from_user_id）
-            context_token: 会话上下文 token（为空时使用缓存的 _last_context_token）
+            context_token: 会话上下文 token（为空时按 target_user 从 _ctx_by_user 取缓存）
 
         Returns:
             是否发送成功

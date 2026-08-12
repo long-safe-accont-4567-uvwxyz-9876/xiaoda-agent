@@ -212,7 +212,32 @@ async def test_connection(request: Request) -> Any:
     W9：统一失败协议——所有可预期失败（凭证缺失/无效/测试失败）一律返回
     data: { success: False, error: msg }（前端软失败分支），仅真正异常才用
     Envelope ok=False 包装，避免三种错误表达并存。
+
+    M2：存在活跃运行中的 adapter 实例时，直接读其实时状态
+    （_connected/_expired），绝不新建 ILinkClient / 发 getupdates——
+    否则并发的空游标探测会窃取活跃 poller 的积压消息并竞争游标文件。
+    仅当没有活跃实例（服务重启后）时，才回退到独立 verify_token 探测。
     """
+    # M2：优先读活跃实例实时状态，避免与 live poller 并发 getupdates。
+    try:
+        import wechat_bot_adapter
+        active = wechat_bot_adapter._ACTIVE_BOT
+    except Exception:
+        active = None
+    if active is not None and not active.is_closed():
+        if getattr(active, "_expired", False):
+            logger.info("wechat.test.active_instance_expired")
+            return Envelope(
+                data={"success": False, "error": "会话已过期，请重新扫码登录"},
+            )
+        if bool(getattr(active, "_connected", False)):
+            logger.info("wechat.test.active_instance_connected")
+            return Envelope(data={"success": True})
+        logger.info("wechat.test.active_instance_not_connected")
+        return Envelope(
+            data={"success": False, "error": "微信 Bot 未连接（正在重连或已断开）"},
+        )
+
     # 加载凭证
     try:
         creds = load_credentials()
