@@ -18,7 +18,7 @@ from .db_analytics import AnalyticsDB
 from .db_kg_v2 import KnowledgeDBV2
 from .db_knowledge import KnowledgeDB
 from .db_learning import LearningDB
-from .db_local_ai import LocalAIDB
+from .db_local_ai import LocalAIDB, transaction_lock_for
 from .db_memory import MemoryDB
 from .db_notebook import NotebookDB
 from .db_temporal_memory import TemporalMemoryDB
@@ -303,10 +303,11 @@ class DatabaseManager:
         auto_commit=False 多语句序列时，A 的 commit() 会提交 B 未完成的半事务，
         或 B 的 rollback() 会回滚 A 已写的数据 → 脏事务/数据丢失/SQL logic error
         （历史"上下文丢失/大面积卡顿58s"的真正根因，shield(rollback)/readonly_conn
-        只是治标）。本方法用 asyncio.Lock 串行化所有多语句写事务，从源头杜绝交叉。
+        只是治标）。本方法用连接级 asyncio.Lock（transaction_lock_for）串行化
+        所有多语句写事务，与裸 LocalAIDB 回退事务共享同一把锁，从源头杜绝交叉。
 
         语义：
-        - 进入时获取 _write_tx_lock，标记 _committed=False
+        - 进入时获取连接级锁（transaction_lock_for），标记 _committed=False
         - yield 连接给调用方执行多条 auto_commit=False 写语句
         - 正常退出 → commit() + _committed=True
         - 异常/取消/超时 → asyncio.shield(rollback())（cancel 传播但 rollback 不中断）
@@ -314,7 +315,7 @@ class DatabaseManager:
 
         单语句 auto_commit=True 操作无需本方法（aiosqlite 单条 execute 自身原子）。
         """
-        async with self._write_tx_lock:
+        async with transaction_lock_for(self._conn):
             token = self._write_tx_active.set(True)
             _committed = False
             try:
@@ -1552,7 +1553,7 @@ class DatabaseManager:
     async def execute(self, sql: str, params: tuple = (), auto_commit: bool = True) -> int:
         """通用写语句。INSERT 返回 lastrowid，UPDATE/DELETE 返回 rowcount。"""
         if auto_commit:
-            async with self._write_tx_lock:
+            async with transaction_lock_for(self._conn):
                 cur = await self._conn.execute(sql, params)
                 await self._conn.commit()
         else:

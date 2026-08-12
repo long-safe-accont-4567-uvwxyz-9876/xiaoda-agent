@@ -6,7 +6,6 @@ import pytest
 from db.database import CURRENT_SCHEMA_VERSION, DatabaseManager
 from db.db_temporal_memory import TemporalMemoryDB
 
-
 TEMPORAL_TABLES = {
     "memory_facts",
     "memory_fact_sources",
@@ -32,7 +31,7 @@ async def test_fresh_database_migrates_to_v13_idempotently(tmp_path):
     manager = DatabaseManager(db_path)
 
     await manager.init()
-    assert CURRENT_SCHEMA_VERSION == 26
+    assert CURRENT_SCHEMA_VERSION == 27
     assert await _schema_version(manager) == CURRENT_SCHEMA_VERSION
     assert TEMPORAL_TABLES <= await _table_names(manager)
     assert isinstance(manager.temporal, TemporalMemoryDB)
