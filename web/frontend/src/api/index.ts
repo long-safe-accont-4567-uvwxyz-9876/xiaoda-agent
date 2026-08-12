@@ -101,6 +101,7 @@ export const api = {
   getMessages: (sessionId: string, before = 0, limit = 50) =>
     get<any[]>(`/sessions/${sessionId}/messages?before=${before}&limit=${limit}`),
   getCommands: () => get<Array<{ name: string; description: string; owner_only: boolean }>>('/commands'),
+  testModelRoute: (route: string) => post<{ ok: boolean; error?: string }>('/health/test/llm', { route }),
 
   getAgents: () => get<any[]>('/agents'),
   getPermissions: (name: string) => get(`/agents/${name}/permissions`),

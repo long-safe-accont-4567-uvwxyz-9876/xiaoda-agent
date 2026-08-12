@@ -71,6 +71,11 @@ async function saveSharedPlatforms() {
   }
 }
 
+function updateSharedPlatforms(values: Array<string | number>) {
+  sharedPlatforms.value = values.map(String)
+  saveSharedPlatforms()
+}
+
 async function loadLanInfo() {
   try {
     const data = await get('/system/lan-addresses')
@@ -292,7 +297,7 @@ const permLabel = computed<Record<string, string>>(() => ({
           <h3>{{ t('settings.sharedContext') }}</h3>
           <p class="apikey-desc">{{ t('settings.sharedContextDesc') }}</p>
           <div class="setting-row">
-            <n-checkbox-group :value="sharedPlatforms" @update:value="(v: string[]) => { sharedPlatforms = v; saveSharedPlatforms() }">
+            <n-checkbox-group :value="sharedPlatforms" @update:value="updateSharedPlatforms">
               <n-checkbox v-for="opt in sharedPlatformOptions" :key="opt.value" :value="opt.value">
                 {{ opt.label }}
               </n-checkbox>

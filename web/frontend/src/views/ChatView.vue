@@ -40,6 +40,7 @@ const loadingSessionId = ref('')  // 正在切换加载的会话 id（用于显�
 const playingUrl = ref('')
 const lightboxUrl = ref('')
 const lightboxRef = ref<HTMLElement | null>(null)
+const paletteDismissed = ref(false)
 
 watch(lightboxUrl, (url) => {
   if (url) nextTick(() => lightboxRef.value?.focus())
@@ -52,7 +53,16 @@ function onImgSettled(url: string) { imgSettled.add(url) }
 // 切换会话时清理：避免旧消息的图片 url 残留导致内存占用与状态错乱
 watch(() => chat.sessionId, () => { imgSettled.clear() })
 
-const showPalette = computed(() => inputText.value.startsWith('/') && !inputText.value.includes(' '))
+const showPalette = computed(() => !paletteDismissed.value && inputText.value.startsWith('/') && !inputText.value.includes(' '))
+
+// 组合框 ARIA：面板可见且有候选项时对外暴露展开态与当前高亮项，供 textarea 引用
+const paletteExpanded = computed(() => showPalette.value && !!paletteRef.value?.hasItems())
+const paletteListboxId = computed(() => (paletteExpanded.value ? paletteRef.value?.listboxId : undefined))
+const paletteActiveOption = computed(() => (paletteExpanded.value ? paletteRef.value?.activeOptionId : undefined))
+
+watch(inputText, (value, previous) => {
+  if (value !== previous && value !== '') paletteDismissed.value = false
+})
 
 function onGlobalKeydown(e: KeyboardEvent) {
   if (lightboxUrl.value && e.key === 'Escape') {
@@ -192,12 +202,8 @@ function handleKeydown(e: KeyboardEvent) {
   if (showPalette.value && paletteRef.value?.hasItems()) {
     if (e.key === 'ArrowDown') { e.preventDefault(); paletteRef.value.move(1); return }
     if (e.key === 'ArrowUp') { e.preventDefault(); paletteRef.value.move(-1); return }
-    if (e.key === 'Tab' || e.key === 'Enter') { e.preventDefault(); paletteRef.value.confirm(); return }
-    if (e.key === 'Escape') { inputText.value = ''; return }
-  }
-  if (e.key === 'Enter' && !e.shiftKey) {
-    e.preventDefault()
-    handleSend()
+    if (e.key === 'Tab' || e.key === 'Enter') { e.preventDefault(); paletteRef.value.selectCurrent(); return }
+    if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); paletteDismissed.value = true; return }
   }
 }
 
@@ -400,8 +406,12 @@ const emotionColors: Record<string, string> = {
         :is-loading="chat.isProcessing"
         :connected="chat.wsConnected"
         :placeholder="t('chatView.inputPlaceholder')"
+        :combobox-expanded="paletteExpanded"
+        :combobox-controls="paletteListboxId"
+        :combobox-active-option="paletteActiveOption"
         @send="handlePromptSend"
         @abort="chat.abort()"
+        @keydown="handleKeydown"
       />
     </div>
 

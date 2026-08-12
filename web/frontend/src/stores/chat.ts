@@ -273,8 +273,14 @@ export const useChatStore = defineStore('chat', () => {
     }
     if (request.search) payload.search_mode = true
     if (request.think) payload.think_mode = true
-    if (image) payload.image_url = image.url
-    if (document?.path) payload.doc_path = document.path
+    if (image) {
+      payload.image_url = image.url
+      payload.image_name = image.name
+    }
+    if (document?.path) {
+      payload.doc_path = document.path
+      payload.doc_name = document.name
+    }
     if (!wsConnected.value || !ws.send(payload)) {
       return { ok: false, reason: 'DISCONNECTED' }
     }
@@ -294,7 +300,7 @@ export const useChatStore = defineStore('chat', () => {
   function retryMessage(messageId: string): ChatSendResult {
     const message = messages.value.find(item => item.id === messageId)
     if (!message?.request) return { ok: false, reason: 'EMPTY_REQUEST' }
-    return sendMessage(message.request)
+    return sendMessage(structuredClone(message.request))
   }
 
   function abort() {
@@ -366,6 +372,7 @@ export const useChatStore = defineStore('chat', () => {
       content: h.content,
       emotion: h.emotion || undefined,
       timestamp: h.timestamp * 1000,
+      request: h.request_context || undefined,
     }))
   }
 

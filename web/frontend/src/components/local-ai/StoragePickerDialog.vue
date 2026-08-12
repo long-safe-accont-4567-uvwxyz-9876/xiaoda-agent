@@ -11,6 +11,7 @@ const path = ref('')
 const entries = ref<string[]>([])
 const loading = ref(false)
 const saveAsDefault = ref(false)
+let browseGeneration = 0
 
 function resolveEntryPath(entry: string) {
   if (!path.value) {
@@ -24,16 +25,19 @@ function resolveEntryPath(entry: string) {
 }
 
 async function browse(target = path.value) {
+  const generation = ++browseGeneration
   loading.value = true
   try {
     const listing = await store.browseStorage(target)
+    if (generation !== browseGeneration) return
     path.value = listing.path
     entries.value = listing.entries
     if (listing.error) message.warning(listing.error)
   } catch (error) {
+    if (generation !== browseGeneration) return
     message.error(error instanceof Error ? error.message : String(error))
   } finally {
-    loading.value = false
+    if (generation === browseGeneration) loading.value = false
   }
 }
 

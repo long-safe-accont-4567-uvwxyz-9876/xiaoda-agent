@@ -34,7 +34,13 @@
   /* Spacing */
   --sidebar-width: 64px;
   --sidebar-expanded: 280px;
+  --sidebar-mobile-width: min(82vw, 320px);
   --topbar-height: 56px;
+  --z-overlay: 70;
+  --z-sidebar: 80;
+  --z-palette: 90;
+  --motion-fast: 120ms;
+  --motion-normal: 220ms;
 }
 
 /* ===== 草元素美学 v2 · 层次色板与渐变 ===== */

@@ -26,7 +26,7 @@ async function remove(id: string) {
       <div class="installed-main"><div><strong>{{ model.id }}</strong><span>{{ model.directory }}</span></div><n-tag :type="model.validation_state === 'valid' ? 'success' : 'warning'">{{ model.validation_state }}</n-tag></div>
       <div class="installed-meta"><span>{{ model.purpose }}</span><span>{{ model.revision }}</span><span>{{ model.ownership }}</span></div>
       <div class="installed-actions">
-        <n-popconfirm v-if="model.removable" @positive-click="remove(model.id)"><template #trigger><n-button size="small" type="error" :loading="removing === model.id">移除</n-button></template>确认移除模型文件？</n-popconfirm>
+        <n-popconfirm v-if="model.removable" @positive-click="remove(model.id)"><template #trigger><n-button size="small" type="error" :loading="removing === model.id">移除</n-button></template>确认移除安装登记？仅移除安装登记，不会删除模型目录或文件。</n-popconfirm>
         <n-tag v-else size="small">内置模型</n-tag>
       </div>
     </article>

@@ -8,6 +8,8 @@ const props = defineProps<{ commands: Command[]; filter: string; visible: boolea
 const emit = defineEmits<{ select: [name: string] }>()
 
 const activeIndex = ref(0)
+const activeOptionId = computed(() => filtered.value[activeIndex.value]
+  ? `slash-option-${activeIndex.value}` : undefined)
 
 const filtered = computed(() => {
   const q = props.filter.toLowerCase().replace(/^\//, '')
@@ -23,21 +25,33 @@ function move(delta: number) {
   activeIndex.value = (activeIndex.value + delta + filtered.value.length) % filtered.value.length
 }
 
-function confirm() {
+function selectCurrent() {
   const cmd = filtered.value[activeIndex.value]
   if (cmd) emit('select', cmd.name)
 }
 
-defineExpose({ move, confirm, hasItems: () => filtered.value.length > 0 })
+// 供父层（textarea 组合框）通过 aria-controls / aria-activedescendant 引用
+const listboxId = 'slash-palette-listbox'
+defineExpose({
+  move,
+  selectCurrent,
+  hasItems: () => filtered.value.length > 0,
+  listboxId,
+  activeOptionId,
+})
 </script>
 
 <template>
-  <div v-if="visible && filtered.length" class="slash-palette">
+  <div v-if="visible && filtered.length" :id="listboxId" class="slash-palette" role="listbox"
+       :aria-label="t('slashPalette.commands')">
     <div
       v-for="(cmd, i) in filtered"
       :key="cmd.name"
+      :id="`slash-option-${i}`"
       class="cmd-item"
       :class="{ active: i === activeIndex }"
+      role="option"
+      :aria-selected="i === activeIndex"
       @mousedown.prevent="emit('select', cmd.name)"
       @mouseenter="activeIndex = i"
     >
@@ -62,7 +76,7 @@ defineExpose({ move, confirm, hasItems: () => filtered.value.length > 0 })
   overflow-y: auto;
   max-height: 320px;
   box-shadow: var(--shadow-md);
-  z-index: 30;
+  z-index: var(--z-palette);
 }
 
 .cmd-item {

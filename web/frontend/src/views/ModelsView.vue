@@ -26,7 +26,8 @@ const credentials = ref<any[]>([])
 const usage = ref<any>({ series: [], total: {} })
 const providerWizardOpen = ref(false)
 const editingProvider = ref<ProviderDefinition | null>(null)
-const testResults = ref<Record<string, CapabilityReport | { ok: boolean; error?: string }>>({})
+const providerTestResults = ref<Record<string, CapabilityReport>>({})
+const routeTestResults = ref<Record<string, { ok: boolean; error?: string }>>({})
 const testingId = ref('')
 const chartEl = ref<HTMLElement | null>(null)
 let usageChart: echarts.ECharts | null = null
@@ -137,9 +138,9 @@ async function removeProvider(id: string) {
 async function testProvider(id: string) {
   testingId.value = id
   try {
-    testResults.value[id] = await providersStore.loadCapabilities(id)
+    providerTestResults.value[id] = await providersStore.loadCapabilities(id)
   } catch (e: any) {
-    testResults.value[id] = { available: false, capabilities: { tools: false, vision: false, streaming: false, model_discovery: false, json_mode: false }, models: [], error: e.message }
+    providerTestResults.value[id] = { available: false, capabilities: { tools: false, vision: false, streaming: false, model_discovery: false, json_mode: false }, models: [], error: e.message }
   } finally {
     testingId.value = ''
   }
@@ -167,9 +168,9 @@ async function saveRoute(task: string) {
 async function testRoute(task: string) {
   testingId.value = `route:${task}`
   try {
-    testResults.value[`route:${task}`] = await api.testModelRoute(task)
+    routeTestResults.value[task] = await api.testModelRoute(task)
   } catch (e: any) {
-    testResults.value[`route:${task}`] = { ok: false, error: e.message }
+    routeTestResults.value[task] = { ok: false, error: e.message }
   } finally {
     testingId.value = ''
   }
@@ -334,9 +335,9 @@ function setPresPreset(val: number) {
             <span class="p-url">{{ p.base_url }}</span>
           </div>
           <div class="provider-ops">
-            <span v-if="testResults[p.id]" class="test-badge"
-                  :class="{ ok: 'available' in testResults[p.id] && testResults[p.id].available }">
-              {{ 'available' in testResults[p.id] && testResults[p.id].available ? `✓ ${testResults[p.id].models.length} 个模型` : `✗ ${testResults[p.id].error?.slice(0, 60)}` }}
+            <span v-if="providerTestResults[p.id]" class="test-badge"
+                  :class="{ ok: providerTestResults[p.id].available }">
+              {{ providerTestResults[p.id].available ? `✓ ${providerTestResults[p.id].models.length} 个模型` : `✗ ${providerTestResults[p.id].error?.slice(0, 60)}` }}
             </span>
             <n-button size="tiny" :loading="testingId === p.id" @click="testProvider(p.id)">{{ t('modelsView.test') }}</n-button>
           </div>
@@ -350,9 +351,9 @@ function setPresPreset(val: number) {
                 <span class="p-url">{{ p.base_url }}</span>
               </div>
               <div class="provider-ops">
-                <span v-if="testResults[p.id]" class="test-badge"
-                      :class="{ ok: 'available' in testResults[p.id] && testResults[p.id].available }">
-                  {{ 'available' in testResults[p.id] && testResults[p.id].available ? `✓ ${testResults[p.id].models.length} 个模型` : `✗ ${testResults[p.id].error?.slice(0, 60)}` }}
+                <span v-if="providerTestResults[p.id]" class="test-badge"
+                      :class="{ ok: providerTestResults[p.id].available }">
+                  {{ providerTestResults[p.id].available ? `✓ ${providerTestResults[p.id].models.length} 个模型` : `✗ ${providerTestResults[p.id].error?.slice(0, 60)}` }}
                 </span>
                 <n-button size="tiny" :loading="testingId === p.id" @click="testProvider(p.id)">{{ t('modelsView.test') }}</n-button>
                 <n-button v-if="!p.builtin" size="tiny" @click="openProviderForm(p)">{{ t('modelsView.edit') }}</n-button>
@@ -391,9 +392,9 @@ function setPresPreset(val: number) {
             <td class="route-ops">
               <n-button size="tiny" type="primary" secondary @click="saveRoute(task as string)">{{ t('modelsView.save') }}</n-button>
               <n-button size="tiny" :loading="testingId === `route:${task}`" @click="testRoute(task as string)">{{ t('modelsView.test') }}</n-button>
-              <span v-if="testResults[`route:${task}`]" class="test-badge"
-                    :class="{ ok: testResults[`route:${task}`].ok }">
-                {{ testResults[`route:${task}`].ok ? '✓' : '✗' }}
+              <span v-if="routeTestResults[task as string]" class="test-badge"
+                    :class="{ ok: routeTestResults[task as string].ok }">
+                {{ routeTestResults[task as string].ok ? '✓' : '✗' }}
               </span>
             </td>
           </tr>

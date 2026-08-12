@@ -73,6 +73,9 @@ export default {
     settings: '系统设置',
     disclaimer: '免责声明',
     localDeploy: '本地部署',
+    mainNavigation: '主导航',
+    openNavigation: '打开导航',
+    closeNavigation: '关闭导航',
   },
 
   // 本地部署页
@@ -1218,6 +1221,7 @@ export default {
     saved: '已保存 ✓',
     saveFirst: '请先保存',
     chatBusy: '对话正在处理中',
+    chatSendFailed: '发送到对话窗口失败，请稍后重试',
     sentToChat: '已发送到对话窗口',
     deleted: '已删除',
     nodeType: {
@@ -1274,6 +1278,7 @@ export default {
   // SlashPalette.vue
   slashPalette: {
     ownerOnly: '仅主人可用',
+    commands: '斜杠命令',
   },
 
   // EmotionAvatar.vue

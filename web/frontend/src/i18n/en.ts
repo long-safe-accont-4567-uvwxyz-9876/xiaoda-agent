@@ -73,6 +73,9 @@ export default {
     settings: 'Settings',
     disclaimer: 'Disclaimer',
     localDeploy: 'Local Deploy',
+    mainNavigation: 'Main navigation',
+    openNavigation: 'Open navigation',
+    closeNavigation: 'Close navigation',
   },
 
   // Local Deploy page
@@ -1217,6 +1220,7 @@ export default {
     saved: 'Saved ✓',
     saveFirst: 'Please save first',
     chatBusy: 'A conversation is in progress',
+    chatSendFailed: 'Failed to send to chat. Please try again',
     sentToChat: 'Sent to chat window',
     deleted: 'Deleted',
     nodeType: {
@@ -1273,6 +1277,7 @@ export default {
   // SlashPalette.vue
   slashPalette: {
     ownerOnly: 'Owner only',
+    commands: 'Slash commands',
   },
 
   // EmotionAvatar.vue

@@ -48,6 +48,7 @@ export const useLocalAiStore = defineStore('localAi', () => {
   let loadGeneration = 0
   let deviceGeneration = 0
   let modelGeneration = 0
+  const modelDeletionTombstones = new Map<string, number>()
   let listening = false
   let loadingUpdates = { devices: new Set<string>(), downloads: new Set<string>(), instances: new Set<string>() }
 
@@ -69,12 +70,25 @@ export const useLocalAiStore = defineStore('localAi', () => {
     instancesById.value = { ...instancesById.value, [instance.id]: instance }
   }
 
+  function commitModelSnapshot(snapshot: InstalledModel[], generation: number) {
+    if (generation !== modelGeneration) return
+    modelsById.value = indexById(snapshot.filter(model => {
+      const deletionGeneration = modelDeletionTombstones.get(model.id)
+      return deletionGeneration === undefined || generation > deletionGeneration
+    }))
+    modelDeletionTombstones.forEach((deletionGeneration, id) => {
+      if (generation > deletionGeneration || !snapshot.some(model => model.id === id)) {
+        modelDeletionTombstones.delete(id)
+      }
+    })
+  }
+
   async function refreshModels() {
     const generation = ++modelGeneration
     error.value = null
     try {
       const nextModels = await localAiApi.loadModels()
-      if (generation === modelGeneration) modelsById.value = indexById(nextModels)
+      commitModelSnapshot(nextModels, generation)
     } catch (cause) {
       if (generation === modelGeneration) error.value = cause instanceof Error ? cause.message : String(cause)
       throw cause
@@ -136,7 +150,7 @@ export const useLocalAiStore = defineStore('localAi', () => {
         devicesById.value = reconcileSnapshot(nextDevices, devicesById.value, loadingUpdates.devices)
       }
       catalogById.value = indexById(nextCatalog)
-      if (currentModelGeneration === modelGeneration) modelsById.value = indexById(nextModels)
+      commitModelSnapshot(nextModels, currentModelGeneration)
       downloadsById.value = reconcileSnapshot(nextDownloads, downloadsById.value, loadingUpdates.downloads)
       instancesById.value = reconcileSnapshot(nextInstances, instancesById.value, loadingUpdates.instances)
       defaultStorage.value = storage.default_model_root
@@ -180,6 +194,7 @@ export const useLocalAiStore = defineStore('localAi', () => {
 
   async function remove(id: string) {
     await localAiApi.removeModel(id)
+    modelDeletionTombstones.set(id, modelGeneration)
     const next = { ...modelsById.value }
     delete next[id]
     modelsById.value = next

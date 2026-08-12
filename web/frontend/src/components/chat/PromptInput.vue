@@ -13,15 +13,23 @@ const props = withDefaults(defineProps<{
   connected: boolean
   disabled?: boolean
   placeholder?: string
+  // 斜杠命令面板的组合框 ARIA 状态（由父层驱动，挂到 textarea 上）
+  comboboxExpanded?: boolean
+  comboboxControls?: string
+  comboboxActiveOption?: string
 }>(), {
   disabled: false,
   placeholder: t('promptInput.inputPlaceholder'),
+  comboboxExpanded: false,
+  comboboxControls: undefined,
+  comboboxActiveOption: undefined,
 })
 
 const emit = defineEmits<{
   'update:modelValue': [value: string]
   'send': [request: ChatRequestSnapshot]
   'abort': []
+  'keydown': [event: KeyboardEvent]
 }>()
 
 const message = useMessage()
@@ -85,6 +93,8 @@ function focus() {
 defineExpose({ focus, textareaRef, clearSubmittedDraft })
 
 function handleKeydown(e: KeyboardEvent) {
+  emit('keydown', e)
+  if (e.defaultPrevented) return
   if (e.key === 'Enter' && !e.shiftKey) {
     e.preventDefault()
     handleSend()
@@ -382,6 +392,11 @@ watch(() => props.modelValue, () => {
       :placeholder="currentPlaceholder"
       :disabled="disabled"
       rows="1"
+      role="combobox"
+      aria-autocomplete="list"
+      :aria-expanded="comboboxExpanded"
+      :aria-controls="comboboxControls"
+      :aria-activedescendant="comboboxActiveOption"
       @input="onInput"
       @keydown="handleKeydown"
     ></textarea>
