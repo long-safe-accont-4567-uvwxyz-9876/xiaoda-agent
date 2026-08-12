@@ -38,6 +38,7 @@ CN_TO_EN_MAP = {
     "感动": "happy", "欣慰": "happy",
     "调皮": "playful", "撒娇": "pout",
     "惊讶": "surprised", "困惑": "confused",
+    "喜欢": "love", "问候": "greeting",
 }
 
 
@@ -181,7 +182,7 @@ class EmotionalMemoryManager:
                 "恐惧": 0.8, "平静": 0.2,
             }
             intensity = _intensity_map.get(emotion, 0.5)
-            get_emotion_state().update(
+            get_emotion_state(user_id).update(
                 CN_TO_EN_MAP.get(emotion, emotion.lower()), intensity
             )
         except Exception as e:
@@ -318,14 +319,15 @@ class EmotionalMemoryManager:
                     "angry": "愤怒", "anxious": "焦虑", "shy": "害羞",
                     "confused": "好奇", "thinking": "思考", "fear": "恐惧",
                     "neutral": "平静", "playful": "喜悦", "pout": "害羞",
-                    "surprised": "好奇",
+                    "surprised": "好奇", "love": "喜欢", "moved": "感动",
+                    "curious": "好奇", "greeting": "问候",
                 }
                 for mem in recalled[:2]:  # 最多用前2条记忆微调
                     # 标准化标签：变体 → 标准中文 → PAD 查表
                     en_label = CN_TO_EN_MAP.get(mem.emotion, mem.emotion.lower())
                     cn_standard = _EN_TO_CN_PAD.get(en_label, mem.emotion)
                     pad = pad_from_emotion(cn_standard, 0.5)
-                    get_emotion_state().shift_pad(pad.to_dict(), weight=0.1)
+                    get_emotion_state(user_id).shift_pad(pad.to_dict(), weight=0.1)
             except Exception as e:
                 logger.debug(f"emotional_memory.recall_link_failed: {e}")
             bounded = self.bound(user_id, recalled)

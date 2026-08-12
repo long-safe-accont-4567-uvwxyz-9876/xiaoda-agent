@@ -45,7 +45,7 @@ class PADEmotion:
         return cls(P=0.0, A=0.0, D=0.5)
 
 
-# 9类中文标签 → PAD 参考值映射
+# 17 类核心情绪 → PAD 参考值映射（与 emotion_enum.Emotion 对齐）
 EMOTION_PAD_REFERENCE: dict[str, PADEmotion] = {
     "喜悦": PADEmotion(0.8, 0.5, 0.6),
     "兴奋": PADEmotion(0.9, 0.9, 0.7),
@@ -57,6 +57,14 @@ EMOTION_PAD_REFERENCE: dict[str, PADEmotion] = {
     "思考": PADEmotion(0.0, 0.2, 0.5),
     "恐惧": PADEmotion(-0.8, 0.8, 0.1),
     "平静": PADEmotion(0.0, 0.0, 0.5),
+    # 补齐缺失的 7 类（love/surprised/confused/playful/moved/pout/greeting）
+    "喜欢": PADEmotion(0.7, 0.5, 0.4),    # love：温和积极
+    "惊讶": PADEmotion(0.2, 0.7, 0.3),    # surprised：高唤醒、中性偏正
+    "困惑": PADEmotion(-0.2, 0.5, 0.2),  # confused：中性偏负、中等唤醒、低支配
+    "调皮": PADEmotion(0.6, 0.7, 0.5),    # playful：积极高唤醒
+    "感动": PADEmotion(0.6, 0.4, 0.3),    # moved：温和积极
+    "撒娇": PADEmotion(0.3, 0.5, 0.2),    # pout：温和积极、略带娇嗔
+    "问候": PADEmotion(0.4, 0.4, 0.5),    # greeting：友好中性偏正
 }
 
 

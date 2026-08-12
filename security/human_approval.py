@@ -515,8 +515,11 @@ class HumanApprovalApprover:
 
         # 发起审批请求
         risk_level = self._gate.get_risk_level(request.tool_name)
+        # 优先使用请求携带的运行时 user_id（ToolExecutor.execute 传入），
+        # 构造时绑定的 user_id 仅作兜底（无状态单例接线场景）。
+        user_id = getattr(request, "user_id", "") or self._user_id
         req = await self._gate.request(
-            user_id=self._user_id,
+            user_id=user_id,
             operation=request.tool_name,
             args=request.arguments,
             risk_level=risk_level,

@@ -45,7 +45,7 @@ class TestAnchorLinkage:
             context="今天升职了非常开心",
             keywords=["升职", "开心"],
         )
-        emotion, intensity = es.get_emotion_state().get_current()
+        emotion, intensity = es.get_emotion_state("u1").get_current()
         assert emotion == "happy"
         assert intensity > 0.0
 
@@ -59,7 +59,7 @@ class TestAnchorLinkage:
             context="钱包丢了很难过",
             keywords=["钱包", "丢"],
         )
-        emotion, _ = es.get_emotion_state().get_current()
+        emotion, _ = es.get_emotion_state("u1").get_current()
         assert emotion == "sad"
 
 
@@ -81,10 +81,10 @@ class TestRecallLinkage:
             keywords=["工作", "压力"],
         )
         # 记录 anchor 之后的 PAD（anchor 不修改 PAD，应仍为初始值）
-        pad_before = es.get_emotion_state().get_pad()
+        pad_before = es.get_emotion_state("u1").get_pad()
         # 召回并 enact（应触发 shift_pad 微调）
         isolated_managers.recall_and_enact("u1", "工作 压力", user_xp_level=2)
-        pad_after = es.get_emotion_state().get_pad()
+        pad_after = es.get_emotion_state("u1").get_pad()
         # PAD 应发生变化（至少一个维度不同）
         assert pad_after != pad_before
 
@@ -98,10 +98,10 @@ class TestRecallLinkage:
             context="工作压力 加薪",
             keywords=["工作", "压力"],
         )
-        es.get_emotion_state()  # 触发单例创建
-        p_before = es.get_emotion_state().get_pad()["P"]
+        es.get_emotion_state("u1")  # 触发 per-user 实例创建
+        p_before = es.get_emotion_state("u1").get_pad()["P"]
         isolated_managers.recall_and_enact("u1", "工作 压力", user_xp_level=2)
-        p_after = es.get_emotion_state().get_pad()["P"]
+        p_after = es.get_emotion_state("u1").get_pad()["P"]
         # 喜悦 PAD 的 P 为正，微调后 P 应增大
         assert p_after > p_before
 

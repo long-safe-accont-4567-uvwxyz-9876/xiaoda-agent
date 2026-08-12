@@ -961,7 +961,7 @@ class MessageProcessorMixin:
         emotion_hint = build_emotion_hint(emotion)
         self.context.emotion_hint = emotion_hint
         ctx.last_user_emotion = emotion.get("primary", "")
-        self._update_mental_state_emotion(emotion)
+        self._update_mental_state_emotion(emotion, user_id=getattr(ctx, "user_id", ""))
 
         # 记忆检索与 notebook 上下文加载并行化
         memories = await self._retrieve_main_memories(user_input, is_master, emotion)
@@ -1104,7 +1104,9 @@ class MessageProcessorMixin:
                 "playful": 0.6, "moved": 0.7, "anxious": 0.6,
                 "fear": 0.8, "pout": 0.5, "neutral": 0.2,
             }
-            get_emotion_state().update(emotion_label, _intensity_map.get(emotion_label, 0.5))
+            get_emotion_state(getattr(ctx, "user_id", "")).update(
+                emotion_label, _intensity_map.get(emotion_label, 0.5)
+            )
         except Exception as e:
             logger.debug("emotion_state.update_failed", error=str(e))
 
@@ -2091,7 +2093,7 @@ class MessageProcessorMixin:
                 return "on"
         return "none"
 
-    def _update_mental_state_emotion(self, emotion: dict) -> None:
+    def _update_mental_state_emotion(self, emotion: dict, user_id: str = "") -> None:
         """将检测到的用户情绪更新到 L/M/S 心理状态模型的 S 层.
 
         受 MENTAL_STATE_ENABLED 环境变量控制, 默认开启.
@@ -2099,7 +2101,7 @@ class MessageProcessorMixin:
         """
         try:
             from core.mental_state import get_mental_state_manager
-            mgr = get_mental_state_manager()
+            mgr = get_mental_state_manager(user_id=user_id)
             if mgr.enabled:
                 mgr.update_short_term(
                     emotion="",

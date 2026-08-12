@@ -770,7 +770,7 @@ class AgentContext:
         # 注入持续情绪状态（让 agent 有情绪惯性）
         try:
             from emotion.emotion_state import get_emotion_state
-            emotion_desc = get_emotion_state().get_description()
+            emotion_desc = get_emotion_state(self._current_user_id).get_description()
             if emotion_desc:
                 volatile_parts.append(emotion_desc)
         except Exception as e:

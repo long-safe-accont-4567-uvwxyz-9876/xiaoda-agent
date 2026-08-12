@@ -70,7 +70,7 @@ def _patch_managers(monkeypatch, mental="", permanent="", emotional="",
     else:
         mock_emotional.recall_and_enact.return_value = emotional
 
-    monkeypatch.setattr("core.mental_state.get_mental_state_manager", lambda: mock_mental)
+    monkeypatch.setattr("core.mental_state.get_mental_state_manager", lambda user_id="": mock_mental)
     monkeypatch.setattr("core.permanent_memory.get_permanent_memory_manager", lambda: mock_permanent)
     monkeypatch.setattr("memory.emotional_memory.get_emotional_memory_manager", lambda: mock_emotional)
     return mock_mental, mock_permanent, mock_emotional

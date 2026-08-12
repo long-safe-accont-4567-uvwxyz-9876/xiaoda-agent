@@ -268,16 +268,21 @@ class EmotionState:
             logger.debug("emotion_state.load_failed", error=str(e))
 
 
-# 全局单例
-_instance: EmotionState | None = None
+# per-user 实例缓存（默认 user 用空串键，向后兼容无参调用）
+_instances: dict[str, "EmotionState"] = {}
 _instance_lock = threading.Lock()
 
 
-def get_emotion_state() -> EmotionState:
-    """获取全局情绪状态单例。"""
-    global _instance
-    if _instance is None:
-        with _instance_lock:
-            if _instance is None:
-                _instance = EmotionState()
-    return _instance
+def get_emotion_state(user_id: str = "") -> "EmotionState":
+    """获取指定用户的情绪状态实例（per-user 隔离）。
+
+    Args:
+        user_id: 用户标识；空串表示默认用户（向后兼容无参调用）。
+
+    不同用户的情绪状态互相隔离，避免多用户场景下情绪互相污染。
+    """
+    key = user_id or ""
+    with _instance_lock:
+        if key not in _instances:
+            _instances[key] = EmotionState()
+        return _instances[key]

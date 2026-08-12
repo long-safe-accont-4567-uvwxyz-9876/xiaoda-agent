@@ -21,7 +21,8 @@ class TestPADVariantLabels:
         "angry": "愤怒", "anxious": "焦虑", "shy": "害羞",
         "confused": "好奇", "thinking": "思考", "fear": "恐惧",
         "neutral": "平静", "playful": "喜悦", "pout": "害羞",
-        "surprised": "好奇",
+        "surprised": "好奇", "love": "喜欢", "moved": "感动",
+        "curious": "好奇", "greeting": "问候",
     }
 
     def _normalize_to_pad(self, emotion_label: str, intensity: float = 0.5) -> PADEmotion:

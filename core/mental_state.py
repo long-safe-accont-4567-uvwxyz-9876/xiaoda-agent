@@ -462,34 +462,39 @@ class MentalStateManager:
         return "温柔"
 
 
-# ============================================================
-# 全局单例
-# ============================================================
-
-_manager: MentalStateManager | None = None
+# per-user 实例缓存（默认 user 用空串键，向后兼容无参调用）
+_managers: dict[str, MentalStateManager] = {}
+_managers_lock = threading.Lock()
 
 
-def get_mental_state_manager(data_dir: Path | None = None) -> MentalStateManager:
-    """获取全局 MentalStateManager 单例, 不存在时创建.
+def get_mental_state_manager(data_dir: Path | None = None, user_id: str = "") -> MentalStateManager:
+    """获取指定用户的心理状态管理器（per-user 隔离）。
 
     Args:
-        data_dir: 数据目录 (仅首次创建时生效, 已存在单例时忽略)
+        data_dir: 数据目录（仅该 user 首次创建时生效）。
+        user_id: 用户标识；空串表示默认用户（向后兼容无参调用）。
+
+    不同用户使用独立状态文件（data/user_{user_id}/mental_state.json），
+    避免多用户心理状态互相污染。
     """
-    global _manager
-    if _manager is None:
-        _manager = MentalStateManager(data_dir=data_dir)
-    return _manager
+    key = user_id or ""
+    with _managers_lock:
+        if key not in _managers:
+            _dir = Path(data_dir) if data_dir else Path("data")
+            if user_id:
+                _dir = _dir / f"user_{user_id}"
+            _managers[key] = MentalStateManager(data_dir=_dir)
+        return _managers[key]
 
 
-def get_mental_state_manager_if_exists() -> MentalStateManager | None:
-    """返回已初始化的全局单例, 未初始化时返回 None.
+def get_mental_state_manager_if_exists(user_id: str = "") -> MentalStateManager | None:
+    """返回已初始化的指定用户管理器, 未初始化时返回 None.
 
     用于 Dream 整合等场景, 避免在未显式初始化时创建副作用 (如测试环境).
     """
-    return _manager
+    return _managers.get(user_id or "")
 
 
 def reset_mental_state_manager() -> None:
-    """重置全局单例 (主要用于测试)."""
-    global _manager
-    _manager = None
+    """重置 per-user 实例缓存 (主要用于测试)."""
+    _managers.clear()

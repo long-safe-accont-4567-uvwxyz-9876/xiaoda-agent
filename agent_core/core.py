@@ -104,7 +104,16 @@ class AgentCore(MessageProcessorMixin, ToolExecutorMixin, SubAgentManagerMixin):
         # 修复：在 _process_impl 期间持有此锁，确保同一时间只有一个请求修改 context。
         # 对个人 bot 无感知（QQ per-user 锁本就串行同一用户消息）。
         self._context_lock = asyncio.Lock()
-        self.tool_executor = ToolExecutor(db=self.db)
+        # HITL 高危操作审批接线：owner 白名单自动通过，非 owner 高危工具走审批门禁
+        # （默认无推送通道时 fail-closed 超时拒绝，堵住高危工具无审批直接放行的安全缺口）。
+        from security.human_approval import get_approval_gate, HumanApprovalApprover
+        _approval_gate = get_approval_gate()
+        for _owner in _owner_ids:
+            _approval_gate.register_auto_approve_user(_owner)
+        self.tool_executor = ToolExecutor(
+            db=self.db,
+            approver=HumanApprovalApprover(_approval_gate, default_timeout=60.0),
+        )
         self.tool_repair = ToolCallRepair(
             allowed_tool_names=set(t["function"]["name"] for t in to_openai_tools())
         )
