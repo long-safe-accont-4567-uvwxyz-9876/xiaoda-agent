@@ -54,9 +54,9 @@ async def test_upsert_and_search_kg_entity(mock_vec_store):
     store, path = mock_vec_store
     try:
         await store.init()
-        # Mock embed to return deterministic 1024-dim vector
+        # Mock embed to return deterministic vector
         store._cache.clear() if hasattr(store._cache, 'clear') else None
-        store.embed = AsyncMock(return_value=[0.1] * 1024)
+        store.embed = AsyncMock(return_value=[[0.1] * 1024])
 
         ok = await store.upsert_kg_entity(1, "篮球: 团队运动")
         assert ok is True
@@ -75,7 +75,7 @@ async def test_upsert_and_search_kg_relation(mock_vec_store):
     store, path = mock_vec_store
     try:
         await store.init()
-        store.embed = AsyncMock(return_value=[0.2] * 1024)
+        store.embed = AsyncMock(return_value=[[0.2] * 1024])
 
         ok = await store.upsert_kg_relation(1, "用户喜欢打篮球")
         assert ok is True

@@ -33,8 +33,8 @@ class TestRecallSchedulerCatchUp:
 
         scheduler = MemoryRecallScheduler(core, catch_up=True, skip_on_overlap=True)
         
-        # 直接调用 _catchup_tick
-        await scheduler._catchup_tick()
+        with patch.object(scheduler, "_is_dnd", return_value=False):
+            await scheduler._catchup_tick()
 
         # 应该执行了回忆任务
         core.memory.run_scheduled_recall.assert_called_once()

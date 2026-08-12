@@ -98,7 +98,7 @@ async def test_run_background_tasks_threads_model_used():
     # 拦截 _spawn，直接 await 协程（_background_tasks 已被 mock，不会触发 DB）
     import core.background_tasks as bt
 
-    def _fake_spawn(coro):
+    def _fake_spawn(coro, **kwargs):
         asyncio.get_event_loop().create_task(coro)
 
     orig_spawn = bt._spawn

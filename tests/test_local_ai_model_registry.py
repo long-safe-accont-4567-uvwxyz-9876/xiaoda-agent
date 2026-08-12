@@ -82,10 +82,10 @@ def registry(manager):
 
 
 @pytest.mark.asyncio
-async def test_schema_version_bumped_to_25(manager):
+async def test_schema_version_bumped_to_26(manager):
     row = await manager.fetch_one("SELECT MAX(version) AS version FROM schema_version")
     assert row["version"] == CURRENT_SCHEMA_VERSION
-    assert CURRENT_SCHEMA_VERSION == 25
+    assert CURRENT_SCHEMA_VERSION == 26
 
 
 @pytest.mark.asyncio

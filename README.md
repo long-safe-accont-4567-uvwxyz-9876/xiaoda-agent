@@ -18,8 +18,11 @@
 | ---- | ---- |
 | [安装部署](SETUP.md) | Docker / 手动 / systemd 三种部署方式 |
 | [使用指南](USAGE.md) | CLI 命令、QQ Bot、Web UI 使用说明 |
+| [本地 AI 平台运维与用户指南](docs/local-ai-platform.md) | 本地模型下载、存储、恢复、设备探测与故障排查 |
 | [架构设计](docs/ARCHITECTURE.md) | 系统架构、模块划分、调用链 |
 | [API 文档](docs/API.md) | Web API 接口规范 |
+
+本地模型市场当前仅支持公开 ModelScope 仓库，私有或受限仓库暂不支持。当前 UI 使用“移除”措辞，但实际操作只注销已安装模型登记，不会删除模型目录或文件；完整边界与运维步骤见本地 AI 平台指南。
 
 ***
 

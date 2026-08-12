@@ -31,7 +31,7 @@ from .session_store import (
 
 DB_DIR = DATA_DIR
 DB_PATH = DB_DIR / "agent.db"
-CURRENT_SCHEMA_VERSION = 25
+CURRENT_SCHEMA_VERSION = 26
 
 
 def _detect_fs_type(path: Path) -> str:
@@ -519,6 +519,7 @@ class DatabaseManager:
             (23, "bitemporal_profile_fields", self._migrate_v23),
             (24, "profile_event_idempotency", self._migrate_v24),
             (25, "installed_models_table", self._migrate_v25),
+            (26, "conversation_logs.request_context_json", self._migrate_v26),
         ]
         for version, desc, migrate_fn in migrations:
             if current < version:
@@ -1514,6 +1515,16 @@ class DatabaseManager:
                 ),
             )
 
+    async def _migrate_v26(self) -> None:
+        columns = await self._conn.execute_fetchall(
+            "PRAGMA table_info(conversation_logs)"
+        )
+        if "request_context_json" not in {row[1] for row in columns}:
+            await self._conn.execute(
+                "ALTER TABLE conversation_logs "
+                "ADD COLUMN request_context_json TEXT DEFAULT '{}'"
+            )
+
     # SQL 注入防护：允许的 SQL 前缀白名单（仅 SELECT / PRAGMA 只读操作）
     _READONLY_PREFIXES = ("SELECT", "PRAGMA")
 
@@ -1885,12 +1896,14 @@ class DatabaseManager:
                                        user_message: str, assistant_reply: str,
                                        emotion_label: str = "", model_used: str = "",
                                        session_id: str = "",
-                                       auto_commit: bool = True) -> None:
+                                       auto_commit: bool = True,
+                                       request_context_json: str = "{}") -> None:
         await self._conn.execute(
             """INSERT INTO conversation_logs
-               (timestamp, user_id, source, user_message, assistant_reply, emotion_label, model_used, session_id)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
-            (time.time(), user_id, source, user_message, assistant_reply, emotion_label, model_used, session_id),
+               (timestamp, user_id, source, user_message, assistant_reply, emotion_label, model_used, session_id, request_context_json)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            (time.time(), user_id, source, user_message, assistant_reply, emotion_label,
+             model_used, session_id, request_context_json),
         )
         if auto_commit:
             await self._conn.commit()

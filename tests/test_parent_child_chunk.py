@@ -1,8 +1,5 @@
 """父子Chunk RAG优化 + Contextual Retrieval 测试"""
 import asyncio
-import hashlib
-import os
-import time
 from contextlib import asynccontextmanager
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -255,6 +252,23 @@ class TestChildChunkDB:
         children = await mdb.get_children_by_parent(pid)
         assert len(children) == 0
 
+    @pytest.mark.asyncio
+    async def test_batch_insert_children_is_atomic_and_returns_ids(self, memory_db):
+        mdb, conn = memory_db
+        parent_id = await mdb.insert_episodic_memory(summary="父", importance=0.5)
+
+        child_ids = await mdb.insert_child_chunks(parent_id, [
+            {"content": "子1", "embed_content": "向量1"},
+            {"content": "子2", "embed_content": "向量2"},
+        ])
+
+        assert len(child_ids) == 2
+        assert [row["id"] for row in await mdb.get_children_by_parent(parent_id)] == child_ids
+        fts_count = await (await conn.execute(
+            "SELECT COUNT(*) FROM memory_child_chunks_fts WHERE rowid IN (?, ?)", child_ids
+        )).fetchone()
+        assert fts_count[0] == 2
+
 
 # ── 单元测试：VectorStore 子chunk方法 ──────────────────────
 
@@ -293,6 +307,88 @@ class TestVectorStoreChild:
 
         asyncio.run(vs.batch_upsert_children([]))
 
+    @pytest.mark.asyncio
+    async def test_batch_upsert_children_sqlite_failure_does_not_mutate_brute(self):
+        from memory.vector_store import VectorStore
+
+        connection = MagicMock()
+        connection.execute.side_effect = [None, None, RuntimeError("second insert failed"), None]
+        brute = MagicMock()
+        vs = VectorStore.__new__(VectorStore)
+        vs._initialized = True
+        vs._closed = False
+        vs._vec_conn = connection
+        vs._lock = __import__("threading").Lock()
+        vs._brute = brute
+        vs._dimensions = 2
+        vs.embed = AsyncMock(return_value=[[1.0, 2.0], [3.0, 4.0]])
+
+        assert not await vs.batch_upsert_children([(11, "first"), (12, "second")])
+        brute.upsert.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_batch_upsert_children_brute_failure_rebuilds_from_committed_db(self):
+        from memory.vector_store import VectorStore
+
+        connection = MagicMock()
+        brute = MagicMock()
+        brute.upsert.side_effect = [True, False]
+        brute.load_from_db.return_value = True
+        vs = VectorStore.__new__(VectorStore)
+        vs._initialized = True
+        vs._closed = False
+        vs._vec_conn = connection
+        vs._lock = __import__("threading").Lock()
+        vs._brute = brute
+        vs._dimensions = 2
+        vs.embed = AsyncMock(return_value=[[1.0, 2.0], [3.0, 4.0]])
+
+        assert await vs.batch_upsert_children([(11, "first"), (12, "second")])
+        connection.commit.assert_called_once()
+        brute.load_from_db.assert_called_once_with(connection)
+
+    @pytest.mark.asyncio
+    async def test_brute_restart_rebuilds_stale_parent_and_child_snapshots(self, tmp_path, monkeypatch):
+        import sqlite3
+
+        import sqlite_vec
+
+        from memory.vector_store import VectorStore
+
+        monkeypatch.setenv("VECTOR_BRUTE_ENABLED", "1")
+        db_path = tmp_path / "vectors.db"
+        first = VectorStore(db_path, embed_mode="remote", dimensions=2)
+        await first.init()
+        first.embed = AsyncMock(side_effect=[[[1.0, 0.0]], [[1.0, 0.0]]])
+        assert await first.upsert(1, "parent-one")
+        await first.upsert_child(1, "child-one")
+        await first.close()
+
+        conn = sqlite3.connect(db_path)
+        conn.enable_load_extension(True)
+        sqlite_vec.load(conn)
+        conn.enable_load_extension(False)
+        conn.execute(
+            "INSERT INTO memories_vec(rowid, embedding) VALUES (?, vec_f32(?))",
+            (2, "[0.0, 1.0]"),
+        )
+        conn.execute(
+            "INSERT INTO memories_child_vec(rowid, embedding) VALUES (?, vec_f32(?))",
+            (2, "[0.0, 1.0]"),
+        )
+        conn.commit()
+        conn.close()
+
+        restarted = VectorStore(db_path, embed_mode="remote", dimensions=2)
+        await restarted.init()
+        restarted.embed = AsyncMock(return_value=[[0.0, 1.0]])
+
+        assert restarted._brute.stats["tables"]["memories_vec"]["alive"] == 2
+        assert restarted._brute.stats["tables"]["memories_child_vec"]["alive"] == 2
+        assert [row_id for row_id, _ in await restarted.search("parent-two", top_k=2)] == [2, 1]
+        assert [row["id"] for row in await restarted.search_child([0.0, 1.0], top_k=2)] == [2, 1]
+        await restarted.close()
+
 
 # ── 集成测试：encode_memory 生成子chunk ──────────────────────
 
@@ -307,6 +403,7 @@ class TestEncodeMemoryChildChunks:
         mgr.memory = MagicMock()
         mgr.memory.insert_episodic_memory = AsyncMock(return_value=1)
         mgr.memory.insert_child_chunk = AsyncMock(return_value=100)
+        mgr.memory.insert_child_chunks = AsyncMock(return_value=[100, 101])
         mgr.memory.insert_consolidation_candidate = AsyncMock(return_value=1)
         mgr.memory.mark_candidate_applied = AsyncMock(return_value=None)
         mgr.memory.update_memory_enrichment = AsyncMock(return_value=None)
@@ -357,6 +454,7 @@ class TestEncodeMemoryChildChunks:
         mock_security = MagicMock()
         mock_security.scan_threats.return_value.is_safe = True
         mgr._security_filter = mock_security
+        mgr._fsrs = MagicMock()
         mgr.concept_graph = None
         mgr.kg = None
         mgr._governance = None
@@ -398,9 +496,7 @@ class TestEncodeMemoryChildChunks:
             # 额外让事件循环空转一轮，确保 done_callback 执行完毕
             await asyncio.sleep(0)
 
-            assert mgr.memory.insert_child_chunk.called
-            call_count = mgr.memory.insert_child_chunk.call_count
-            assert call_count >= 2
+            mgr.memory.insert_child_chunks.assert_awaited_once()
 
             assert mgr.vec.batch_upsert_children.called
 
@@ -434,6 +530,97 @@ class TestEncodeMemoryChildChunks:
             await mgr.encode_memory({"exchanges": exchanges})
 
             assert not mgr.memory.insert_child_chunk.called
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("failure", [False, asyncio.TimeoutError(), RuntimeError("vector failed")])
+    async def test_encode_compensates_only_new_children_when_vector_index_fails(self, failure):
+        mgr = self._make_mock_manager()
+        mock_security = MagicMock()
+        mock_security.scan_threats.return_value.is_safe = True
+        mgr._security_filter = mock_security
+        mgr._fsrs = MagicMock()
+        mgr.memory.insert_child_chunks = AsyncMock(return_value=[101, 102])
+        mgr.memory.delete_child_chunks = AsyncMock()
+        mgr.memory.update_fsrs_state = AsyncMock(return_value=None)
+        if isinstance(failure, BaseException):
+            mgr.vec.batch_upsert_children = AsyncMock(side_effect=failure)
+        else:
+            mgr.vec.batch_upsert_children = AsyncMock(return_value=failure)
+        mgr._estimate_importance = MagicMock(return_value=0.7)
+        mgr._save_state_json = MagicMock()
+        mgr.invalidate_memory_count_cache = MagicMock()
+        mgr._split_into_children = MagicMock(return_value=[
+            {
+                "content": "first",
+                "embed_content": "first vector",
+                "chunk_type": "segment",
+                "weight": 1.0,
+                "overlap_hash": "",
+            },
+            {
+                "content": "second",
+                "embed_content": "second vector",
+                "chunk_type": "segment",
+                "weight": 0.8,
+                "overlap_hash": "",
+            },
+        ])
+
+        with patch("memory.memory_manager.validate_memory_content", return_value=""), \
+             patch("security.security.SecurityFilter", return_value=mock_security), \
+             patch("memory.memory_manager.estimate_initial_difficulty", return_value=5.0):
+            from core.background_tasks import _bg_tasks
+            before = set(_bg_tasks)
+            await mgr.encode_memory({"exchanges": [
+                {"role": "user", "content": "测试补偿"},
+                {"role": "assistant", "content": "开始索引"},
+            ]})
+            tasks = [task for task in _bg_tasks if task not in before]
+            if tasks:
+                await asyncio.wait_for(asyncio.gather(*tasks), timeout=5.0)
+
+        mgr.memory.delete_child_chunks.assert_awaited_once_with([101, 102])
+
+    @pytest.mark.asyncio
+    async def test_cancel_after_committed_child_batch_compensates_exact_new_ids(self):
+        committed = asyncio.Event()
+        return_result = asyncio.Event()
+
+        class FakeMemory:
+            def __init__(self):
+                self.rows = {7: {"content": "existing"}}
+
+            async def insert_child_chunks(self, parent_id, children, auto_commit=True):
+                self.rows.update({101: children[0], 102: children[1]})
+                committed.set()
+                await return_result.wait()
+                return [101, 102]
+
+            async def delete_child_chunks(self, child_ids):
+                for child_id in child_ids:
+                    self.rows.pop(child_id, None)
+
+        manager = __import__("memory.memory_manager", fromlist=["MemoryManager"]).MemoryManager.__new__(
+            __import__("memory.memory_manager", fromlist=["MemoryManager"]).MemoryManager
+        )
+        manager.memory = FakeMemory()
+        manager.vec = MagicMock()
+        manager.vec.batch_upsert_children = AsyncMock(return_value=True)
+        children = [
+            {"content": "first", "embed_content": "v1", "chunk_type": "segment", "weight": 1.0, "overlap_hash": ""},
+            {"content": "second", "embed_content": "v2", "chunk_type": "segment", "weight": 0.8, "overlap_hash": ""},
+        ]
+
+        task = asyncio.create_task(manager._insert_indexed_children(9, children, 0.8))
+        await committed.wait()
+        task.cancel()
+        await asyncio.sleep(0)
+        return_result.set()
+
+        with pytest.raises(asyncio.CancelledError):
+            await task
+        assert manager.memory.rows == {7: {"content": "existing"}}
+        manager.vec.batch_upsert_children.assert_not_awaited()
 
 
 # ── 向后兼容测试 ──────────────────────────────────────────

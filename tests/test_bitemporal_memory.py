@@ -32,7 +32,7 @@ async def test_fresh_database_migrates_to_v13_idempotently(tmp_path):
     manager = DatabaseManager(db_path)
 
     await manager.init()
-    assert CURRENT_SCHEMA_VERSION == 25
+    assert CURRENT_SCHEMA_VERSION == 26
     assert await _schema_version(manager) == CURRENT_SCHEMA_VERSION
     assert TEMPORAL_TABLES <= await _table_names(manager)
     assert isinstance(manager.temporal, TemporalMemoryDB)
