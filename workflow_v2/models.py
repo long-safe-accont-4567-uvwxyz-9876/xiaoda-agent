@@ -40,7 +40,7 @@ class NodeType(str, Enum):
     INPUT = "input"
     APPROVAL = "approval"
     DELAY = "delay"
-    LEGACY_PROMPT = "legacy_prompt"
+    LEGACY_PROMPT = "legacy_prompt"  # migrated v1 'custom' nodes
 
 
 class JoinStrategy(str, Enum):
