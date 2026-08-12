@@ -47,3 +47,21 @@ def test_content_hash_stable_and_order_independent():
     h1 = compute_content_hash(nodes, edges, {})
     h2 = compute_content_hash(list(reversed(nodes)), list(reversed(edges)), {})
     assert h1 == h2 and len(h1) == 64
+
+
+def test_content_hash_mixed_conditional_edges():
+    # condition-node branches mix unconditional (condition=None) and
+    # conditional (condition="<expr>") edges to the same target (default
+    # branch + guarded branch); the hash must handle both.
+    nodes = [_n("start", NodeType.START), _n("a"), _n("b"), _n("end", NodeType.END)]
+    edges = [
+        EdgeSpec(source="start", target="a"),
+        EdgeSpec(source="a", target="b", condition="c > 1"),
+        EdgeSpec(source="a", target="b"),
+        EdgeSpec(source="b", target="end"),
+    ]
+    validate_graph(nodes, edges)  # must be a valid revision
+    h1 = compute_content_hash(nodes, edges, {})
+    h2 = compute_content_hash(list(reversed(nodes)), list(reversed(edges)), {})
+    assert len(h1) == 64
+    assert h1 == h2

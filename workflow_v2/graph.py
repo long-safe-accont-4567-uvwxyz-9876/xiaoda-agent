@@ -62,9 +62,15 @@ def validate_graph(nodes: list[NodeSpec], edges: list[EdgeSpec]) -> None:
 
 
 def compute_content_hash(nodes: list[NodeSpec], edges: list[EdgeSpec], input_schema: dict) -> str:
+    # Normalize condition None -> "" once, then sort and serialize the same
+    # tuples so the hash is deterministic and order-independent even when a
+    # revision mixes unconditional (condition=None) and conditional edges.
+    normalized_edges = [
+        (e.source, e.target, "" if e.condition is None else e.condition) for e in edges
+    ]
     payload = {
         "nodes": sorted((n.model_dump(mode="json") for n in nodes), key=lambda x: x["id"]),
-        "edges": sorted(([e.source, e.target, e.condition] for e in edges)),
+        "edges": sorted(normalized_edges),
         "input_schema": input_schema,
     }
     blob = json.dumps(payload, sort_keys=True, ensure_ascii=False).encode("utf-8")
