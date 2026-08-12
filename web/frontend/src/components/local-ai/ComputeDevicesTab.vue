@@ -2,7 +2,6 @@
 import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
 import { NButton, NEmpty, NProgress, NTag, useMessage } from 'naive-ui'
 import { useLocalAiStore } from '../../stores/localAi'
-import { localAiApi } from '../../api/localAi'
 
 const store = useLocalAiStore()
 const message = useMessage()
@@ -31,7 +30,7 @@ const memoryUsagePct = (device: { memory_available?: number | null; memory_total
   const available = device.memory_available ?? 0
   return Math.max(0, Math.min(100, Math.round((1 - available / total) * 100)))
 }
-const loadPct = (device: { kind: string; stats?: Record<string, unknown> | null }) => {
+const loadPct = (device: { kind: string; stats?: { usage_pct?: number | null; utilization_pct?: number | null } | null }) => {
   if (device.kind === 'cpu') return typeof device.stats?.usage_pct === 'number' ? Math.min(device.stats.usage_pct, 100) : null
   if (device.kind === 'gpu') return typeof device.stats?.utilization_pct === 'number' ? Math.min(device.stats.utilization_pct, 100) : null
   if (device.kind === 'npu') return typeof device.stats?.utilization_pct === 'number' ? Math.min(device.stats.utilization_pct, 100) : null
@@ -42,8 +41,7 @@ const lastUpdated = ref<string | null>(null)
 let timer: ReturnType<typeof setInterval> | null = null
 async function refreshStats() {
   try {
-    const devices = await localAiApi.loadDevices()
-    for (const device of devices) store.upsertDevice(device)
+    await store.refreshDevices()
     lastUpdated.value = new Date().toLocaleTimeString('zh-CN', { hour12: false })
   } catch { /* 轮询失败静默，下次重试 */ }
 }
@@ -98,7 +96,7 @@ const devices = computed(() => store.devices)
               <span>内存占用</span>
               <b>{{ memoryUsagePct(device) }}%</b>
             </div>
-            <n-progress type="line" :percentage="memoryUsagePct(device)" :show-indicator="false" :color="memoryUsagePct(device) > 80 ? '#d03050' : memoryUsagePct(device) > 60 ? '#e8d5a3' : '#70c0e8'" />
+            <n-progress type="line" :percentage="memoryUsagePct(device) ?? 0" :show-indicator="false" :color="(memoryUsagePct(device) ?? 0) > 80 ? '#d03050' : (memoryUsagePct(device) ?? 0) > 60 ? '#e8d5a3' : '#70c0e8'" />
             <div class="mem-detail">可用 {{ byteText(device.memory_available) }} / 共 {{ byteText(device.memory_total) }}</div>
           </template>
         </div>
@@ -106,7 +104,7 @@ const devices = computed(() => store.devices)
         <!-- 规格 -->
         <div class="spec-block">
           <div class="block-title">规格</div>
-          <div class="stat-row" v-if="device.kind === 'cpu'"><span>核数</span><b>{{ (device.stats as any)?.cores ?? device.cores ?? '—' }}</b></div>
+          <div class="stat-row" v-if="device.kind === 'cpu'"><span>核数</span><b>{{ (device.stats as any)?.cores ?? '—' }}</b></div>
           <div class="stat-row" v-if="device.kind === 'cpu' && (device.stats as any)?.freq_mhz"><span>频率</span><b>{{ freqText((device.stats as any)?.freq_mhz) }}</b></div>
           <div class="stat-row" v-if="device.kind === 'npu' && (device.stats as any)?.freq_hz"><span>频率</span><b>{{ gHz((device.stats as any)?.freq_hz) }}<template v-if="(device.stats as any)?.max_freq_hz"> / {{ gHz((device.stats as any)?.max_freq_hz) }}</template></b></div>
           <div class="stat-row" v-if="device.kind === 'gpu' && (device.stats as any)?.temperature_c"><span>温度</span><b>{{ (device.stats as any)?.temperature_c }} °C</b></div>

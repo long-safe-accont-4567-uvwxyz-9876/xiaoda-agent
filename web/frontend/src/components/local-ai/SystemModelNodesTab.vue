@@ -1,8 +1,9 @@
 <script setup lang="ts">
 import { computed, onMounted, ref } from 'vue'
 import { NButton, NTag, NEmpty, useMessage } from 'naive-ui'
-import { fetchModelNodes, setModelNodeBackend, type ModelNode } from '../../api/localAi'
+import { useLocalAiStore, type ModelNode } from '../../stores/localAi'
 
+const store = useLocalAiStore()
 const message = useMessage()
 const nodes = ref<ModelNode[]>([])
 const loading = ref(false)
@@ -41,7 +42,7 @@ const stateType = (node: ModelNode) => {
 async function load() {
   loading.value = true
   try {
-    nodes.value = await fetchModelNodes()
+    nodes.value = await store.fetchModelNodes()
   } catch (error) {
     message.error(error instanceof Error ? error.message : String(error))
   } finally {
@@ -58,7 +59,7 @@ async function switchApi(node: ModelNode) {
   if (saving.value) return
   saving.value = node.id
   try {
-    await setModelNodeBackend(node.id, 'api')
+    await store.setModelNodeBackend(node.id, 'api')
     node.backend = 'api'
     localOpen.value[node.id] = false
     message.success(`「${node.name}」已切换到 API（本地推理已停止常驻）`)
@@ -73,7 +74,7 @@ async function runLocalModel(node: ModelNode, modelId: string) {
   if (saving.value) return
   saving.value = node.id
   try {
-    await setModelNodeBackend(node.id, 'local', modelId)
+    await store.setModelNodeBackend(node.id, 'local', modelId)
     node.backend = 'local'
     node.local_model = modelId
     localOpen.value[node.id] = false

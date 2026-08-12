@@ -16,6 +16,11 @@ Design notes (Task 6 brief):
   directory tree, checks the path exists (or can be created), checks it is
   writable (try creating a temp file), and checks free space >= required_bytes
   via shutil.disk_usage.
+- Restricted mode (I1): when `local_ai.allowed_storage_roots` is configured
+  (non-empty), the destination must resolve inside one of those allowed roots.
+  Roots and the destination are compared by realpath so symbolic links cannot
+  be used to escape the configured roots. Empty configuration = unrestricted
+  mode, previous behavior unchanged.
 - validate_destination does NOT auto-persist the default — that is a separate
   explicit API call (set_default / PUT /api/v1/local-ai/storage/default).
 - StoragePolicy.__init__(config_service=None) uses get_config_service() if not
@@ -43,6 +48,9 @@ _REASON_SYMLINK_ESCAPE = "symlink escapes parent tree"
 _REASON_NOT_FOUND = "path does not exist and cannot be created"
 _REASON_NOT_WRITABLE = "path is not writable"
 _REASON_INSUFFICIENT_SPACE = "insufficient free space"
+# Restricted mode: destination resolved outside every configured allowed root.
+# 中文释义：目录不在允许的存储根目录内（allowed_storage_roots 非空时启用受限模式）。
+_REASON_OUTSIDE_ROOTS = "directory outside allowed storage roots"
 
 
 @dataclass(frozen=True)
@@ -266,6 +274,18 @@ class StoragePolicy:
                 error=_REASON_FORBIDDEN, reason=_REASON_FORBIDDEN,
             )
 
+        # Restricted mode (I1): when allowed storage roots are configured, the
+        # destination must resolve inside one of them. Roots and the destination
+        # are compared by realpath so a symlinked intermediate component cannot
+        # smuggle the write outside the allowed roots. Empty roots = unrestricted
+        # mode (previous behavior unchanged).
+        roots = self._allowed_roots()
+        if roots and not self._is_within_allowed_roots(resolved, roots):
+            return StorageValidation(
+                path=str(resolved), writable=False, free_bytes=0,
+                error=_REASON_OUTSIDE_ROOTS, reason=_REASON_OUTSIDE_ROOTS,
+            )
+
         # Existence / creatability. If the path doesn't exist, attempt to
         # create it (and any missing parents). If creation fails, report
         # not-writable with a "does not exist / cannot create" reason.
@@ -320,6 +340,43 @@ class StoragePolicy:
         except (OSError, ValueError) as exc:
             logger.debug("storage.disk_usage_failed path={} err={}", resolved, exc)
             return 0
+
+    def _allowed_roots(self) -> tuple[Path, ...]:
+        """Realpath'd allowed storage roots; empty tuple = unrestricted mode.
+
+        Reads `local_ai.allowed_storage_roots` from the config service on every
+        call (like get_default), so runtime config changes take effect without
+        rebuilding the policy. A config service without a `.get` (e.g. a stub in
+        tests) is treated as unrestricted.
+        """
+        try:
+            raw = self._config.get("local_ai.allowed_storage_roots", [])
+        except Exception:  # noqa: BLE001 — config may be unavailable in edge cases
+            return ()
+        if not isinstance(raw, (list, tuple)):
+            return ()
+        roots: list[Path] = []
+        for item in raw:
+            if not isinstance(item, str) or not item.strip():
+                continue
+            try:
+                roots.append(Path(item).expanduser().resolve(strict=False))
+            except (OSError, ValueError):
+                # Unresolvable root entries are skipped rather than failing open
+                # or rejecting everything.
+                continue
+        return tuple(roots)
+
+    @staticmethod
+    def _is_within_allowed_roots(resolved: Path, roots: tuple[Path, ...]) -> bool:
+        """True if `resolved` equals or lies under one of the `roots` (realpaths)."""
+        for root in roots:
+            try:
+                resolved.relative_to(root)
+                return True
+            except ValueError:
+                continue
+        return False
 
     # ── default persistence ───────────────────────────────────
 

@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import copy
 import json
+import os
 import threading
 import traceback
 from collections.abc import Callable
@@ -125,6 +126,16 @@ def _get_overrides_path() -> Path:
     from config import get_config_dir
     return get_config_dir() / "webui_overrides.json"
 
+
+def _env_allowed_storage_roots() -> list[str]:
+    """解析 LOCAL_AI_ALLOWED_STORAGE_ROOTS（逗号分隔）为路径列表。
+
+    空/未设置返回 []（非受限模式）；每个条目去除首尾空白，空条目丢弃。
+    分隔符风格与项目其他列表型环境变量（如 OWNER_IDS）一致。
+    """
+    raw = os.getenv("LOCAL_AI_ALLOWED_STORAGE_ROOTS", "")
+    return [part.strip() for part in raw.split(",") if part.strip()]
+
 _DEFAULTS: dict[str, Any] = {
     "schedule": {
         "enabled": True,
@@ -179,8 +190,16 @@ _DEFAULTS: dict[str, Any] = {
     },
     # Local AI Platform (Task 6): default_model_root 是用户在 WebUI 选择并持久化的
     # 模型下载根目录（PUT /api/v1/local-ai/storage/default 写入）；
-    # restricted_roots 是禁止作为下载目标的路径前缀列表（用户可扩展，默认空）。
-    "local_ai": {"default_model_root": "", "restricted_roots": []},
+    # restricted_roots 是禁止作为下载目标的路径前缀列表（用户可扩展，默认空）；
+    # allowed_storage_roots 是受限模式下允许的存储根目录列表（默认空 = 非受限，
+    # 行为与旧版一致；非空时下载/存储目标必须位于这些根目录或其子目录内）。
+    # 部署层可用环境变量 LOCAL_AI_ALLOWED_STORAGE_ROOTS（逗号分隔）锁定该列表，
+    # env 优先级高于 webui_overrides.json（与 METRICS_ENABLED 同策略）。
+    "local_ai": {
+        "default_model_root": "",
+        "restricted_roots": [],
+        "allowed_storage_roots": [],
+    },
 }
 
 
@@ -197,6 +216,12 @@ class ConfigService:
         self._data: dict[str, Any] = _wrap_tracked(json.loads(json.dumps(_DEFAULTS)), "root")
         self._watchers: dict[str, list[Callable[[Any], None]]] = {}
         self._load()
+        # Env 优先级高于 webui_overrides.json（与 METRICS_ENABLED 同策略）：
+        # LOCAL_AI_ALLOWED_STORAGE_ROOTS 是部署层锁定的受限存储根目录，
+        # 非空时开启受限模式，不应被 Web UI 覆盖放宽。env 值不落盘。
+        env_roots = _env_allowed_storage_roots()
+        if env_roots:
+            self._assign("local_ai.allowed_storage_roots", env_roots)
 
     def _load(self) -> None:
         if self._path.exists():

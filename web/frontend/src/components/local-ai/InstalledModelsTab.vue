@@ -1,8 +1,7 @@
 <script setup lang="ts">
 import { ref } from 'vue'
 import { NButton, NEmpty, NPopconfirm, NTag, useMessage } from 'naive-ui'
-import { useLocalAiStore } from '../../stores/localAi'
-import { localAiApi, type BenchmarkResult } from '../../api/localAi'
+import { useLocalAiStore, type BenchmarkResult } from '../../stores/localAi'
 
 const store = useLocalAiStore()
 const message = useMessage()
@@ -18,7 +17,7 @@ const ownershipText = (ownership: string) => OWNERSHIP_TEXT[ownership] ?? owners
 const validationMeta = (state: string) => ({ text: VALIDATION_TEXT[state] ?? state, type: state === 'valid' || state === 'validated' ? 'success' : 'warning' } as const)
 const revisionText = (revision: string) => /^0+$/.test(revision) ? '内置版本' : revision
 /** 是否有正在运行的实例：测速仅对已启动的模型有意义 */
-const isRunning = (modelId: string) => store.instances.some(instance => instance.model_id === modelId && instance.state !== 'stopped')
+const isRunning = (modelId: string) => store.instances.some(instance => instance.model_id === modelId && instance.state !== 'stopped' && instance.state !== 'failed')
 
 async function remove(id: string) {
   removing.value = id
@@ -35,7 +34,7 @@ async function remove(id: string) {
 async function benchmark(id: string) {
   benchmarking.value = id
   try {
-    benchmarkResult.value[id] = await localAiApi.benchmarkModel(id)
+    benchmarkResult.value[id] = await store.benchmarkModel(id)
   } catch (error) {
     benchmarkResult.value[id] = { ok: false, model_id: id, purpose: null, error: error instanceof Error ? error.message : String(error) }
   } finally {
@@ -65,7 +64,7 @@ function resultText(result: BenchmarkResult | undefined): string | null {
       <div class="installed-actions">
         <span v-if="!isRunning(model.id)" class="not-running">未启动，启动后才能测速</span>
         <n-button size="small" :disabled="!isRunning(model.id)" :loading="benchmarking === model.id" @click="benchmark(model.id)">测速</n-button>
-        <n-popconfirm v-if="model.removable" @positive-click="remove(model.id)"><template #trigger><n-button size="small" type="error" :loading="removing === model.id">移除</n-button></template>确认移除该模型？安装登记和模型目录文件将一并删除（不可恢复）。若模型正在使用中或仍有下载任务，将被拒绝。</n-popconfirm>
+        <n-popconfirm v-if="model.removable" @positive-click="remove(model.id)"><template #trigger><n-button size="small" type="error" :loading="removing === model.id">移除</n-button></template>确认移除该模型？仅移除安装登记，不会删除模型目录或文件。若模型正在使用中或仍有下载任务，将被拒绝。</n-popconfirm>
         <n-tag v-else size="small">内置模型</n-tag>
       </div>
     </article>

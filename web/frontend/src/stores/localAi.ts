@@ -2,17 +2,39 @@ import { computed, ref } from 'vue'
 import { defineStore } from 'pinia'
 import {
   localAiApi,
+  fetchModelNodes as fetchModelNodesApi,
+  setModelNodeBackend as setModelNodeBackendApi,
+  type BenchmarkResult,
   type CatalogModel,
   type ComputeDevice,
   type DirectoryListing,
   type DownloadRequest,
   type DownloadTask,
+  type HubCategory,
+  type HubSearchResponse,
+  type HubSearchResult,
+  type HubSource,
   type InstalledModel,
   type ModelInstance,
+  type ModelNode,
+  type ModelNodeBackend,
+  type RemoteInspection,
   type StartInstanceRequest,
   type StorageValidation,
 } from '../api/localAi'
 import { getWsClient, type LocalAiWsEvent, type WsEvent } from '../api/ws'
+
+// 供组件统一从 store 入口消费的类型（组件不得直接 import '../api/localAi'）
+export type {
+  BenchmarkResult,
+  HubCategory,
+  HubSearchResponse,
+  HubSearchResult,
+  HubSource,
+  ModelNode,
+  ModelNodeBackend,
+  RemoteInspection,
+} from '../api/localAi'
 
 function indexById<T extends { id: string }>(items: T[]): Record<string, T> {
   return Object.fromEntries(items.map(item => [item.id, item]))
@@ -181,6 +203,46 @@ export const useLocalAiStore = defineStore('localAi', () => {
     catalogById.value = indexById(await localAiApi.loadCatalog(advanced))
   }
 
+  // ── 模型广场（Hub 获取/检视/下载）统一入口 ──
+  function hubCategories(): Promise<HubCategory[]> {
+    return localAiApi.hubCategories()
+  }
+
+  function searchHub(query: string, source: HubSource = 'all', limit = 20, category = 'all'): Promise<HubSearchResponse> {
+    return localAiApi.searchHub(query, source, limit, category)
+  }
+
+  function inspectRemote(repository: string, revision: string, source = 'modelscope'): Promise<RemoteInspection> {
+    return localAiApi.inspectRemote(repository, revision, source)
+  }
+
+  async function downloadHubRepository(repository: string, revision: string, destination: string, requestId: string, source = 'modelscope') {
+    const response = await localAiApi.downloadHubRepository(repository, revision, destination, requestId, source)
+    upsertDownload(response.task)
+    return response
+  }
+
+  // ── 已安装模型：测速 ──
+  function benchmarkModel(modelId: string, iterations = 3): Promise<BenchmarkResult> {
+    return localAiApi.benchmarkModel(modelId, iterations)
+  }
+
+  // ── 算力设备：仅刷新负载/状态（供 5s 轮询，不触发全量 load） ──
+  async function refreshDevices() {
+    const nextDevices = await localAiApi.loadDevices()
+    for (const device of nextDevices) upsertDevice(device)
+    return nextDevices
+  }
+
+  // ── 功能节点：获取清单与切换后端 ──
+  function fetchModelNodes(): Promise<ModelNode[]> {
+    return fetchModelNodesApi()
+  }
+
+  function setModelNodeBackend(node_id: string, backend: ModelNodeBackend, local_model?: string): Promise<void> {
+    return setModelNodeBackendApi(node_id, backend, local_model)
+  }
+
   async function download(request: DownloadRequest) {
     const response = await localAiApi.createDownload(request)
     upsertDownload(response.task)
@@ -268,6 +330,8 @@ export const useLocalAiStore = defineStore('localAi', () => {
     devices, catalog, models, downloads, instances, defaultStorage, catalogAdvanced, loading, rescanning, error,
     load, rescan, download, pause, resume, cancel, removeDownload, start, stop, remove,
     refreshModels, refreshCatalog, browseStorage, validateStorage, saveDefaultStorage,
+    hubCategories, searchHub, inspectRemote, downloadHubRepository,
+    benchmarkModel, refreshDevices, fetchModelNodes, setModelNodeBackend,
     createRequestId, upsertDevice, upsertDownload, upsertInstance, connectWebSocket, disconnectWebSocket,
   }
 })

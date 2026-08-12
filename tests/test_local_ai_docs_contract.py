@@ -1,4 +1,5 @@
 import inspect
+import re
 from pathlib import Path
 
 from local_ai.catalog.modelscope import ModelScopeRepository
@@ -32,29 +33,38 @@ def test_docs_document_platform_providers():
     docs = read_project_file("docs/local-ai-platform.md")
     for provider in ("openai", "anthropic", "ollama", "custom-map"):
         assert provider in docs
+    assert "填写配置 → 测试连接 → 保存" in docs
+    assert "测试成功后才保存 Provider" in docs
 
 
 def test_docs_document_modelscope_source_policy():
     docs = read_project_file("docs/local-ai-platform.md")
-    assert "ModelScope" in docs
-    assert "revision" in docs
+    assert "当前仅支持公开 ModelScope 仓库" in docs
+    assert "不可变 `revision`" in docs
+    assert "7–64 位十六进制" in docs
+    assert "`main`、`master`、`latest` 等可变引用会被拒绝" in docs
 
 
 def test_docs_document_storage_behavior():
     docs = read_project_file("docs/local-ai-platform.md")
-    assert "存储" in docs
-    assert "下载" in docs
+    assert "下载前检查目录能否创建" in docs
+    assert "默认目录在每次下载前都会重新校验" in docs
+    assert "不会自动保存为默认目录" in docs
 
 
 def test_docs_document_recovery():
     docs = read_project_file("docs/local-ai-platform.md")
-    assert "断点" in docs or "恢复" in docs
+    assert "HTTP Range 断点续传" in docs
+    assert "暂停保留分片" in docs
+    assert "取消时可选择保留分片或丢弃分片" in docs
 
 
 def test_docs_document_npu_evidence():
     docs = read_project_file("docs/local-ai-platform.md")
     assert "NPU" in docs
-    assert "证据" in docs
+    assert "页面只展示后端探测结果" in docs
+    assert "不写死任何设备型号或 TOPS 数值" in docs
+    assert "实际探测证据" in docs
 
 
 def test_docs_are_complete_chinese_operator_and_user_guide():
@@ -74,12 +84,22 @@ def test_docs_are_complete_chinese_operator_and_user_guide():
         assert section in docs
 
 
-def test_docs_explain_all_five_web_ui_tabs_and_core_actions():
+def test_docs_explain_all_six_web_ui_tabs_and_core_actions():
     docs = read_project_file("docs/local-ai-platform.md")
-    for tab in ("部署", "模型市场", "已安装", "算力设备", "下载任务"):
+    for tab in ("部署", "模型广场", "已安装", "算力设备", "功能节点", "下载任务"):
         assert f"`{tab}`" in docs
-    for action in ("重新扫描", "查看并下载", "暂停", "恢复", "取消", "启动", "停止", "移除"):
+    for action in ("重新扫描", "选择目录并下载", "暂停", "恢复", "取消", "启动", "停止", "移除"):
         assert action in docs
+
+
+def test_docs_tabs_match_local_deploy_view():
+    docs = read_project_file("docs/local-ai-platform.md")
+    view = read_project_file("web/frontend/src/views/LocalDeployView.vue")
+    view_tabs = set(re.findall(r'tab="([^"]+)"', view))
+    assert view_tabs == {"部署", "模型广场", "已安装", "算力设备", "功能节点", "下载任务"}
+    for tab in view_tabs:
+        assert f"`{tab}`" in docs
+    assert "模型市场" not in docs
 
 
 def test_docs_explain_storage_validation_and_explicit_persistence(tmp_path, monkeypatch):
@@ -154,6 +174,24 @@ def test_docs_truthfully_explain_model_removal_only_unregisters_metadata():
     assert "delete_if_mutable" in registry_remove
     assert "unlink" not in registry_remove
     assert "rmtree" not in registry_remove
-    assert "移除只删除已安装模型登记，不会删除模型目录或其中的文件" in docs
+    assert "移除只注销已安装模型登记，不会删除模型目录或文件" in docs
     assert "确认移除模型文件" not in docs
     assert "删除用户模型是破坏性操作" not in docs
+
+
+def test_modelscope_support_and_removal_wording_is_locked_across_documentation():
+    env = read_project_file(".env.example")
+    readme = read_project_file("README.md")
+    docs = read_project_file("docs/local-ai-platform.md")
+    public_only = "当前仅支持公开 ModelScope 仓库，私有或受限仓库暂不支持"
+    removal_core = "只注销已安装模型登记，不会删除模型目录或文件"
+    assert public_only in env
+    assert public_only in readme
+    assert "当前仅支持公开 ModelScope 仓库" in docs
+    assert removal_core in readme
+    assert removal_core in docs
+    for text in (env, readme, docs):
+        assert "MODELSCOPE_ACCESS_TOKEN" not in text
+        assert "MODELSCOPE_API_KEY" not in text
+        assert "ModelScope Token" not in text
+        assert "ModelScope token" not in text

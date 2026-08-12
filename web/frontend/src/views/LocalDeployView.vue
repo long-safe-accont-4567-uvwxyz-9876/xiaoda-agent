@@ -12,7 +12,7 @@ import { useLocalAiStore } from '../stores/localAi'
 const store = useLocalAiStore()
 const message = useMessage()
 const activeTab = ref('deployments')
-const summary = computed(() => `${store.instances.filter(item => item.state !== 'stopped').length} 个运行实例 · ${store.models.length} 个已安装模型 · ${store.devices.filter(item => item.state === 'available').length} 个可用设备 · ${store.downloads.filter(item => ['pending', 'downloading', 'paused'].includes(item.state)).length} 个下载任务`)
+const summary = computed(() => `${store.instances.filter(item => item.state !== 'stopped' && item.state !== 'failed').length} 个运行实例 · ${store.models.length} 个已安装模型 · ${store.devices.filter(item => item.state === 'available').length} 个可用设备 · ${store.downloads.filter(item => ['pending', 'downloading', 'paused'].includes(item.state)).length} 个下载任务`)
 
 async function load() {
   try { await store.load() } catch (error) { message.error(error instanceof Error ? error.message : String(error)) }

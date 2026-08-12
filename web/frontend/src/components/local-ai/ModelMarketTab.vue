@@ -1,8 +1,7 @@
 <script setup lang="ts">
 import { computed, onMounted, ref, watch } from 'vue'
 import { NAlert, NButton, NEmpty, NInput, NSelect, NSpin, NTabPane, NTabs, NTag, useMessage } from 'naive-ui'
-import { localAiApi, type HubCategory, type HubSearchResult, type HubSource, type RemoteInspection } from '../../api/localAi'
-import { useLocalAiStore } from '../../stores/localAi'
+import { useLocalAiStore, type HubCategory, type HubSearchResult, type HubSource, type RemoteInspection } from '../../stores/localAi'
 import StoragePickerDialog from './StoragePickerDialog.vue'
 
 const store = useLocalAiStore()
@@ -33,7 +32,7 @@ const hubCategory = ref('all')
 
 async function loadCategories() {
   try {
-    const list = await localAiApi.hubCategories()
+    const list = await store.hubCategories()
     if (Array.isArray(list) && list.length) CATEGORIES.value = list
   } catch {
     /* 后端不可用或旧版本时保留内置兜底 */
@@ -61,7 +60,7 @@ async function searchHub(keyword?: string) {
   hubErrors.value = []
   clearInspection()
   try {
-    const response = await localAiApi.searchHub(query, hubSource.value, 20, hubCategory.value)
+    const response = await store.searchHub(query, hubSource.value, 20, hubCategory.value)
     hubResults.value = response.results
     hubErrors.value = response.errors
     hubSearched.value = true
@@ -109,6 +108,7 @@ const sourceText = (row: HubSearchResult) => {
 const marketRows = computed(() => hubResults.value.map(item => ({
   key: `${item.id}:${(item.sources ?? [item.source]).join(',')}`,
   id: item.id,
+  source: item.source,
   purpose: pipelineText(item.pipeline_tag) || '未标注用途',
   downloads: item.downloads,
   installed: isInstalled(item.id),
@@ -145,7 +145,7 @@ async function toggleInspect(row: { id: string; source: string; item: HubSearchR
   clearInspection()
   inspecting.value = true
   try {
-    hubInspection.value = await localAiApi.inspectRemote(row.id, revision, row.source)
+    hubInspection.value = await store.inspectRemote(row.id, revision, row.source)
     inspectingId.value = row.id
     inspectingSource.value = row.source
   } catch (error) {
@@ -166,7 +166,7 @@ async function downloadHub() {
   if (!hubInspection.value || !destination.value) return
   hubDownloading.value = true
   try {
-    await localAiApi.downloadHubRepository(
+    await store.downloadHubRepository(
       hubInspection.value.repository,
       hubInspection.value.revision,
       destination.value,
@@ -187,6 +187,31 @@ function selectStorage(path: string) {
   destination.value = path
   showStorage.value = false
   void downloadHub()
+}
+
+// ── 下载入口：已保存默认目录可写则直接复用（每次下载前重新校验），否则打开目录选择 ──
+let chooseGeneration = 0
+
+async function choose() {
+  const generation = ++chooseGeneration
+  if (!hubInspection.value) return
+  if (store.defaultStorage) {
+    try {
+      const validation = await store.validateStorage(store.defaultStorage, hubBytes.value)
+      if (generation !== chooseGeneration) return
+      if (validation.writable && !validation.error) {
+        destination.value = validation.path
+        void downloadHub()
+        return
+      }
+      message.warning(validation.error || validation.reason || '默认目录不可用，请重新选择')
+    } catch (error) {
+      if (generation !== chooseGeneration) return
+      message.warning(error instanceof Error ? error.message : String(error))
+    }
+  }
+  if (generation !== chooseGeneration) return
+  showStorage.value = true
 }
 
 // ── 展示工具 ──
@@ -304,7 +329,7 @@ const missingText = (item: string) => MISSING_TEXT[item] ?? item
 
           <div v-if="!hubInspection.missing.length" class="download-row">
             <span v-if="destination" class="dest">存储：{{ destination }}</span>
-            <n-button size="small" type="primary" :loading="hubDownloading" @click="showStorage = true">选择目录并下载</n-button>
+            <n-button size="small" type="primary" :loading="hubDownloading" @click="choose">选择目录并下载</n-button>
           </div>
         </div>
       </article>

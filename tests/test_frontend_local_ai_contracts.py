@@ -725,15 +725,16 @@ def test_websocket_declares_typed_local_ai_events():
     assert "local_ai_instance_updated" in ws
 
 
-def test_local_deploy_has_five_tabs_and_no_fixed_device_copy():
+def test_local_deploy_has_six_tabs_and_no_fixed_device_copy():
     view = source("web/frontend/src/views/LocalDeployView.vue")
-    for name in ("部署", "模型市场", "已安装", "算力设备", "下载任务"):
+    for name in ("部署", "模型广场", "已安装", "算力设备", "功能节点", "下载任务"):
         assert name in view
     for component in (
         "DeploymentsTab",
         "ModelMarketTab",
         "InstalledModelsTab",
         "ComputeDevicesTab",
+        "SystemModelNodesTab",
         "DownloadTasksTab",
     ):
         assert component in view
@@ -747,6 +748,7 @@ def test_local_ai_tabs_consume_store_without_raw_http():
         "web/frontend/src/components/local-ai/ModelMarketTab.vue",
         "web/frontend/src/components/local-ai/InstalledModelsTab.vue",
         "web/frontend/src/components/local-ai/ComputeDevicesTab.vue",
+        "web/frontend/src/components/local-ai/SystemModelNodesTab.vue",
         "web/frontend/src/components/local-ai/DownloadTasksTab.vue",
         "web/frontend/src/components/local-ai/ModelDetailDrawer.vue",
         "web/frontend/src/components/local-ai/StoragePickerDialog.vue",
@@ -844,7 +846,7 @@ def test_model_market_validates_saved_default_for_each_download_before_use():
     market = source("web/frontend/src/components/local-ai/ModelMarketTab.vue")
 
     assert "async function choose" in market
-    assert "store.validateStorage(store.defaultStorage, model.download_size)" in market
+    assert "store.validateStorage(store.defaultStorage, hubBytes.value)" in market
     assert "validation.writable && !validation.error" in market
     assert "showStorage.value = true" in market
 
@@ -854,11 +856,10 @@ def test_model_market_ignores_stale_choose_validation(tmp_path):
     component = source("web/frontend/src/components/local-ai/ModelMarketTab.vue")
     script = component.split('<script setup lang="ts">', 1)[1].split("</script>", 1)[0]
     script = script.replace("'../../stores/localAi'", repr(str(ROOT / "web/frontend/src/stores/localAi.ts")))
-    script = script.replace("import ModelDetailDrawer from './ModelDetailDrawer.vue'", "")
     script = script.replace("import StoragePickerDialog from './StoragePickerDialog.vue'", "")
-    script = script.replace("const message = useMessage()", "const message = { warning: () => undefined }")
+    script = script.replace("const message = useMessage()", "const message = { warning: () => undefined, success: () => undefined, error: () => undefined }")
     script = script.replace("async function choose", "export async function choose")
-    script += "\nexport { selected, destination, showStorage, showDetail, store }\n"
+    script += "\nexport { destination, showStorage, hubInspection, store }\n"
     instrumented = tmp_path / "ModelMarketTab.instrumented.ts"
     entry = tmp_path / "model-market-choose-race.ts"
     bundle = tmp_path / "model-market-choose-race.mjs"
@@ -873,17 +874,21 @@ def test_model_market_ignores_stale_choose_validation(tmp_path):
             setActivePinia(createPinia())
             const market = await import({str(instrumented)!r})
             const validations = []
+            const downloads = []
             market.store.defaultStorage = '/models'
             market.store.validateStorage = () => new Promise(resolve => validations.push(resolve))
-            const modelA = {{ id: 'model:a', repository: 'a', purpose: 'chat', download_size: 1 }}
-            const modelB = {{ id: 'model:b', repository: 'b', purpose: 'chat', download_size: 2 }}
-            const chooseA = market.choose(modelA)
-            const chooseB = market.choose(modelB)
-            validations[1]({{ path: '/b', writable: true }})
+            market.store.downloadHubRepository = async (...args) => {{ downloads.push(args) }}
+            market.hubInspection.value = {{
+              repository: 'owner/repo', revision: 'abcd123', purpose: 'embedding', runnable: true, state: 'ready',
+              files: [{{ path: 'model.onnx', size: 1024, sha256: 'x' }}], missing: [], evidence: {{}},
+            }}
+            const chooseA = market.choose()
+            const chooseB = market.choose()
+            validations[1]({{ path: '/models/b', writable: true, error: null, reason: null }})
             await chooseB
-            validations[0]({{ path: '/a', writable: true }})
+            validations[0]({{ path: '/models/a', writable: true, error: null, reason: null }})
             await chooseA
-            if (market.selected.value?.id !== 'model:b' || market.destination.value !== '/b') {{
+            if (downloads.length !== 1 || downloads[0][2] !== '/models/b') {{
               throw new Error('较旧 choose 校验结果串入了当前模型')
             }}
             process.exit(0)
@@ -906,7 +911,7 @@ def test_deployments_tab_filters_stopped_instances_from_cards_and_empty_state():
     deployments = source("web/frontend/src/components/local-ai/DeploymentsTab.vue")
 
     assert "const activeInstances = computed" in deployments
-    assert "store.instances.filter(instance => instance.state !== 'stopped')" in deployments
+    assert "instance.state !== 'stopped' && instance.state !== 'failed'" in deployments
     assert 'v-for="instance in activeInstances"' in deployments
     assert "!activeInstances.length && !store.models.length" in deployments
 
