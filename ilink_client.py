@@ -608,21 +608,24 @@ class ILinkClient:
             ret = payload.get("ret", RET_OK)
             logger.info(
                 "ilink.send_message.ok to={} text_len={} ret={}",
-                to_user_id, len(text), ret,
+                to_user_id[:16], len(text), ret,
             )
             return {"ret": ret}
-        except RuntimeError as e:
+        except ILinkRetError as e:
             # ret=-2 = 参数错误（context_token 过期/无效，或请求体不合规）
             # context_token 是消息路由必需字段，去掉它服务端无法路由，
             # 仍返回 ret=-2，故 tokenless 降级无效。
             # 恢复方式：等待该用户发新消息刷新 context_token 后再回复。
-            if "ret=-2" not in str(e):
+            # Minor#8（R3）：按 e.ret 精确判断，而非匹配异常字符串——
+            # 否则 HTTP 400 响应体恰好含 "ret=-2" 文本时（如 JSON 原样透传）
+            # 会误报为 context_token 过期（仅日志误导，行为一致）。
+            if e.ret != -2:
                 raise
             logger.warning(
                 "ilink.send_message.ret_minus_2 to={} text_len={} "
                 "ctx_token_len={} cause=context_token_expired_or_invalid "
                 "recovery=user_must_send_new_message_to_refresh",
-                to_user_id, len(text), len(context_token),
+                to_user_id[:16], len(text), len(context_token),
             )
             raise
 
@@ -797,7 +800,7 @@ class ILinkClient:
         ])
         logger.info(
             "ilink.send_media_message.ok to={} text_len={} img_len={} ret={}",
-            to_user_id, len(text), len(raw_bytes), ret,
+            to_user_id[:16], len(text), len(raw_bytes), ret,
         )
         return {"ret": ret}
 
@@ -834,7 +837,7 @@ class ILinkClient:
         ret = payload.get("ret", RET_OK)
         logger.info(
             "ilink.send_typing.ok user={} status={} ret={}",
-            user_id, status, ret,
+            user_id[:16], status, ret,
         )
         return {"ret": ret}
 
@@ -871,7 +874,7 @@ class ILinkClient:
         ret = payload.get("ret", RET_OK)
         logger.info(
             "ilink.get_config.ok user={} ticket_len={} ret={}",
-            user_id, len(typing_ticket), ret,
+            user_id[:16], len(typing_ticket), ret,
         )
         return {
             "typing_ticket": typing_ticket,
@@ -898,12 +901,17 @@ class ILinkClient:
                 - (False, error_msg) token 无效或网络错误
         """
         try:
+            # Minor#1（R3）：探测游标用持久化游标起步而非空游标——空游标会从
+            # 服务端最早积压回卷消费全部未确认消息（静默吞掉用户消息）；用上次
+            # 持久化游标起步，把消费范围限制在"上次已确认位置之后"的增量，
+            # 与 poller 恢复后的消费范围一致，最大程度缩小探测造成的数据丢失窗口。
+            probe_cursor = self._load_probe_cursor()
             payload = await self._post(
                 "/ilink/bot/getupdates",
-                data={"get_updates_buf": ""},
+                data={"get_updates_buf": probe_cursor},
                 timeout=2.0,
             )
-            # Q7 修复：空游标探测会推进服务端消息游标（消费已积压消息）——
+            # Q7 修复：探测会推进服务端消息游标（消费积压消息）——
             # 将返回的新游标持久化到 ~/.ai-agent/wechat_cursor.json（与
             # wechat_bot_adapter 同路径），供后续长轮询接续，避免消息被
             # 探测消费后丢失或按旧游标重放（重复处理）。
@@ -912,8 +920,10 @@ class ILinkClient:
                 self._persist_verify_cursor(next_cursor)
             msgs = payload.get("msgs", []) or []
             if msgs:
-                logger.info(
-                    "ilink.verify_token.consumed_pending_msgs count={} cursor_len={}",
+                logger.warning(
+                    "ilink.verify_token.consumed_pending_msgs count={} cursor_len={} "
+                    "note=messages_consumed_by_probe_without_processing "
+                    "hint=only_happens_when_no_active_poller",
                     len(msgs), len(next_cursor),
                 )
             # ret=0：token 有效，且本次没有新消息
@@ -937,6 +947,31 @@ class ILinkClient:
             return False, f"{type(e).__name__}: {str(e)[:120]}"
 
     @staticmethod
+    def _load_probe_cursor() -> str:
+        """读取已持久化的探测/轮询游标（无则返回空串）。
+
+        与 wechat_bot_adapter._cursor_path 路径保持一致（凭证同目录）。
+        供 verify_token 探测起步用，避免空游标从服务端最早积压回卷消费。
+        """
+        try:
+            import json as _json
+            from pathlib import Path as _Path
+
+            cursor_path = _Path.home() / ".ai-agent" / "wechat_cursor.json"
+            if cursor_path.exists():
+                data = _json.loads(cursor_path.read_text(encoding="utf-8"))
+                cursor = data.get("cursor", "") or ""
+                if cursor:
+                    logger.info("ilink.verify_probe_cursor_loaded len={}", len(cursor))
+                    return cursor
+        except Exception as e:
+            logger.warning(
+                "ilink.verify_probe_cursor_load_failed error={}",
+                str(e)[:120],
+            )
+        return ""
+
+    @staticmethod
     def _persist_verify_cursor(cursor: str) -> None:
         """持久化 verify_token 探测后推进的服务端游标。
 
@@ -948,15 +983,19 @@ class ILinkClient:
             return
         try:
             import json as _json
+            import os as _os
             from pathlib import Path as _Path
 
             cursor_path = _Path.home() / ".ai-agent" / "wechat_cursor.json"
-            cursor_path.parent.mkdir(parents=True, exist_ok=True)
+            cursor_path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
             tmp = cursor_path.with_suffix(".tmp")
             tmp.write_text(
                 _json.dumps({"cursor": cursor}, ensure_ascii=False),
                 encoding="utf-8",
             )
+            # Minor#4（R3）：游标含会话状态信息，权限对齐凭证文件（0600），
+            # 避免 umask 默认权限（如 0644）导致同机其他用户可读。
+            _os.chmod(tmp, 0o600)
             tmp.replace(cursor_path)
             logger.info("ilink.verify_cursor_persisted len={}", len(cursor))
         except Exception as e:

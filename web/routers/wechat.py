@@ -33,7 +33,22 @@ public_router = APIRouter(tags=["wechat"])
 
 # 生命周期锁：串行化 start/stop 对 app.state.wechat_bot 的修改，
 # 避免并发请求在 await 点交错导致旧 adapter 被误清、轮询任务失控。
-_lifecycle_lock = asyncio.Lock()
+# Minor#2（R3）：不能在 import 期创建 asyncio.Lock()——会绑定到 import 时的
+# 事件循环，跨 loop 复用抛 "bound to a different event loop"（与适配器层
+# _START_LOCK 的 M3 修复同因）。改为 per-loop 惰性创建。
+_lifecycle_locks: "dict" = {}
+_lifecycle_locks_guard = __import__("threading").Lock()
+
+
+def _get_lifecycle_lock() -> asyncio.Lock:
+    """返回绑定当前运行事件循环的生命周期锁（首次使用时惰性创建）。"""
+    loop = asyncio.get_running_loop()
+    with _lifecycle_locks_guard:
+        lock = _lifecycle_locks.get(loop)
+        if lock is None:
+            lock = asyncio.Lock()
+            _lifecycle_locks[loop] = lock
+        return lock
 
 
 def _build_adapter(request: Request) -> Any:
@@ -306,7 +321,7 @@ async def start_bot(request: Request) -> Any:
     从凭证文件加载凭证，创建 WeChatBotAdapter 并调用 start()。
     start() 内部会加载凭证、初始化 ILinkClient、启动长轮询任务。
     """
-    async with _lifecycle_lock:
+    async with _get_lifecycle_lock():
         # 先停止已有的 bot 实例（避免重复轮询）
         existing = getattr(request.app.state, "wechat_bot", None)
         if existing is not None:
@@ -358,7 +373,7 @@ async def start_bot(request: Request) -> Any:
 @router.post("/wechat/stop", response_model=Envelope[dict])
 async def stop_bot(request: Request) -> Any:
     """停止微信消息轮询并清除凭证文件。"""
-    async with _lifecycle_lock:
+    async with _get_lifecycle_lock():
         bot = getattr(request.app.state, "wechat_bot", None)
         success = True
 

@@ -18,7 +18,7 @@ from .db_analytics import AnalyticsDB
 from .db_kg_v2 import KnowledgeDBV2
 from .db_knowledge import KnowledgeDB
 from .db_learning import LearningDB
-from .db_local_ai import LocalAIDB, transaction_lock_for
+from .db_local_ai import LocalAIDB
 from .db_memory import MemoryDB
 from .db_notebook import NotebookDB
 from .db_temporal_memory import TemporalMemoryDB
@@ -145,7 +145,6 @@ class DatabaseManager:
             ) from e
 
         self._conn = await aiosqlite.connect(str(self.db_path))
-        self._write_tx_lock = transaction_lock_for(self._conn)
         self._conn.row_factory = aiosqlite.Row
         # busy_timeout 必须最先设置，防止后续 PRAGMA 因锁竞争失败
         # 5000→15000：greeting_scheduler/memory_encoding/portrait 等后台任务并发写入时，

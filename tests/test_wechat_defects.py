@@ -1,8 +1,9 @@
-"""微信 Bot 适配器缺陷回归测试（M1-M4 及部分 Minor）。
+"""微信 Bot 适配器缺陷回归测试（M1-M4、Major#1/#2 及部分 Minor）。
 
 每个用例先复现 bug（RED），再验证修复（GREEN）。
 """
 import asyncio
+import json
 
 import pytest
 
@@ -23,10 +24,12 @@ def _make_adapter(**over):
 class _FakeILinkClient:
     """可注入指定异常/返回的 ILinkClient 替身。"""
 
-    def __init__(self, *, send_media_exc=None, get_updates_seq=None):
+    def __init__(self, *, send_media_exc=None, get_updates_seq=None, bot_token=""):
         self._send_media_exc = send_media_exc
         self._get_updates_seq = list(get_updates_seq or [])
         self.closed = False
+        # 对齐真实 ILinkClient 的私有属性名（_client_owns_credentials 读取它）
+        self._bot_token = bot_token
 
     async def send_media_message(self, to_user_id, context_token, content, image_path):
         if self._send_media_exc is not None:
@@ -273,3 +276,105 @@ def test_save_credentials_clears_stale_cursor(tmp_path, monkeypatch):
 
     assert cred.exists()
     assert not cursor.exists(), "保存新凭证后陈旧游标应被清除"
+
+
+# ---------------------------------------------------------------------------
+# R3 Major#1: 换 token 后旧 poller 不得删新凭证 / 回写旧游标
+# ---------------------------------------------------------------------------
+
+def test_clear_credentials_skips_when_token_changed(tmp_path, monkeypatch):
+    """R3-Major#1: 凭证文件 token(T2) 与 client token(T1) 不一致时，_clear_credentials 不得删除凭证。"""
+    import wechat_bot_adapter as wba
+
+    cred = tmp_path / "wechat_credentials.json"
+    cred.write_text(
+        json.dumps({"bot_token": "T2", "ilink_bot_id": "b", "ilink_user_id": "u"}),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(wba, "CREDENTIALS_PATH", cred)
+
+    bot = _make_adapter()
+    bot._ilink_client = _FakeILinkClient(bot_token="T1")
+
+    bot._clear_credentials()
+    assert cred.exists(), "token 已被重新扫码更新时，旧 poller 不得删除新凭证"
+
+
+def test_clear_credentials_deletes_when_token_matches(tmp_path, monkeypatch):
+    """R3-Major#1: 凭证 token 与 client token 一致时（真正过期），_clear_credentials 删除凭证。"""
+    import wechat_bot_adapter as wba
+
+    cred = tmp_path / "wechat_credentials.json"
+    cred.write_text(
+        json.dumps({"bot_token": "T1", "ilink_bot_id": "b", "ilink_user_id": "u"}),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(wba, "CREDENTIALS_PATH", cred)
+
+    bot = _make_adapter()
+    bot._ilink_client = _FakeILinkClient(bot_token="T1")
+
+    bot._clear_credentials()
+    assert not cred.exists(), "token 归属一致（真正过期）时应删除凭证"
+
+
+def test_save_cursor_skips_when_token_changed(tmp_path, monkeypatch):
+    """R3-Major#1: 凭证 token(T2) 与 client token(T1) 不一致时，旧 poller 不得把旧游标写回文件。"""
+    import wechat_bot_adapter as wba
+
+    cred = tmp_path / "wechat_credentials.json"
+    cred.write_text(
+        json.dumps({"bot_token": "T2", "ilink_bot_id": "b", "ilink_user_id": "u"}),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(wba, "CREDENTIALS_PATH", cred)
+    cursor_path = tmp_path / "wechat_cursor.json"
+    assert not cursor_path.exists()
+
+    bot = _make_adapter()
+    bot._ilink_client = _FakeILinkClient(bot_token="T1")
+    bot._cursor = "OLD-CURSOR-FROM-T1-SESSION"
+
+    bot._save_cursor()
+    assert not cursor_path.exists(), "token 已被更新时旧 poller 不得回写旧游标"
+
+
+def test_save_cursor_writes_when_token_matches(tmp_path, monkeypatch):
+    """R3-Major#1: 凭证 token 与 client token 一致时，正常写回游标。"""
+    import wechat_bot_adapter as wba
+
+    cred = tmp_path / "wechat_credentials.json"
+    cred.write_text(
+        json.dumps({"bot_token": "T1", "ilink_bot_id": "b", "ilink_user_id": "u"}),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(wba, "CREDENTIALS_PATH", cred)
+    cursor_path = tmp_path / "wechat_cursor.json"
+
+    bot = _make_adapter()
+    bot._ilink_client = _FakeILinkClient(bot_token="T1")
+    bot._cursor = "CURSOR-T1"
+
+    bot._save_cursor()
+    assert cursor_path.exists(), "token 归属一致时应正常持久化游标"
+
+
+# ---------------------------------------------------------------------------
+# R3 Major#2: start() 无凭证/初始化失败时不得留下僵尸 _ACTIVE_BOT
+# ---------------------------------------------------------------------------
+
+def test_start_no_credentials_does_not_leave_zombie_active_bot(monkeypatch):
+    """R3-Major#2: 无凭证时 start() 后 _ACTIVE_BOT 不应指向未运行的实例。"""
+    import wechat_bot_adapter as wba
+
+    bot = _make_adapter()
+    monkeypatch.setattr(bot, "_load_credentials", lambda: None)
+    # 避免 AgentCore 自建
+    monkeypatch.setattr(wba.WeChatBotAdapter, "_core", None, raising=False)
+
+    asyncio.run(bot.start())
+
+    active = wba._ACTIVE_BOT
+    assert active is not bot, "无凭证启动失败后不应残留僵尸 _ACTIVE_BOT"
+    assert bot._running is False, "无凭证启动失败后不应保持 running"
+    asyncio.run(bot.stop())

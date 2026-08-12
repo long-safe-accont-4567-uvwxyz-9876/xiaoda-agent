@@ -107,14 +107,29 @@ def test_send_message_ok_returns_ret_zero():
 # ── verify_token / send_test_message ──────────────────────────────────────
 # 登录后无 context_token，发消息会 ret=-2；改为 getupdates 短超时探测 token。
 
-def test_verify_token_ok_via_ret_zero():
+def test_verify_token_ok_via_ret_zero(monkeypatch):
     """getupdates 返回 ret=0 → token 有效。"""
     fake = FakeAsyncClient([{"ret": 0, "msgs": [], "get_updates_buf": ""}])
     client = ILinkClient(bot_token="tok", client=fake)
+    # Minor#1（R3）：无持久化游标时探测仍从空游标起步（隔离测试环境的真实游标文件）
+    monkeypatch.setattr(ILinkClient, "_load_probe_cursor", staticmethod(lambda: ""))
     ok, msg = asyncio.run(client.verify_token())
     assert ok is True and msg == "ok"
     # 请求体格式与 get_updates 一致
     assert fake.calls[0]["json"]["get_updates_buf"] == ""
+
+
+def test_verify_token_uses_persisted_cursor_probe(monkeypatch):
+    """Minor#1（R3）：存在持久化游标时，探测以该游标起步（而非空游标），
+    避免从服务端最早积压回卷消费全部未确认消息。"""
+    fake = FakeAsyncClient([{"ret": 0, "msgs": [], "get_updates_buf": "C1"}])
+    client = ILinkClient(bot_token="tok", client=fake)
+    monkeypatch.setattr(ILinkClient, "_load_probe_cursor", staticmethod(lambda: "PERSISTED"))
+    # 避免真实写盘
+    monkeypatch.setattr(ILinkClient, "_persist_verify_cursor", staticmethod(lambda c: None))
+    ok, msg = asyncio.run(client.verify_token())
+    assert ok is True and msg == "ok"
+    assert fake.calls[0]["json"]["get_updates_buf"] == "PERSISTED"
 
 
 def test_verify_token_ok_via_timeout():

@@ -16,6 +16,7 @@ import json
 import os
 import threading
 import time
+import weakref
 from pathlib import Path
 from typing import Any, Optional
 
@@ -57,11 +58,12 @@ def save_credentials(bot_token: str, ilink_bot_id: str, ilink_user_id: str, base
         }
         # 原子写入 + 限制权限：先写临时文件 chmod 0600，再 replace 覆盖，
         # 避免明文 token 权限过宽、且失败时留下半截文件。
+        # Minor#6（R3）：用 os.open 以 0600 模式创建文件再写入，消除
+        # "先写后 chmod" 的权限窗口（写入瞬间临时文件不短暂暴露为 umask 默认权限）。
         tmp_path = CREDENTIALS_PATH.with_suffix(".json.tmp")
-        tmp_path.write_text(
-            json.dumps(data, ensure_ascii=False, indent=2),
-            encoding="utf-8",
-        )
+        fd = os.open(tmp_path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            json.dump(data, f, ensure_ascii=False, indent=2)
         os.chmod(tmp_path, 0o600)
         tmp_path.replace(CREDENTIALS_PATH)
         # m4：写入新凭证意味着新会话开始，清除陈旧游标，避免服务端按旧游标
@@ -167,7 +169,11 @@ async def send_proactive_message(text: str) -> bool:
 # 事件循环，在测试/重启等跨 loop 场景复用会抛 "bound to a different event
 # loop"。改为 per-loop 惰性创建：每个运行中的事件循环各持一把锁，
 # 用 threading.Lock 保护映射的读写。
-_START_LOCKS: "dict[asyncio.AbstractEventLoop, asyncio.Lock]" = {}
+# Minor#3（R3）：用 WeakKeyDictionary 存放 loop→lock，事件循环被回收时
+# 条目自动消失，避免多 loop 环境下字典无界增长（内存泄漏）。
+_START_LOCKS: "weakref.WeakKeyDictionary[asyncio.AbstractEventLoop, asyncio.Lock]" = (
+    weakref.WeakKeyDictionary()
+)
 _START_LOCKS_GUARD = threading.Lock()
 
 
@@ -311,6 +317,15 @@ class WeChatBotAdapter:
     def _save_cursor(self) -> None:
         if not self._cursor:
             return
+        # R3-Major#1：写入前校验 token 归属——若凭证文件已被重新扫码更新为
+        # 新 token（旧 poller 正在退出/即将过期），不得把旧会话游标回写，
+        # 否则新会话会带上旧游标导致服务端重放历史消息（重复回复）。
+        if not self._client_owns_credentials():
+            logger.info(
+                "wechat_bot.cursor_save_skipped_token_changed cursor_len={}",
+                len(self._cursor),
+            )
+            return
         try:
             path = self._cursor_path()
             tmp = path.with_suffix(".tmp")
@@ -318,9 +333,35 @@ class WeChatBotAdapter:
                 json.dumps({"cursor": self._cursor}, ensure_ascii=False),
                 encoding="utf-8",
             )
+            # Minor#4（R3）：游标含会话状态信息，权限对齐凭证文件（0600），
+            # 避免 umask 默认权限（如 0644）导致同机其他用户可读。
+            os.chmod(tmp, 0o600)
             tmp.replace(path)
         except Exception as e:
             logger.warning("wechat_bot.cursor_save_failed error={}", str(e)[:120])
+
+    def _client_owns_credentials(self) -> bool:
+        """校验凭证文件中的 bot_token 与当前 client 的 token 是否一致。
+
+        R3-Major#1：重新扫码会写入新 token；旧 poller 判断"会话过期"时若直接
+        删凭证 / 回写游标，会破坏新凭证（删掉刚写入的 T2）或写回旧游标。
+        仅当凭证文件 token 与当前 client token 一致（确实是本实例的会话）
+        才允许删除凭证 / 持久化游标。
+        """
+        client = self._ilink_client
+        if client is None:
+            return False
+        client_token = getattr(client, "_bot_token", "") or ""
+        if not client_token:
+            return False
+        try:
+            creds = load_credentials()
+        except Exception as e:
+            logger.warning("wechat_bot.creds_ownership_check_failed error={}", str(e)[:120])
+            return False
+        if creds is None:
+            return False
+        return creds.get("bot_token", "") == client_token
 
     def _remember_ctx(self, user_id: str, token: str) -> None:
         """记录 per-user 上下文 token（m2：带 TTL + 上限清理，避免无界增长）。
@@ -450,15 +491,49 @@ class WeChatBotAdapter:
                     str(e)[:200],
                 )
                 self._connected = False
+                # R3-Major#2：ILinkClient 初始化失败同样视为未就绪——
+                # 回滚 _ACTIVE_BOT/_running，避免僵尸实例（auto-start not-ready
+                # 分支只检查 app.state.wechat_bot，僵尸会让 /wechat/stop 失效）。
+                if _ACTIVE_BOT is self:
+                    _ACTIVE_BOT = None
+                self._running = False
+                self._closed = True
         else:
             # 无凭证：等待 WebUI 触发扫码流程（不自动启动轮询）
+            # R3-Major#2：回滚 start() 早期无条件设置的 _ACTIVE_BOT/_running，
+            # 避免留下"僵尸实例"——_ACTIVE_BOT 指向未运行实例会让 /wechat/test
+            # 短路读状态、/wechat/stop 无法停止真正运行的 poller（auto-start
+            # not-ready 时 poller 可能稍后恢复）。
             logger.info("wechat_bot.no_credentials waiting_for_scan")
+            if _ACTIVE_BOT is self:
+                _ACTIVE_BOT = None
+            self._running = False
+            self._closed = True
 
     def _start_polling(self) -> None:
         """启动消息轮询任务（幂等：已运行时不重复创建）。"""
         if self._poll_task is not None and not self._poll_task.done():
             return
         self._poll_task = asyncio.create_task(self._poll_messages())
+        # Minor#5（R3）：挂 done callback——poll 循环若以未捕获异常退出
+        # （如事件循环关闭时 create_task 抛 RuntimeError），取回异常并复位
+        # 连接状态，避免 /wechat/status 误报 connected=True 且无自动恢复。
+        self._poll_task.add_done_callback(self._on_poll_task_done)
+
+    def _on_poll_task_done(self, task: "asyncio.Task") -> None:
+        """poll task 结束回调：取回异常、收敛状态，避免静默停摆。"""
+        try:
+            exc = task.exception()
+        except asyncio.CancelledError:
+            return  # 正常取消（stop() 主动 cancel），无需处理
+        except Exception:
+            exc = None
+        if exc is not None:
+            logger.error(
+                "wechat_bot.poll_task_crashed error={} type={}",
+                str(exc)[:200], type(exc).__name__,
+            )
+            self._connected = False
 
     async def stop(self) -> None:
         """停止微信 Bot 适配器
@@ -1139,7 +1214,15 @@ class WeChatBotAdapter:
         return load_credentials()
 
     def _clear_credentials(self) -> None:
-        """删除凭证文件（委托给模块级函数）"""
+        """删除凭证文件（委托给模块级函数）。
+
+        R3-Major#1：先校验 token 归属——仅当凭证文件 token 与当前 client
+        一致（本实例的会话真正过期）才删除；若凭证已被重新扫码更新为新 token，
+        旧 poller 不得删除（否则新登录态被误删，用户被迫重新扫码）。
+        """
+        if not self._client_owns_credentials():
+            logger.info("wechat_bot.clear_credentials_skipped_token_changed")
+            return
         clear_credentials()
 
     # ------------------------------------------------------------------

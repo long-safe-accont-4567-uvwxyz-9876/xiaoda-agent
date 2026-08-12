@@ -228,14 +228,16 @@ _HIGH_RISK_OP_RE = re.compile(
 
 _msg_seq_counter = int(time.time() * 1000) % (10 ** 8)
 _msg_seq_lock = threading.Lock()
+# QQ API 官方示例即用毫秒时间戳作 msg_seq（int64，单调递增即可）。
+# 此处每次对齐当前毫秒时间戳并 +1，保证：1) 单调递增；2) 时钟回拨/进程
+# 休眠后计数器落后时不产生回退，避免服务端拒绝。等价于官方时间戳方案。
 
-# 保护 .env 文件读-改-写操作，防止并发 QQ 消息损坏 .env
-_env_write_lock = threading.Lock()
 
 def _next_msg_seq() -> int:
     global _msg_seq_counter
     with _msg_seq_lock:
-        _msg_seq_counter += 1
+        now_ms = int(time.time() * 1000)
+        _msg_seq_counter = max(_msg_seq_counter + 1, now_ms)
         return _msg_seq_counter
 
 
@@ -390,7 +392,14 @@ class AIQQBot(botpy.Client):
     @staticmethod
     def _cleanup_message_lock(locks: dict[str, asyncio.Lock], key: str) -> None:
         lock = locks.get(key)
-        if lock is not None and not lock.locked():
+        if lock is None:
+            return
+        # 仅当锁未被持有且无等待者时才清理（R3 观察项）：
+        # 若仅检查 locked()，锁刚释放但仍有 task 在 acquire 队列等待时
+        # pop 掉旧锁，后续新消息会创建新锁，与排队者并行处理同一用户
+        # 消息 → per-user 串行锁失效。
+        waiters = getattr(lock, "_waiters", None)
+        if not lock.locked() and not waiters:
             locks.pop(key, None)
 
     def _prune_c2c_session_cache(self) -> None:
@@ -447,7 +456,10 @@ class AIQQBot(botpy.Client):
             return None
 
     async def on_ready(self) -> None:
-        logger.info("qq_bot.connected", app_id=APP_ID)
+        # R3 观察项：实时读取 env 而非模块级 APP_ID——模块级变量在 import 时
+        # 一次性读取，.env 后更新时日志会显示过时/错误的 app_id。
+        _live_app_id = os.getenv("QQBOT_APP_ID", "").strip() or APP_ID
+        logger.info("qq_bot.connected", app_id=_live_app_id)
 
         try:
             if not self._agent_initialized:
