@@ -228,6 +228,7 @@ _HIGH_RISK_OP_RE = re.compile(
 
 _msg_seq_counter = int(time.time() * 1000) % (10 ** 8)
 _msg_seq_lock = threading.Lock()
+_env_write_lock = threading.Lock()
 # QQ API 官方示例即用毫秒时间戳作 msg_seq（int64，单调递增即可）。
 # 此处每次对齐当前毫秒时间戳并 +1，保证：1) 单调递增；2) 时钟回拨/进程
 # 休眠后计数器落后时不产生回退，避免服务端拒绝。等价于官方时间戳方案。
