@@ -11,6 +11,8 @@ import pytest
 from local_ai.contracts import CatalogModel, InstalledModel, ModelPurpose, TaskState
 from local_ai.downloads.manager import DownloadManager
 from local_ai.downloads.transport import DownloadStream, HttpDownloadTransport
+from local_ai.instances.manager import InstanceManager
+from local_ai.runtimes.registry import RuntimeRegistry
 
 
 class FakeRegistry:
@@ -75,6 +77,26 @@ def make_model(content: bytes, *, sha256: str | None = None) -> CatalogModel:
             },
         ),
         download_size=len(content),
+    )
+
+
+def make_chat_model(content: bytes, *, sha256: str | None = None) -> CatalogModel:
+    return CatalogModel(
+        id="model:chat",
+        source="modelscope",
+        repository="owner/chat",
+        revision="abcdef0",
+        purpose=ModelPurpose.CHAT,
+        files=(
+            {
+                "path": "nested/model.onnx",
+                "size": len(content),
+                "sha256": sha256 or hashlib.sha256(content).hexdigest(),
+            },
+        ),
+        download_size=len(content),
+        compatibility={"runtimes": ["ort_genai"], "providers": ["cpu"]},
+        runtime_requirements={"minimum_ram": 1024, "recommended_ram": 2048},
     )
 
 
@@ -502,3 +524,47 @@ async def test_http_transport_closes_error_response():
             await transport.open(make_model(b"complete"), "nested/model.onnx", 8)
 
     assert responses[0].is_closed
+
+
+@pytest.mark.asyncio
+async def test_register_persists_compatibility_and_runtime_requirements(tmp_path):
+    content = b"chat-model"
+    registry = FakeRegistry()
+    manager = make_manager(
+        tmp_path,
+        FakeTransport({"nested/model.onnx": content}),
+        registry,
+        [],
+    )
+    task = manager.create(make_chat_model(content), tmp_path / "model")
+
+    completed = await manager.start(task.id)
+
+    assert completed.state is TaskState.COMPLETED
+    installed = await registry.get("model:chat")
+    assert installed is not None
+    assert "ort_genai" in installed.metadata["compatibility"]["runtimes"]
+    assert installed.metadata["runtime_requirements"]["minimum_ram"] == 1024
+
+
+@pytest.mark.asyncio
+async def test_catalog_model_restores_chat_compatibility_from_metadata(tmp_path):
+    content = b"chat-model"
+    registry = FakeRegistry()
+    manager = make_manager(
+        tmp_path,
+        FakeTransport({"nested/model.onnx": content}),
+        registry,
+        [],
+    )
+    task = manager.create(make_chat_model(content), tmp_path / "model")
+    await manager.start(task.id)
+    installed = await registry.get("model:chat")
+    assert installed is not None
+
+    instances = InstanceManager(registry, None, RuntimeRegistry())
+    catalog = await instances._catalog_model(installed)
+
+    assert catalog.purpose is ModelPurpose.CHAT
+    assert "ort_genai" in catalog.compatibility["runtimes"]
+    assert catalog.runtime_requirements["minimum_ram"] == 1024

@@ -187,7 +187,7 @@ class ModelRegistry:
             "validation_state": installed.validation_state,
             "ownership": installed.ownership,
             "installed_at": installed.installed_at,
-            "metadata": dict(installed.metadata),
+            "metadata": installed.to_dict()["metadata"],
         }
 
 

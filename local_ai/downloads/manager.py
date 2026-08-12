@@ -420,7 +420,12 @@ class DownloadManager:
             validation_state="validated",
             ownership="user",
             installed_at=datetime.now(timezone.utc),
-            metadata={"source": model.source, "repository": model.repository},
+            metadata={
+                "source": model.source,
+                "repository": model.repository,
+                "compatibility": dict(model.compatibility),
+                "runtime_requirements": dict(model.runtime_requirements),
+            },
         )
         await self._registry.register(installed)
 

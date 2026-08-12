@@ -215,6 +215,30 @@ async def test_register_round_trips_metadata(registry):
 
 
 @pytest.mark.asyncio
+async def test_register_round_trips_nested_metadata_json_serializable(registry):
+    # 嵌套 dict 经 _freeze 后变成 MappingProxyType，落库必须深度普通化，
+    # 否则 LocalAIDB.insert_model 的 json.dumps 会抛 TypeError。
+    installed = _make_installed(
+        id="local:chat-model",
+        purpose=ModelPurpose.CHAT,
+        metadata={
+            "source": "modelscope",
+            "repository": "owner/chat",
+            "compatibility": {"runtimes": ["ort_genai"], "providers": ["cpu"]},
+            "runtime_requirements": {"minimum_ram": 1024, "recommended_ram": 2048},
+        },
+    )
+    await registry.register(installed)
+    fetched = await registry.get("local:chat-model")
+    assert fetched is not None
+    assert fetched.metadata["compatibility"]["runtimes"] == ("ort_genai",)
+    assert fetched.metadata["runtime_requirements"]["minimum_ram"] == 1024
+    # 落库序列化后，嵌套 dict/list 应还原为普通 dict/list（非 mappingproxy/tuple）
+    assert fetched.to_dict()["metadata"]["compatibility"]["runtimes"] == ["ort_genai"]
+    assert fetched.to_dict()["metadata"]["runtime_requirements"]["minimum_ram"] == 1024
+
+
+@pytest.mark.asyncio
 async def test_register_with_duplicate_id_raises(registry):
     installed = _make_installed(id="local:dup")
     await registry.register(installed)

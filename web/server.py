@@ -718,6 +718,25 @@ async def lifespan(app: FastAPI) -> AsyncIterator[Any]:
     except Exception as e:
         logger.warning("webui.watchdog_start_failed error={}", str(e))
 
+    # 周期刷新运行实例健康状态：设备热插拔/失联后自动降级 degraded/device_unavailable，
+    # 保证「可观测运行状态」完整落地（复审 Warning #2 闭环）。
+    # 无运行实例时 refresh_health 内部遍历为空，仅剩设备 scan 开销，60s 一次可接受。
+    try:
+        from core.background_tasks import _spawn as _spawn_bg
+        _instances = getattr(core, "local_ai_instances", None)
+        if _instances is not None:
+            async def _local_ai_health_loop():
+                import asyncio as _aio
+                while True:
+                    await _aio.sleep(60)
+                    try:
+                        await _instances.refresh_health()
+                    except Exception as _e:
+                        logger.debug("local_ai.health_refresh_failed error={}", _e)
+            app.state.local_ai_health_task = _spawn_bg(_local_ai_health_loop())
+    except Exception as e:
+        logger.warning("webui.local_ai_health_loop_start_failed error={}", str(e))
+
     yield
 
     # 停止 watchdog
@@ -869,6 +888,12 @@ async def _shutdown_lifespan(app: FastAPI, core: Any, owns_core: bool) -> None:
             _t.cancel()
             with suppress(asyncio.CancelledError, RuntimeError):
                 await _t
+    # 取消本地 AI 实例健康检查周期任务
+    _local_ai_health_task = getattr(app.state, "local_ai_health_task", None)
+    if _local_ai_health_task and not _local_ai_health_task.done():
+        _local_ai_health_task.cancel()
+        with suppress(asyncio.CancelledError, RuntimeError):
+            await _local_ai_health_task
     # Shutdown plugins
     plugin_mgr = getattr(app.state, "plugin_manager", None)
     if plugin_mgr:
