@@ -172,46 +172,6 @@ _REUNION_PATTERN = re.compile(
     re.IGNORECASE,
 )
 
-
-def _enhance_emotion_with_llm(emotion: dict, llm: dict) -> dict:
-    """用 LLM 深度情绪分析结果增强关键词层检测。
-
-    LLM 层返回更精准的 PAD 与深层需求（needs/style），关键词层保证 17 类
-    标签与 sticker 对齐。合并策略：
-    - PAD：优先 LLM（P/A/D 更精准），缺失时回退关键词层
-    - primary：LLM 标签可映射到统一枚举则采用，并同步 valence
-    - intensity：用 LLM 的 A（arousal）覆盖
-    - needs/style：附加字段，供后续情绪提示增强使用
-    """
-    if not llm:
-        return emotion
-    # PAD + intensity 增强
-    if all(k in llm for k in ("P", "A", "D")):
-        emotion["pad"] = {"P": llm["P"], "A": llm["A"], "D": llm["D"]}
-        emotion["intensity"] = max(0.0, min(1.0, float(llm["A"])))
-    # primary 增强：LLM 标签在统一别名表中则采用，并同步 valence
-    llm_primary = (llm.get("primary") or "").strip()
-    if llm_primary:
-        try:
-            from emotion.emotion_enum import EMOTION_ALIASES
-            if llm_primary in EMOTION_ALIASES:
-                emotion["primary"] = llm_primary
-                _val = EMOTION_ALIASES[llm_primary].value
-                if _val in ("happy", "excited", "love", "shy", "playful", "moved", "greeting"):
-                    emotion["valence"] = "positive"
-                elif _val in ("sad", "angry", "anxious", "fear", "confused", "pout"):
-                    emotion["valence"] = "negative"
-                else:
-                    emotion["valence"] = "neutral"
-        except ImportError:
-            pass
-    # needs/style 附加
-    if llm.get("needs"):
-        emotion["needs"] = llm["needs"]
-    if llm.get("style"):
-        emotion["style"] = llm["style"]
-    return emotion
-
 # G1: 项目硬约束 —— 所有时间函数使用 Asia/Shanghai 时区
 _SH_TZ = ZoneInfo("Asia/Shanghai")
 
@@ -1063,16 +1023,14 @@ class MessageProcessorMixin:
             self.context.klee_context = None
 
         emotion = detect_emotion(user_input)
-        # 情绪 LLM 深度分析增强（受 ENABLE_EMOTION_LLM 控制，默认关闭避免拖慢主路径）
+        # emotion_llm 后台 fire-and-forget（不阻塞主流程，结果异步更新 mental_state）
         try:
             from config import ENABLE_EMOTION_LLM
             if ENABLE_EMOTION_LLM:
-                from emotion.emotion_llm import detect_emotion_llm
-                _llm_emotion = await detect_emotion_llm(
-                    user_input, router=getattr(self, "router", None))
-                emotion = _enhance_emotion_with_llm(emotion, _llm_emotion)
+                _spawn(self._run_emotion_llm_background(
+                    user_input, getattr(ctx, "user_id", "")), timeout=2.0)
         except Exception:
-            logger.debug("emotion.llm_enhance_failed")
+            logger.debug("emotion.llm_spawn_failed")
         emotion_hint = build_emotion_hint(emotion)
         self.context.emotion_hint = emotion_hint
         ctx.last_user_emotion = emotion.get("primary", "")
@@ -1084,6 +1042,30 @@ class MessageProcessorMixin:
 
         emotion_label = emotion.get("primary", "")
         return emotion, emotion_label
+
+    async def _run_emotion_llm_background(self, user_input: str, user_id: str) -> None:
+        """emotion_llm 后台深度情绪分析（fire-and-forget）。
+
+        不阻塞主流程，LLM 结果异步覆盖 mental_state 的 user_last_emotion，
+        使后续请求的情绪引导提示使用更精准的 LLM 情绪标签。任何异常均吞掉。
+        """
+        try:
+            from emotion.emotion_llm import detect_emotion_llm
+            llm_emotion = await detect_emotion_llm(
+                user_input, router=getattr(self, "router", None))
+            if not llm_emotion or not llm_emotion.get("primary"):
+                return
+            from core.mental_state import get_mental_state_manager_if_exists
+            mgr = get_mental_state_manager_if_exists(user_id=user_id)
+            if mgr is not None and mgr.enabled:
+                mgr.update_short_term(
+                    emotion="",
+                    user_emotion=llm_emotion.get("primary", ""),
+                )
+                logger.debug("emotion.llm_background_updated",
+                             primary=llm_emotion.get("primary"))
+        except Exception:
+            logger.debug("emotion.llm_background_failed")
 
     async def _build_main_messages(self, user_input: Any, is_master: Any, image_data: Any,
                                      clean_input: Any, emotion: Any,
