@@ -556,7 +556,7 @@ class BackgroundTaskManager:
             _vec = getattr(self.memory, "vec", None)
             if _vec is None or not getattr(_vec, "enabled", False):
                 return
-            from core.dream_engine_v2 import DreamEngineV2, get_cognitive_memory
+            from core.dream_engine_v2 import get_dream_engine_v2, get_cognitive_memory
             import numpy as np
             cog = get_cognitive_memory()
             # 首次加载：从 DB 读记忆并计算 embedding 填充 CognitiveMemory
@@ -574,7 +574,8 @@ class BackgroundTaskManager:
                             emotion_label="",
                             session_id="dream",
                         )
-            dream = DreamEngineV2(cognitive_memory=cog)
+            # 复用单例（避免 _cycle_count 重置导致 DAE 阶段永不触发）
+            dream = get_dream_engine_v2()
             stats = await dream.run_cycle()
             logger.info("dream_engine_v2.cycle_done",
                         cycle=stats.get("cycle", 0),

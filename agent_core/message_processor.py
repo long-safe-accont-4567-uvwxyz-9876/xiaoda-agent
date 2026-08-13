@@ -1063,12 +1063,14 @@ class MessageProcessorMixin:
             self.context.klee_context = None
 
         emotion = detect_emotion(user_input)
-        # 情绪 LLM 深度分析增强（超时 500ms，失败/无 router 回退关键词结果）
+        # 情绪 LLM 深度分析增强（受 ENABLE_EMOTION_LLM 控制，默认关闭避免拖慢主路径）
         try:
-            from emotion.emotion_llm import detect_emotion_llm
-            _llm_emotion = await detect_emotion_llm(
-                user_input, router=getattr(self, "router", None))
-            emotion = _enhance_emotion_with_llm(emotion, _llm_emotion)
+            from config import ENABLE_EMOTION_LLM
+            if ENABLE_EMOTION_LLM:
+                from emotion.emotion_llm import detect_emotion_llm
+                _llm_emotion = await detect_emotion_llm(
+                    user_input, router=getattr(self, "router", None))
+                emotion = _enhance_emotion_with_llm(emotion, _llm_emotion)
         except Exception:
             logger.debug("emotion.llm_enhance_failed")
         emotion_hint = build_emotion_hint(emotion)

@@ -457,3 +457,20 @@ def get_cognitive_memory(dimensions: int = 512,
             episodic_capacity=episodic_capacity,
         )
     return _cognitive_singleton
+
+
+_dream_engine_singleton: DreamEngineV2 | None = None
+
+
+def get_dream_engine_v2() -> DreamEngineV2:
+    """获取全局 DreamEngineV2 单例（复用同一份 CognitiveMemory + cycle 计数）。
+
+    必须复用同一实例，否则每次 run_cycle 新建对象会重置 _cycle_count，
+    导致 DAE 阶段（每 5 周期一次）永远无法触发。
+    """
+    global _dream_engine_singleton
+    if _dream_engine_singleton is None:
+        _dream_engine_singleton = DreamEngineV2(
+            cognitive_memory=get_cognitive_memory(),
+        )
+    return _dream_engine_singleton
