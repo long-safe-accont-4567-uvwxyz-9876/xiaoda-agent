@@ -120,6 +120,10 @@ class StickerManager:
 
     EMOTION_PATTERN = re.compile(r'\[emotion:([a-z_]+)\]')
 
+    # should_send 概率：有明确情绪 70%、无情绪/neutral 40%，避免表情包泛滥
+    SEND_PROB_EMOTION = 0.7
+    SEND_PROB_NEUTRAL = 0.4
+
     def __init__(self, sticker_dir: Path | str) -> None:
         """初始化表情包管理器并扫描目录.
 
@@ -142,15 +146,25 @@ class StickerManager:
             except (json.JSONDecodeError, OSError):
                 logger.debug("sticker.description_parse_error", exc_info=True)
                 self._descriptions = {}
-        for emotion_dir in self._dir.iterdir():
-            if emotion_dir.is_dir():
+        try:
+            entries = list(self._dir.iterdir())
+        except OSError:
+            logger.warning("sticker.dir_scan_failed", dir=str(self._dir))
+            return
+        for emotion_dir in entries:
+            if not emotion_dir.is_dir():
+                continue
+            try:
                 files = [
                     f for f in emotion_dir.iterdir()
                     if f.suffix.lower() in (".png", ".jpg", ".jpeg", ".gif", ".webp")
                 ]
-                if files:
-                    # 以目录名为准（目录结构即情绪分类），不再根据文件名描述重分类
-                    self._cache[emotion_dir.name] = files
+            except OSError:
+                logger.warning("sticker.emotion_dir_scan_failed", dir=str(emotion_dir))
+                continue
+            if files:
+                # 以目录名为准（目录结构即情绪分类），不再根据文件名描述重分类
+                self._cache[emotion_dir.name] = files
         total = sum(len(v) for v in self._cache.values())
         logger.info("sticker.loaded", categories=len(self._cache), total=total)
 
@@ -233,8 +247,8 @@ class StickerManager:
         """
         if not self._cache:
             return False
-        # 有明确情绪时 100% 发送，neutral/无情绪时 90%
-        prob = 1.0 if detected_emotion and detected_emotion != "neutral" else 0.9
+        # 有明确情绪 70%、无情绪/neutral 40%（对齐 media_test 断言，避免表情包泛滥）
+        prob = self.SEND_PROB_EMOTION if detected_emotion and detected_emotion != "neutral" else self.SEND_PROB_NEUTRAL
         return random.random() < prob
 
     def get_sticker(self, emotion: str = "") -> Path | None:
@@ -254,18 +268,18 @@ class StickerManager:
         """
         if not self._cache:
             return None
+        # Emotion 枚举 → 字符串目录名（统一/非统一模式通用，避免 _cache 键类型不匹配）
+        if isinstance(emotion, Emotion):
+            emotion = STICKER_FALLBACK.get(emotion, emotion.value)
         # 优先直接匹配物理目录名（避免 greeting→happy, curious→confused 等错误降级）
         # 当 LLM 输出 [sticker:greeting] 或 detect_emotion 返回 "greeting" 时，
         # 应直接使用 greeting/ 目录，而非经 STICKER_FALLBACK 降级到 happy
         if emotion and isinstance(emotion, str) and emotion in self._cache:
             return random.choice(self._cache[emotion])
-        # 统一模式：Emotion 枚举 → STICKER_FALLBACK 映射
+        # 统一模式：字符串标签 → resolve_emotion → STICKER_FALLBACK 映射
         if emotion and is_unified():
-            if isinstance(emotion, Emotion):
-                emotion = STICKER_FALLBACK.get(emotion, "happy")
-            else:
-                resolved = resolve_emotion(str(emotion))
-                emotion = STICKER_FALLBACK.get(resolved, "happy")
+            resolved = resolve_emotion(str(emotion))
+            emotion = STICKER_FALLBACK.get(resolved, "happy")
         if emotion:
             # 优先从物理目录与情绪匹配的文件中选（目录名=情绪名）
             if self._cache.get(emotion):
