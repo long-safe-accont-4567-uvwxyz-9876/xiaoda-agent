@@ -20,6 +20,7 @@ import threading
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import Any
 
 from loguru import logger
 
@@ -41,6 +42,37 @@ def _is_enabled() -> bool:
     """
     val = os.getenv("MENTAL_STATE_ENABLED", "1").strip().lower()
     return val not in ("0", "false", "off", "no", "")
+
+
+def _safe_float(val: Any, default: float = 0.0) -> float:
+    """安全转 float，失败返回默认值（处理 null / 非法字符串）。"""
+    try:
+        return float(val)
+    except (TypeError, ValueError):
+        return default
+
+
+def _safe_str_list(val: Any) -> list[str]:
+    """安全转字符串列表：非 list 的字符串视为单元素，其他非法类型返回空。"""
+    if isinstance(val, list):
+        return [str(x) for x in val if x is not None]
+    if isinstance(val, str):
+        return [val] if val else []
+    return []
+
+
+def _safe_dict_list(val: Any) -> list[dict]:
+    """安全转 dict 列表：仅保留 dict 元素。"""
+    if isinstance(val, list):
+        return [x for x in val if isinstance(x, dict)]
+    return []
+
+
+def _safe_dict(val: Any) -> dict:
+    """安全转 dict：非 dict 返回空。"""
+    if isinstance(val, dict):
+        return val
+    return {}
 
 
 # ============================================================
@@ -130,32 +162,32 @@ class MentalState:
 
     @classmethod
     def from_dict(cls, d: dict) -> MentalState:
-        """从字典反序列化 (兼容缺失字段)."""
+        """从字典反序列化 (兼容缺失字段与类型损坏)."""
         if not d or not isinstance(d, dict):
             return cls()
-        L_data = d.get("L", {}) or {}
-        M_data = d.get("M", {}) or {}
-        S_data = d.get("S", {}) or {}
+        L_data = _safe_dict(d.get("L"))
+        M_data = _safe_dict(d.get("M"))
+        S_data = _safe_dict(d.get("S"))
         return cls(
             L=LongTermIdentity(
-                soul_content=L_data.get("soul_content", ""),
-                identity_content=L_data.get("identity_content", ""),
-                core_traits=list(L_data.get("core_traits", [])),
-                last_updated=float(L_data.get("last_updated", 0.0)),
+                soul_content=str(L_data.get("soul_content") or ""),
+                identity_content=str(L_data.get("identity_content") or ""),
+                core_traits=_safe_str_list(L_data.get("core_traits")),
+                last_updated=_safe_float(L_data.get("last_updated")),
             ),
             M=MediumTermState(
-                recent_themes=list(M_data.get("recent_themes", [])),
-                stress_events=list(M_data.get("stress_events", [])),
-                relationship_milestones=list(M_data.get("relationship_milestones", [])),
-                last_dream_at=float(M_data.get("last_dream_at", 0.0)),
+                recent_themes=_safe_str_list(M_data.get("recent_themes")),
+                stress_events=_safe_dict_list(M_data.get("stress_events")),
+                relationship_milestones=_safe_dict_list(M_data.get("relationship_milestones")),
+                last_dream_at=_safe_float(M_data.get("last_dream_at")),
             ),
             S=ShortTermEmotion(
-                current_emotion=S_data.get("current_emotion", ""),
-                user_last_emotion=S_data.get("user_last_emotion", ""),
-                user_last_pad=dict(S_data.get("user_last_pad", {}) or {}),
-                user_needs=list(S_data.get("user_needs", []) or []),
-                session_started_at=float(S_data.get("session_started_at", 0.0)),
-                emotion_history=list(S_data.get("emotion_history", [])),
+                current_emotion=str(S_data.get("current_emotion") or ""),
+                user_last_emotion=str(S_data.get("user_last_emotion") or ""),
+                user_last_pad=_safe_dict(S_data.get("user_last_pad")),
+                user_needs=_safe_str_list(S_data.get("user_needs")),
+                session_started_at=_safe_float(S_data.get("session_started_at")),
+                emotion_history=_safe_dict_list(S_data.get("emotion_history")),
             ),
         )
 
@@ -182,7 +214,7 @@ class MentalState:
             with open(path, encoding="utf-8") as f:
                 data = json.load(f)
             return cls.from_dict(data)
-        except (OSError, json.JSONDecodeError, ValueError) as e:
+        except (OSError, json.JSONDecodeError, ValueError, TypeError) as e:
             logger.warning(f"MentalState.load_failed path={path} error={e}")
             return cls()
 

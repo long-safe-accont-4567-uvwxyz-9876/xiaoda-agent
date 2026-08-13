@@ -1382,10 +1382,9 @@ def __getattr__(name: str) -> Any:
 ENABLE_J_SPACE_HOOKS = os.getenv("ENABLE_J_SPACE_HOOKS", "true").lower() == "true"
 
 # ── emotion_llm 深度情绪分析开关 ──────────────────────────────
-# LLM 深度情绪分析会在主消息路径上额外 await（最长 500ms 超时），
-# 默认关闭避免拖慢每条消息的响应（用户要求 10s 内响应）；需要更精准的
-# PAD + 深层需求时可开启。
-ENABLE_EMOTION_LLM = os.getenv("ENABLE_EMOTION_LLM", "false").lower() in ("1", "true", "yes")
+# LLM 深度情绪分析已在 fire-and-forget 模式下运行（不阻塞主路径），
+# 结果异步持久化到 mental_state（primary + PAD + needs）供下次请求使用。
+ENABLE_EMOTION_LLM = os.getenv("ENABLE_EMOTION_LLM", "true").lower() in ("1", "true", "yes")
 DIRECTION_REGISTRY_PATH = os.getenv("DIRECTION_REGISTRY_PATH", str(DATA_DIR / "direction_registry.json"))
 SIGNAL_STREAM_MAX_HISTORY = _safe_int(os.getenv("SIGNAL_STREAM_MAX_HISTORY"), 1000)
 INTERVENTION_DEFAULT_COOLDOWN = _safe_float(os.getenv("INTERVENTION_DEFAULT_COOLDOWN"), 30.0)
