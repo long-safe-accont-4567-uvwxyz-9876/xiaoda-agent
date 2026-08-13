@@ -315,8 +315,8 @@ class StickerManager:
             表情包路径, 无可用返回 None
         """
         target_emotion = detected_emotion or self.detect_emotion(text)
-        if not target_emotion or target_emotion == "neutral":
-            # 无明确情绪时更激进：兜底到"生动"情绪而非平淡 neutral
+        if not target_emotion:
+            # 仅在 detect_emotion 无法识别情绪时兜底到"生动"情绪；真正的平静(neutral)保留
             target_emotion = self._pick_lively_emotion()
         return self.pick(target_emotion)
 
