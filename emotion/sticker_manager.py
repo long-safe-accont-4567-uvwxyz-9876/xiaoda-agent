@@ -120,9 +120,9 @@ class StickerManager:
 
     EMOTION_PATTERN = re.compile(r'\[emotion:([a-z_]+)\]')
 
-    # should_send 概率：有明确情绪 70%、无情绪/neutral 40%，避免表情包泛滥
-    SEND_PROB_EMOTION = 0.7
-    SEND_PROB_NEUTRAL = 0.4
+    # should_send 概率：有明确情绪 85%、无情绪/neutral 50%，表情包是核心特色保持较高发送率
+    SEND_PROB_EMOTION = 0.85
+    SEND_PROB_NEUTRAL = 0.5
 
     def __init__(self, sticker_dir: Path | str) -> None:
         """初始化表情包管理器并扫描目录.
@@ -247,7 +247,7 @@ class StickerManager:
         """
         if not self._cache:
             return False
-        # 有明确情绪 70%、无情绪/neutral 40%（对齐 media_test 断言，避免表情包泛滥）
+        # 有明确情绪 85%、无情绪/neutral 50%（表情包是核心特色）
         prob = self.SEND_PROB_EMOTION if detected_emotion and detected_emotion != "neutral" else self.SEND_PROB_NEUTRAL
         return random.random() < prob
 
