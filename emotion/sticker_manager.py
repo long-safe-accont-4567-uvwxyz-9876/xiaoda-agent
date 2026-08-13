@@ -124,6 +124,11 @@ class StickerManager:
     SEND_PROB_EMOTION = 1.0
     SEND_PROB_NEUTRAL = 0.9
 
+    # 无明确情绪时 pick_by_text 兜底的"生动"情绪（比平淡 neutral 更活泼）
+    LIVELY_EMOTIONS: ClassVar[tuple[str, ...]] = (
+        "happy", "excited", "playful", "love", "curious", "moved",
+    )
+
     def __init__(self, sticker_dir: Path | str) -> None:
         """初始化表情包管理器并扫描目录.
 
@@ -310,9 +315,17 @@ class StickerManager:
             表情包路径, 无可用返回 None
         """
         target_emotion = detected_emotion or self.detect_emotion(text)
-        if not target_emotion:
-            target_emotion = "neutral"
+        if not target_emotion or target_emotion == "neutral":
+            # 无明确情绪时更激进：兜底到"生动"情绪而非平淡 neutral
+            target_emotion = self._pick_lively_emotion()
         return self.pick(target_emotion)
+
+    def _pick_lively_emotion(self) -> str:
+        """从"生动"情绪中随机选一个（优先目录中存在的），无则回退 neutral。"""
+        available = [e for e in self.LIVELY_EMOTIONS if e in self._cache]
+        if available:
+            return random.choice(available)
+        return "neutral"
 
     def get_description(self, filepath: Path) -> str:
         """获取表情包描述：优先 descriptions.json，否则从文件名提取.
