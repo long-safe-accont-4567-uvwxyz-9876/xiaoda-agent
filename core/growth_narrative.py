@@ -20,6 +20,8 @@ from typing import TYPE_CHECKING
 
 from loguru import logger
 
+from utils.free_model_backend import FreeModelBackend
+
 
 def _get_local_now() -> datetime.datetime:
     """获取本地时间（使用显式时区，修复 Windows/Docker 中系统时区不正确的问题）。"""
@@ -45,6 +47,14 @@ class GrowthNarrative:
         self._task: asyncio.Task | None = None
         self._running = False
         self._last_run_date: str = ""  # YYYY-MM-DD，防止重复触发
+        self._free = FreeModelBackend()
+        self._free.set_router(getattr(core, "router", None))
+
+    def set_backend(self, backend: str, local_model: str | None = None) -> None:
+        """热更新后端：local=走本地模型；api/auto=走硅基流动免费模型。"""
+        self._free.set_backend(backend)
+        if local_model is not None:
+            self._free.set_local_model(local_model)
 
     def start(self) -> None:
         if self._task is None:
@@ -163,14 +173,18 @@ class GrowthNarrative:
 
 语气要自然、有感情，像在写日记。不要加任何前缀，直接写叙事内容。"""
 
+        messages = [
+            {"role": "system", "content": "你是小妲，在写每日成长日记。"},
+            {"role": "user", "content": prompt},
+        ]
+        result = await self._free.call(messages, temperature=0.7, max_tokens=512)
+        if result is not None:
+            return result.strip()
         try:
             result = await asyncio.wait_for(
                 self.core.router.route(
                     "memory_encoding",
-                    [
-                        {"role": "system", "content": "你是小妲，在写每日成长日记。"},
-                        {"role": "user", "content": prompt},
-                    ],
+                    messages,
                     temperature=0.7,
                     max_tokens=512,
                 ),

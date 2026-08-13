@@ -547,6 +547,36 @@ async def _test_ollama(base_url: str) -> tuple[bool, str]:
         return False, f"Ollama 请求失败: {e}"
 
 
+async def _test_llama_cpp(base_url: str) -> tuple[bool, str]:
+    """测试 llama.cpp server 连通性（OpenAI 兼容 /v1/models 端点）。"""
+    # URL 规范化：OpenAI 兼容端点需以 /v1 结尾
+    import urllib.parse as _urlparse
+    _parsed = _urlparse.urlparse(base_url)
+    _path = _parsed.path.rstrip("/")
+    if not _path.endswith("/v1"):
+        base_url = f"{base_url.rstrip('/')}/v1"
+    # SSRF 防护：llama.cpp 是本地部署，允许 localhost / 127.0.0.1 / host.docker.internal
+    from security.ssrf_guard import validate_url, is_local_host
+    if not is_local_host(base_url):
+        allowed, reason = validate_url(base_url)
+        if not allowed:
+            return False, f"URL 安全检查失败: {reason}"
+    try:
+        async with httpx.AsyncClient(timeout=_TIMEOUT) as client:
+            resp = await client.get(f"{base_url.rstrip('/')}/models")
+            if resp.status_code == 200:
+                data = resp.json()
+                models = data.get("data", [])
+                return True, f"llama.cpp 可用，发现 {len(models)} 个模型"
+            return False, f"llama.cpp 返回 HTTP {resp.status_code}，请确认 llama.cpp server 已启动且 URL 正确（需 /v1 后缀）"
+    except httpx.ConnectError:
+        return False, f"无法连接到 llama.cpp 服务（{base_url}），请确认 llama.cpp server 已启动"
+    except httpx.TimeoutException:
+        return False, "llama.cpp 连接超时"
+    except Exception as e:
+        return False, f"llama.cpp 请求失败: {e}"
+
+
 async def test_single_key(key_name: str, key_value: str, extra: dict | None = None) -> tuple[bool, str]:
     """根据 key_name 调用对应的测试函数，返回 (success, message)。"""
     extra = extra or {}
@@ -610,6 +640,9 @@ async def test_single_key(key_name: str, key_value: str, extra: dict | None = No
 
     if key_name == "OLLAMA_BASE_URL":
         return await _test_ollama(key_value)
+
+    if key_name == "LLAMA_CPP_BASE_URL":
+        return await _test_llama_cpp(key_value)
 
     # 不需要调用外部 API 的配置项，简单校验即可
     _NO_API_TEST_KEYS = {"WEBUI_PASSWORD"}
@@ -962,6 +995,10 @@ _KNOWN_PROVIDERS = {
         "id": "ollama", "label": "Ollama 本地大模型", "format": "openai",
         "base_url": "http://localhost:11434/v1",
     },
+    "LLAMA_CPP_BASE_URL": {
+        "id": "llama.cpp", "label": "llama.cpp 本地接口", "format": "openai",
+        "base_url": "http://localhost:8080/v1",
+    },
 }
 
 
@@ -977,11 +1014,11 @@ async def _auto_register_providers(updates: dict) -> list[Any]:
 
     try:
         for env_key, provider_info in _KNOWN_PROVIDERS.items():
-            if env_key == "OLLAMA_BASE_URL":
+            if env_key in ("OLLAMA_BASE_URL", "LLAMA_CPP_BASE_URL"):
                 base_url = updates.get(env_key, "").strip()
                 if not base_url:
                     continue
-                api_key = "ollama"
+                api_key = provider_info["id"]  # 本地部署无需真实 Key，用 provider id 占位
             else:
                 api_key = updates.get(env_key, "").strip()
                 if not api_key:

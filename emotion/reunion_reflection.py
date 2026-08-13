@@ -15,6 +15,19 @@ import asyncio
 from typing import Any, Optional
 from loguru import logger
 
+from utils.free_model_backend import FreeModelBackend
+
+
+# LLM 功能节点后端切换器，供 WebUI 功能节点在「本地模型 / 远程免费模型」间切换
+_free = FreeModelBackend()
+
+
+def set_backend(backend: str, local_model: str | None = None) -> None:
+    """热更新后端：local=走本地模型；api/auto=走硅基流动免费模型。"""
+    _free.set_backend(backend)
+    if local_model is not None:
+        _free.set_local_model(local_model)
+
 
 async def generate_reunion_message(
     idle_seconds: float,
@@ -78,8 +91,9 @@ async def generate_reunion_message(
     else:
         style_hint = f"用户离开了{idle_desc}，自然地欢迎回来，可以提及之前的话题。"
 
-    # 尝试 LLM 生成
-    if router:
+    # 尝试 LLM 生成（优先远程免费模型，失败降级主 LLM router）
+    if router or _free.api_available:
+        _free.set_router(router)
         try:
             system_msg = (
                 f"你是小妲，温柔可爱的AI伙伴。用户{address_term}回来了，离开了{idle_desc}。"
@@ -95,10 +109,14 @@ async def generate_reunion_message(
                 {"role": "system", "content": system_msg},
                 {"role": "user", "content": "（回来了）"},
             ]
-            result = await asyncio.wait_for(
-                router.route("memory_encoding", messages, temperature=0.8),
-                timeout=10,
-            )
+
+            async def _generate():
+                raw = await _free.call(messages, temperature=0.8, max_tokens=128)
+                if raw is None and router:
+                    raw = await router.route("memory_encoding", messages, temperature=0.8)
+                return raw
+
+            result = await asyncio.wait_for(_generate(), timeout=10)
             text = result if isinstance(result, str) else (
                 result.choices[0].message.content if hasattr(result, 'choices') else str(result)
             )

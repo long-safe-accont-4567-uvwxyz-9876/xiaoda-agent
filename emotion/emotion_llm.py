@@ -19,8 +19,20 @@ from typing import Any
 
 from loguru import logger
 
+from utils.free_model_backend import FreeModelBackend
+
 # 超时时间（秒）
 LLM_EMOTION_TIMEOUT = 0.5  # 500ms
+
+# LLM 功能节点后端切换器，供 WebUI 功能节点在「本地模型 / 远程免费模型」间切换
+_free = FreeModelBackend()
+
+
+def set_backend(backend: str, local_model: str | None = None) -> None:
+    """热更新后端：local=走本地模型；api/auto=走硅基流动免费模型。"""
+    _free.set_backend(backend)
+    if local_model is not None:
+        _free.set_local_model(local_model)
 
 
 async def detect_emotion_llm(
@@ -57,6 +69,8 @@ async def detect_emotion_llm(
         logger.debug("emotion_llm.no_router")
         return {}
 
+    _free.set_router(router)
+
     prompt = _build_prompt(text, context)
     messages = [
         {"role": "system", "content": _SYSTEM_PROMPT},
@@ -64,12 +78,15 @@ async def detect_emotion_llm(
     ]
 
     try:
-        result = await asyncio.wait_for(
-            # emotion 是轻量分类任务，用 emotion_analysis（max_tokens=1024, timeout=10s）足够
-            # chat_flash 已合并进 chat，改用专门的 emotion_analysis task 避免浪费配额
-            router.route("emotion_analysis", messages, temperature=0.3),
-            timeout=LLM_EMOTION_TIMEOUT,
-        )
+        async def _route():
+            raw = await _free.call(messages, temperature=0.3, max_tokens=512)
+            if raw is None:
+                # emotion 是轻量分类任务，用 emotion_analysis（max_tokens=1024, timeout=10s）足够
+                # chat_flash 已合并进 chat，改用专门的 emotion_analysis task 避免浪费配额
+                raw = await router.route("emotion_analysis", messages, temperature=0.3)
+            return raw
+
+        result = await asyncio.wait_for(_route(), timeout=LLM_EMOTION_TIMEOUT)
         raw_text = result if isinstance(result, str) else (
             result.choices[0].message.content if hasattr(result, 'choices') else str(result)
         )

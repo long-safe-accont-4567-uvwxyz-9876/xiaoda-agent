@@ -492,6 +492,17 @@ class AIQQBot(botpy.Client):
                         core=self.agent,
                     )
                     await self.nudge_engine.start()
+                    # 恢复 nudge 功能节点的后端/本地模型选择（on_ready 晚于 lifespan 的
+                    # restore，若 bot 未就绪 restore 会跳过，这里在就绪后补一次恢复）
+                    try:
+                        from web.local_deploy_nodes import get_backend, get_local_model
+                        _cfg = self._get_config_service()
+                        if _cfg is not None:
+                            _nudge_backend = get_backend(_cfg, "nudge")
+                            _nudge_model = get_local_model(_cfg, "nudge") or None
+                            self.nudge_engine.set_backend(_nudge_backend, _nudge_model)
+                    except Exception as _e:
+                        logger.debug("nudge.backend_restore_failed error={}", _e)
                 except (ImportError, AttributeError, OSError, RuntimeError) as e:
                     logger.warning("nudge.init_failed", error=str(e))
 

@@ -40,6 +40,15 @@ class _BenchmarkCancelToken:
         return
 
 
+def _norm_model_id(model_id: Any) -> str:
+    """规范化模型 id：去掉内置/本地的 id 前缀（builtin:/local:），用于匹配展示名。"""
+    if isinstance(model_id, str) and ":" in model_id:
+        prefix, name = model_id.split(":", 1)
+        if prefix in ("builtin", "local"):
+            return name
+    return str(model_id)
+
+
 class InstanceManager:
     def __init__(
         self,
@@ -343,6 +352,38 @@ class InstanceManager:
                 )
             self.bind_route(selected_id, route)
         return selected_id, runtime
+
+    async def acquire_runtime_for_model(
+        self,
+        model_id: str,
+        route: str,
+    ) -> tuple[str, RuntimeAdapter] | None:
+        """按指定模型定位运行实例的 runtime（供功能节点独立选择本地模型）。
+
+        与 acquire_runtime 不同，不依赖全局按 purpose 的选中实例，而是直接按
+        model_id 查找已启动实例。model_id 兼容 registry id（builtin:/local: 前缀）
+        与规范化名。实例未启动/不健康时返回 None。
+        """
+        target = _norm_model_id(model_id)
+        with self._state_lock:
+            instance_id = self._model_instances.get(model_id)
+            if instance_id is None:
+                for mid, iid in self._model_instances.items():
+                    if _norm_model_id(mid) == target:
+                        instance_id = iid
+                        break
+            instance = self._instances.get(instance_id) if instance_id else None
+            runtime = self._runtimes.get(instance_id) if instance_id else None
+        if instance is None or runtime is None:
+            return None
+        if (
+            instance.state != "running"
+            or instance.health != "healthy"
+            or not await self._run_sync(instance.model_id, runtime.health)
+        ):
+            return None
+        self.bind_route(instance_id, route)
+        return instance_id, runtime
 
     def release_runtime(self, instance_id: str, route: str) -> None:
         self.unbind_route(instance_id, route)

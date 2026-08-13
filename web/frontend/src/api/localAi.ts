@@ -11,7 +11,7 @@ export interface ModelNode {
   desc: string
   api_model: string
   local_desc: string
-  /** 本地实际使用的模型名（如 bge-small-zh-v1.5；生成型节点为主 LLM） */
+  /** 本地实际使用的模型名（如 bge-small-zh-v1.5；生成型节点为本地对话小模型） */
   local_model: string
   default: ModelNodeBackend
   backend: ModelNodeBackend

@@ -95,6 +95,17 @@
       "doc_note": "Ollama 本地部署，无固定上限（视本地模型而定）。模型名映射机制：路由把工作流/云模型名翻译为本地模型名后再真实转发给本地 Ollama（OLLAMA_BASE_URL，如 http://localhost:11434/v1），避免 model not found。default_model 是云模型名（含 / 的 org/model 名）回退到的本地模型。仅当 OLLAMA_BASE_URL 环境变量显式配置时才启用，不默认注册",
       "supports_vision": false,
       "supports_tools": true
+    },
+    "llama.cpp": {
+      "protocol": "openai_compatible",
+      "environment_aliases": ["LLAMA_CPP_API_KEY"],
+      "base_url_default": "",
+      "max_tokens_cap": null,
+      "default_model": "",
+      "doc_url": "https://github.com/ggml-org/llama.cpp",
+      "doc_note": "本地 llama.cpp server（OpenAI 兼容接口，无需 API Key）。仅当 LLAMA_CPP_BASE_URL 环境变量显式配置时才启用，不默认注册；有配置就用，没有就不启用。",
+      "supports_vision": false,
+      "supports_tools": true
     }
   },
   "_cross_provider_fallback": {

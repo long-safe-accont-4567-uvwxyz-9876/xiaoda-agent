@@ -167,8 +167,8 @@ async def _determine_free(provider_id: str, model_id: str, item: dict) -> bool:
         # 定价数据获取失败时，无法确认 → 付费
         return False
 
-    # Ollama 本地部署，永远免费
-    if provider_id == "ollama":
+    # Ollama / llama.cpp 本地部署，永远免费
+    if provider_id in ("ollama", "llama.cpp"):
         return True
 
     # Agnes 免费平台

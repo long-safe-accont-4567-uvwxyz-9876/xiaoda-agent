@@ -203,6 +203,13 @@ OPTIONAL_KEYS = [
         "url": "https://ollama.com",
         "url_desc": "下载安装 Ollama",
     },
+    {
+        "key": "LLAMA_CPP_BASE_URL",
+        "label": "llama.cpp 本地接口",
+        "desc": "本地 llama.cpp server 服务地址（OpenAI 兼容，需带 /v1 后缀），用于接入本地大模型。示例：http://localhost:8080/v1。填入后可在聊天和 Agent 配置中切换使用。本地部署无需 API Key，留空即可。",
+        "url": "https://github.com/ggml-org/llama.cpp",
+        "url_desc": "llama.cpp 项目主页",
+    },
 ]
 
 ALL_KEYS = REQUIRED_KEYS + OPTIONAL_KEYS

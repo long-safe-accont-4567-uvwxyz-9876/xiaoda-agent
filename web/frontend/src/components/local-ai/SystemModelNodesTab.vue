@@ -1,7 +1,8 @@
 <script setup lang="ts">
-import { computed, onMounted, ref } from 'vue'
+import { computed, onMounted, ref, watch } from 'vue'
 import { NButton, NTag, NEmpty, useMessage } from 'naive-ui'
 import { useLocalAiStore, type ModelNode } from '../../stores/localAi'
+import StoragePickerDialog from './StoragePickerDialog.vue'
 
 const store = useLocalAiStore()
 const message = useMessage()
@@ -10,6 +11,11 @@ const loading = ref(false)
 const saving = ref('')
 /** 展开本地模型候选的节点（点击「本地模型」只展开，不切换） */
 const localOpen = ref<Record<string, boolean>>({})
+/** 正在下载的候选模型 id（用于显示 loading） */
+const downloadingModel = ref('')
+/** 下载目录选择对话框 */
+const showStorage = ref(false)
+const pendingModelId = ref('')
 
 // 按用途分组展示（每个分组是一个独立的功能区）
 const GROUPS: Array<{ key: string; title: string; sub: string; icon: string; kinds: ModelNode['kind'][] }> = [
@@ -86,6 +92,55 @@ async function runLocalModel(node: ModelNode, modelId: string) {
   }
 }
 
+// ── 目录候选一键下载（未下载灰 → 下载 → 已安装白） ──
+function createRequestId() {
+  return store.createRequestId()
+}
+
+async function doDownload(modelId: string, destination: string) {
+  downloadingModel.value = modelId
+  try {
+    await store.download({ model_id: modelId, destination, request_id: createRequestId() })
+    pendingModelId.value = ''
+    message.success(`已开始下载 ${modelId}，完成后会自动进入候选列表`)
+  } catch (error) {
+    message.error(error instanceof Error ? error.message : String(error))
+  } finally {
+    downloadingModel.value = ''
+  }
+}
+
+async function downloadLocalModel(modelId: string) {
+  if (downloadingModel.value) return
+  pendingModelId.value = modelId
+  if (store.defaultStorage) {
+    try {
+      const validation = await store.validateStorage(store.defaultStorage, 0)
+      if (validation.writable && !validation.error) {
+        await doDownload(modelId, validation.path)
+        return
+      }
+      message.warning(validation.error || validation.reason || '默认目录不可用，请重新选择')
+    } catch {
+      message.warning('默认目录不可用，请重新选择')
+    }
+  }
+  showStorage.value = true
+}
+
+function selectStorage(path: string) {
+  showStorage.value = false
+  if (pendingModelId.value) void doDownload(pendingModelId.value, path)
+}
+
+// 下载完成 → 自动刷新节点候选（未下载灰 → 已安装白）
+watch(
+  () => store.downloads.filter(d => d.state === 'completed').length,
+  (count, prev) => {
+    if (count > (prev ?? 0)) void load()
+  },
+)
+
 onMounted(load)
 </script>
 
@@ -139,13 +194,13 @@ onMounted(load)
               </button>
             </div>
 
-            <!-- 展开候选：已安装模型列表；没有就显示「没有模型」 -->
+            <!-- 展开候选：已安装（白，可运行）+ 目录未下载（灰，一键下载） -->
             <div v-if="localOpen[node.id]" class="local-panel">
               <template v-if="node.local_models.length">
-                <p class="lm-title">选择已安装的模型运行（切换后常驻，重启自动恢复）：</p>
+                <p class="lm-title">选择模型：已安装可直接运行，灰色未下载可一键下载：</p>
                 <div class="local-models">
                   <button
-                    v-for="model in node.local_models"
+                    v-for="model in node.local_models.filter(m => m.installed)"
                     :key="model.id"
                     class="lm-item"
                     :class="{ active: node.backend === 'local' && node.local_model === model.id }"
@@ -159,15 +214,31 @@ onMounted(load)
                       <span v-if="model.ownership === 'bundled'" class="lm-builtin">内置</span>
                     </span>
                   </button>
+                  <button
+                    v-for="model in node.local_models.filter(m => !m.installed)"
+                    :key="model.id"
+                    class="lm-item lm-item-pending"
+                    :disabled="downloadingModel !== ''"
+                    @click="downloadLocalModel(model.id)"
+                  >
+                    <span class="lm-name">{{ model.id }}</span>
+                    <span class="lm-tags">
+                      <n-tag size="tiny" :bordered="false" type="info">{{ purposeLabel(model.purpose) }}</n-tag>
+                      <n-tag size="tiny" :bordered="false" type="warning">暂未下载</n-tag>
+                      <n-tag size="tiny" :bordered="false" type="info">{{ downloadingModel === model.id ? '下载中…' : '点击下载' }}</n-tag>
+                    </span>
+                  </button>
                 </div>
               </template>
-              <p v-else class="lm-empty">没有模型。去「模型广场」下载{{ group.title === '生成改写' ? '对话' : '' }}类模型后，这里会自动出现候选。</p>
+              <p v-else class="lm-empty">没有模型候选。</p>
             </div>
           </div>
         </div>
       </section>
     </template>
     <n-empty v-else description="功能节点加载失败或为空" />
+
+    <StoragePickerDialog :show="showStorage" :required-bytes="0" @select="selectStorage" @cancel="showStorage = false" />
   </div>
 </template>
 
@@ -210,4 +281,6 @@ onMounted(load)
 .lm-tags { display: inline-flex; align-items: center; gap: 4px; flex-wrap: wrap; }
 .lm-builtin { font-size: 10.5px; color: #8fe560; font-weight: 700; }
 .lm-empty { margin: 0; color: var(--moon-dim); font-size: 12.5px; }
+.lm-item-pending { opacity: 0.62; background: rgba(255, 255, 255, 0.55); border-style: dashed; }
+.lm-item-pending:hover { opacity: 0.9; }
 </style>

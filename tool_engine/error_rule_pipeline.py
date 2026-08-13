@@ -20,6 +20,7 @@ import httpx
 from loguru import logger
 
 from utils.http_pool import get_shared_client
+from utils.free_model_backend import call_local_model
 
 
 # 提取 prompt — 让 LLM 从一次失败中提取一条最关键的预防规则
@@ -81,8 +82,9 @@ class ErrorRulePipeline:
         self._free_base_url = "https://api.siliconflow.cn/v1"
         self._free_model = "THUDM/GLM-4-9B-0414"  # 非思考模型，避免 Z1 思考碎片
         self._disabled = False          # backend=off：完全禁用
-        self._backend = "auto"          # auto/local/api/off（local=走主 LLM）
+        self._backend = "auto"          # auto/local/api/off（local=走本地模型）
         self._backup_free_api_key = ""  # backend=local 时的 key 备份
+        self._local_model = None        # 功能节点独立选择的本地模型（None=全局共享）
 
     def set_free_model_client(self, api_key: str, base_url: str, model: str) -> None:
         """配置硅基流动免费模型客户端（与 InstinctManager 接口一致）"""
@@ -90,11 +92,13 @@ class ErrorRulePipeline:
         self._free_base_url = base_url
         self._free_model = model
 
-    def set_backend(self, backend: str) -> None:
-        """热更新后端选择：off=禁用；local=禁用免费模型走主 LLM；api/auto=恢复免费模型。"""
+    def set_backend(self, backend: str, local_model: str | None = None) -> None:
+        """热更新后端选择：off=禁用；local=走本地模型；api/auto=走免费模型。"""
         if backend not in ("auto", "local", "api", "off"):
             return
         self._backend = backend
+        if local_model is not None:
+            self._local_model = local_model
         if backend == "off":
             self._disabled = True
             return
@@ -109,7 +113,11 @@ class ErrorRulePipeline:
 
     async def _call_free_model(self, messages: list, temperature: float = 0.3,
                                 max_tokens: int = 200) -> str | None:
-        """调用硅基流动免费模型。失败返回 None。"""
+        """按后端调用：local=本地模型；api/auto=免费模型。失败返回 None。"""
+        if self._backend == "local":
+            return await call_local_model(
+                self.router, messages, temperature, max_tokens, model_id=self._local_model
+            )
         if not self._free_api_key:
             return None
         try:

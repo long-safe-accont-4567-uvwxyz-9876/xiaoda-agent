@@ -9,6 +9,7 @@ from loguru import logger
 
 from db.db_analytics import AnalyticsDB
 from utils.llm_cleanup import strip_thinking as _strip_thinking
+from utils.free_model_backend import FreeModelBackend
 from config import get_agent_display_name, get_temperature
 import contextlib
 
@@ -63,6 +64,14 @@ class NudgeEngine:
 
         self._portrait_manager = portrait_manager
         self._config_service = config_service
+        self._free = FreeModelBackend()
+        self._free.set_router(router)
+
+    def set_backend(self, backend: str, local_model: str | None = None) -> None:
+        """热更新后端：local=走本地模型；api/auto=走硅基流动免费模型。"""
+        self._free.set_backend(backend)
+        if local_model is not None:
+            self._free.set_local_model(local_model)
 
     async def start(self) -> None:
         self._running = True
@@ -372,11 +381,13 @@ class NudgeEngine:
                     {"role": "system", "content": system_msg},
                     {"role": "user", "content": user_msg},
                 ]
-                result = await asyncio.wait_for(
-                    self._router.route("memory_encoding", messages, temperature=get_temperature(default=0.9)),
-                    timeout=30,
-                )
-                greeting = result if isinstance(result, str) else result.choices[0].message.content or ""
+                result = await self._free.call(messages, temperature=get_temperature(default=0.9))
+                if result is None:
+                    result = await asyncio.wait_for(
+                        self._router.route("memory_encoding", messages, temperature=get_temperature(default=0.9)),
+                        timeout=30,
+                    )
+                greeting = result if isinstance(result, str) else (result.choices[0].message.content if hasattr(result, "choices") else "") or ""
 
             logger.debug("nudge.raw_llm_output raw={}", greeting[:200])
             greeting = _strip_thinking(greeting, context="nudge").strip()

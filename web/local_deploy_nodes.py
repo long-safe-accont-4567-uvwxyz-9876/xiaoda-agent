@@ -3,7 +3,7 @@
 system 服务节点——RAG 链路与系统内部 AI 功能依赖的免费模型入口（主 LLM 除外）。
 每个节点在两种后端之间选择（config.local_deploy.nodes.<id> 持久化）：
 
-- local: 强制本地（编码型=本地 ONNX 模型；生成型=主 LLM 执行），长驻服务、重启自动恢复
+- local: 强制本地（编码型=本地 ONNX 模型；生成型=本地对话小模型），长驻服务、重启自动恢复
 - api:   强制远程 API（硅基流动免费模型），并停止该节点的本地推理常驻
 
 （auto/off 为历史默认值与内部禁用值，前端不再暴露。）
@@ -20,7 +20,7 @@ from loguru import logger
 # 合法后端值
 _BACKENDS = ("auto", "local", "api", "off")
 
-# 节点注册表：kind=encoder 编码型（本地有专有模型）/ generative 生成型（本地=主 LLM）
+# 节点注册表：kind=encoder 编码型（本地有专有模型）/ generative 生成型（本地=对话小模型）
 NODES: list[dict[str, Any]] = [
     {
         "id": "embedding",
@@ -91,6 +91,86 @@ NODES: list[dict[str, Any]] = [
         "local_desc": "",
         "default": "api",
     },
+    {
+        "id": "emotion_llm",
+        "name": "情绪深度分析",
+        "kind": "generative",
+        "desc": "LLM 情绪 PAD 分析与深层需求提取",
+        "api_model": "硅基流动免费模型",
+        "local_model": "",
+        "local_desc": "本地部署的对话小模型",
+        "default": "api",
+    },
+    {
+        "id": "portrait",
+        "name": "用户画像",
+        "kind": "generative",
+        "desc": "用户画像整合与更新（memory_encoding）",
+        "api_model": "硅基流动免费模型",
+        "local_model": "",
+        "local_desc": "本地部署的对话小模型",
+        "default": "api",
+    },
+    {
+        "id": "nudge",
+        "name": "主动问候",
+        "kind": "generative",
+        "desc": "主动问候 / 轻推生成（nudge）",
+        "api_model": "硅基流动免费模型",
+        "local_model": "",
+        "local_desc": "本地部署的对话小模型",
+        "default": "api",
+    },
+    {
+        "id": "reunion",
+        "name": "重聚反思",
+        "kind": "generative",
+        "desc": "用户回来时的重聚欢迎语",
+        "api_model": "硅基流动免费模型",
+        "local_model": "",
+        "local_desc": "本地部署的对话小模型",
+        "default": "api",
+    },
+    {
+        "id": "growth",
+        "name": "成长叙事",
+        "kind": "generative",
+        "desc": "每日成长叙事生成",
+        "api_model": "硅基流动免费模型",
+        "local_model": "",
+        "local_desc": "本地部署的对话小模型",
+        "default": "api",
+    },
+    {
+        "id": "memory_distill",
+        "name": "记忆蒸馏",
+        "kind": "generative",
+        "desc": "旧记忆压缩为摘要（memory_encoding）",
+        "api_model": "硅基流动免费模型",
+        "local_model": "",
+        "local_desc": "本地部署的对话小模型",
+        "default": "api",
+    },
+    {
+        "id": "spontaneous_recall",
+        "name": "自发回忆",
+        "kind": "generative",
+        "desc": "空闲时随机回忆生成内心独白",
+        "api_model": "硅基流动免费模型",
+        "local_model": "",
+        "local_desc": "本地部署的对话小模型",
+        "default": "api",
+    },
+    {
+        "id": "dream",
+        "name": "梦境整合",
+        "kind": "generative",
+        "desc": "梦境 6 阶段偏好结晶（LLM 蒸馏）",
+        "api_model": "硅基流动免费模型",
+        "local_model": "",
+        "local_desc": "本地部署的对话小模型",
+        "default": "api",
+    },
 ]
 
 _NODE_MAP = {node["id"]: node for node in NODES}
@@ -118,7 +198,7 @@ def set_backend(cfg: Any, node_id: str, backend: str, local_model: str | None = 
     """校验并持久化节点后端选择，返回归一化后的值。
 
     选择 local 时可指定具体本地模型（local_model，如已安装的 bge 仓库）；
-    未指定时使用节点默认本地模型（内置模型 / 主 LLM）。
+    未指定时使用节点默认本地模型（内置模型 / 对话小模型）。
     """
     if node_id not in _NODE_MAP:
         raise ValueError(f"unknown model node: {node_id}")
@@ -296,17 +376,36 @@ async def restore_local_instances(core: Any, cfg: Any) -> None:
         await ensure_local_instance(core, node_id, local_model)
 
 
+def _node_catalog_purpose(node: dict[str, Any]) -> str | None:
+    """功能节点 → 目录（catalog）用途，用于把「已收录但未下载」的目录候选并入节点候选列表。
+
+    - embedding 节点 → embedding
+    - reranker 节点 → reranker
+    - 生成型节点 → chat
+    - asr 等其他节点暂无目录预置，返回 None（不并入）
+    """
+    node_id = node["id"]
+    if node_id == "embedding":
+        return "embedding"
+    if node_id == "reranker":
+        return "reranker"
+    if node["kind"] == "generative":
+        return "chat"
+    return None
+
+
 def _node_local_models(node: dict[str, Any], installed: list[dict[str, str]]) -> list[dict[str, Any]]:
-    """按节点用途分类的本地模型候选 —— 只来自已安装模型，不硬编码。
+    """按节点用途分类的本地模型候选 = 已安装（白）+ 目录中未下载（灰），不硬编码。
 
     每个节点对应的分类：
-    - embedding 节点 → 已安装的向量嵌入模型
-    - reranker 节点 → 已安装的语义重排模型
-    - 生成型节点 → 已安装的对话小模型（替代主 LLM 执行）
-    - asr 节点 → 已安装的语音识别模型
+    - embedding 节点 → 向量嵌入模型
+    - reranker 节点 → 语义重排模型
+    - 生成型节点 → 对话小模型（替代主 LLM 执行）
+    - asr 节点 → 语音识别模型
 
     内置模型在注册表中 id 为 builtin:bge-small-zh-v1.5，规范化后（bge-small-zh-v1.5）
-    展示，避免出现前缀；未安装任何对应模型的节点返回空列表。
+    展示，避免出现前缀。已下载候选 installed=True，目录中未下载候选 installed=False，
+    由前端区分白/灰并提供「一键下载」。
     """
     node_id = node["id"]
     if node_id == "embedding":
@@ -337,6 +436,22 @@ def _node_local_models(node: dict[str, Any], installed: list[dict[str, str]]) ->
             "installed": True,
             "ownership": model.get("ownership", ""),
         })
+
+    # 并入目录中「已收录但未下载」的候选（installed=False），供前端灰色展示 + 一键下载
+    catalog_purpose = _node_catalog_purpose(node)
+    if catalog_purpose is not None:
+        for catalog_item in _catalog_candidates(catalog_purpose):
+            if catalog_item["id"] in seen:
+                continue
+            seen.add(catalog_item["id"])
+            candidates.append({
+                "id": catalog_item["id"],
+                "catalog_id": catalog_item["catalog_id"],
+                "purpose": catalog_item["purpose"],
+                "source": catalog_item["source"],
+                "installed": False,
+                "ownership": "",
+            })
     return candidates
 
 
@@ -366,9 +481,9 @@ async def build_status(core: Any, vs: Any, cfg: Any) -> list[dict[str, Any]]:
                     except Exception:  # noqa: BLE001
                         local_available = False
         elif node_id == "asr":
-            local_available = bool(_node_local_models(node, installed))
-        else:  # generative 节点：本地=已安装的对话小模型（替代主 LLM）
-            local_available = bool(_node_local_models(node, installed))
+            local_available = any(c.get("installed") for c in _node_local_models(node, installed))
+        else:  # generative 节点：本地=已安装的对话小模型
+            local_available = any(c.get("installed") for c in _node_local_models(node, installed))
         result.append({
             **node,
             "backend": backend,
@@ -380,8 +495,13 @@ async def build_status(core: Any, vs: Any, cfg: Any) -> list[dict[str, Any]]:
     return result
 
 
-def apply_to_runtime(core: Any, vs: Any, node_id: str, backend: str) -> None:
-    """将节点后端选择立即应用到运行时对象（热生效，无重启）。"""
+def apply_to_runtime(core: Any, vs: Any, node_id: str, backend: str, app: Any = None,
+                     local_model: str | None = None) -> None:
+    """将节点后端选择立即应用到运行时对象（热生效，无重启）。
+
+    app 为 FastAPI 应用（可选），用于访问 app.state 上的自发回忆/成长叙事实例。
+    local_model 为生成型节点选择的本地模型（每节点独立）；None 表示全局共享。
+    """
     try:
         if node_id == "embedding":
             # embedding 复用向量库引擎切换（热生效）
@@ -399,28 +519,73 @@ def apply_to_runtime(core: Any, vs: Any, node_id: str, backend: str) -> None:
             memory = getattr(core, "memory", None)
             qt = getattr(memory, "_query_transformer", None)
             if qt is not None and hasattr(qt, "set_backend"):
-                qt.set_backend(backend)
+                qt.set_backend(backend, local_model)
             return
         if node_id == "instinct":
             manager = getattr(core, "instinct_manager", None)
             if manager is not None and hasattr(manager, "set_backend"):
-                manager.set_backend(backend)
+                manager.set_backend(backend, local_model)
             return
         if node_id == "error_rule":
             pipeline = getattr(core, "error_pipeline", None)
             if pipeline is not None and hasattr(pipeline, "set_backend"):
-                pipeline.set_backend(backend)
+                pipeline.set_backend(backend, local_model)
             return
         if node_id == "kg_extract":
             kg = getattr(core, "knowledge_graph", None)
             if kg is not None and hasattr(kg, "set_backend"):
-                kg.set_backend(backend)
+                kg.set_backend(backend, local_model)
             kg_v2 = getattr(kg, "_kg_v2", None) if kg is not None else None
             if kg_v2 is not None and hasattr(kg_v2, "set_backend"):
-                kg_v2.set_backend(backend)
+                kg_v2.set_backend(backend, local_model)
             return
         if node_id == "asr":
             # ASR 每次请求读取配置，无需运行时对象
+            return
+
+        # ── 内在世界 LLM 节点 ──
+        if node_id == "emotion_llm":
+            from emotion import emotion_llm
+            emotion_llm.set_backend(backend, local_model)
+            return
+        if node_id == "reunion":
+            from emotion import reunion_reflection
+            reunion_reflection.set_backend(backend, local_model)
+            return
+        if node_id == "portrait":
+            pm = getattr(core, "portrait_manager", None)
+            if pm is not None and hasattr(pm, "set_backend"):
+                pm.set_backend(backend, local_model)
+            return
+        if node_id == "memory_distill":
+            memory = getattr(core, "memory", None)
+            distiller = getattr(memory, "distiller", None)
+            if distiller is not None and hasattr(distiller, "set_backend"):
+                distiller.set_backend(backend, local_model)
+            return
+        if node_id == "dream":
+            from core.dream_engine_v2 import get_dream_engine_v2
+            get_dream_engine_v2().set_backend(backend, local_model)
+            return
+        if node_id == "nudge":
+            try:
+                import qq_bot_adapter
+                bot = getattr(qq_bot_adapter, "_ACTIVE_BOT", None)
+                nudge = getattr(bot, "nudge_engine", None) if bot is not None else None
+                if nudge is not None and hasattr(nudge, "set_backend"):
+                    nudge.set_backend(backend, local_model)
+            except (ImportError, AttributeError):
+                logger.debug("local_deploy.nudge_not_available")
+            return
+        if node_id == "spontaneous_recall":
+            obj = getattr(app.state, "spontaneous_recall", None) if app is not None else None
+            if obj is not None and hasattr(obj, "set_backend"):
+                obj.set_backend(backend, local_model)
+            return
+        if node_id == "growth":
+            obj = getattr(app.state, "growth_narrative", None) if app is not None else None
+            if obj is not None and hasattr(obj, "set_backend"):
+                obj.set_backend(backend, local_model)
             return
     except Exception as e:  # noqa: BLE001
         logger.warning("local_deploy.node_apply_failed node={} error={}", node_id, str(e))

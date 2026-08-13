@@ -662,6 +662,7 @@ class ModelRouter:
         _BUILTIN_PROVIDERS = {"mimo", "agnes"}
         _PROVIDER_FORMAT = {
             "ollama": "openai",
+            "llama.cpp": "openai",
             "siliconflow": "openai",
             "openrouter": "openai",
             "modelscope": "openai",
@@ -964,6 +965,7 @@ class ModelRouter:
     # 建议通过 /models/health-check 端点定期验证这些模型ID是否仍然可用
     _CUSTOM_PROVIDER_DEFAULT_MODELS: ClassVar[dict[str, str]] = {
         "ollama": "qwen2.5:latest",
+        "llama.cpp": "",
         "siliconflow": "THUDM/GLM-4-9B-0414",
         "openrouter": "openrouter/free",
         "modelscope": "Qwen/Qwen3-8B",
@@ -1967,7 +1969,7 @@ class ModelRouter:
             messages=tuple(messages),
             temperature=temperature,
             max_tokens=max_tokens,
-            extra={"route": f"router:{task_type}"},
+            extra={"route": f"router:{task_type}", "model_id": model},
         )
         try:
             async for chunk in transport.stream(request):

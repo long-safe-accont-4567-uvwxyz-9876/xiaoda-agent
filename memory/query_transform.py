@@ -9,6 +9,7 @@ import httpx
 from loguru import logger
 
 from utils.http_pool import get_shared_client
+from utils.free_model_backend import call_local_model
 
 
 # G15: sentinel 用于区分"缓存未命中"和"命中 None"
@@ -52,12 +53,13 @@ class QueryTransformer:
 
     def __init__(self, router: Any | None=None, api_key: str = "", base_url: str = "",
                  model: str = "", backend: str = "auto") -> None:
-        # backend: auto=有 key 用 API；local=用主 LLM(router) 执行；api=强制 API；off=禁用
+        # backend: auto=有 key 用 API；local=走本地模型；api=强制 API；off=禁用
         self._router = router
         self._api_key = api_key or os.getenv("SILICONFLOW_API_KEY", "") or os.getenv("EMBED_API_KEY", "")
         self._base_url = base_url or "https://api.siliconflow.cn/v1"
         self._model = model or os.getenv("QUERY_TRANSFORM_MODEL", "THUDM/GLM-4-9B-0414")
         self._backend = backend if backend in ("auto", "local", "api", "off") else "auto"
+        self._local_model = None  # 功能节点独立选择的本地模型（None=全局共享）
         if self._backend == "off":
             self._available = False
         elif self._backend == "local":
@@ -71,11 +73,13 @@ class QueryTransformer:
         self._expand_cache: OrderedDict[str, tuple[list[str], float]] = OrderedDict()
         self._hyde_cache: OrderedDict[str, tuple[str | None, float]] = OrderedDict()
 
-    def set_backend(self, backend: str) -> None:
+    def set_backend(self, backend: str, local_model: str | None = None) -> None:
         """热更新后端选择（auto/local/api/off）。"""
         if backend not in ("auto", "local", "api", "off"):
             return
         self._backend = backend
+        if local_model is not None:
+            self._local_model = local_model
         if backend == "off":
             self._available = False
         elif backend == "local":
@@ -125,28 +129,18 @@ class QueryTransformer:
 
     async def _call_free_model(self, prompt: str, temperature: float = 0.1,
                                 max_tokens: int = 150) -> str | None:
-        """执行查询变换：backend=local 时用主 LLM(router)，否则走硅基流动免费模型。"""
+        """执行查询变换：backend=local 时用本地模型，否则走硅基流动免费模型。"""
         if not self._available:
             return None
         if self._backend == "local":
-            if self._router is None:
-                return None
-            messages = [{"role": "user", "content": prompt}]
-            try:
-                # 主 LLM 执行（后台任务类型，自动让路于主对话）
-                return await asyncio.wait_for(
-                    self._router.route(
-                        task_type="memory_encoding",
-                        messages=messages,
-                        temperature=temperature,
-                        max_tokens=max_tokens,
-                    ),
-                    timeout=5.0,
-                )
-            except Exception as e:
-                logger.debug("query_transform.router_failed error={} error_type={}",
-                             str(e)[:200], type(e).__name__)
-                return None
+            # 本地模型执行（功能节点独立选模型）
+            return await call_local_model(
+                self._router,
+                [{"role": "user", "content": prompt}],
+                temperature,
+                max_tokens,
+                model_id=self._local_model,
+            )
         try:
             # G4: 共享 httpx.AsyncClient（连接池复用 + HTTP/2），单次请求级别覆盖 timeout
             # 修复：15s→4s。根因：检索整体只有 8s 超时，free model 15s 超时远超预算，

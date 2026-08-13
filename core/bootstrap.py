@@ -568,7 +568,7 @@ class AgentCoreBootstrapper:
         from instinct_manager import InstinctManager
         core.instinct_manager = InstinctManager(db=core.db, router=core.router)
         await core.instinct_manager.init()
-        # Instinct 提取：按节点后端选择注入免费模型（local=主 LLM / off=禁用）
+        # Instinct 提取：按节点后端选择注入免费模型（local=本地模型 / off=禁用）
         from web.config_service import get_config_service
         from web.local_deploy_nodes import get_backend
         instinct_backend = get_backend(get_config_service(), "instinct")

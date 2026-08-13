@@ -22,6 +22,8 @@ from typing import TYPE_CHECKING
 
 from loguru import logger
 
+from utils.free_model_backend import FreeModelBackend
+
 if TYPE_CHECKING:
     from agent_core.core import AgentCore
 
@@ -47,6 +49,14 @@ class SpontaneousRecall:
         self.core = core
         self._task: asyncio.Task | None = None
         self._running = False
+        self._free = FreeModelBackend()
+        self._free.set_router(getattr(core, "router", None))
+
+    def set_backend(self, backend: str, local_model: str | None = None) -> None:
+        """热更新后端：local=走本地模型；api/auto=走硅基流动免费模型。"""
+        self._free.set_backend(backend)
+        if local_model is not None:
+            self._free.set_local_model(local_model)
 
     def start(self) -> None:
         if self._task is None:
@@ -159,14 +169,18 @@ class SpontaneousRecall:
 
 请用第一人称写一段简短的内心独白（1-2句话），回忆这件事。语气要自然、有感情，像真的在想过去的事。不要加任何前缀，直接写独白本身。"""
 
+        messages = [
+            {"role": "system", "content": "你是小妲，在独自回忆过去。"},
+            {"role": "user", "content": prompt},
+        ]
+        result = await self._free.call(messages, temperature=0.7, max_tokens=512)
+        if result is not None:
+            return result.strip()
         try:
             result = await asyncio.wait_for(
                 self.core.router.route(
                     "chat",
-                    [
-                        {"role": "system", "content": "你是小妲，在独自回忆过去。"},
-                        {"role": "user", "content": prompt},
-                    ],
+                    messages,
                     temperature=0.7,
                     max_tokens=512,
                 ),

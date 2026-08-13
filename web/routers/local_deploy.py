@@ -472,6 +472,9 @@ async def local_deploy_set_model_node(request: Request, body: dict) -> Any:
     if core is not None:
         # 常驻服务：切本地 → 启动对应模型实例；切 API → 关闭本地推理实例
         if normalized == "local" and local_model:
+            # 切换到新的本地模型：先停旧模型释放内存（全局共享，只保留一份权重）
+            if prev_backend == "local" and prev_model and prev_model != local_model:
+                await stop_node_instance(core, node_id, prev_model)
             await ensure_local_instance(core, node_id, local_model)
         elif normalized == "api" and prev_backend == "local" and prev_model:
             await stop_node_instance(core, node_id, prev_model)
@@ -480,7 +483,7 @@ async def local_deploy_set_model_node(request: Request, body: dict) -> Any:
             from web.local_deploy_nodes import apply_to_runtime as _apply
             await asyncio.to_thread(_apply, core, vs, node_id, normalized)
         else:
-            apply_to_runtime(core, vs, node_id, normalized)
+            apply_to_runtime(core, vs, node_id, normalized, app=request.app, local_model=local_model)
     return Envelope(data={
         "node_id": node_id,
         "backend": normalized,

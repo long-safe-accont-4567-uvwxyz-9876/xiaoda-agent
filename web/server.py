@@ -67,12 +67,16 @@ def _register_env_providers(cfg: Any, env_values: Any, os_module: Any) -> None:
             "ollama", "openai",
             "", "Ollama 本地大模型"
         ),
+        "LLAMA_CPP_BASE_URL": (
+            "llama.cpp", "openai",
+            "", "llama.cpp 本地接口"
+        ),
     }
     known_env_keys = list(_KNOWN_ENV_PROVIDERS.keys())
     for env_key, (pid, fmt, _default_url, label) in _KNOWN_ENV_PROVIDERS.items():
-        if env_key == "OLLAMA_BASE_URL":
-            # ollama：仅当 .env 显式配置 OLLAMA_BASE_URL 时才注册（_default_url 为空串）
-            api_key = "ollama"
+        if env_key in ("OLLAMA_BASE_URL", "LLAMA_CPP_BASE_URL"):
+            # 本地无 key 接口：仅当 .env 显式配置 base_url 时才注册（_default_url 为空串）
+            api_key = pid
             base_url = env_values.get(env_key, "").strip()
             if not base_url:
                 continue
@@ -708,6 +712,26 @@ async def lifespan(app: FastAPI) -> AsyncIterator[Any]:
                 logger.warning("local_deploy.instances_restore_failed error={}", _e)
         _spawn(_restore_local_node_instances())
 
+        # 恢复生成型节点后端选择：重启后生效，避免 WebUI 已保存的「本地/远程」被重置
+        async def _restore_generative_backends():
+            try:
+                from web.local_deploy_nodes import (
+                    NODES, apply_to_runtime, get_backend, get_local_model,
+                )
+                from web.config_service import get_config_service
+                _cfg = get_config_service()
+                for _node in NODES:
+                    if _node.get("kind") != "generative":
+                        continue
+                    _node_id = _node["id"]
+                    _backend = get_backend(_cfg, _node_id)
+                    _local_model = get_local_model(_cfg, _node_id) or None
+                    apply_to_runtime(core, None, _node_id, _backend, app=app, local_model=_local_model)
+                logger.info("local_deploy.generative_backends_restored")
+            except Exception as _e:
+                logger.warning("local_deploy.generative_backends_restore_failed error={}", _e)
+        _spawn(_restore_generative_backends())
+
     # 启动事件循环阻塞 watchdog：检测同步阻塞并打印线程栈定位根因
     # 根因：后台任务集体卡 257-265s，_spawn timeout 无法取消同步阻塞
     _stop_watchdog = None
@@ -847,22 +871,23 @@ def _has_any_provider_credential() -> bool:
         from web._provider_keys import load_provider_key
         cfg = get_config_service()
         for pid in (cfg.get("models.providers", {}) or {}):
-            if pid == "ollama":
-                # ollama 不需要 API key，由下方第 4 步检查 OLLAMA_BASE_URL
+            if pid in ("ollama", "llama.cpp"):
+                # 本地无 key 接口不需要 API key，由下方第 4 步检查 base_url
                 continue
             if load_provider_key(pid).strip():
                 return True
     except (ImportError, OSError, ValueError) as e:
         logger.warning("webui.custom_provider_credential_check_failed error={}", str(e))
 
-    # 4. Ollama：不需要 API key，仅看 .env 是否显式配置 OLLAMA_BASE_URL
-    #    （与 _apply_model_overrides 的注册条件一致，Ollama-only 部署不误入降级模式）
+    # 4. 本地无 key 接口（Ollama / llama.cpp）：不需要 API key，仅看 .env 是否显式配置 base_url
+    #    （与 _apply_model_overrides 的注册条件一致，本地-only 部署不误入降级模式）
     try:
         from setup_wizard import _load_env_values
-        if _load_env_values().get("OLLAMA_BASE_URL", "").strip():
+        _env = _load_env_values()
+        if _env.get("OLLAMA_BASE_URL", "").strip() or _env.get("LLAMA_CPP_BASE_URL", "").strip():
             return True
     except (ImportError, OSError, ValueError):
-        logger.debug("server.ollama_url_check_failed", exc_info=True)
+        logger.debug("server.local_provider_url_check_failed", exc_info=True)
 
     return False
 

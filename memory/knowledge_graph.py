@@ -6,6 +6,7 @@ import time
 from loguru import logger
 
 from db.db_knowledge import KnowledgeDB
+from utils.free_model_backend import call_local_model
 
 
 ENTITY_EXTRACT_PROMPT = """从以下对话摘要中提取关键实体和关系，只提取最显著的3-5个。
@@ -100,13 +101,14 @@ class KnowledgeGraph:
         self._query_entity_lru: list[str] = []
         # 规则提取器（jieba，<10ms）用于实体前置短路，避免对无实体查询调用 LLM
         self._rule_extractor: Any = None
-        # 节点后端选择：auto/local/api/off（local=走主 LLM；off=禁用提取）
+        # 节点后端选择：auto/local/api/off（local=走本地模型；off=禁用提取）
         self._free_api_key = ""
         self._free_base_url = ""
         self._free_model = ""
         self._disabled = False
         self._backend = "auto"
         self._backup_free_api_key = ""
+        self._local_model = None  # 功能节点独立选择的本地模型（None=全局共享）
 
     def set_db(self, db: Any) -> None:
         self._db = db
@@ -123,11 +125,13 @@ class KnowledgeGraph:
         self._free_base_url = base_url
         self._free_model = model
 
-    def set_backend(self, backend: str) -> None:
-        """热更新后端选择：off=禁用提取；local=禁用免费模型走主 LLM；api/auto=恢复免费模型。"""
+    def set_backend(self, backend: str, local_model: str | None = None) -> None:
+        """热更新后端选择：off=禁用提取；local=走本地模型；api/auto=走免费模型。"""
         if backend not in ("auto", "local", "api", "off"):
             return
         self._backend = backend
+        if local_model is not None:
+            self._local_model = local_model
         if backend == "off":
             self._disabled = True
             return
@@ -142,7 +146,11 @@ class KnowledgeGraph:
 
     async def _call_free_model(self, messages: list, temperature: float = 0.1,
                                 max_tokens: int = 800) -> str | None:
-        """调用硅基流动免费模型"""
+        """按后端调用：local=本地模型；api/auto=免费模型。失败返回 None。"""
+        if self._backend == "local":
+            return await call_local_model(
+                self._router, messages, temperature, max_tokens, model_id=self._local_model
+            )
         if not getattr(self, '_free_api_key', ''):
             return None
         import httpx

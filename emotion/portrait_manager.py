@@ -4,6 +4,7 @@ import re
 from loguru import logger
 
 from db.db_memory import MemoryDB
+from utils.free_model_backend import FreeModelBackend
 
 
 def _repair_and_extract_json(raw: str) -> dict | None:
@@ -107,6 +108,14 @@ class PortraitManager:
         self.notebook = notebook
         self._router = router
         self._dirty = True
+        self._free = FreeModelBackend()
+        self._free.set_router(router)
+
+    def set_backend(self, backend: str, local_model: str | None = None) -> None:
+        """热更新后端：local=走本地模型；api/auto=走硅基流动免费模型。"""
+        self._free.set_backend(backend)
+        if local_model is not None:
+            self._free.set_local_model(local_model)
 
     def mark_dirty(self) -> None:
         self._dirty = True
@@ -129,16 +138,19 @@ class PortraitManager:
 
         prompt = self._build_consolidate_inputs(memories, notes, old_section, address_term)
 
-        try:
-            raw = await self._router.route(
-                "memory_encoding",
-                [{"role": "user", "content": prompt}],
-                temperature=0.3,
-                max_tokens=1536,
-            )
-        except Exception as e:
-            logger.error("portrait.llm_failed", error=str(e))
-            return None
+        messages = [{"role": "user", "content": prompt}]
+        raw = await self._free.call(messages, temperature=0.3, max_tokens=1536)
+        if raw is None:
+            try:
+                raw = await self._router.route(
+                    "memory_encoding",
+                    messages,
+                    temperature=0.3,
+                    max_tokens=1536,
+                )
+            except Exception as e:
+                logger.error("portrait.llm_failed", error=str(e))
+                return None
 
         try:
             data = _repair_and_extract_json(raw)

@@ -1,13 +1,23 @@
 <script setup lang="ts">
-import { ref } from 'vue'
+import { computed, ref, watch } from 'vue'
 import { NButton, NEmpty, NPopconfirm, NTag, useMessage } from 'naive-ui'
 import { useLocalAiStore, type BenchmarkResult } from '../../stores/localAi'
+import StoragePickerDialog from './StoragePickerDialog.vue'
 
 const store = useLocalAiStore()
 const message = useMessage()
 const removing = ref('')
 const benchmarking = ref('')
 const benchmarkResult = ref<Record<string, BenchmarkResult>>({})
+const downloading = ref('')
+const showStorage = ref(false)
+const pendingModelId = ref('')
+
+// 目录中「已收录但未下载」的候选（排除已安装），供灰色展示 + 一键下载
+const pendingCatalog = computed(() => {
+  const installedIds = new Set(store.models.map(m => m.catalog_id).filter(Boolean))
+  return store.catalog.filter(c => !installedIds.has(c.id))
+})
 
 const PURPOSE_TEXT: Record<string, string> = { chat: '对话', embedding: '向量嵌入', reranker: '语义重排' }
 const OWNERSHIP_TEXT: Record<string, string> = { bundled: '内置模型', user: '用户安装' }
@@ -53,6 +63,56 @@ function resultText(result: BenchmarkResult | undefined): string | null {
   if (result.iterations != null) parts.push(`采样 ${result.iterations} 次`)
   return parts.join(' · ')
 }
+
+// ── 目录候选一键下载（灰色未下载 → 下载 → 已安装白） ──
+function createRequestId() { return store.createRequestId() }
+
+async function doDownload(modelId: string, destination: string) {
+  downloading.value = modelId
+  try {
+    await store.download({ model_id: modelId, destination, request_id: createRequestId() })
+    pendingModelId.value = ''
+    message.success(`已开始下载 ${modelId}`)
+  } catch (error) {
+    message.error(error instanceof Error ? error.message : String(error))
+  } finally {
+    downloading.value = ''
+  }
+}
+
+async function downloadModel(modelId: string) {
+  if (downloading.value) return
+  pendingModelId.value = modelId
+  if (store.defaultStorage) {
+    try {
+      const validation = await store.validateStorage(store.defaultStorage, 0)
+      if (validation.writable && !validation.error) {
+        await doDownload(modelId, validation.path)
+        return
+      }
+      message.warning(validation.error || validation.reason || '默认目录不可用，请重新选择')
+    } catch {
+      message.warning('默认目录不可用，请重新选择')
+    }
+  }
+  showStorage.value = true
+}
+
+function selectStorage(path: string) {
+  showStorage.value = false
+  if (pendingModelId.value) void doDownload(pendingModelId.value, path)
+}
+
+function formatCatalogSize(size: number) {
+  if (size >= 1024 * 1024 * 1024) return `${(size / 1024 / 1024 / 1024).toFixed(2)} GB`
+  return `${(size / 1024 / 1024).toFixed(1)} MB`
+}
+
+// 下载完成 → 刷新已安装列表（WS 兜底，避免未连接时候选不更新）
+watch(
+  () => store.downloads.filter(d => d.state === 'completed').length,
+  (count, prev) => { if (count > (prev ?? 0)) void store.refreshModels().catch(() => undefined) },
+)
 </script>
 
 <template>
@@ -68,7 +128,19 @@ function resultText(result: BenchmarkResult | undefined): string | null {
         <n-tag v-else size="small">内置模型</n-tag>
       </div>
     </article>
-    <n-empty v-if="!store.models.length" description="暂无已安装模型" />
+
+    <!-- 目录中已收录但未下载的候选（灰色，一键下载） -->
+    <article v-for="catalog in pendingCatalog" :key="catalog.id" class="glass-panel installed-card pending-card">
+      <div class="installed-main"><div><strong>{{ catalog.id }}</strong><span>{{ catalog.repository }}</span></div><n-tag size="small" type="warning">暂未下载</n-tag></div>
+      <div class="installed-meta"><span>用途：{{ purposeText(catalog.purpose) }}</span><span>大小：{{ formatCatalogSize(catalog.download_size) }}</span></div>
+      <div class="installed-actions">
+        <n-button size="small" type="primary" :loading="downloading === catalog.id" @click="downloadModel(catalog.id)">{{ downloading === catalog.id ? '下载中…' : '下载' }}</n-button>
+      </div>
+    </article>
+
+    <n-empty v-if="!store.models.length && !pendingCatalog.length" description="暂无模型" />
+
+    <StoragePickerDialog :show="showStorage" :required-bytes="0" @select="selectStorage" @cancel="showStorage = false" />
   </div>
 </template>
 
@@ -83,4 +155,5 @@ function resultText(result: BenchmarkResult | undefined): string | null {
 .benchmark-line { margin-top: 12px; padding: 8px 12px; border-radius: 10px; background: var(--moon-soft); color: var(--text-2); font-size: 12px; }
 .benchmark-line.failed { color: #d03050; }
 .not-running { color: var(--moon-dim); font-size: 12px; }
+.pending-card { opacity: 0.72; border: 1px dashed rgba(128, 128, 128, 0.35); }
 </style>

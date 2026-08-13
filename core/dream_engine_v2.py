@@ -29,6 +29,7 @@ from memory.bridge_memory import BridgeMemoryManager
 from memory.spreading_activation import SpreadingActivation
 from core.conflict_supersession import ConflictSupersession
 from memory.preference_discovery import PreferenceDiscovery
+from utils.free_model_backend import FreeModelBackend
 
 
 class DreamEngineV2:
@@ -75,6 +76,7 @@ class DreamEngineV2:
         self._conflict = conflict_supersession or ConflictSupersession()
         self._pref = preference_discovery or PreferenceDiscovery()
         self._llm_client = llm_client
+        self._free = FreeModelBackend()
 
         self._cycle_count = 0
         # 共享 CognitiveMemory 的连接图（引用，非拷贝），使 NREM Hebbian 强化能
@@ -82,6 +84,26 @@ class DreamEngineV2:
         # 故 SUPERSEDES/REM 阶段写入的新边也对 CognitiveMemory 可见。
         self._connections = self._cognitive._connections
         self._last_dae_cycle = 0
+
+    def set_backend(self, backend: str, local_model: str | None = None) -> None:
+        """热更新后端：local=走本地模型；api/auto=走硅基流动免费模型。"""
+        self._free.set_backend(backend)
+        if local_model is not None:
+            self._free.set_local_model(local_model)
+
+    def set_router(self, router: Any) -> None:
+        """注入 ModelRouter，供 local 后端通过 local-ort transport 走本地模型。"""
+        self._free.set_router(router)
+
+    def _llm(self) -> Any:
+        """返回偏好蒸馏实际使用的 LLM 客户端（优先共享后端 self._free）。
+
+        惰性注入全局 ModelRouter，确保 local 后端可用；失败时返回 self._free
+        （其 api 分支仍可走免费模型，local 分支因无 router 返回 None 由调用方降级）。
+        """
+        if getattr(self._free, "_router", None) is None:
+            self._free.set_router(_get_global_router())
+        return self._free
 
     async def run_cycle(self) -> dict:
         """执行完整梦境周期"""
@@ -290,7 +312,7 @@ class DreamEngineV2:
 
         # 2. Stage C: 提取用户状态事实
         session_content = "\n".join(m.content for m in valid)
-        facts = await self._pref.stage_c_extract(session_content, self._llm_client)
+        facts = await self._pref.stage_c_extract(session_content, self._llm())
 
         if not facts:
             # 降级模式: 用记忆内容直接作为事实
@@ -315,7 +337,7 @@ class DreamEngineV2:
 
         # 4. Stage S: 聚类 + 蒸馏
         patterns = await self._pref.stage_s_synthesize(
-            fact_texts, emb_matrix, self._llm_client
+            fact_texts, emb_matrix, self._llm()
         )
 
         # 5. 存储为高 salience 记忆
@@ -441,6 +463,16 @@ class DreamEngineV2:
 
 # 全局单例：供生产接线复用同一个 CognitiveMemory（避免每次梦境周期重建记忆）
 _cognitive_singleton: CognitiveMemory | None = None
+
+
+def _get_global_router() -> Any:
+    """获取全局 ModelRouter（用于 dream 节点的 local 后端推理）。失败返回 None。"""
+    try:
+        from model_router import get_model_router
+        return get_model_router()
+    except Exception as e:
+        logger.debug("dream_engine_v2.get_global_router_failed", error=str(e))
+        return None
 
 
 def get_cognitive_memory(dimensions: int = 512,

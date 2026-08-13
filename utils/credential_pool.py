@@ -348,6 +348,15 @@ class CredentialPool:
                 base_url=ollama_url,
             ))
 
+        # llama.cpp：同样仅在用户显式配置时启用（不默认注册）
+        llama_cpp_url = os.getenv("LLAMA_CPP_BASE_URL", "")
+        if llama_cpp_url:
+            self.add_credential(Credential(
+                api_key="llama.cpp",  # 占位 Key（llama.cpp 本地部署无需真实 Key）
+                provider="llama.cpp",
+                base_url=llama_cpp_url,
+            ))
+
         # 统计
         total = sum(len(creds) for creds in self._pool.values())
         providers = list(self._pool.keys())
