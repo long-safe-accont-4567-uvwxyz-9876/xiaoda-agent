@@ -540,9 +540,48 @@ class BackgroundTaskManager:
                                 merged=stats.get("merged", 0),
                                 strengthened=stats.get("strengthened", 0),
                                 evicted=stats.get("evicted", 0))
+                # DreamEngineV2 6阶段梦境引擎（渐进接线：与 DreamConsolidator 并存，独立容错）
+                await self._run_dream_engine_v2()
             await self.db.set_cron_last_run("dream_archive")
         except (ImportError, OSError, RuntimeError) as e:
             logger.warning("dream.archive_failed", error=str(e))
+
+    async def _run_dream_engine_v2(self) -> None:
+        """DreamEngineV2 6阶段梦境引擎接线（独立容错，失败不影响主流程）。
+
+        从 DB 加载记忆 + 批量 embedding 填充 CognitiveMemory，然后运行 6 阶段。
+        仅在 vector store 可用时执行；embedding 缺失/失败时安全跳过。
+        """
+        try:
+            _vec = getattr(self.memory, "vec", None)
+            if _vec is None or not getattr(_vec, "enabled", False):
+                return
+            from core.dream_engine_v2 import DreamEngineV2, get_cognitive_memory
+            import numpy as np
+            cog = get_cognitive_memory()
+            # 首次加载：从 DB 读记忆并计算 embedding 填充 CognitiveMemory
+            if cog.episodic_size() == 0:
+                rows = await self.memory.memory.get_all_memories(limit=500)
+                contents = [r.get("summary", "") for r in rows if r.get("summary")]
+                if contents:
+                    vectors = await _vec.embed(contents)
+                    for i, content in enumerate(contents):
+                        if i >= len(vectors):
+                            break
+                        await cog.remember(
+                            content,
+                            np.asarray(vectors[i], dtype=np.float32),
+                            emotion_label="",
+                            session_id="dream",
+                        )
+            dream = DreamEngineV2(cognitive_memory=cog)
+            stats = await dream.run_cycle()
+            logger.info("dream_engine_v2.cycle_done",
+                        cycle=stats.get("cycle", 0),
+                        nrem_sampled=stats.get("nrem_sampled", 0),
+                        insight_communities=stats.get("insight_communities", 0))
+        except Exception as e:
+            logger.warning("dream_engine_v2.failed", error=str(e))
 
     async def _warm_embedding_cache(self) -> None:
         """预热嵌入缓存：将最近 30 条情景记忆摘要写入向量缓存，减少查询时 cache miss。"""

@@ -437,3 +437,23 @@ class DreamEngineV2:
 
         result = recent + random_old + low_salience
         return result
+
+
+# 全局单例：供生产接线复用同一个 CognitiveMemory（避免每次梦境周期重建记忆）
+_cognitive_singleton: CognitiveMemory | None = None
+
+
+def get_cognitive_memory(dimensions: int = 512,
+                         episodic_capacity: int = 10000) -> CognitiveMemory:
+    """获取全局 CognitiveMemory 单例（懒加载）。
+
+    供生产梦境接线复用，使 DreamEngineV2 的 6 阶段共享同一份认知记忆，
+    而非每个周期重建（否则 NREM Hebbian 强化无法跨周期累积）。
+    """
+    global _cognitive_singleton
+    if _cognitive_singleton is None:
+        _cognitive_singleton = CognitiveMemory(
+            dimensions=dimensions,
+            episodic_capacity=episodic_capacity,
+        )
+    return _cognitive_singleton

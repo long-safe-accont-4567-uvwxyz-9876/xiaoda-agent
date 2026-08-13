@@ -166,6 +166,52 @@ _GREETING_PATTERN = re.compile(
 
 _THANK_REPLIES = ["不客气～", "不用谢啦～", "举手之劳～"]
 
+# reunion_reflection: 用户"回来了"类关键词（用于生成个性化重聚欢迎）
+_REUNION_PATTERN = re.compile(
+    r'(回来了|我回来了|回来啦|我回来啦|回来了吗|到家了|上线了)',
+    re.IGNORECASE,
+)
+
+
+def _enhance_emotion_with_llm(emotion: dict, llm: dict) -> dict:
+    """用 LLM 深度情绪分析结果增强关键词层检测。
+
+    LLM 层返回更精准的 PAD 与深层需求（needs/style），关键词层保证 17 类
+    标签与 sticker 对齐。合并策略：
+    - PAD：优先 LLM（P/A/D 更精准），缺失时回退关键词层
+    - primary：LLM 标签可映射到统一枚举则采用，并同步 valence
+    - intensity：用 LLM 的 A（arousal）覆盖
+    - needs/style：附加字段，供后续情绪提示增强使用
+    """
+    if not llm:
+        return emotion
+    # PAD + intensity 增强
+    if all(k in llm for k in ("P", "A", "D")):
+        emotion["pad"] = {"P": llm["P"], "A": llm["A"], "D": llm["D"]}
+        emotion["intensity"] = max(0.0, min(1.0, float(llm["A"])))
+    # primary 增强：LLM 标签在统一别名表中则采用，并同步 valence
+    llm_primary = (llm.get("primary") or "").strip()
+    if llm_primary:
+        try:
+            from emotion.emotion_enum import EMOTION_ALIASES
+            if llm_primary in EMOTION_ALIASES:
+                emotion["primary"] = llm_primary
+                _val = EMOTION_ALIASES[llm_primary].value
+                if _val in ("happy", "excited", "love", "shy", "playful", "moved", "greeting"):
+                    emotion["valence"] = "positive"
+                elif _val in ("sad", "angry", "anxious", "fear", "confused", "pout"):
+                    emotion["valence"] = "negative"
+                else:
+                    emotion["valence"] = "neutral"
+        except ImportError:
+            pass
+    # needs/style 附加
+    if llm.get("needs"):
+        emotion["needs"] = llm["needs"]
+    if llm.get("style"):
+        emotion["style"] = llm["style"]
+    return emotion
+
 # G1: 项目硬约束 —— 所有时间函数使用 Asia/Shanghai 时区
 _SH_TZ = ZoneInfo("Asia/Shanghai")
 
@@ -707,6 +753,12 @@ class MessageProcessorMixin:
             trace.info("agent.greeting_shortcut_hit", keyword=user_input[:20])
             return greeting_result
 
+        # reunion_reflection: 用户"回来了"检测（离开超 30min 生成个性化重聚欢迎）
+        reunion_result = await self._try_reunion_greeting(user_input, user_id, user_openid)
+        if reunion_result is not None:
+            trace.info("agent.reunion_greeting_hit", keyword=user_input[:20])
+            return reunion_result
+
         _stage_t1 = time.time()
         chat_targets = await self._parse_chat_target(user_input, user_id)
         clean_input = ChatProcessor.clean_mention_from_input(user_input)
@@ -876,6 +928,59 @@ class MessageProcessorMixin:
             )
         return ProcessResult(reply=reply, emotion="greeting")
 
+    async def _try_reunion_greeting(self, user_input: str, user_id: str,
+                                    user_openid: str) -> ProcessResult | None:
+        """reunion_reflection 接线：用户"回来了"检测，生成个性化重聚欢迎。
+
+        - 仅命中"回来了/我回来了"等关键词时触发
+        - idle 时长从最近 session 的 ended_at 计算，last_emotion 从 mental_state 读取
+        - 任何异常回退 None，不阻塞主流程（后续仍走正常 LLM 路径）
+        """
+        text = (user_input or "").strip()
+        if not text or len(text) > 20:
+            return None
+        if not _REUNION_PATTERN.search(text):
+            return None
+        try:
+            # 1. idle_seconds：从最近 session 的 ended_at 计算
+            idle_seconds = 0.0
+            _uid = user_openid or user_id
+            if _uid and getattr(self, "db", None) is not None:
+                try:
+                    cursor = await self.db._conn.execute(
+                        "SELECT ended_at FROM sessions WHERE user_openid=? "
+                        "ORDER BY ended_at DESC LIMIT 1",
+                        (_uid,),
+                    )
+                    row = await cursor.fetchone()
+                    if row and row[0]:
+                        idle_seconds = max(0.0, time.time() - float(row[0]))
+                except Exception:
+                    idle_seconds = 0.0
+            # 2. last_emotion：从 mental_state 的 user_last_emotion 读取
+            last_emotion = ("neutral", 0.0)
+            try:
+                from core.mental_state import get_mental_state_manager_if_exists
+                mgr = get_mental_state_manager_if_exists(user_id=user_id)
+                if mgr is not None:
+                    _label = getattr(mgr.state.S, "user_last_emotion", "")
+                    if _label:
+                        last_emotion = (_label, 0.5)
+            except Exception:
+                pass
+            # 3. 生成重聚欢迎消息（内部有降级模板，router 缺失也能返回）
+            from emotion.reunion_reflection import generate_reunion_message
+            reply = await generate_reunion_message(
+                idle_seconds=idle_seconds,
+                last_emotion=last_emotion,
+                router=getattr(self, "router", None),
+                address_term=getattr(self.context, "current_address_term", "爸爸"),
+            )
+            return ProcessResult(reply=reply, emotion="greeting")
+        except Exception:
+            logger.debug("reunion_reflection.failed")
+            return None
+
     async def _run_main_process_path(self, ctx: Any, user_input: Any, clean_input: Any, user_id: Any, source: Any,
                                       user_openid: Any, session_id: Any, status_callback: Any, image_data: Any,
                                       is_master: Any, force_voice: Any, chat_targets: Any, trace: Any) -> Any:
@@ -958,6 +1063,14 @@ class MessageProcessorMixin:
             self.context.klee_context = None
 
         emotion = detect_emotion(user_input)
+        # 情绪 LLM 深度分析增强（超时 500ms，失败/无 router 回退关键词结果）
+        try:
+            from emotion.emotion_llm import detect_emotion_llm
+            _llm_emotion = await detect_emotion_llm(
+                user_input, router=getattr(self, "router", None))
+            emotion = _enhance_emotion_with_llm(emotion, _llm_emotion)
+        except Exception:
+            logger.debug("emotion.llm_enhance_failed")
         emotion_hint = build_emotion_hint(emotion)
         self.context.emotion_hint = emotion_hint
         ctx.last_user_emotion = emotion.get("primary", "")
