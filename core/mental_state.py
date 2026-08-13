@@ -78,6 +78,8 @@ class ShortTermEmotion:
     """S 层: 短期情感 (实时)"""
     current_emotion: str = ""       # 当前会话情绪
     user_last_emotion: str = ""     # 用户最近一次情绪
+    user_last_pad: dict = field(default_factory=dict)   # 用户最近一次 PAD 情绪维度 (LLM 深度分析)
+    user_needs: list[str] = field(default_factory=list)  # 用户深层心理需求 (LLM 深度分析)
     session_started_at: float = 0.0
     emotion_history: list[dict] = field(default_factory=list)  # 本次会话情绪历史
 
@@ -119,6 +121,8 @@ class MentalState:
             "S": {
                 "current_emotion": self.S.current_emotion,
                 "user_last_emotion": self.S.user_last_emotion,
+                "user_last_pad": dict(self.S.user_last_pad),
+                "user_needs": list(self.S.user_needs),
                 "session_started_at": self.S.session_started_at,
                 "emotion_history": list(self.S.emotion_history),
             },
@@ -148,6 +152,8 @@ class MentalState:
             S=ShortTermEmotion(
                 current_emotion=S_data.get("current_emotion", ""),
                 user_last_emotion=S_data.get("user_last_emotion", ""),
+                user_last_pad=dict(S_data.get("user_last_pad", {}) or {}),
+                user_needs=list(S_data.get("user_needs", []) or []),
                 session_started_at=float(S_data.get("session_started_at", 0.0)),
                 emotion_history=list(S_data.get("emotion_history", [])),
             ),
@@ -311,12 +317,16 @@ class MentalStateManager:
 
     # ── S 层: 短期情感 (实时) ──────────────────────────
 
-    def update_short_term(self, emotion: str, user_emotion: str = "") -> None:
+    def update_short_term(self, emotion: str, user_emotion: str = "",
+                          user_pad: dict | None = None,
+                          user_needs: list[str] | None = None) -> None:
         """更新 S 层 (实时).
 
         Args:
             emotion: 当前会话情绪 (小妲自身情绪)
             user_emotion: 用户最近一次情绪
+            user_pad: 用户最近一次 PAD 情绪维度 (P/A/D, 来自 LLM 深度分析)
+            user_needs: 用户深层心理需求 (来自 LLM 深度分析)
         """
         if not self.enabled:
             return
@@ -326,6 +336,10 @@ class MentalStateManager:
         self._state.S.current_emotion = emotion
         if user_emotion:
             self._state.S.user_last_emotion = user_emotion
+        if user_pad:
+            self._state.S.user_last_pad = dict(user_pad)
+        if user_needs:
+            self._state.S.user_needs = list(user_needs)
         # 记录情绪历史 (最多保留 50 条)
         self._state.S.emotion_history.append({
             "ts": now,
@@ -448,6 +462,18 @@ class MentalStateManager:
         elif self._state.S.current_emotion:
             lines.append(f"当前情绪：{self._state.S.current_emotion}")
 
+        # PAD 情绪维度（LLM 深度分析，比标签更精准）
+        pad = self._state.S.user_last_pad
+        if pad:
+            pad_hint = self._pad_guidance(pad)
+            if pad_hint:
+                lines.append(f"情绪维度：{pad_hint}")
+
+        # 深层心理需求（LLM 深度分析）
+        needs = self._state.S.user_needs
+        if needs:
+            lines.append(f"深层需求：{'、'.join(needs[:3])}")
+
         return "\n".join(lines)
 
     @staticmethod
@@ -460,6 +486,35 @@ class MentalStateManager:
         if user_emotion in _cheering:
             return "轻快"
         return "温柔"
+
+    @staticmethod
+    def _pad_guidance(pad: dict) -> str:
+        """根据 PAD 三维生成情绪维度提示.
+
+        - P (Pleasure -1~1): 负=不悦, 正=愉悦
+        - A (Arousal 0~1): 低=平静, 高=激动
+        - D (Dominance 0~1): 低=无力/受控, 高=掌控
+        """
+        try:
+            p_val = float(pad.get("P", 0.0))
+            a_val = float(pad.get("A", 0.0))
+            d_val = float(pad.get("D", 0.5))
+        except (TypeError, ValueError):
+            return ""
+
+        mood = "平静"
+        if p_val < -0.3:
+            mood = "不悦" if a_val < 0.5 else "焦躁不安"
+        elif p_val > 0.3:
+            mood = "愉悦" if a_val < 0.7 else "兴奋"
+
+        control = ""
+        if d_val < 0.3:
+            control = "、感到无力/受控"
+        elif d_val > 0.7:
+            control = "、处于掌控"
+
+        return f"{mood}{control}"
 
 
 # per-user 实例缓存（默认 user 用空串键，向后兼容无参调用）

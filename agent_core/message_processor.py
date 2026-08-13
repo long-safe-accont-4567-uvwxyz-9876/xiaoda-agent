@@ -1046,8 +1046,8 @@ class MessageProcessorMixin:
     async def _run_emotion_llm_background(self, user_input: str, user_id: str) -> None:
         """emotion_llm 后台深度情绪分析（fire-and-forget）。
 
-        不阻塞主流程，LLM 结果异步覆盖 mental_state 的 user_last_emotion，
-        使后续请求的情绪引导提示使用更精准的 LLM 情绪标签。任何异常均吞掉。
+        不阻塞主流程，LLM 结果异步写入 mental_state（primary + PAD + needs），
+        使后续请求的情绪引导提示使用更精准的 LLM 情绪信息。任何异常均吞掉。
         """
         try:
             from emotion.emotion_llm import detect_emotion_llm
@@ -1058,9 +1058,16 @@ class MessageProcessorMixin:
             from core.mental_state import get_mental_state_manager_if_exists
             mgr = get_mental_state_manager_if_exists(user_id=user_id)
             if mgr is not None and mgr.enabled:
+                _pad = None
+                if all(k in llm_emotion for k in ("P", "A", "D")):
+                    _pad = {"P": llm_emotion["P"], "A": llm_emotion["A"],
+                            "D": llm_emotion["D"]}
+                _needs = llm_emotion.get("needs") or None
                 mgr.update_short_term(
                     emotion="",
                     user_emotion=llm_emotion.get("primary", ""),
+                    user_pad=_pad,
+                    user_needs=_needs,
                 )
                 logger.debug("emotion.llm_background_updated",
                              primary=llm_emotion.get("primary"))
