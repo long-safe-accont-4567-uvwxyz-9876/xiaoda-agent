@@ -395,9 +395,14 @@ class SubAgent:
             try:
                 interventions = await _intervention_loop.evaluate({})
                 for intervention in interventions:
-                    # 应用干预到上下文
-                    # TODO(phase-2): apply intervention to context
-                    pass  # 实际应用取决于上下文结构
+                    # 应用干预到上下文（此处上下文为字符串，仅消费 prompt 维度方向）
+                    direction_ctx = await _intervention_loop.apply_intervention({}, intervention)
+                    prompt_modifier = direction_ctx.get("prompt_modifier", 0.0)
+                    if prompt_modifier > 0:
+                        system_prompt += (
+                            f"\n\n[干预方向] 行为权重 {prompt_modifier:.2f}，"
+                            "请在回复中适度体现此方向倾向。"
+                        )
             except Exception:
                 logger.debug("JSpace.intervention_evaluate_failed")
 

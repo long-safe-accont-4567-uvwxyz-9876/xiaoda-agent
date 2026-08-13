@@ -1399,9 +1399,11 @@ def build_system_prompt(extra_context: str = "", address_term: str = "爸爸",
         if ENABLE_J_SPACE_HOOKS:
             prompt_modifier = context.get("prompt_modifier", 0.0) if context else 0.0
             if prompt_modifier > 0:
-                # 根据 prompt_modifier 调整 prompt
-                # TODO(phase-2): apply prompt_modifier to system prompt
-                pass
+                # 应用 prompt 方向权重：附加行为倾向提示（消费端闭环）
+                system_prompt += (
+                    f"\n\n[J-Space 方向] 当前行为方向权重：{prompt_modifier:.2f}。"
+                    "请在回复中适度体现此方向倾向。"
+                )
     except Exception as e:
         logger.debug("prompt_builder.j_space_direction_hook_failed", error=str(e))
     from config import apply_agent_name_replacements

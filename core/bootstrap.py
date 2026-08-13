@@ -503,6 +503,17 @@ class AgentCoreBootstrapper:
             instinct_manager=core.instinct_manager,
         )
 
+        # 5. 情景记忆行数限制器（H1）：接入定期清理，防止 episodic_memories 无限增长
+        try:
+            from memory.episodic_limiter import get_episodic_limiter
+            _limiter = get_episodic_limiter(core.db)
+            if _limiter is not None:
+                _limiter.start_scheduler(interval=3600)
+                logger.info("episodic_limiter.scheduler_started",
+                            max_rows=_limiter.stats()["max_rows"])
+        except Exception as e:
+            logger.warning("episodic_limiter.start_failed", error=str(e))
+
     @staticmethod
     def _init_reranker(config: Any) -> Any:
         """初始化 Reranker（SiliconFlow 免费常驻）。无 API Key 时返回 None。"""
