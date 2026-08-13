@@ -1210,6 +1210,9 @@ MAX_EPISODIC_MEMORIES = _safe_int(os.getenv("MAX_EPISODIC_MEMORIES"), 200)
 MEMORY_DISTILL_BATCH = _safe_int(os.getenv("MEMORY_DISTILL_BATCH"), 30)
 MEMORY_DISTILL_ENABLED = os.getenv("MEMORY_DISTILL_ENABLED", "false").lower() in ("1", "true", "yes")
 
+# ── H1 情景记忆行数上限 (episodic_limiter) ──
+MAX_EPISODIC_ROWS = _safe_int(os.getenv("MAX_EPISODIC_ROWS"), 10000)
+
 # MCP_SERVERS：使用 shutil.which() 动态解析命令路径，兼容 Windows/Linux/macOS
 # 不再硬编码 Orange Pi 上的绝对路径，避免在其他设备上失效
 

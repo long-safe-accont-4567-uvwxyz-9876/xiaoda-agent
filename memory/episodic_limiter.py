@@ -59,7 +59,7 @@ class EpisodicLimiter:
                 return 0
             excess = count - self._max_rows
             # 按综合评分排序, 淘汰评分最低的
-            # score = importance * 0.5 + (access_count / 10) * 0.3 + recency * 0.2
+            # score = importance * 0.5 + MIN(access_count, 10) * 0.03 + recency * 0.2
             cursor = await self._db._conn.execute(
                 """
                 SELECT id FROM episodic_memories
@@ -84,7 +84,7 @@ class EpisodicLimiter:
                 ids_to_prune
             )
             await self._db._conn.commit()
-            logger.info(f"EpisodicLimiter.puned count={len(ids_to_prune)} "
+            logger.info(f"EpisodicLimiter.pruned count={len(ids_to_prune)} "
                          f"total={count} max={self._max_rows}")
             return len(ids_to_prune)
         except Exception as e:
@@ -132,5 +132,9 @@ def get_episodic_limiter(db_manager: Any | None=None) -> EpisodicLimiter:
     """获取全局情景记忆限制器单例。"""
     global _limiter
     if _limiter is None and db_manager is not None:
-        _limiter = EpisodicLimiter(db_manager)
+        try:
+            from config import MAX_EPISODIC_ROWS
+        except ImportError:
+            MAX_EPISODIC_ROWS = EpisodicLimiter.DEFAULT_MAX_ROWS
+        _limiter = EpisodicLimiter(db_manager, max_rows=MAX_EPISODIC_ROWS)
     return _limiter  # type: ignore
