@@ -540,6 +540,28 @@ class MessageProcessorMixin:
         except Exception as e:
             logger.warning(error_log, error=str(e))
 
+    def _spawn_xp_and_profile(self, user_input: str, user_id: str, user_openid: str) -> None:
+        """XP 加成 + 用户画像统计（fire-and-forget，不阻塞主消息流程）。"""
+        try:
+            from core.xp_system import get_xp_system
+            from core.user_profile_learner import get_user_profile_learner
+            _xp_uid = user_openid or user_id
+            if _xp_uid:
+                _xp = get_xp_system()
+                _learner = get_user_profile_learner()
+                _is_deep = len(user_input) > 100
+                _spawn(asyncio.gather(
+                    asyncio.to_thread(_xp.add_chat_xp, _xp_uid, len(user_input)),
+                    asyncio.to_thread(
+                        _learner.record_interaction, _xp_uid, len(user_input), is_deep=_is_deep),
+                ), timeout=20)
+                if _learner.should_run_insight(_xp_uid):
+                    _xp_state = _xp.get_state(_xp_uid)
+                    _lv = _xp_state.level.value if hasattr(_xp_state.level, 'value') else int(_xp_state.level)
+                    _spawn(self._run_profile_insight(_xp_uid, _lv), timeout=45)
+        except Exception as _e:
+            logger.warning("xp.profile.record_failed", error=str(_e))
+
     async def _run_verification_loop(
         self,
         first_result: Any,
@@ -682,48 +704,7 @@ class MessageProcessorMixin:
         # 保留 self._system_context 赋值作为向后兼容（无其他读取点，但避免意外断裂）。
         self._system_context = system_context or ""
         _system_context_var.set(system_context or "")
-        # 前端模式标记解析（搜索/深度思考）—— UI 按钮产生 [Search:...]/[Think:...] 标记，
-        # 后端解析后剥离标记并注入对应能力：Search→强制 web_search 工具指令，Think→升级 chat_pro
-        # P0 修复：不再重写 user_input，避免污染 conversation_logs.user_message
-        # 根因：原实现 user_input = f"请使用 web_search 工具搜索最新信息后回答：{_sq}"
-        #       导致 DB 历史记录出现"请使用 web_search 工具..."等系统指令，
-        #       LLM 在后续轮次回应这些元指令，造成上下文污染。
-        # 修复：剥离 marker 后保留用户原话，模式指令走 system message 注入。
-        self._think_mode = False
-        self._search_mode = False
-        _mode_system_hint = ""  # 模式指令系统提示（不入库）
-        if isinstance(user_input, str):
-            _stripped_ui = user_input.strip()
-            _m_search = re.match(r'^\[Search:\s*(.+?)\]\s*$', _stripped_ui)
-            if _m_search:
-                _sq = _m_search.group(1)
-                self._search_mode = True
-                # 保留用户原话，不重写 user_input
-                user_input = _sq
-                # 模式指令走 system message（仅 LLM 可见，不入库）
-                _mode_system_hint = "本次回复请优先使用 web_search 工具搜索最新信息后回答。"
-            else:
-                _m_think = re.match(r'^\[Think:\s*(.+?)\]\s*$', _stripped_ui)
-                if _m_think:
-                    self._think_mode = True
-                    user_input = _m_think.group(1)
-                    _mode_system_hint = "本次回复请进行更深入的思考，可以分步骤推理。"
-            # P0 新增（Task 1.9）：文档上传标记解析
-            # 前端上传文档后追加 [Doc: /path/to/file] 标记
-            # 后端剥离标记，注入 system message 提示 LLM 使用 document_reader 工具
-            _m_doc = re.search(r'\n?\[Doc:\s*([^\]]+)\]\s*', user_input)
-            if _m_doc:
-                _doc_path = _m_doc.group(1).strip()
-                # 从 user_input 中剥离 [Doc:] 标记（不污染历史记录）
-                user_input = user_input.replace(_m_doc.group(0), "").strip()
-                _doc_hint = f"用户上传了文档：{_doc_path}。请使用 document_reader 工具读取该文档内容后回答用户的问题。"
-                _mode_system_hint = (_mode_system_hint + "\n" + _doc_hint).strip() if _mode_system_hint else _doc_hint
-                logger.info("agent.doc_marker_parsed", doc_path=_doc_path)
-        # 模式指令合并到 system_context（与主动问候等场景共用同一通道）
-        if _mode_system_hint:
-            self._system_context = (self._system_context + "\n" + _mode_system_hint).strip() if self._system_context else _mode_system_hint
-            # P0-2：同步到 ContextVar，保持与实例属性一致
-            _system_context_var.set(self._system_context)
+        user_input = self._parse_mode_markers(user_input)
         # 初始化 + 安全检查 + 上下文恢复
         _stage_t0 = time.time()
         trace, session_id, allowed, reason = await self._init_and_restore_context(
@@ -735,41 +716,8 @@ class MessageProcessorMixin:
             trace.warning("agent.blocked", reason=reason)
             return ProcessResult(reply="")
 
-        # XP 自动加成 + 用户画像统计（fire-and-forget，绝不阻塞主消息流程）
-        # 治本修复（2026-08-05 用户"10秒内响应"铁证）：
-        #   日志 10:10:18 XPSystem.load → 10:10:25 router.decision，中间 7s 空白。
-        #   根因：XPSystem 单例首次调用触发 _load()，从 USB 盘（KIOXIA）
-        #   读取 xp_state.json（26 用户）同步 IO 耗时 7s。原实现
-        #   `await asyncio.gather(asyncio.to_thread(add_chat_xp), asyncio.to_thread(record_interaction))`
-        #   主流程 await 线程池任务，7s 阻塞主消息流程（非事件循环，但 coroutine 卡住）。
-        #   USB 盘 IO 慢是硬件限制无法根治，只能不让主流程等它。
-        # 治本：fire-and-forget _spawn，XP 记录在后台跑，主流程立即继续。
-        #   首次加载 7s 在后台完成，后续对话 XP 已在内存（<1ms）。
-        #   XP 状态丢失不影响回复生成（仅影响等级显示），优先保证响应速度。
-        #   配合 lifespan 预热（web/server.py），首次对话时 XP 已加载完毕。
-        try:
-            from core.xp_system import get_xp_system
-            from core.user_profile_learner import get_user_profile_learner
-            _xp_uid = user_openid or user_id
-            if _xp_uid:
-                _xp = get_xp_system()
-                _learner = get_user_profile_learner()
-                _is_deep = len(user_input) > 100
-                # fire-and-forget：XP + profile 记录后台跑，不阻塞主流程
-                _spawn(asyncio.gather(
-                    asyncio.to_thread(_xp.add_chat_xp, _xp_uid, len(user_input)),
-                    asyncio.to_thread(
-                        _learner.record_interaction, _xp_uid, len(user_input), is_deep=_is_deep),
-                ), timeout=20)
-                # 周期性触发 LLM 认知抽取（不阻塞，spawn 后台）
-                if _learner.should_run_insight(_xp_uid):
-                    _xp_state = _xp.get_state(_xp_uid)
-                    _lv = _xp_state.level.value if hasattr(_xp_state.level, 'value') else int(_xp_state.level)
-                    # _run_profile_insight 仅 LLM 调用 + 写 USER.md 文件，无 DB 事务，
-                    # 可安全中断，故显式传 timeout=45 防止卡死阻塞事件循环
-                    _spawn(self._run_profile_insight(_xp_uid, _lv), timeout=45)
-        except Exception as _e:
-            logger.warning("xp.profile.record_failed", error=str(_e))
+        # XP 加成 + 用户画像统计（fire-and-forget）
+        self._spawn_xp_and_profile(user_input, user_id, user_openid)
 
         # slash 命令
         if self.slash_handler and self.slash_handler.is_slash_command(user_input):
@@ -875,31 +823,25 @@ class MessageProcessorMixin:
         # 否则 restore_from_db 用裸 openid 查询 → DB 返回 0 行 → 每次重启后完全失忆。
         _restore_id = user_id or user_openid
         if _restore_id:
-            try:
-                await asyncio.wait_for(
-                    self.context.switch_user_context(_restore_id),
-                    timeout=5.0,
-                )
-            except asyncio.TimeoutError:
-                logger.warning("agent.switch_user_context_timeout",
-                               timeout=5.0, user_id=_restore_id,
-                               hint="锁竞争或事件循环阻塞，跳过用户切换")
-            except Exception as e:
-                logger.warning("agent.switch_user_context_failed", error=str(e))
+            await MessageProcessorMixin._call_with_timeout(
+                self,
+                self.context.switch_user_context(_restore_id),
+                timeout=5.0,
+                timeout_log="agent.switch_user_context_timeout",
+                error_log="agent.switch_user_context_failed",
+                timeout_kwargs={"user_id": _restore_id, "hint": "锁竞争或事件循环阻塞，跳过用户切换"},
+            )
         if _restore_id and self.db:
-            try:
-                await asyncio.wait_for(
-                    self.context.restore_from_db(
-                        self.db, user_id=_restore_id,
-                        address_term=self.context.current_address_term),
-                    timeout=10.0,
-                )
-            except asyncio.TimeoutError:
-                logger.warning("agent.restore_from_db_timeout",
-                               timeout=10.0, user_id=_restore_id,
-                               hint="数据库查询阻塞，跳过历史摘要恢复")
-            except Exception as e:
-                logger.warning("agent.restore_failed", error=str(e))
+            await MessageProcessorMixin._call_with_timeout(
+                self,
+                self.context.restore_from_db(
+                    self.db, user_id=_restore_id,
+                    address_term=self.context.current_address_term),
+                timeout=10.0,
+                timeout_log="agent.restore_from_db_timeout",
+                error_log="agent.restore_failed",
+                timeout_kwargs={"user_id": _restore_id, "hint": "数据库查询阻塞，跳过历史摘要恢复"},
+            )
 
         logger.info("pipeline.restore.done proc_id={} elapsed_ms={}",
                     _proc_id, int((time.time() - _restore_t0) * 1000))
