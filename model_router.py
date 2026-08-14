@@ -1785,58 +1785,47 @@ class ModelRouter:
         for attempt in range(MAX_RETRIES + 1):
             try:
                 _stream_finish_reason = None
-                client = await self._select_client_for_provider(provider)
-                kwargs = self._build_route_kwargs(
-                    model, messages, temperature, mt, True,
-                    tools, tool_choice, extra_headers, config, provider,
+                stream = await self._create_completion(
+                    provider,
+                    model=model, messages=messages, temperature=temperature,
+                    max_tokens=mt, stream=True, tools=tools, tool_choice=tool_choice,
+                    extra_headers=extra_headers, config=config, timeout=timeout,
+                    stream_options={"include_usage": True},
                 )
-                # CR-Major-1 修复：stream_options include_usage，让 provider 在最后一个
-                # chunk 返回 usage，供 _record_stream_usage 记录费用。
-                # 不加此参数时流式调用 usage 为 None，费用统计漏算（用户反馈"流式调用
-                # 不计费"根因）。OpenAI 兼容端点均支持，不支持时 provider 忽略此字段。
-                kwargs["stream_options"] = {"include_usage": True}
-                # per-provider 锁：agnes 不支持并发，create + stream 消费期间持锁，
-                # 保证同 provider 的流式调用串行；不同 provider 之间不互斥。
-                # 替代已删除的全局 _llm_call_gate（全局锁会阻塞所有 provider）。
-                async with self._get_credential_lock(provider):
-                    stream = await asyncio.wait_for(
-                        client.chat.completions.create(**kwargs),
-                        timeout=timeout,
-                    )
-                    # P0 修复（qq_group 截断根因）：添加 stall timeout 检测死流
-                    # 根因：原实现在 async for chunk in stream 中无 stall timeout，
-                    # 如果 provider 中途关闭连接且不发送 finish_reason chunk，
-                    # 循环会正常结束（无异常），content 被静默截断，
-                    # _stream_finish_reason 保持 None → 不触发 length retry → 用户看到截断回复。
-                    # 修复：用 asyncio.wait_for 包装每个 chunk 的读取，15 秒无新 chunk → TimeoutError
-                    # _stall_timeout 已在循环外初始化（except 分支需引用）
-                    _chunk_count = 0
-                    _stream_usage = None
-                    while True:
-                        try:
-                            chunk = await asyncio.wait_for(
-                                stream.__anext__(),
-                                timeout=_stall_timeout,
-                            )
-                        except StopAsyncIteration:
-                            break  # 流正常结束
-                        _chunk_count += 1
-                        # CR-Major-1：捕获 usage（最后一个 chunk 才有，include_usage=True 时）
-                        _chunk_usage = getattr(chunk, "usage", None)
-                        if _chunk_usage is not None:
-                            _stream_usage = _chunk_usage
-                        try:
-                            _choice = chunk.choices[0]
-                        except (AttributeError, IndexError):
-                            continue
-                        # P0 修复：捕获 finish_reason（最后一个 chunk 才有）
-                        _chunk_fr = getattr(_choice, "finish_reason", None)
-                        if _chunk_fr:
-                            _stream_finish_reason = _chunk_fr
-                        delta = getattr(_choice.delta, "content", None)
-                        if delta:
-                            _content_yielded = True
-                            yield delta
+                # P0 修复（qq_group 截断根因）：添加 stall timeout 检测死流
+                # 根因：原实现在 async for chunk in stream 中无 stall timeout，
+                # 如果 provider 中途关闭连接且不发送 finish_reason chunk，
+                # 循环会正常结束（无异常），content 被静默截断，
+                # _stream_finish_reason 保持 None → 不触发 length retry → 用户看到截断回复。
+                # 修复：用 asyncio.wait_for 包装每个 chunk 的读取，15 秒无新 chunk → TimeoutError
+                # _stall_timeout 已在循环外初始化（except 分支需引用）
+                _chunk_count = 0
+                _stream_usage = None
+                while True:
+                    try:
+                        chunk = await asyncio.wait_for(
+                            stream.__anext__(),
+                            timeout=_stall_timeout,
+                        )
+                    except StopAsyncIteration:
+                        break  # 流正常结束
+                    _chunk_count += 1
+                    # CR-Major-1：捕获 usage（最后一个 chunk 才有，include_usage=True 时）
+                    _chunk_usage = getattr(chunk, "usage", None)
+                    if _chunk_usage is not None:
+                        _stream_usage = _chunk_usage
+                    try:
+                        _choice = chunk.choices[0]
+                    except (AttributeError, IndexError):
+                        continue
+                    # P0 修复：捕获 finish_reason（最后一个 chunk 才有）
+                    _chunk_fr = getattr(_choice, "finish_reason", None)
+                    if _chunk_fr:
+                        _stream_finish_reason = _chunk_fr
+                    delta = getattr(_choice.delta, "content", None)
+                    if delta:
+                        _content_yielded = True
+                        yield delta
                 # P0 修复：流结束后检测是否收到 finish_reason
                 # 如果未收到，说明 provider 可能中途关闭连接（死流），content 可能被截断
                 if not _stream_finish_reason:
@@ -2076,6 +2065,40 @@ class ModelRouter:
         elif thinking_config:
             kwargs["extra_body"] = {"thinking": thinking_config}
         return kwargs
+
+    async def _create_completion(
+        self,
+        provider: str,
+        *,
+        model: str,
+        messages: list[dict],
+        temperature: float,
+        max_tokens: int,
+        stream: bool,
+        tools: list[dict] | None,
+        tool_choice: str | None,
+        extra_headers: dict | None,
+        config: dict,
+        timeout: int,
+        stream_options: dict | None = None,
+    ) -> Any:
+        """统一「客户端选择 → 构造 kwargs → 加锁创建」的调用核心。
+
+        供 chat_stream / _route_with_retry / _route_for_continuation 复用，
+        消除三处重复。stream_options 仅流式路径需要时透传。
+        """
+        client = await self._select_client_for_provider(provider)
+        kwargs = self._build_route_kwargs(
+            model, messages, temperature, max_tokens, stream,
+            tools, tool_choice, extra_headers, config, provider,
+        )
+        if stream_options:
+            kwargs["stream_options"] = stream_options
+        async with self._get_credential_lock(provider):
+            return await asyncio.wait_for(
+                client.chat.completions.create(**kwargs),
+                timeout=timeout,
+            )
 
     async def _handle_route_response(self, response: Any, task_type: str, model: str,
                                      stream: bool, user_openid: str, session_id: str,
@@ -2355,19 +2378,12 @@ class ModelRouter:
 
         for attempt in range(MAX_RETRIES + 1):
             try:
-                client = await self._select_client_for_provider(provider)
-                kwargs = self._build_route_kwargs(
-                    model, messages, temperature, max_tokens, stream,
-                    tools, tool_choice, extra_headers, config, provider,
+                response = await self._create_completion(
+                    provider,
+                    model=model, messages=messages, temperature=temperature,
+                    max_tokens=max_tokens, stream=stream, tools=tools, tool_choice=tool_choice,
+                    extra_headers=extra_headers, config=config, timeout=timeout,
                 )
-
-                # per-provider 锁：agnes 不支持并发，同 provider 的 create 串行；
-                # 不同 provider 之间不互斥（替代已删除的全局 _llm_call_gate）。
-                async with self._get_credential_lock(provider):
-                    response = await asyncio.wait_for(
-                        client.chat.completions.create(**kwargs),
-                        timeout=timeout,
-                    )
                 return await self._handle_route_response(
                     response, task_type, model, stream,
                     user_openid, session_id, provider, tools,
@@ -2413,17 +2429,12 @@ class ModelRouter:
         messages = self._apply_prompt_caching(provider, messages)
 
         try:
-            client = await self._select_client_for_provider(provider)
-            kwargs = self._build_route_kwargs(
-                model, messages, temperature, mt, False,
-                None, None, None, config, provider,
+            response = await self._create_completion(
+                provider,
+                model=model, messages=messages, temperature=temperature,
+                max_tokens=mt, stream=False, tools=None, tool_choice=None,
+                extra_headers=None, config=config, timeout=timeout,
             )
-            # per-provider 锁：agnes 不支持并发，同 provider create 串行
-            async with self._get_credential_lock(provider):
-                response = await asyncio.wait_for(
-                    client.chat.completions.create(**kwargs),
-                    timeout=timeout,
-                )
             self._track_cache(response)
             logger.info("llm.continuation_call", model=model, task=task_type,
                         user_id=user_openid, session_id=session_id,
