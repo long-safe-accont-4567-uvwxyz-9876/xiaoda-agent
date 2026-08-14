@@ -897,25 +897,15 @@ def apply_agent_name_replacements(content: str) -> str:
 
 
 def reverse_agent_name_replacements(content: str) -> str:
-    """将 display_name 还原为原名（用于编辑器保存时还原模板）。
+    """将 display_name 还原为 agent key（用于编辑器保存时还原模板）。
 
     与 apply_agent_name_replacements 互为逆操作。
-    还原中文显示名 → 原名、agent key → 原名。
+    只做 display_name → agent key 这一层还原，不涉及旧名（如"纳西妲"）。
     """
-    # 还原 agent key（必须先还原，因为显示名可能包含 agent key）
     for agent_key in agent_names():
         dn = _best_display_name(agent_key)
         if dn and dn != agent_key:
             content = content.replace(dn, agent_key)
-    # 还原中文 display_name → 原名（使用配置文件中的第一个旧名）
-    for agent_key in agent_names():
-        dn = _best_display_name(agent_key)
-        deprecated = get_agent_deprecated_names(agent_key)
-        if dn and deprecated:
-            # 还原到第一个中文旧名（优先）
-            cn_names = [n for n in deprecated if any('\u4e00' <= c <= '\u9fff' for c in n)]
-            target = cn_names[0] if cn_names else deprecated[0]
-            content = content.replace(dn, target)
     return content
 
 

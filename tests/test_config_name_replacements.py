@@ -25,7 +25,14 @@ def test_reverse_agent_name_replacements(monkeypatch):
     monkeypatch.setattr(config, "agent_names", lambda: ["xiaoda"])
     monkeypatch.setattr(config, "get_agent_display_name", lambda k: "草神")
     monkeypatch.setattr(config, "get_agent_deprecated_names", lambda k: ["纳西妲"])
-    # 注意：reverse 先做 display_name → agent_key（"草神" → "xiaoda"），
-    # 再做 display_name → 中文旧名（"草神" → "纳西妲"），但此时内容已是 "xiaoda"，
-    # 第二步不再命中，因此最终结果是 "xiaoda"。这里按既有行为断言，防止回归。
+    # reverse 只做 display_name → agent key，绝不还原到旧名（如"纳西妲"）。
     assert config.reverse_agent_name_replacements("草神") == "xiaoda"
+
+
+def test_reverse_does_not_restore_deprecated_name(monkeypatch):
+    """reverse 不得把显示名还原为旧名（纳西妲），只还原为 agent key。"""
+    monkeypatch.setattr(config, "agent_names", lambda: ["xiaoda"])
+    monkeypatch.setattr(config, "get_agent_display_name", lambda k: "小妲")
+    monkeypatch.setattr(config, "get_agent_deprecated_names", lambda k: ["纳西妲", "nahida"])
+    assert config.reverse_agent_name_replacements("小妲") == "xiaoda"
+    assert "纳西妲" not in config.reverse_agent_name_replacements("小妲")
