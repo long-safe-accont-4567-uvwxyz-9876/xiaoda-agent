@@ -53,6 +53,11 @@ _rate_limit_lock = Lock()
 # 已撤销 token 内存缓存，避免每次请求都读文件
 _revoked_cache: set[str] = set()
 _revoked_cache_mtime: float = 0.0
+# 滑动续期宽限期（秒）：续期撤销旧 token 后，旧 token 在宽限期内仍视为有效，
+# 避免并发请求 B 在 A 刚续期作废旧 token 的瞬间被误伤 401。
+_RENEWAL_GRACE_SECONDS = 30.0
+# token -> 宽限期截止时间（epoch 秒）。仅内存态，用于续期撤销的短窗口豁免。
+_revoked_grace: dict[str, float] = {}
 _token_epoch: int | None = None
 _token_epoch_lock = Lock()
 
@@ -126,7 +131,7 @@ def _increment_token_epoch() -> int:
 def _extract_expiry(token: str) -> float:
     """从 token 中提取过期时间。"""
     try:
-        decoded = base64.urlsafe_b64decode(token.encode()).decode()
+        decoded = base64.urlsafe_b64decode((token + "=" * (-len(token) % 4)).encode()).decode()
         parts = decoded.rsplit(".", 3)
         if len(parts) == 4:
             return float(parts[0])
@@ -137,8 +142,17 @@ def _extract_expiry(token: str) -> float:
         return 0.0
 
 
-def _revoke_token(token: str) -> None:
-    """将 token 加入黑名单（持久化到文件）。"""
+def _now() -> float:
+    """当前时间（可注入时钟，便于测试宽限期边界）。"""
+    return time.time()
+
+
+def _revoke_token(token: str, grace_seconds: float = 0.0) -> None:
+    """将 token 加入黑名单（持久化到文件）。
+
+    grace_seconds > 0 时，token 在宽限期内仍视为有效（用于滑动续期撤销旧 token，
+    避免并发请求在续期瞬间被误伤）；否则立即生效（logout / revoke-all 语义）。
+    """
     with _revoked_lock:
         path = _get_revoked_path()
         data: dict[str, list] = {"revoked": []}
@@ -157,6 +171,11 @@ def _revoke_token(token: str) -> None:
         # 清理已过期的 revoked token（节省空间）
         now = time.time()
         data["revoked"] = [t for t in data["revoked"] if _extract_expiry(t) > now]
+        # 宽限期：续期撤销记录截止时间；无宽限期则清除旧豁免
+        if grace_seconds > 0:
+            _revoked_grace[token] = _now() + grace_seconds
+        else:
+            _revoked_grace.pop(token, None)
         try:
             path.parent.mkdir(parents=True, exist_ok=True)
             path.write_text(json.dumps(data, ensure_ascii=False), encoding="utf-8")
@@ -177,7 +196,16 @@ def _is_revoked(token: str) -> bool:
                 data = json.loads(path.read_text(encoding="utf-8"))
                 _revoked_cache = set(data.get("revoked", []))
                 _revoked_cache_mtime = mtime
-            return token in _revoked_cache
+            if token not in _revoked_cache:
+                return False
+            # 宽限期：刚因续期被撤销的旧 token，在宽限期内仍视为有效
+            deadline = _revoked_grace.get(token)
+            if deadline is not None:
+                if _now() < deadline:
+                    return False
+                # 宽限期已过，惰性清理避免无限增长
+                _revoked_grace.pop(token, None)
+            return True
     except Exception as exc:
         logger.debug("auth.is_revoked_json_parse_failed: {}", exc, exc_info=True)
         return False
@@ -197,7 +225,7 @@ def _issue_token() -> tuple[str, float]:
     epoch = _load_token_epoch()
     payload = f"{expiry}.{nonce}.{epoch}"
     sig = hmac.new(_SECRET.encode(), payload.encode(), hashlib.sha256).hexdigest()
-    token = base64.urlsafe_b64encode(f"{payload}.{sig}".encode()).decode()
+    token = base64.urlsafe_b64encode(f"{payload}.{sig}".encode()).decode().rstrip("=")
     with _tokens_lock:
         _cleanup_expired_tokens()
         _tokens[token] = expiry
@@ -210,7 +238,7 @@ def _issue_token() -> tuple[str, float]:
 def _validate_token(token: str) -> bool:
     """Validate token via HMAC signature + revocation check."""
     try:
-        decoded = base64.urlsafe_b64decode(token.encode()).decode()
+        decoded = base64.urlsafe_b64decode((token + "=" * (-len(token) % 4)).encode()).decode()
         parts = decoded.rsplit(".", 3)
         if len(parts) != 4:
             return False
@@ -315,11 +343,10 @@ async def get_current_user(request: Request) -> str:
         raise HTTPException(401, "Invalid or expired token")
     # 滑动续期：剩余不到1天时换新
     try:
-        decoded = base64.urlsafe_b64decode(token.encode()).decode()
-        expiry = float(decoded.rsplit(".", 2)[0])
+        expiry = _extract_expiry(token)
         if expiry - time.time() < 86400:  # 不到1天就续
             new_token, new_expiry = _issue_token()
-            _revoke_token(token)  # 旧 token 作废
+            _revoke_token(token, grace_seconds=_RENEWAL_GRACE_SECONDS)  # 旧 token 作废（带宽限期）
             request.state.new_token = new_token
             request.state.new_expiry = new_expiry
             logger.info("auth.token_renewed old_expiry={} new_expiry={}", int(expiry), int(new_expiry))

@@ -65,8 +65,7 @@ export class WsClient {
   // connect() 会重置 _intentionalDisconnect/reconnectAttempts，导致
   // 重连失败时 onclose 误判为主动断开而放弃重试，且指数退避失效。
   private _open(token: string) {
-    const wsUrl = `${this.url}?token=${token}`
-    this.ws = new WebSocket(wsUrl)
+    this.ws = token ? new WebSocket(this.url, [token]) : new WebSocket(this.url)
 
     this.ws.onopen = () => {
       this.connected = true
@@ -84,12 +83,7 @@ export class WsClient {
         if (data.type === 'error' && data.code === 'UNAUTHORIZED') {
           this._unauthorized = true
           this.disconnect()
-          // 清除本地 token 并跳转登录页
-          localStorage.removeItem('token')
-          localStorage.removeItem('expires_at')
-          if (!location.hash.includes('/login')) {
-            location.hash = '#/login'
-          }
+          this._handleUnauthorized()
           return
         }
         // G5: 处理服务端心跳 ping，立即回 pong（在 emit 之前处理，避免给 listeners 传 ping 事件）
@@ -105,7 +99,14 @@ export class WsClient {
       this.connected = false
       this.stopHeartbeat()
       // 先更新重连状态，再发事件：onWsDisconnected 需读到 reconnecting 才能亮黄灯
-      if (event.code === 4001 || this._unauthorized || this._intentionalDisconnect) {
+      if (event.code === 4001) {
+        // token 失效（服务端直接以 4001 关闭）：停止重连、清 token 跳登录
+        this._reconnecting = false
+        this._handleUnauthorized()
+        this.emit({ type: 'ws_disconnected' })
+        return
+      }
+      if (this._unauthorized || this._intentionalDisconnect) {
         // 主动断开 / token 失效：不重连，标记为"已断开"（红灯）
         this._reconnecting = false
         this.emit({ type: 'ws_disconnected' })
@@ -130,6 +131,15 @@ export class WsClient {
     this.ws?.close()
     this.ws = null
     this.connected = false
+  }
+
+  private _handleUnauthorized() {
+    // 清除本地 token 并跳转登录页
+    localStorage.removeItem('token')
+    localStorage.removeItem('expires_at')
+    if (!location.hash.includes('/login')) {
+      location.hash = '#/login'
+    }
   }
 
   send(data: Record<string, unknown>): boolean {

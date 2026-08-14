@@ -5,7 +5,7 @@ import time
 from loguru import logger
 
 from db.database import DatabaseManager
-from db.db_memory import MemoryDB
+from db.db_memory import MemoryDB, compute_missing_vec_ids
 # FTS5 分词工具从 db.fts_utils 导入 (打破 db <-> memory 循环); 这里 re-export
 # 保持向后兼容 (其他模块仍可 `from memory.memory_manager import _tokenize_for_fts`)
 from .vector_store import VectorStore
@@ -599,6 +599,34 @@ class MemoryManager:
     def set_knowledge_graph(self, kg: Any) -> None:
         self.kg = kg
 
+    async def reconcile_vector_index_gap(self) -> int:
+        """对账检测：统计主表已落盘（is_raw=1）但向量索引缺失的记忆数量。
+
+        进程崩溃时 is_raw=1 的记忆已写入主表，但 fire-and-forget 的 vec.upsert
+        可能未完成，导致向量检索搜不到这些记忆。返回缺失数量，>0 时记录 warning
+        提示需要重建向量索引。
+        """
+        if not self.vec or not getattr(self.vec, "_vec_conn", None):
+            return 0
+        get_raw_ids = getattr(self.memory, "get_raw_memory_ids", None)
+        get_vec_ids = getattr(self.vec, "get_memories_vec_rowids", None)
+        if get_raw_ids is None or get_vec_ids is None:
+            return 0
+        try:
+            raw_ids = await get_raw_ids()
+            if not raw_ids:
+                return 0
+            vec_ids = await asyncio.to_thread(get_vec_ids)
+            missing = compute_missing_vec_ids(list(raw_ids), set(vec_ids))
+            if missing:
+                logger.warning("memory.vector_index_gap_detected",
+                               missing_count=len(missing),
+                               hint="is_raw=1 记忆已落主表但向量索引缺失，需重建")
+            return len(missing)
+        except Exception as e:
+            logger.warning("memory.vector_reconcile_failed", error=str(e))
+            return 0
+
     def set_kg_v2_engine(self, engine: Any) -> None:
         """注入 KGSearchEngine 实例 (KG v2 混合检索)。"""
         self._kg_v2_engine = engine
@@ -706,7 +734,8 @@ class MemoryManager:
                                         use_reranker: bool = True,
                                         use_kg: bool = True,
                                         scope: Any | None = None,
-                                        include_raw: bool = True) -> list[dict]:
+                                        include_raw: bool = True,
+                                        query_vec: list[float] | None = None) -> list[dict]:
         """FTS + 向量 + KG + 子chunk + 扩散 + 实体 六路 RRF 混合检索 + Reranker 精排
 
         mem0 SPEC 优化：
@@ -728,6 +757,8 @@ class MemoryManager:
                 也会置为 False 以节省 Reranker 调用成本。
             use_kg: 是否启用 KG 第三路召回。闲聊型查询置为 False 避免不必要的
                 KG 检索开销。
+            query_vec: P1-4 预计算查询向量（多查询场景批量 embed 后复用），
+                None 时各向量通道内部 embed。
         """
         # scope 默认值
         if scope is None:
@@ -796,7 +827,7 @@ class MemoryManager:
                             duration_ms=int((time.time() - _start) * 1000))
                 return results
             # FTS 无结果，尝试向量兜底 + KG v2
-            vec_items = await self._hybrid_vec_search(query, recall_limit, is_raw=is_raw_filter, scope=scope)
+            vec_items = await self._hybrid_vec_search(query, recall_limit, is_raw=is_raw_filter, scope=scope, query_vec=query_vec)
             if vec_items:
                 results = vec_items[:k]
                 if kg_v2_items and len(results) < k:
@@ -875,11 +906,15 @@ class MemoryManager:
                     # embed client 已配 connect=15s + max_retries=0 + 共享 httpx client，
                     # 内层 embed 有 10s 单次超时 + 重试保护。原外层 3s 必然先于内层 10s 触发，
                     # 导致 embed 重试机制完全失效，网络抖动时子chunk向量召回被错误跳过。
-                    query_vectors = await self.vec.embed([query])
-                    query_vec = query_vectors[0] if query_vectors else []
-                    if not query_vec:
+                    # P1-4: 复用上层预计算的 query_vec（多查询场景批量 embed），
+                    # 未提供时回退独立 embed
+                    _qv = query_vec
+                    if _qv is None:
+                        query_vectors = await self.vec.embed([query])
+                        _qv = query_vectors[0] if query_vectors else []
+                    if not _qv:
                         return []
-                    results = await self.vec.search_child(query_vec, top_k=recall_limit)
+                    results = await self.vec.search_child(_qv, top_k=recall_limit)
                     if not results:
                         return []
                     child_ids = [r["id"] for r in results]
@@ -959,7 +994,7 @@ class MemoryManager:
 
         fts_items, vec_items, kg_items, child_items, spread_items, entity_items, kg_v2_items = await asyncio.gather(
             _timed("fts", self._hybrid_fts_search_scoped(query, recall_limit, scope, is_raw_filter)),
-            _timed("vec", self._hybrid_vec_search(query, recall_limit, candidate_ids=candidate_ids, is_raw=is_raw_filter, scope=scope)),
+            _timed("vec", self._hybrid_vec_search(query, recall_limit, candidate_ids=candidate_ids, is_raw=is_raw_filter, scope=scope, query_vec=query_vec)),
             _timed("kg", _kg_recall()),
             _timed("child", _child_recall()),
             _timed("spreading", self._spreading_recall(query, recall_limit, scope=scope)),
@@ -972,7 +1007,7 @@ class MemoryManager:
             # Fallback: 用相同 FTS+Vec 检索，但 include_raw（is_raw=0 和 is_raw=1 都返回）
             raw_fts, raw_vec = await asyncio.gather(
                 self._hybrid_fts_search_scoped(query, recall_limit, scope, is_raw_filter=None),
-                self._hybrid_vec_search(query, recall_limit, candidate_ids=candidate_ids, is_raw=None, scope=scope),
+                self._hybrid_vec_search(query, recall_limit, candidate_ids=candidate_ids, is_raw=None, scope=scope, query_vec=query_vec),
             )
             raw_results = (raw_fts or []) + (raw_vec or [])
             if raw_results:
@@ -1179,13 +1214,15 @@ class MemoryManager:
     async def _hybrid_vec_search(self, query: str, k: int,
                                  candidate_ids: list[int] | None = None,
                                  is_raw: int | None = None,
-                                 scope: Any | None = None) -> list[dict]:
+                                 scope: Any | None = None,
+                                 query_vec: list[float] | None = None) -> list[dict]:
         """向量检索 + 批量 JOIN：一次查询获取所有向量命中的记忆记录
 
         ContextNest A1: candidate_ids 提供时, 向量检索只在确定性候选集内排序,
         候选集本身由 metadata selector (时间/重要性) 产生, Jaccard 1.0。
         is_raw: None=不过滤, 0=只查蒸馏知识, 1=只查原始记忆
         scope: 非空时后过滤 user_id/agent_id，防止跨用户记忆泄露。
+        query_vec: P1-4 预计算查询向量（多查询场景批量 embed 后复用），None 时内部 embed
         """
         if not self.vec:
             return []
@@ -1198,6 +1235,7 @@ class MemoryManager:
             __st = time.time()
             vec_results = await self.vec.search(
                 query, top_k=k * 2, candidate_ids=candidate_ids, deterministic=True,
+                query_vec=query_vec,
             )
             _stage_log("vec_embed_search", __st, query)
             if not vec_results:
@@ -1220,31 +1258,20 @@ class MemoryManager:
             # 不进入 RRF 融合，从源头杜绝噪声。
             import config as _cfg
             _max_distance = getattr(_cfg, 'RAG_VEC_MAX_DISTANCE', 1.0)
-            filtered_dists = [d for rid, d in vec_results
-                              if rid in vec_mem_map and d <= _max_distance]
-            items = []
-            if filtered_dists:
-                if len(filtered_dists) == 1:
-                    _use_normalize = False
-                    max_dist = 0.0
-                else:
-                    max_dist = max(filtered_dists)
-                    _use_normalize = max_dist > 0
-            else:
-                _use_normalize = False
-                max_dist = 0.0
             _filtered_count = 0
+            items = []
             for row_id, distance in vec_results:
                 mem = vec_mem_map.get(row_id)
                 if mem:
-                    # 治本：绝对距离阈值过滤，远距离向量直接丢弃
+                    # P0-1: 统一绝对相似度 (1 - distance)，去掉相对归一化 (1 - distance/max_dist)。
+                    # 根因：相对归一化会把过滤后最大距离映射到 0.0、最小距离映射到 1.0，
+                    # 即使所有结果都距离很远（接近 RAG_VEC_MAX_DISTANCE），最相关的也有高分，
+                    # 与绝对阈值过滤配合时分数失真。绝对距离 0~1.0 映射相似度 1.0~0.0，
+                    # 与 RAG_MIN_FINAL_SCORE / RRF 的分数语义对齐。
                     if distance > _max_distance:
                         _filtered_count += 1
                         continue
-                    if _use_normalize:
-                        mem["score"] = max(0.0, 1.0 - distance / max_dist)
-                    else:
-                        mem["score"] = max(0.0, 1.0 - distance)
+                    mem["score"] = max(0.0, 1.0 - distance)
                     items.append(mem)
             if _filtered_count > 0:
                 logger.info("memory.vec_distance_filtered",
@@ -2107,9 +2134,25 @@ class MemoryManager:
         """
         all_results: list[dict] = []
         seen_ids: set[str] = set()
+        # P1-4: 合并 embed 批处理。原实现每个子查询在 retrieve_memories_hybrid
+        # 内部各自 embed 一次（N 个子查询 = N 次 API 调用/推理）。
+        # 这里先批量 embed 一次，子查询检索时复用向量，减少 embed 延迟与限流。
+        # 批量失败时降级为 None，各子查询回退内部独立 embed（single-flight 兜底）。
+        precomputed_vecs: list[list[float] | None] = [None] * len(queries)
+        if getattr(self, "vec", None):
+            try:
+                batch_vecs = await self.vec.embed(list(queries))
+                for i, v in enumerate(batch_vecs):
+                    if v:
+                        precomputed_vecs[i] = v
+            except Exception as e:
+                logger.debug("memory.batch_embed_failed", error=str(e))
         hybrid_tasks = [
-            self.retrieve_memories_hybrid(q, k=k * 2, use_reranker=False, scope=scope)
-            for q in queries
+            self.retrieve_memories_hybrid(
+                q, k=k * 2, use_reranker=False, scope=scope,
+                query_vec=precomputed_vecs[i],
+            )
+            for i, q in enumerate(queries)
         ]
         hybrid_results = await asyncio.gather(*hybrid_tasks, return_exceptions=True)
         for i, res in enumerate(hybrid_results):
@@ -2128,14 +2171,14 @@ class MemoryManager:
         if self._reranker and self._reranker.available and len(all_results) > k:
             try:
                 docs = [r.get("summary", "") for r in all_results]
-                # 阶段性超时保护：reranker 5s 超时，慢时降级到未排序结果
-                reranked = await asyncio.wait_for(
-                    self._reranker.rerank(
-                        query=query,
-                        documents=docs,
-                        top_n=k,
-                    ),
-                    timeout=5.0,
+                # P1-5: 移除 5s 外层 wait_for（治标）。
+                # 根因：reranker 已用共享 httpx client（connect=15s）+ 单次请求 5s timeout，
+                # 且 _hybrid_rerank 与本方法均有 try/except 降级。原外层 5s 与内层 5s
+                # 双层超时，外层必然先触发，reranker 实际耗时被截断，降级机制失效。
+                reranked = await self._reranker.rerank(
+                    query=query,
+                    documents=docs,
+                    top_n=k,
                 )
                 reranked_results = []
                 for item in reranked:
@@ -2388,7 +2431,7 @@ class MemoryManager:
     async def _compute_final_scores(self, query: str, results: list[dict],
                                       config: Any,
                                       query_entities: set[str] | None = None) -> None:
-        """统一评分公式: final = 0.5×rerank + 0.3×R + 0.1×kg + 0.1×importance。
+        """统一评分公式: final = 0.4×rerank + 0.25×R + 0.15×recency + 0.1×kg + 0.1×importance。
 
         R 为 FSRS-DSR Retrievability（记忆可提取性），替代旧 fluid_score。
         I6: 复用已存储的 entities 字段 + 预提取的 query_entities，
@@ -2736,7 +2779,7 @@ class MemoryManager:
                         logger.error("degradation_triggered memory.encode_vec_upsert_timeout "
                                      "hint=vec_upsert 15s 超时，跳过向量索引（episodic 已保存）")
                     except Exception as e:
-                        logger.debug("memory.initial_vec_upsert_failed", error=str(e))
+                        logger.warning("memory.initial_vec_upsert_failed", error=str(e))
                 _it1 = time.time()
                 if _it1 - _it0 > 3:
                     logger.warning("memory.encode_slow_step", step="vec_upsert",
@@ -2752,7 +2795,7 @@ class MemoryManager:
                         logger.error("degradation_triggered memory.encode_concept_timeout "
                                      "hint=concept_graph 15s 超时，跳过（lazy_migrate 可补）")
                     except Exception as e:
-                        logger.debug("memory.concept_dual_write_failed", error=str(e))
+                        logger.warning("memory.concept_dual_write_failed", error=str(e))
                 _it2 = time.time()
                 if _it2 - _it1 > 3:
                     logger.warning("memory.encode_slow_step", step="concept_graph",
@@ -2779,7 +2822,7 @@ class MemoryManager:
                         logger.error("degradation_triggered memory.encode_children_section_timeout "
                                      "hint=子chunk生成+写入 25s 整体超时，跳过（episodic 已保存）")
                     except Exception as e:
-                        logger.debug("memory.child_chunk_failed", error=str(e))
+                        logger.warning("memory.child_chunk_failed", error=str(e))
                 _it3 = time.time()
                 logger.info("memory.indexing_done",
                             total_ms=int((_it3 - _it0) * 1000), mem_id=mem_id)
@@ -2845,7 +2888,10 @@ class MemoryManager:
             self.invalidate_memory_count_cache()
 
             if self._query_cache:
-                await self._query_cache.invalidate()
+                # P1-6: invalidate 改 fire-and-forget（原 await 会与持锁的 get/put
+                # 竞争：get/put 在 await embed（最长 1.5s）时持锁，写路径被拖慢。
+                # 缓存失效不依赖写入结果，无需阻塞写入流程）
+                _spawn(self._query_cache.invalidate())
 
             # G13: 失效扩散激活 recall 缓存（concept_nodes 已写入，避免返回旧结果）
             if getattr(self, 'spreading_engine', None) and self.spreading_engine:
@@ -3083,7 +3129,8 @@ class MemoryManager:
                            raw_id=raw_id, knowledge_id=knowledge_id)
             # 蒸馏完成后失效查询缓存：新提炼知识需被后续检索感知
             if self._query_cache:
-                await self._query_cache.invalidate()
+                # P1-6: fire-and-forget（避免与持锁的 get/put 竞争阻塞写路径）
+                _spawn(self._query_cache.invalidate())
             # G13: 失效扩散激活 recall 缓存
             if getattr(self, 'spreading_engine', None) and self.spreading_engine:
                 self.spreading_engine.clear_cache()
@@ -3123,7 +3170,8 @@ class MemoryManager:
                 await self.memory.update_distill_status(raw_id, "distill_failed")
             # summary 更新后失效查询缓存，避免返回旧内容
             if self._query_cache:
-                await self._query_cache.invalidate()
+                # P1-6: fire-and-forget（避免与持锁的 get/put 竞争阻塞写路径）
+                _spawn(self._query_cache.invalidate())
             # G13: 失效扩散激活 recall 缓存
             if getattr(self, 'spreading_engine', None) and self.spreading_engine:
                 self.spreading_engine.clear_cache()
@@ -3472,7 +3520,8 @@ class MemoryManager:
 
             # enrichment 更新了 summary/entities/子chunk，失效查询缓存
             if self._query_cache:
-                await self._query_cache.invalidate()
+                # P1-6: fire-and-forget（避免与持锁的 get/put 竞争阻塞写路径）
+                _spawn(self._query_cache.invalidate())
 
         except Exception as e:
             logger.debug("memory.enrich_failed",

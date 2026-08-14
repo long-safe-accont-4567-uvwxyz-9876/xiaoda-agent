@@ -4,6 +4,7 @@ import {
   localAiApi,
   fetchModelNodes as fetchModelNodesApi,
   setModelNodeBackend as setModelNodeBackendApi,
+  fetchLocalDeployStatus as fetchLocalDeployStatusApi,
   type BenchmarkResult,
   type CatalogModel,
   type ComputeDevice,
@@ -15,6 +16,7 @@ import {
   type HubSearchResult,
   type HubSource,
   type InstalledModel,
+  type LocalDeployStatus,
   type ModelInstance,
   type ModelNode,
   type ModelNodeBackend,
@@ -31,6 +33,7 @@ export type {
   HubSearchResponse,
   HubSearchResult,
   HubSource,
+  LocalDeployStatus,
   ModelNode,
   ModelNodeBackend,
   RemoteInspection,
@@ -243,6 +246,10 @@ export const useLocalAiStore = defineStore('localAi', () => {
     return setModelNodeBackendApi(node_id, backend, local_model)
   }
 
+  function fetchLocalDeployStatus(): Promise<LocalDeployStatus> {
+    return fetchLocalDeployStatusApi()
+  }
+
   async function download(request: DownloadRequest) {
     const response = await localAiApi.createDownload(request)
     upsertDownload(response.task)
@@ -331,7 +338,7 @@ export const useLocalAiStore = defineStore('localAi', () => {
     load, rescan, download, pause, resume, cancel, removeDownload, start, stop, remove,
     refreshModels, refreshCatalog, browseStorage, validateStorage, saveDefaultStorage,
     hubCategories, searchHub, inspectRemote, downloadHubRepository,
-    benchmarkModel, refreshDevices, fetchModelNodes, setModelNodeBackend,
+    benchmarkModel, refreshDevices, fetchModelNodes, setModelNodeBackend, fetchLocalDeployStatus,
     createRequestId, upsertDevice, upsertDownload, upsertInstance, connectWebSocket, disconnectWebSocket,
   }
 })

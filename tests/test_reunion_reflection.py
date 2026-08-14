@@ -14,8 +14,21 @@ import asyncio
 
 import pytest
 
+from emotion import reunion_reflection as reunion_mod
 from emotion.reunion_reflection import generate_reunion_message, _format_idle
 from memory.emotional_memory import EmotionalMemory
+
+
+@pytest.fixture(autouse=True)
+def _isolate_free_model_backend():
+    """关闭免费模型后端，让无 router 场景稳定走模板、有 router 场景走 mock router。
+
+    避免测试环境配置了 SILICONFLOW_API_KEY 时走真实网络导致结果不确定。
+    """
+    original = reunion_mod._free.backend
+    reunion_mod.set_backend("off")
+    yield
+    reunion_mod.set_backend(original)
 
 
 class MockRouter:

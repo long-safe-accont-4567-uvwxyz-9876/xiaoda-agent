@@ -21,7 +21,7 @@ from config import _ensure_workspace_template
 from config import DEFAULT_PROVIDER as _DEFAULT_PROVIDER, PRO_MODEL_NAME as _PRO_MODEL
 from config import MODEL_NAME as _MODEL_NAME, get_provider_config as _get_provider_config
 from config import get_agent_display_name
-from core.background_tasks import BackgroundTaskManager
+from core.background_tasks import BackgroundTaskManager, _spawn
 
 if TYPE_CHECKING:
     from agent_core import AgentCore
@@ -314,6 +314,19 @@ class AgentCoreBootstrapper:
                 DeviceRegistry(),
                 RuntimeRegistry(),
             )
+        # 恢复常驻本地推理（backend=local 节点绑定的模型实例）：
+        # 必须在下方 vector_store.init() 之前完成——managed embedding 服务的
+        # 维度解析依赖已启动的实例；实例未就绪时 resolve 不到 runtime，
+        # 维度兜底 512 会与 1024 维向量库冲突（local_deploy mode=local 时 init_failed）。
+        # server.py 启动后还有一次幂等恢复（同一 model_id 已运行则复用）。
+        try:
+            from web.config_service import get_config_service
+            from web.local_deploy_nodes import restore_local_instances
+
+            await restore_local_instances(core, get_config_service())
+            logger.info("bootstrap.local_instances_restored")
+        except Exception as e:  # noqa: BLE001
+            logger.warning("bootstrap.local_instances_restore_failed error={}", str(e))
         from llm_gateway.transports import LocalOrtTransport
         from local_ai.integration.chat import LocalChatService
 
@@ -338,6 +351,19 @@ class AgentCoreBootstrapper:
                 _ld = (_ov or {}).get("local_deploy", {})
                 if isinstance(_ld, dict) and _ld.get("mode") in ("local", "remote"):
                     embed_mode = _ld["mode"]
+                    # 持久化失效兜底（2026-08-13 用户规则）：mode=local 要求
+                    # 「功能节点里选了本地模型」（引擎启动为运行时状态，由
+                    # restore_local_instances 负责）。若没有任何节点 backend=local
+                    # （历史残留 / 手动编辑）→ 持久化失效，回退 remote 默认 API。
+                    if embed_mode == "local":
+                        _nodes = _ld.get("nodes")
+                        if not isinstance(_nodes, dict) or "local" not in {
+                            str(v).lower() for v in _nodes.values()
+                        }:
+                            embed_mode = "remote"
+                            logger.info(
+                                "bootstrap.local_deploy_mode_ignored no_local_node "
+                                "mode=local->remote")
                     logger.info("bootstrap.local_deploy_mode_applied mode={}", embed_mode)
                 # 算力设备持久化：WebUI「本地部署 → 算力设备检测」选择后重启生效
                 if isinstance(_ld, dict) and _ld.get("device") in ("cpu", "npu"):
@@ -418,6 +444,11 @@ class AgentCoreBootstrapper:
             ),
             query_transformer=query_transformer,
         )
+        # 启动时对账：检测主表已落盘但向量索引缺失的记忆（fire-and-forget，不阻塞启动）
+        try:
+            _spawn(core.memory.reconcile_vector_index_gap())
+        except Exception as e:
+            logger.warning("bootstrap.vector_reconcile_spawn_failed", error=str(e))
         # ContextNest A2/A3: 注入上下文治理 (哈希链 + 审计追踪)
         try:
             from memory.context_governance import ContextGovernance
@@ -883,10 +914,11 @@ class AgentCoreBootstrapper:
         from openai import AsyncOpenAI as _AOI
         from task_orchestrator import build_task_graph
         import os as _os
+        from model_router import _resolve_provider_key
 
         core = self.core
-        # 从 os.getenv() 实时读取，避免使用模块级冻结的空 API Key
-        _key = _os.getenv("MIMO_API_KEY", "")
+        # 统一凭证读取口径：enc:v1: 密文自动解密，避免把密文当 Key → 401
+        _key = _resolve_provider_key("MIMO_API_KEY")
         _url = _os.getenv("MIMO_BASE_URL", "https://api.xiaomimimo.com/v1")
         route_client = _AOI(
             api_key=_key,

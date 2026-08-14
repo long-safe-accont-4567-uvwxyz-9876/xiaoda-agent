@@ -2,6 +2,7 @@ from typing import Any
 import signal
 import ast
 import os
+import re
 import sys
 import math
 import subprocess
@@ -69,11 +70,37 @@ _BANNED_BUILTINS = frozenset({
 
 # 禁止访问的 dunder 属性
 _BANNED_DUNDER = frozenset({
-    '__class__', '__mro__', '__subclasses__', '__bases__', '__globals__',
+    '__class__', '__base__', '__mro__', '__subclasses__', '__bases__', '__globals__',
     '__builtins__', '__code__', '__func__', '__dict__', '__init__',
     '__new__', '__reduce__', '__getattribute__', '__setattr__',
     '__delattr__', '__import__', '__slots__',
 })
+
+# format 迷你语言会把属性访问隐藏在字符串字面量里（如 "{0.__class__.__mro__}".format(x)），
+# AST 只能看到 Constant 字符串 + Call，因此需要额外扫描字符串字面量中的 dunder 探测模式。
+_DUNDER_ATTR_IN_STRING_RE = re.compile(r'\.__[A-Za-z_]\w*__')
+
+
+def _string_has_dunder_probe(value: Any) -> bool:
+    """检测字符串字面量中的 format 迷你语言 dunder 属性探测。
+
+    "{0.__class__.__mro__}".format(x) 这类代码在 AST 中只有 Constant 字符串 +
+    Call 节点，dunder 属性访问隐藏在字符串里，普通 ast.Attribute 检查看不到。
+    仅扫描 { ... } 字段内部，避免误伤普通说明文本。
+    """
+    if not isinstance(value, str) or ".__" not in value or "{" not in value:
+        return False
+    start = 0
+    while True:
+        open_idx = value.find("{", start)
+        if open_idx == -1:
+            return False
+        close_idx = value.find("}", open_idx + 1)
+        if close_idx == -1:
+            return False
+        if _DUNDER_ATTR_IN_STRING_RE.search(value[open_idx + 1:close_idx]):
+            return True
+        start = close_idx + 1
 
 
 def _audit_code_ast(code: str) -> str | None:
@@ -86,39 +113,44 @@ def _audit_code_ast(code: str) -> str | None:
         return f"代码解析失败: {e}"
 
     for node in ast.walk(tree):
-        # 检查 import 语句
+        # 检查 import 语句（白名单之外的一律拒绝，避免未知模块绕过）
         if isinstance(node, ast.Import):
             for alias in node.names:
                 mod_name = alias.name.split('.')[0]
                 if mod_name in _BANNED_MODULE_NAMES:
                     return f"禁止导入模块: {alias.name}"
-                if mod_name not in _ALLOWED_MODULES and mod_name not in {'math'}:
-                    # 允许 math（已在 exec_globals 中提供）和 _ALLOWED_MODULES
-                    pass  # 不拦截未知模块，只拦截已知危险模块
+                if mod_name not in _ALLOWED_MODULES:
+                    return f"禁止导入未知模块: {alias.name}"
 
         elif isinstance(node, ast.ImportFrom):
-            if node.module:
-                mod_name = node.module.split('.')[0]
-                if mod_name in _BANNED_MODULE_NAMES:
-                    return f"禁止从模块导入: {node.module}"
+            if node.level > 0:
+                return "禁止相对导入"
+            if not node.module:
+                return "禁止相对导入"
+            mod_name = node.module.split('.')[0]
+            if mod_name in _BANNED_MODULE_NAMES:
+                return f"禁止从模块导入: {node.module}"
+            if mod_name not in _ALLOWED_MODULES:
+                return f"禁止从未知模块导入: {node.module}"
 
         # 检查函数调用
         elif isinstance(node, ast.Call):
             func_name = None
             if isinstance(node.func, ast.Name):
                 func_name = node.func.id
-            elif isinstance(node.func, ast.Attribute):
-                # 检查 dunder 属性访问
-                attr = node.func.attr
-                if attr in _BANNED_DUNDER:
-                    return f"禁止访问危险属性: {attr}"
+            elif isinstance(node.func, ast.Attribute) and node.func.attr.startswith("__"):
+                return f"禁止访问危险属性: {node.func.attr}"
 
             if func_name in _BANNED_BUILTINS:
                 return f"禁止调用: {func_name}()"
 
-        # 检查属性访问（dunder）
-        elif isinstance(node, ast.Attribute) and node.attr in _BANNED_DUNDER:
+        # 检查属性访问（拦截所有 dunder 属性，而非仅枚举名单，封堵 __base__ 等漏网项）
+        elif isinstance(node, ast.Attribute) and node.attr.startswith("__"):
             return f"禁止访问危险属性: {node.attr}"
+
+        # 检查字符串字面量中的 format 迷你语言 dunder 探测
+        elif isinstance(node, ast.Constant) and _string_has_dunder_probe(node.value):
+            return "禁止在字符串中探测 dunder 属性"
 
     return None
 
@@ -133,7 +165,7 @@ def _audit_code_regex(code: str) -> str | None:
     _BANNED_PATTERNS = [
         (re.compile(r'__import__\s*\('), '禁止使用 __import__()'),
         (re.compile(r'\bopen\s*\('), '禁止使用 open() 文件操作'),
-        (re.compile(r'__(class|mro|subclasses|bases|globals|builtins|code|func|dict|init|new|reduce|getattribute|setattr|delattr)__'), '禁止使用危险反射属性'),
+        (re.compile(r'__(class|base|mro|subclasses|bases|globals|builtins|code|func|dict|init|new|reduce|getattribute|setattr|delattr)__'), '禁止使用危险反射属性'),
         (re.compile(r'\beval\s*\('), '禁止使用 eval()'),
         (re.compile(r'\bexec\s*\('), '禁止使用 exec()'),
         (re.compile(r'\bcompile\s*\('), '禁止使用 compile()'),
@@ -241,7 +273,7 @@ def get_current_time() -> ToolResult:
 
 @register_tool(
     name="python_executor",
-    description="执行 Python 代码并返回结果。输入要执行的 Python 代码字符串。可用于计算、数据处理、文件操作等。支持 import 标准库和已安装的第三方库。",
+    description="执行 Python 代码并返回结果。输入要执行的 Python 代码字符串。可用于计算、数据处理、文件操作等。仅支持 import 白名单内的标准库模块（json、re、datetime、collections、itertools、math）。",
     schema={
         "type": "object",
         "properties": {

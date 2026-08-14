@@ -78,14 +78,14 @@ def webui_base_url(host: str | None = None, port: int | None = None) -> str:
     return f"http://{h}:{p}"
 
 
-def ws_url(host: str | None = None, port: int | None = None, token: str = "") -> str:
-    """主进程 WebSocket 地址（/ws 无 /api/v1 前缀）。"""
+def ws_url(host: str | None = None, port: int | None = None) -> str:
+    """主进程 WebSocket 地址（/ws 无 /api/v1 前缀）。
+
+    token 通过 WebSocket subprotocol 传递，不再拼进 URL 查询串。
+    """
     h = host or _DEFAULT_HOST
     p = _resolve_port(port)
-    base = f"ws://{h}:{p}/ws"
-    if token:
-        base += f"?token={token}"
-    return base
+    return f"ws://{h}:{p}/ws"
 
 
 def main_process_alive(host: str | None = None, port: int | None = None,
@@ -320,7 +320,7 @@ class WSClient:
                  port: int | None = None) -> None:
         import websockets
         self._websockets = websockets
-        self._url = ws_url(host, port, token)
+        self._url = ws_url(host, port)
         self._host = host
         self._port = port
         self._token = token
@@ -329,8 +329,11 @@ class WSClient:
 
     async def connect(self) -> None:
         try:
+            connect_kwargs: dict[str, Any] = {}
+            if self._token:
+                connect_kwargs["subprotocols"] = [self._token]
             self._ws = await self._websockets.connect(
-                self._url, open_timeout=10, ping_interval=None)
+                self._url, open_timeout=10, ping_interval=None, **connect_kwargs)
         except Exception as e:
             raise RuntimeError(f"连接主进程失败: {str(e)[:120]}") from e
 

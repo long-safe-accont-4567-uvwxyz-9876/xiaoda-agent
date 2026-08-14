@@ -316,7 +316,7 @@ class SubAgentManagerMixin:
         try:
             raw_results = await asyncio.wait_for(
                 asyncio.gather(
-                    *[self._parallel_run_one(t, sub_tasks, sub_context, bb, clean_input) for t in targets],
+                    *[self._parallel_run_one(t, sub_tasks, sub_context, bb, clean_input, user_id) for t in targets],
                     return_exceptions=True,
                 ),
                 timeout=_PARALLEL_WALL_TIMEOUT,
@@ -349,7 +349,7 @@ class SubAgentManagerMixin:
         )
 
     async def _parallel_run_one(self, t: str, sub_tasks: dict[str, str], sub_context: str,
-                                 bb: Any, clean_input: str) -> dict:
+                                 bb: Any, clean_input: str, user_id: str = "") -> dict:
         """并行调度单个子代理：黑板缓存读写 + 超时控制 + 异常归一化。
 
         成功返回 dict(agent/display_name/reply)；失败时 reply 字段为降级文案，
@@ -362,7 +362,7 @@ class SubAgentManagerMixin:
                     "reply": f"{display_name}暂时不可用", "error": True}
         sub_task = sub_tasks.get(t, clean_input)
         # 20.1/20.3: 委托前读取黑板中该子代理对同一任务的已有产出
-        task_key = self._bb_task_key(t, sub_task)
+        task_key = self._bb_task_key(t, sub_task, user_id=user_id)
         if bb is not None:
             try:
                 cached = await bb.get(task_key)
@@ -592,7 +592,7 @@ class SubAgentManagerMixin:
             return f"（找不到名为 {name} 的子代理）"
         # A2A 共享黑板：委托前读取已有产出，避免重复工作（黑板为 None 时跳过）
         bb = getattr(self.context, "shared_blackboard", None)
-        task_key = self._bb_task_key(name, task)
+        task_key = self._bb_task_key(name, task, user_id=_ctx.user_id if _ctx else "")
         if bb is not None:
             try:
                 cached = await bb.get(task_key)
@@ -812,7 +812,7 @@ class SubAgentManagerMixin:
         _ctx = _current_request_ctx.get()
         # A2A 共享黑板：委托前读取已有产出（factual 与非 factual 结果不同，需区分 key）
         bb = getattr(self.context, "shared_blackboard", None)
-        task_key = self._bb_task_key("xiaoli", task, suffix="factual" if factual else "")
+        task_key = self._bb_task_key("xiaoli", task, suffix="factual" if factual else "", user_id=_ctx.user_id if _ctx else "")
         if bb is not None:
             try:
                 cached = await bb.get(task_key)
@@ -839,12 +839,16 @@ class SubAgentManagerMixin:
         return result
 
     @staticmethod
-    def _bb_task_key(agent_name: str, task: str, suffix: str = "") -> str:
+    def _bb_task_key(agent_name: str, task: str, suffix: str = "", user_id: str = "") -> str:
         """计算共享黑板中子代理委托结果的稳定 key。
 
-        基于 agent_name + task 内容的 md5 摘要，保证相同任务命中缓存。
+        基于 user_id + agent_name + task 内容的 md5 摘要，保证：
+        - 同一用户对同一子代理的相同任务命中缓存；
+        - 不同用户即使提交相同任务也不会命中彼此的缓存（隐私隔离）。
+        user_id 为空时退化为旧格式，保持向后兼容。
         """
-        h = hashlib.md5(task.encode("utf-8"), usedforsecurity=False).hexdigest()[:16]
+        raw = task if not user_id else f"{user_id}\x00{task}"
+        h = hashlib.md5(raw.encode("utf-8"), usedforsecurity=False).hexdigest()[:16]
         key = f"bb:delegate:{agent_name}:{h}"
         if suffix:
             key += f":{suffix}"

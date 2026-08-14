@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { onMounted, onBeforeUnmount, computed } from 'vue'
+import { onMounted, onBeforeUnmount, computed, ref } from 'vue'
 import { useChatStore } from '../../stores/chat'
 import { useAgentsStore } from '../../stores/agents'
 import { getWsClient } from '../../api/ws'
@@ -7,9 +7,15 @@ import EmotionAvatar from '../chat/EmotionAvatar.vue'
 import { t } from '../../i18n'
 import { refreshAgentNames } from '../../utils/agentNames'
 
+defineProps<{ mobileSidebarOpen?: boolean }>()
+const emit = defineEmits<{ 'toggle-sidebar': [] }>()
+
 const chat = useChatStore()
 const agentsStore = useAgentsStore()
 const ws = getWsClient()
+
+// 头像加载失败的 Agent 名称集合（按名称维护，保证首字回退可见）
+const failedAvatars = ref<Set<string>>(new Set())
 
 function onConfigChanged(e: any) {
   // display_name 等变更 → 全局联动刷新 Agent 列表 + 名称映射
@@ -20,9 +26,10 @@ function onConfigChanged(e: any) {
 }
 
 // Agent 头像图片加载失败时隐藏破图，避免控制台报错与裂图显示
-function onAvatarError(e: Event) {
-  const img = e.target as HTMLImageElement
-  if (img) img.style.display = 'none'
+function onAvatarError(name: string) {
+  const next = new Set(failedAvatars.value)
+  next.add(name)
+  failedAvatars.value = next
 }
 
 onMounted(() => {
@@ -35,6 +42,11 @@ onBeforeUnmount(() => ws.off('config_changed', onConfigChanged))
 const enabledAgents = computed(() =>
   agentsStore.agents.filter(a => a.enabled))
 
+const connectionStatusText = computed(() =>
+  chat.wsConnected ? t('topBar.connected')
+    : chat.wsReconnecting ? t('topBar.reconnecting') + '...'
+    : t('topBar.disconnected'))
+
 const stageText: Record<string, string> = {
   thinking: '🌿 ' + t('topBar.thinking') + '...',
   tool: '🛠 ' + t('topBar.usingTool') + '...',
@@ -44,19 +56,33 @@ const stageText: Record<string, string> = {
 
 <template>
   <header class="topbar">
+    <button
+      type="button"
+      class="menu-toggle toggle-sidebar"
+      :aria-expanded="mobileSidebarOpen"
+      aria-controls="app-sidebar"
+      :aria-label="t('nav.mainNavigation')"
+      @click="emit('toggle-sidebar')"
+    >
+      <span class="menu-bar"></span>
+      <span class="menu-bar"></span>
+      <span class="menu-bar"></span>
+    </button>
+
     <div class="agent-switcher">
       <button
         v-for="a in enabledAgents"
         :key="a.name"
         class="agent-chip"
         :class="{ active: chat.currentAgent === a.name }"
+        :aria-pressed="chat.currentAgent === a.name"
         :title="`${a.display_name} · ${a.model || a.provider} · ${a.tool_count ?? '?'} ${t('topBar.toolsCount')}`"
         @click="chat.setAgent(a.name)"
       >
         <span class="chip-avatar">
-          <img v-if="a.wallpaper" :src="a.wallpaper" class="chip-avatar-img"
-               @error="onAvatarError" />
-          <template v-if="!a.wallpaper">{{ a.display_name.slice(0, 1) }}</template>
+          <img v-if="a.wallpaper && !failedAvatars.has(a.name)" :src="a.wallpaper" class="chip-avatar-img"
+               @error="onAvatarError(a.name)" />
+          <template v-else>{{ a.display_name.slice(0, 1) }}</template>
         </span>
         <span class="chip-name">{{ a.display_name }}</span>
       </button>
@@ -75,9 +101,9 @@ const stageText: Record<string, string> = {
       <EmotionAvatar />
       <!-- 三态连接灯：绿=已连接 / 黄=重连中 / 红=已断开（无限后台重连中） -->
       <span class="status-dot"
+            role="status"
             :class="chat.wsConnected ? 'green' : (chat.wsReconnecting ? 'yellow' : 'red')"
-            :title="chat.wsConnected ? t('topBar.connected')
-                   : (chat.wsReconnecting ? t('topBar.reconnecting') + '...' : t('topBar.disconnected'))"></span>
+            :title="connectionStatusText"></span>
     </div>
   </header>
 </template>
@@ -93,6 +119,29 @@ const stageText: Record<string, string> = {
   backdrop-filter: blur(12px);
   border-bottom: 1px solid var(--glass-border);
   flex-shrink: 0;
+}
+
+.menu-toggle {
+  display: none;
+  flex-direction: column;
+  justify-content: center;
+  gap: 4px;
+  width: 40px;
+  height: 40px;
+  padding: 8px;
+  border: 1px solid var(--glass-border);
+  border-radius: 8px;
+  background: rgba(20, 40, 28, 0.5);
+  cursor: pointer;
+  flex-shrink: 0;
+}
+
+.menu-bar {
+  display: block;
+  width: 100%;
+  height: 2px;
+  border-radius: 2px;
+  background: var(--moon-dim);
 }
 
 .agent-switcher {
@@ -216,6 +265,7 @@ const stageText: Record<string, string> = {
 }
 
 @media (max-width: 768px) {
+  .menu-toggle { display: inline-flex; }
   .chip-name { display: none; }
   .stage-indicator { display: none; }
   .sig-text { display: none; }

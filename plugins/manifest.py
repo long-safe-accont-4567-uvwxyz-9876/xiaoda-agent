@@ -1,11 +1,30 @@
 """插件清单模型 + YAML 解析"""
 from __future__ import annotations
 
+import re
+import sys
 from pathlib import Path
 from typing import Any, Literal
 
 import yaml
 from pydantic import BaseModel, Field, field_validator
+
+
+_ENTRYPOINT_MODULE_RE = re.compile(r"[A-Za-z_][A-Za-z0-9_]*(\.[A-Za-z_][A-Za-z0-9_]*)*")
+
+
+def validate_entrypoint_module(module_path: str) -> None:
+    """校验 entrypoint 模块名，阻止导入标准库等任意模块。
+
+    允许插件目录内的相对模块名（如 ``echo_plugin``）或受信任前缀
+    ``plugins.``；禁止 ``os`` / ``subprocess`` / ``pathlib`` 等标准库
+    模块名，因为导入它们会执行模块级代码。
+    """
+    if not _ENTRYPOINT_MODULE_RE.fullmatch(module_path):
+        raise ValueError(f"Invalid entrypoint module name: {module_path!r}")
+    top = module_path.split(".", 1)[0]
+    if top in sys.stdlib_module_names:
+        raise ValueError(f"Entrypoint module must not be a stdlib module: {module_path!r}")
 
 
 class NetworkPermission(BaseModel):
@@ -96,6 +115,8 @@ class PluginManifest(BaseModel):
     def validate_entrypoint(cls, v: str) -> str:
         if ":" not in v:
             raise ValueError(f"Entrypoint must be 'module.path:ClassName', got {v!r}")
+        module_path = v.rsplit(":", 1)[0]
+        validate_entrypoint_module(module_path)
         return v
 
 

@@ -23,6 +23,30 @@ from web.routers.models import router as models_router
 from web.routers.providers import router as providers_router
 
 
+class FakeRuntimeRouter:
+    def __init__(self, _custom_clients=None, **extra):
+        self._custom_clients = dict(_custom_clients or {})
+        self.__dict__.update(extra)
+
+    def get_custom_client(self, provider_id):
+        return self._custom_clients.get(provider_id)
+
+    def set_custom_client(self, provider_id, client):
+        self._custom_clients[provider_id] = client
+
+    def remove_custom_client(self, provider_id):
+        self._custom_clients.pop(provider_id, None)
+
+    def has_custom_client(self, provider_id):
+        return provider_id in self._custom_clients
+
+    def list_custom_clients(self):
+        return list(self._custom_clients.items())
+
+    def clear_custom_clients(self):
+        self._custom_clients.clear()
+
+
 class MemoryConfig:
     def __init__(self) -> None:
         self.providers: dict[str, dict] = {}
@@ -147,7 +171,7 @@ def custom_mapping_draft(**overrides) -> dict:
 def service():
     config = MemoryConfig()
     credentials = MemoryCredentials()
-    runtime = SimpleNamespace(_custom_clients={})
+    runtime = FakeRuntimeRouter(_custom_clients={})
     reports = {
         "https://example.com/v1": CapabilityReport(
             True,
@@ -194,7 +218,7 @@ def test_provider_service_restores_persisted_custom_mapping_contract():
     provider_service = ProviderService(
         config,
         builtin_catalog(),
-        SimpleNamespace(_custom_clients={}),
+        FakeRuntimeRouter(_custom_clients={}),
         credential_store=MemoryCredentials(),
     )
 
@@ -225,7 +249,7 @@ def test_custom_mapping_factory_receives_persisted_contract(service):
 @pytest.mark.asyncio
 async def test_optional_auth_provider_can_be_tested_without_credentials():
     config = MemoryConfig()
-    runtime = SimpleNamespace(_custom_clients={})
+    runtime = FakeRuntimeRouter(_custom_clients={})
     received: list[str] = []
 
     def transport_factory(definition, credential):
@@ -295,7 +319,7 @@ async def test_create_discover_update_and_delete_are_reflected_everywhere(servic
 async def test_failed_create_commit_rolls_back_credential_catalog_and_runtime():
     config = FailingConfig("set")
     credentials = MemoryCredentials()
-    runtime = SimpleNamespace(_custom_clients={})
+    runtime = FakeRuntimeRouter(_custom_clients={})
     service = ProviderService(
         config,
         builtin_catalog(),
@@ -325,7 +349,7 @@ async def test_failed_create_config_write_restores_existing_same_id_snapshots():
     old_record = draft(label="Existing")
     credentials = MemoryCredentials()
     old_client = object()
-    runtime = SimpleNamespace(_custom_clients={})
+    runtime = FakeRuntimeRouter(_custom_clients={})
     service = ProviderService(
         config,
         builtin_catalog(),
@@ -357,12 +381,48 @@ async def test_failed_create_config_write_restores_existing_same_id_snapshots():
 
 
 @pytest.mark.asyncio
+async def test_create_commit_runtime_restore_has_no_nameerror():
+    """_commit_create 回滚时 restore_runtime 不能引用未定义的 clients 变量。
+
+    回滚闭包必须通过 runtime_router 方法恢复客户端，否则回滚内部抛 NameError
+    （被 _run_rollback 吞掉记 rollback 失败），客户端状态无法正确恢复。
+    """
+    config = FailingConfig("set")
+    credentials = MemoryCredentials()
+    old_client = object()
+    runtime = FakeRuntimeRouter(_custom_clients={"custom": old_client})
+    service = ProviderService(
+        config,
+        builtin_catalog(),
+        runtime,
+        credential_store=credentials,
+        transport_factory=lambda definition, credential: FakeTransport(CapabilityReport(
+            True,
+            definition.capabilities,
+            models=(definition.default_model,),
+        )),
+        runtime_client_factory=lambda definition, credential: object(),
+    )
+
+    with pytest.raises(OSError, match="config write failed") as excinfo:
+        service._commit_create(service._definition(draft()), "new-key", object())
+
+    chain = []
+    node = excinfo.value
+    while node is not None:
+        chain.append(node)
+        node = node.__context__
+    assert not any(isinstance(error, NameError) for error in chain)
+    assert runtime._custom_clients["custom"] is old_client
+
+
+@pytest.mark.asyncio
 async def test_compensation_failure_is_isolated_and_preserves_original_error():
     class FailingDeleteCredentials(MemoryCredentials):
         def delete(self, provider_id):
             raise OSError("credential delete failed")
     config = FailingConfig("set")
-    runtime = SimpleNamespace(_custom_clients={})
+    runtime = FakeRuntimeRouter(_custom_clients={})
     service = ProviderService(
         config,
         builtin_catalog(),
@@ -408,7 +468,7 @@ async def test_rollback_failures_are_aggregated_in_chain_when_commit_and_rollbac
                 raise OSError("config set failed")
             super().set(path, value)
 
-    runtime = SimpleNamespace(_custom_clients={})
+    runtime = FakeRuntimeRouter(_custom_clients={})
     service = ProviderService(
         FailingSetConfig(),
         builtin_catalog(),
@@ -452,7 +512,7 @@ async def test_create_commit_step_failure_matrix(mode):
 
     config = FailingCfg()
     credentials = FailingCreds()
-    runtime = SimpleNamespace(_custom_clients={})
+    runtime = FakeRuntimeRouter(_custom_clients={})
     service = ProviderService(
         config,
         builtin_catalog(),
@@ -495,7 +555,7 @@ async def test_update_commit_failure_restores_all_snapshots():
 
     config = FailingSetConfig()
     credentials = MemoryCredentials()
-    runtime = SimpleNamespace(_custom_clients={})
+    runtime = FakeRuntimeRouter(_custom_clients={})
     service = ProviderService(
         config,
         builtin_catalog(),
@@ -537,7 +597,7 @@ async def test_delete_commit_failure_restores_all_snapshots():
 
     config = FailingDeleteConfig()
     credentials = MemoryCredentials()
-    runtime = SimpleNamespace(_custom_clients={})
+    runtime = FakeRuntimeRouter(_custom_clients={})
     service = ProviderService(
         config,
         builtin_catalog(),
@@ -824,7 +884,7 @@ async def test_saved_custom_mapping_runtime_client_is_compat_client():
 
     config = MemoryConfig()
     credentials = MemoryCredentials()
-    runtime = SimpleNamespace(_custom_clients={})
+    runtime = FakeRuntimeRouter(_custom_clients={})
     provider_service = ProviderService(
         config,
         builtin_catalog(),
@@ -853,7 +913,7 @@ async def test_saved_ollama_runtime_client_uses_openai_v1_base_url():
 
     config = MemoryConfig()
     credentials = MemoryCredentials()
-    runtime = SimpleNamespace(_custom_clients={})
+    runtime = FakeRuntimeRouter(_custom_clients={})
     provider_service = ProviderService(
         config,
         builtin_catalog(),
@@ -889,17 +949,17 @@ def test_restart_rebuilds_runtime_client_from_persisted_config_and_credentials()
     ProviderService(
         config,
         builtin_catalog(),
-        SimpleNamespace(_custom_clients={}),
+        FakeRuntimeRouter(_custom_clients={}),
         credential_store=credentials,
     )
     restarted = ProviderService(
         config,
         builtin_catalog(),
-        SimpleNamespace(_custom_clients={}),
+        FakeRuntimeRouter(_custom_clients={}),
         credential_store=credentials,
     )
 
-    client = restarted._runtime_clients().get("mapped")
+    client = restarted.runtime_router.get_custom_client("mapped")
     assert isinstance(client, CustomMappingCompatClient)
 
 
@@ -913,12 +973,12 @@ def test_restart_skips_provider_missing_required_credential_without_crashing():
     restarted = ProviderService(
         config,
         builtin_catalog(),
-        SimpleNamespace(_custom_clients={}),
+        FakeRuntimeRouter(_custom_clients={}),
         credential_store=credentials,
     )
 
     assert restarted.catalog.get("custom").id == "custom"
-    assert "custom" not in restarted._runtime_clients()
+    assert not restarted.runtime_router.has_custom_client("custom")
 
 
 def test_provider_id_rejects_dots_that_would_collide_in_credential_files(service):
@@ -950,7 +1010,7 @@ def test_builtin_route_accepts_configured_runtime_client(service):
 async def test_bind_builtin_activates_runtime_without_replacing_builtin_definition():
     config = MemoryConfig()
     credentials = MemoryCredentials()
-    runtime = SimpleNamespace(_client=None, _custom_clients={})
+    runtime = FakeRuntimeRouter(_client=None, _custom_clients={})
 
     def bind_builtin(provider_id, client):
         old_client = runtime._client
@@ -1210,7 +1270,7 @@ async def test_setup_env_write_failure_restores_real_provider_snapshot_when_old_
     config.providers["siliconflow"] = old_record
     credentials = MemoryCredentials()
     credentials.values["siliconflow"] = "old-key"
-    runtime = SimpleNamespace(_custom_clients={"siliconflow": old_client})
+    runtime = FakeRuntimeRouter(_custom_clients={"siliconflow": old_client})
 
     def transport_factory(definition, credential):
         return FakeTransport(CapabilityReport(
@@ -1253,7 +1313,7 @@ async def test_setup_env_write_failure_restores_builtin_client_without_old_crede
     config = MemoryConfig()
     credentials = MemoryCredentials()
     credentials.values["mimo"] = "old-key"
-    runtime = SimpleNamespace(_client=old_client, _custom_clients={})
+    runtime = FakeRuntimeRouter(_client=old_client, _custom_clients={})
     runtime.bind_builtin = lambda provider_id, client: setattr(runtime, "_client", client) or old_client
     runtime.get_builtin_client = lambda provider_id: runtime._client
 
@@ -1338,7 +1398,7 @@ async def test_startup_override_uses_provider_service_restored_runtime(monkeypat
     from web import server
 
     config = MemoryConfig()
-    runtime = SimpleNamespace(_custom_clients={"custom": object()})
+    runtime = FakeRuntimeRouter(_custom_clients={"custom": object()})
     core = SimpleNamespace(router=runtime)
     service = SimpleNamespace(runtime_router=runtime)
     monkeypatch.setattr("web.config_service.get_config_service", lambda: config)

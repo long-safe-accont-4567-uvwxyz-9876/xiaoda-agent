@@ -45,6 +45,21 @@ export async function setModelNodeBackend(
   )
 }
 
+/** embedding 引擎实时状态（模式 / 本地引擎是否已启动 / 维度） */
+export interface LocalDeployStatus {
+  mode: 'local' | 'remote'
+  source?: string | null
+  engine_running: boolean
+  backend?: string
+  api_configured: boolean
+  model_dir?: string
+  dimensions?: number
+}
+
+export async function fetchLocalDeployStatus(): Promise<LocalDeployStatus> {
+  return get<LocalDeployStatus>('/local-deploy/status')
+}
+
 export interface ExecutionBackend {
   runtime: RuntimeKind
   provider: string

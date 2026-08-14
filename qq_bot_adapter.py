@@ -226,19 +226,20 @@ _HIGH_RISK_OP_MARKER = "__HIGH_RISK_OP__:"
 _HIGH_RISK_OP_RE = re.compile(
     r"__HIGH_RISK_OP__:\s*(\w+)(?:\s+(.*))?\s*$", re.MULTILINE)
 
-_msg_seq_counter = int(time.time() * 1000) % (10 ** 8)
+_msg_seq_counter = int(time.time())
 _msg_seq_lock = threading.Lock()
 _env_write_lock = threading.Lock()
-# QQ API 官方示例即用毫秒时间戳作 msg_seq（int64，单调递增即可）。
-# 此处每次对齐当前毫秒时间戳并 +1，保证：1) 单调递增；2) 时钟回拨/进程
-# 休眠后计数器落后时不产生回退，避免服务端拒绝。等价于官方时间戳方案。
+# QQ API 要求 msg_seq 为 int32 范围（0~2147483647）。实测毫秒时间戳（13 位，
+# ~1.7e12）超范围被拒（40011000「请求数据异常」），导致所有回复发送失败。
+# 改用秒级时间戳（10 位，2038-01-19 前安全），仍保证：1) 单调递增；
+# 2) 时钟回拨/进程休眠后计数器落后时不产生回退，避免服务端拒绝。
 
 
 def _next_msg_seq() -> int:
     global _msg_seq_counter
     with _msg_seq_lock:
-        now_ms = int(time.time() * 1000)
-        _msg_seq_counter = max(_msg_seq_counter + 1, now_ms)
+        now_s = int(time.time())
+        _msg_seq_counter = max(_msg_seq_counter + 1, now_s)
         return _msg_seq_counter
 
 
@@ -1408,7 +1409,7 @@ class AIQQBot(botpy.Client):
             让外层循环能合并剩余内容为单条最终消息发送，避免后续段全部丢失。
             """
             try:
-                if is_group or passive:
+                if is_group or passive or not getattr(self, "api", None):
                     await message.reply(content=text, msg_seq=_next_msg_seq())
                 else:
                     response = await self.api.post_c2c_message(

@@ -926,8 +926,8 @@ class MessageProcessorMixin:
                     _label = getattr(mgr.state.S, "user_last_emotion", "")
                     if _label:
                         last_emotion = (_label, 0.5)
-            except Exception:
-                pass
+            except Exception as e:
+                logger.debug("reunion_reflection.last_emotion_failed", error=str(e))
             # 3. 生成重聚欢迎消息（内部有降级模板，router 缺失也能返回）
             from emotion.reunion_reflection import generate_reunion_message
             reply = await generate_reunion_message(

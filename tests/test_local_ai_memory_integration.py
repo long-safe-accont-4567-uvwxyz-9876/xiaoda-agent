@@ -553,7 +553,7 @@ class ProbeVectorStore:
         vectors = await self._local_provider.embed([text])
         return list(vectors[0])
 
-    async def search(self, query, top_k, candidate_ids=None, deterministic=False):
+    async def search(self, query, top_k, candidate_ids=None, deterministic=False, query_vec=None):
         await self._local_provider.embed([query])
         return []
 

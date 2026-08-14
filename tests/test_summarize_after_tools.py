@@ -30,6 +30,8 @@ def _make_sub_agent():
     agent = SubAgent.__new__(SubAgent)
     agent.config = cfg
     agent._client = MagicMock()
+    agent._router = MagicMock()
+    agent._router.route_config = AsyncMock(return_value="这是总结回复")
     agent._degraded = False
     agent._initialized = True
     return agent
@@ -48,8 +50,7 @@ def _fake_response(content="这是总结回复"):
 async def test_summarize_returns_llm_response():
     """_summarize_after_tools 应返回 LLM 总结 而非降级内容"""
     agent = _make_sub_agent()
-    fake_resp = _fake_response("根据查询结果今天天气晴朗")
-    agent._client.chat.completions.create = AsyncMock(return_value=fake_resp)
+    agent._router.route_config = AsyncMock(return_value="根据查询结果今天天气晴朗")
 
     working = [
         {"role": "user", "content": "今天天气怎么样"},
@@ -63,13 +64,12 @@ async def test_summarize_returns_llm_response():
 
 @pytest.mark.asyncio
 async def test_summarize_api_actually_called():
-    """_summarize_after_tools 应成功调用API 不因NameError跳过"""
+    """_summarize_after_tools 应成功调用路由 不因NameError跳过"""
     agent = _make_sub_agent()
-    fake_resp = _fake_response("总结完成")
-    agent._client.chat.completions.create = AsyncMock(return_value=fake_resp)
+    agent._router.route_config = AsyncMock(return_value="总结完成")
 
     working = [{"role": "user", "content": "测试"}]
 
     await agent._summarize_after_tools(working, api_timeout=30, remaining=30.0)
 
-    agent._client.chat.completions.create.assert_awaited_once()
+    agent._router.route_config.assert_awaited_once()

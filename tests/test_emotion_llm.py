@@ -10,12 +10,25 @@ import asyncio
 
 import pytest
 
+from emotion import emotion_llm as emotion_llm_mod
 from emotion.emotion_llm import (
     _build_prompt,
     _clamp,
     _parse_llm_response,
     detect_emotion_llm,
 )
+
+
+@pytest.fixture(autouse=True)
+def _isolate_free_model_backend():
+    """关闭免费模型后端，让 detect_emotion_llm 只走注入的 mock router。
+
+    避免测试环境配置了 SILICONFLOW_API_KEY 时走真实网络导致超时/结果不确定。
+    """
+    original = emotion_llm_mod._free.backend
+    emotion_llm_mod.set_backend("off")
+    yield
+    emotion_llm_mod.set_backend(original)
 
 
 # ── Mock Router ──────────────────────────────────────────────

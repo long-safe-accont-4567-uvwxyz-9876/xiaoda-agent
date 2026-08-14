@@ -6,6 +6,16 @@ from tool_engine.tool_registry import register_tool, ToolPermission, ToolResult
 
 _DEFAULT_PROJECT_DIR = os.path.expanduser("~/ai-agent")
 
+_CONTENT_LIMIT = 8000
+
+
+def _truncate(text: str, limit: int = _CONTENT_LIMIT) -> str:
+    """截断超长内容，防止单次工具结果打爆 LLM 上下文。"""
+    if len(text) <= limit:
+        return text
+    return text[:limit] + "\n...(内容过长已截断)"
+
+
 PROTECTED_SERVICES = {"sshd", "systemd", "systemd-journald", "systemd-logind", "systemd-udevd", "dbus", "cron", "rsyslog", "networking", "NetworkManager", "ufw"}
 AGENT_SERVICES = {"xiaoda-web", "qq-agent", "napcat", "qqbot", "nginx", "frpc", "docker"}
 
@@ -306,7 +316,7 @@ async def _dev_assist_logs(path: str, lines: int, service: str) -> ToolResult:
         if not log_files:
             rc, log_out, _ = await _run_cmd(["journalctl", "-u", service, "-n", str(lines), "--no-pager"], timeout=30)
             if rc == 0 and log_out.strip() and log_out.strip() != "-- No entries --":
-                return ToolResult.ok(f"服务 {service} 最近 {lines} 条日志:\n{log_out.strip()}")
+                return ToolResult.ok(f"服务 {service} 最近 {lines} 条日志:\n{_truncate(log_out.strip())}")
             return ToolResult.fail(f"未找到日志文件，且服务 {service} 无 journalctl 记录（可能服务名错误，本机通常是 'xiaoda-web'）")
         log_path = os.path.join(log_dir, log_files[0])
         try:
@@ -314,11 +324,11 @@ async def _dev_assist_logs(path: str, lines: int, service: str) -> ToolResult:
                 lambda: pathlib.Path(log_path).read_text(encoding="utf-8", errors="replace").splitlines(keepends=True)
             )
             recent = all_lines[-lines:]
-            return ToolResult.ok(f"日志文件 {log_files[0]} (最后{len(recent)}行):\n{''.join(recent).strip()}")
+            return ToolResult.ok(f"日志文件 {log_files[0]} (最后{len(recent)}行):\n{_truncate(''.join(recent).strip())}")
         except Exception as e:
             return ToolResult.fail(f"读取日志文件失败: {e!s}")
     else:
         rc, log_out, _ = await _run_cmd(["journalctl", "-u", service, "-n", str(lines), "--no-pager"], timeout=30)
         if rc == 0 and log_out.strip() and log_out.strip() != "-- No entries --":
-            return ToolResult.ok(f"服务 {service} 最近 {lines} 条日志:\n{log_out.strip()}")
+            return ToolResult.ok(f"服务 {service} 最近 {lines} 条日志:\n{_truncate(log_out.strip())}")
         return ToolResult.fail(f"未找到日志目录或日志（服务 {service} 可能服务名错误，本机通常是 'xiaoda-web'）")

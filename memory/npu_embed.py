@@ -35,9 +35,12 @@ from memory.local_embed import LocalEmbeddingProvider  # noqa: E402
 # runner 流协议常量（与 bge_npu_runner.c --serve 一致）
 MAGIC = b"BGEVEC01"
 SEQ = 512
-HID = 512
-VEC_BYTES = HID * 4          # 512 float32
-INPUT_BYTES = 3 * SEQ * 4    # 6144：input_ids/attention_mask/token_type_ids 各 512×int32
+# 模型维度和输入数由 NPU 型号决定（bge-small-zh: 512 维 3 输入；
+# bge-large-zh w8a16: 1024 维 2 输入）。支持 env 覆盖便于切换模型。
+HID = int(os.getenv("NPU_HID", "1024"))
+N_IN = int(os.getenv("NPU_N_IN", "2"))
+VEC_BYTES = HID * 4          # hidden × float32
+INPUT_BYTES = N_IN * SEQ * 4  # input_ids/attention_mask（+token_type_ids 视模型而定）
 # 单批最大条数：NPU 流串行（_io_lock），大批（32 条 3.7s）占流会让检索
 # embed 排队撞 8s 检索超时线；8 条/批 ≈ 0.9s，检索插队亚秒级
 _MAX_NPU_BATCH = 8
@@ -50,10 +53,12 @@ def _default_runner() -> str:
 
 
 def _default_nbg() -> str:
-    """NBG 默认路径（INT16 固化正式版）。"""
+    """NBG 默认路径（bge-large-zh w8a16 1024 维固化版；bge-small 512 维旧版
+    仍可用 NPU_NBG env 指回 bge_small_zh.nb）。"""
     return os.getenv(
         "NPU_NBG",
-        "/media/orangepi/KIOXIA/nahida-data/npu/bge_npu_kit/npu_input/bge_small_zh.nb",
+        "/media/orangepi/KIOXIA/nahida-data/npu/bge_npu_kit/npu_input/"
+        "bge_large_zh_sigmoid_pcq.w8a16/network_binary.nb",
     )
 
 
@@ -157,7 +162,8 @@ class NpuEmbeddingProvider:
         """拉起 runner 子进程并等待协议 magic（丢弃库横幅）。"""
         # sudo -n：NPU 设备需 root 权限（已配置 NOPASSWD）
         cmd = ["sudo", "-n", self._runner_path, self._nbg_path,
-               "--serve", "--seq", str(SEQ), "--quiet"]
+               "--serve", "--seq", str(SEQ), "--hidden", str(self._dimensions),
+               "--quiet"]
         log_path = Path(__file__).resolve().parent.parent / "logs" / "npu_embed_runner.log"
         log_path.parent.mkdir(parents=True, exist_ok=True)
         self._stderr_f = open(log_path, "ab")
@@ -191,7 +197,11 @@ class NpuEmbeddingProvider:
         return f"{self._query_prefix}{text}" if self._query_prefix else text
 
     def _tokenize(self, texts: list[str]) -> bytes:
-        """批量分词并 padding 到固定 SEQ，打包为 runner 输入字节流。"""
+        """批量分词并 padding 到固定 SEQ，打包为 runner 输入字节流。
+
+        N_IN=2（bge-large）：input_ids + attention_mask；
+        N_IN=3（bge-small）：额外 token_type_ids。
+        """
         encodings = self._tokenizer.encode_batch(
             [self._apply_prefix(t) for t in texts],
             add_special_tokens=True,
@@ -202,7 +212,8 @@ class NpuEmbeddingProvider:
             pad = SEQ - len(ids)
             flat += ids + [0] * pad                      # input_ids
             flat += [1] * len(ids) + [0] * pad           # attention_mask
-            flat += list(enc.type_ids[:SEQ]) + [0] * pad  # token_type_ids
+            if N_IN >= 3:
+                flat += list(enc.type_ids[:SEQ]) + [0] * pad  # token_type_ids
         return struct.pack(f"<{len(flat)}i", *flat)
 
     def encode_batch(self, texts: list[str]) -> list[list[float]]:
@@ -349,28 +360,30 @@ class AdaptiveEmbeddingProvider:
                 if not tok_path.exists():
                     raise FileNotFoundError(f"tokenizer.json not found: {tok_path}")
                 self._tokenizer = Tokenizer.from_file(str(tok_path))
-                cpu_ok = self._cpu.load()
-                # NPU 探测短路：无 NPU / runner 缺失 / 权限不足（sudo 不可用）→
-                # 不 spawn 常驻进程，自动降级纯 CPU（CPU 为兜底必须可用）
-                if cpu_ok and probe_npu(runner_path=self._npu._runner_path):
+                # NPU 优先（本地部署主力，秒级启动）：NPU 可用则 CPU 兜底
+                # 懒加载（不常驻 1.3GB bge-large 权重，省内存）；
+                # NPU 不可用（无设备/驱动/权限）才加载 CPU 兜底。
+                npu_ok = False
+                if probe_npu(runner_path=self._npu._runner_path):
                     npu_ok = self._npu.load()
-                else:
-                    npu_ok = False
-                    self._npu._load_error = (
-                        "npu_probe_failed" if cpu_ok else "cpu_unavailable")
-                self._dimensions = self._cpu.dimensions or self._npu.dimensions or HID
-                self._loaded = cpu_ok  # CPU 为兜底，必须可用
+                if npu_ok:
+                    self._dimensions = self._npu.dimensions or HID
+                    self._loaded = True
+                    logger.info("adaptive_embed.ready threshold={} npu_ok=True dims={} cpu=lazy",
+                                self._threshold, self._dimensions)
+                    return True
+                # NPU 不可用 → CPU 兜底（bge-large 1024 维，加载约 5s）
+                cpu_ok = self._cpu.load()
                 if not cpu_ok:
-                    self._load_error = self._cpu._load_error
-                    logger.warning("adaptive_embed.load_failed cpu_error={}", self._load_error)
-                else:
-                    logger.info("adaptive_embed.ready threshold={} npu_ok={} dims={}",
-                                self._threshold, npu_ok, self._dimensions)
-                    if not npu_ok:
-                        logger.warning(
-                            "adaptive_embed.no_npu_fallback cpu_only=True "
-                            "error={}", self._npu._load_error)
-                return self._loaded
+                    self._load_error = self._cpu._load_error or self._npu._load_error
+                    logger.warning("adaptive_embed.load_failed npu_error={} cpu_error={}",
+                                   self._npu._load_error, self._cpu._load_error)
+                    return False
+                self._dimensions = self._cpu.dimensions or HID
+                self._loaded = True
+                logger.info("adaptive_embed.ready threshold={} npu_ok=False dims={} cpu=active "
+                            "error={}", self._threshold, self._dimensions, self._npu._load_error)
+                return True
             except Exception as e:  # noqa: BLE001
                 self._load_error = str(e)
                 logger.warning("adaptive_embed.load_failed error={}", str(e))
@@ -400,14 +413,19 @@ class AdaptiveEmbeddingProvider:
         long_i = [i for i, l in enumerate(lens) if l > self._threshold]
         result: list[list[float] | None] = [None] * len(texts)
         if short_i:
+            # CPU 懒加载：NPU 模式 CPU 未常驻，短文本首次走到 CPU 时再加载
+            if not self._cpu.ready:
+                self._cpu.load()
             vecs = self._cpu.encode_batch([texts[i] for i in short_i])
             for i, v in zip(short_i, vecs):
                 result[i] = v
         if long_i:
             lt = [texts[i] for i in long_i]
             vecs = self._npu.encode_batch(lt) if self._npu.ready else []
-            if not vecs:  # NPU 失败降级 CPU
+            if not vecs:  # NPU 失败降级 CPU（同样懒加载兜底）
                 logger.warning("adaptive_embed.npu_degraded_to_cpu n={}", len(lt))
+                if not self._cpu.ready:
+                    self._cpu.load()
                 vecs = self._cpu.encode_batch(lt)
             for i, v in zip(long_i, vecs):
                 result[i] = v

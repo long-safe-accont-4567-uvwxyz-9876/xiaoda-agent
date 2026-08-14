@@ -566,11 +566,27 @@ async def process_and_serialize(core: Any, text: str, session_id: str,
 async def websocket_endpoint(ws: WebSocket, token: str = "") -> None:
     # 先验证 token 再 accept，防止无 token 连接耗尽资源
     from web.routers.auth import _validate_token
+
+    # 优先从 Sec-WebSocket-Protocol 子协议读取 token，向后兼容 query token
+    subprotocol_token = None
+    headers = getattr(ws, "headers", None)
+    if headers is not None:
+        raw = headers.get("sec-websocket-protocol")
+        if raw:
+            subprotocol_token = str(raw).split(",")[0].strip()
+    subprotocol_token = subprotocol_token or None
+
+    token = subprotocol_token or token
+
     if not token or not _validate_token(token):
-        await ws.close(code=1008, reason="Unauthorized")
+        # 未授权统一用 4001 关闭（4000-4999 为应用私有段），前端 onclose 据此停止重连
+        await ws.close(code=4001, reason="Unauthorized")
         return
 
-    await ws.accept()
+    if subprotocol_token:
+        await ws.accept(subprotocol=subprotocol_token)
+    else:
+        await ws.accept()
 
     try:
         conn_id = manager.register(ws)

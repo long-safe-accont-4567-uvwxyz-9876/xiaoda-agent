@@ -25,6 +25,15 @@ _PLATFORM_EXTRACTORS = {
     "douyin.com": "_extract_douyin",
 }
 
+_CONTENT_LIMIT = 8000
+
+
+def _truncate(text: str, limit: int = _CONTENT_LIMIT) -> str:
+    """截断超长内容，防止单次工具结果打爆 LLM 上下文。"""
+    if len(text) <= limit:
+        return text
+    return text[:limit] + "\n...(内容过长已截断)"
+
 
 def _route_platform(url: str) -> str | None:
     from urllib.parse import urlparse
@@ -201,7 +210,7 @@ async def web_browse_enhanced(url: str) -> ToolResult:
                 if extractor:
                     title, content = await extractor(url)
                     logger.info("web_browse.platform_extracted platform={} len={}", extractor_name, len(content))
-                    return ToolResult.ok(f"网页: {title}\nURL: {url}\n{'='*40}\n{content}")
+                    return ToolResult.ok(f"网页: {title}\nURL: {url}\n{'='*40}\n{_truncate(content)}")
             except Exception as e:
                 logger.warning("web_browse.platform_failed platform={} error={}", extractor_name, str(e)[:100])
 
@@ -210,7 +219,7 @@ async def web_browse_enhanced(url: str) -> ToolResult:
             title, content = await _extract_via_jina(url)
             logger.info("web_browse.jina_extracted len={}", len(content))
             if len(content) > 200:
-                return ToolResult.ok(f"网页: {title}\nURL: {url}\n{'='*40}\n{content}")
+                return ToolResult.ok(f"网页: {title}\nURL: {url}\n{'='*40}\n{_truncate(content)}")
         except Exception as e:
             logger.warning("web_browse.jina_failed error={}", str(e)[:100])
 

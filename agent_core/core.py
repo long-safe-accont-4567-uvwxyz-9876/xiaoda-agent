@@ -151,6 +151,13 @@ class AgentCore(MessageProcessorMixin, ToolExecutorMixin, SubAgentManagerMixin):
         self._voice_mode: bool = False
         self._error_handler = None
         self._mcp_manager = MCPManager()
+        # 装配默认 stdio 命令白名单（配合 _validate_stdio_command 的 fail-closed 语义）：
+        # 白名单为空时所有 stdio command 都会被拒绝，因此启动时必须装配合法命令。
+        # 与 config.MCP_SERVERS 的 uvx/npx 对齐；市场 MCP 常见 npx/uvx/python/node。
+        # 校验按 basename 匹配，config._resolve_command 解析出的完整路径也可放行。
+        self._mcp_manager.set_security_policy(
+            allowed_stdio_commands=["npx", "uvx", "python", "python3", "node"],
+        )
         self.instinct_manager: InstinctManager | None = None
         # P5: 失败经验→规则闭环（bootstrap 阶段注入，失败时保持 None）
         self.error_pipeline = None

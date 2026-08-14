@@ -1,10 +1,14 @@
 <script setup lang="ts">
+import { computed, onMounted, onBeforeUnmount, ref } from 'vue'
 import SumeruIcon from '../fx/SumeruIcon.vue'
 import DendroEmblem from '../fx/DendroEmblem.vue'
-import { t, tf, state as i18nState } from '../../i18n'
+import { t } from '../../i18n'
 
-defineProps<{ expanded: boolean }>()
-const emit = defineEmits<{ 'update:expanded': [value: boolean] }>()
+const props = defineProps<{ expanded: boolean; mobileOpen?: boolean }>()
+const emit = defineEmits<{
+  'update:expanded': [value: boolean]
+  close: []
+}>()
 
 const navItems = [
   { icon: 'chat', labelKey: 'nav.chat', route: '/' },
@@ -24,17 +28,65 @@ const navItems = [
   { icon: 'settings', labelKey: 'nav.settings', route: '/settings/system' },
   { icon: 'alert', labelKey: 'nav.disclaimer', route: '/disclaimer' },
 ]
+
+const isMobileViewport = ref(false)
+const hoverCapable = ref(true)
+
+function updateViewport() {
+  isMobileViewport.value = window.innerWidth <= 768
+  hoverCapable.value = window.matchMedia('(hover: hover) and (pointer: fine)').matches
+}
+
+onMounted(() => {
+  updateViewport()
+  window.addEventListener('resize', updateViewport)
+})
+
+onBeforeUnmount(() => {
+  window.removeEventListener('resize', updateViewport)
+})
+
+const showLabels = computed(() => props.expanded || !!props.mobileOpen)
+// 移动端浮层关闭时，从 Tab 序与辅助技术中移除侧栏，仅靠 transform 位移不够
+const focusIsolated = computed(() => isMobileViewport.value && props.mobileOpen === false)
+
+function onEnter() {
+  if (!isMobileViewport.value && hoverCapable.value) {
+    emit('update:expanded', true)
+  }
+}
+
+function onLeave() {
+  if (!isMobileViewport.value) {
+    emit('update:expanded', false)
+  }
+}
 </script>
 
 <template>
-  <nav class="sidebar" :class="{ expanded }"
-       @mouseenter="emit('update:expanded', true)"
-       @mouseleave="emit('update:expanded', false)">
+  <nav
+    id="app-sidebar"
+    class="sidebar"
+    :class="{ expanded, 'mobile-open': mobileOpen }"
+    :aria-label="t('nav.mainNavigation')"
+    :inert="focusIsolated"
+    :aria-hidden="focusIsolated || undefined"
+    @mouseenter="onEnter"
+    @mouseleave="onLeave"
+  >
     <div class="sidebar-inner">
       <div class="sidebar-logo">
         <DendroEmblem :size="30" spin />
-        <span v-if="expanded" class="logo-text">{{ t('brand') }}</span>
+        <span v-if="showLabels" class="logo-text">{{ t('brand') }}</span>
       </div>
+
+      <button
+        v-if="mobileOpen"
+        type="button"
+        class="mobile-close"
+        :aria-label="t('nav.closeNavigation')"
+        @click="emit('close')"
+      >✕</button>
 
       <div class="nav-items">
         <router-link
@@ -45,12 +97,12 @@ const navItems = [
           :title="t(item.labelKey)"
         >
           <span class="nav-icon"><SumeruIcon :name="item.icon" :size="20" /></span>
-          <span v-if="expanded" class="nav-label">{{ t(item.labelKey) }}</span>
+          <span v-if="showLabels" class="nav-label">{{ t(item.labelKey) }}</span>
           <span class="nav-glow"></span>
         </router-link>
       </div>
 
-      <div class="sidebar-foot" v-if="expanded">
+      <div class="sidebar-foot" v-if="showLabels">
         <router-link to="/sponsor" class="sponsor-entry" :title="t('sponsor.navTitle')">
           <span class="sponsor-icon"><SumeruIcon name="tea" :size="14" /></span>
           <span class="sponsor-label">{{ t('sponsor.navTitle') }}</span>
@@ -68,7 +120,7 @@ const navItems = [
 <style scoped>
 .sidebar {
   width: var(--sidebar-width);
-  height: 100vh;
+  height: 100dvh;
   background: rgba(15, 31, 23, 0.7);
   backdrop-filter: blur(10px);
   border-right: 1px solid var(--glass-border);
@@ -88,11 +140,31 @@ const navItems = [
   to { transform: perspective(800px) rotateY(0); }
 }
 
+/* 触屏（粗指针）不应触发 hover 展开；仅精细指针设备允许 */
+@media (hover: hover) and (pointer: fine) {
+  .sidebar { transition: width 0.3s cubic-bezier(0.4, 0, 0.2, 1); }
+}
+
+.mobile-close {
+  position: absolute;
+  top: 12px;
+  right: 12px;
+  width: 32px;
+  height: 32px;
+  border: 1px solid var(--glass-border);
+  border-radius: 8px;
+  background: rgba(15, 31, 23, 0.6);
+  color: var(--moon);
+  cursor: pointer;
+  font-size: 15px;
+}
+
 .sidebar-inner {
   display: flex;
   flex-direction: column;
   height: 100%;
   padding: 12px 0;
+  position: relative;
 }
 
 .sidebar-logo {
@@ -250,6 +322,22 @@ const navItems = [
 }
 
 @media (max-width: 768px) {
-  .sidebar { position: fixed; left: 0; top: 0; }
+  .sidebar {
+    position: fixed;
+    left: 0;
+    top: 0;
+    width: var(--sidebar-mobile-width, min(82vw, 320px));
+    transform: translateX(-105%);
+    transition: transform 0.25s var(--ease-out);
+  }
+  .sidebar.mobile-open {
+    transform: translateX(0);
+    width: var(--sidebar-mobile-width, min(82vw, 320px));
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .sidebar { transition: none; }
+  .sidebar.expanded { animation: none; }
 }
 </style>

@@ -63,7 +63,53 @@ class LocalEmbeddingService:
 
     @property
     def ready(self) -> bool:
-        return bool(getattr(self._runtime, "ready", False))
+        # managed 模式：runtime 由 InstanceManager 持有（常驻实例），
+        # 实例管理器内已有 healthy 的 EMBEDDING 实例即视为就绪；
+        # 否则回退到已加载的 fallback / 直接绑定的 runtime。
+        if self._instance_manager is not None:
+            try:
+                from local_ai.contracts import ModelPurpose
+
+                if self._instance_manager.selection_available(ModelPurpose.EMBEDDING):
+                    return True
+            except Exception:  # noqa: BLE001 - 实例状态查询失败按未就绪处理
+                pass
+        runtime = self._runtime
+        if runtime is not None and getattr(runtime, "ready", False):
+            return True
+        if self._fallback is not None:
+            return bool(getattr(self._fallback, "ready", False))
+        return bool(getattr(runtime, "ready", False))
+
+    def npu_stats(self) -> dict:
+        """NPU 实时状态（代理到已解析 runtime / fallback provider）。
+
+        算力设备页 / local-deploy.status 读取；优先返回常驻 NPU 的运行统计。
+        """
+        sources = []
+        if self._fallback is not None:
+            sources.append(self._fallback)
+        if self._runtime is not None:
+            sources.append(self._runtime)
+        for src in sources:
+            fn = getattr(src, "npu_stats", None)
+            if fn is None:
+                continue
+            try:
+                stats = fn()
+            except Exception:  # noqa: BLE001
+                continue
+            if stats and stats.get("resident"):
+                return stats
+        for src in sources:
+            fn = getattr(src, "npu_stats", None)
+            if fn is None:
+                continue
+            try:
+                return fn()
+            except Exception:  # noqa: BLE001
+                continue
+        return {"resident": False, "busy": False, "last_call_ms": None, "calls": 0}
 
     @property
     def dimensions(self) -> int:

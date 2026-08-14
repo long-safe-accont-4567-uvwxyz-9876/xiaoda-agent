@@ -729,6 +729,14 @@ class MCPManager:
                 logger.info("mcp_manager.skip_disabled", server=server_name)
                 continue
 
+            # 静态配置也必须走与动态添加相同的白名单校验，
+            # 防止市场安装的 MCP 配置通过 command 执行任意命令。
+            error = self.validate_dynamic_server(config)
+            if error:
+                logger.warning("mcp_manager.server_rejected",
+                               server=server_name, reason=error)
+                continue
+
             client = MCPClient(server_name, config)
             self._clients[server_name] = client
 
@@ -831,12 +839,26 @@ class MCPManager:
         self._allowed_stdio_commands = allowed_stdio_commands or []
         self._allowed_url_prefixes = allowed_url_prefixes or []
 
+    def _validate_stdio_command(self, command: str) -> str | None:
+        """校验 stdio command 是否在允许名单内，返回错误原因或 None。
+
+        fail-closed：白名单为空时拒绝所有 stdio command，防止安全策略未装配时
+        市场安装的 MCP 配置通过 command 执行任意命令。
+        比较时用 basename，兼容 command 为完整路径（config._resolve_command）
+        或短命令名两种形式。
+        """
+        if not self._allowed_stdio_commands:
+            return "No stdio commands allowed (security policy not configured)"
+        basename = os.path.basename(command)
+        if command not in self._allowed_stdio_commands and basename not in self._allowed_stdio_commands:
+            return f"Command '{command}' not in allowed list"
+        return None
+
     def validate_dynamic_server(self, config: MCPTransportConfig) -> str | None:
         """验证动态添加的服务器配置，返回错误原因或 None"""
         if config.transport == "stdio":
-            if self._allowed_stdio_commands and config.command not in self._allowed_stdio_commands:
-                return f"Command '{config.command}' not in allowed list"
-        elif config.transport in ("sse", "streamable-http") and self._allowed_url_prefixes and not any(
+            return self._validate_stdio_command(config.command)
+        if config.transport in ("sse", "streamable-http") and self._allowed_url_prefixes and not any(
             config.url.startswith(prefix) for prefix in self._allowed_url_prefixes
         ):
             return f"URL '{config.url}' does not match any allowed prefix"

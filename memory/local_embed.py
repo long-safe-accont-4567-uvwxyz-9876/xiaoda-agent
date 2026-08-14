@@ -71,6 +71,9 @@ class LocalEmbeddingProvider:
         self._active_session_index = 0
         self._session: Any = None
         self._tokenizer: Any = None
+        self._input_names: list[str] = []
+        self._input_dtypes: dict[str, str] = {}
+        self._fixed_seq: int = 0
         self._dimensions: int = 0
         self._load_lock = threading.Lock()
         self._loaded = False
@@ -224,10 +227,27 @@ class LocalEmbeddingProvider:
                                 f"active providers {active_providers} do not equal {providers}"
                             )
                 tokenizer = Tokenizer.from_file(str(tokenizer_path))
+                # 输入名动态适配：bge-small 3 输入 / bge-large 2 输入
+                # （onnx 图决定；encode_batch 按此过滤 feeds）
+                self._input_names = [i.name for i in session.get_inputs()]
+                self._input_dtypes = {i.name: i.type for i in session.get_inputs()}
+                # 固定 seq 检测：bge-large-zh-fixed3（NPU 编译版）输入为
+                # 固定 [1, 512]，不支持动态长度；短文本须 padding 到 512。
+                # 动态 shape（None/-1）时保持批内最大长度（bge-small 路径）。
+                self._fixed_seq = 0
+                in_shape = session.get_inputs()[0].shape
+                if len(in_shape) >= 2 and isinstance(in_shape[1], int):
+                    self._fixed_seq = in_shape[1]
                 out_shape = session.get_outputs()[0].shape
-                hidden = getattr(out_shape[-1], "dim_value", None)
-                dimensions = int(hidden) if hidden else 512
+                # dims 取值容错：onnxruntime 的 shape 元素可能是 int 或带
+                # dim_value 的对象；bge-large 输出 [*, seq, 1024] → 1024 维
+                hidden = None
+                if out_shape:
+                    last = out_shape[-1]
+                    hidden = last if isinstance(last, int) else getattr(last, "dim_value", None)
+                dimensions = int(hidden) if hidden else 0
                 if dimensions <= 0:
+                    # 兜底：运行时从实际输出张量推断（固定 batch 的图可用）
                     dimensions = 512
                 self._sessions = sessions
                 self._active_session_index = 0
@@ -255,14 +275,25 @@ class LocalEmbeddingProvider:
     def _apply_prefix(self, text: str) -> str:
         return f"{self._query_prefix}{text}" if self._query_prefix else text
 
+    def _cast_input(self, name: str, arr: Any) -> Any:
+        """按 onnx 图期望 dtype 转换输入张量（bge-large: int32，bge-small: int64）。"""
+        t = self._input_dtypes.get(name, "")
+        if "int32" in t and arr.dtype != np.int32:
+            return arr.astype(np.int32)
+        return arr
+
     def _tokenize(self, texts: list[str]) -> tuple[Any, Any, Any]:
-        """批量分词 + padding 到批内最大长度（截断 max_length）。"""
+        """批量分词 + padding。固定 seq 图（bge-large-fixed3）统一 pad 到
+        onnx 输入 seq；动态图（bge-small）pad 到批内最大长度（≤max_length）。"""
         encodings = self._tokenizer.encode_batch(
             [self._apply_prefix(t) for t in texts],
             add_special_tokens=True,
         )
         seq_lens = [len(e.ids) for e in encodings]
-        max_len = min(max(seq_lens), self._max_length)
+        if self._fixed_seq > 0:
+            max_len = self._fixed_seq
+        else:
+            max_len = min(max(seq_lens), self._max_length)
         input_ids, attention, types = [], [], []
         for enc in encodings:
             ids = enc.ids[:max_len]
@@ -302,11 +333,17 @@ class LocalEmbeddingProvider:
             for i in range(0, len(texts), step):
                 chunk = texts[i:i + step]
                 input_ids, attention, types = self._tokenize(chunk)
-                feeds = {
-                    "input_ids": input_ids,
-                    "attention_mask": attention,
-                    "token_type_ids": types,
-                }
+                # 按 onnx 实际输入名过滤（bge-small 含 token_type_ids，
+                # bge-large 仅 input_ids + attention_mask），并按图期望
+                # dtype 转换（bge-large onnx 用 int32，bge-small 用 int64）
+                name_set = set(self._input_names or ["input_ids"])
+                feeds = {}
+                if "input_ids" in name_set:
+                    feeds["input_ids"] = self._cast_input("input_ids", input_ids)
+                if "attention_mask" in name_set:
+                    feeds["attention_mask"] = self._cast_input("attention_mask", attention)
+                if "token_type_ids" in name_set:
+                    feeds["token_type_ids"] = self._cast_input("token_type_ids", types)
                 if self._sessions:
                     outputs = None
                     last_error = None

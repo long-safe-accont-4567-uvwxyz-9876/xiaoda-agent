@@ -110,9 +110,11 @@ class EmotionState:
                 # 应用 emotion_offset 方向（正=增强强度，负=减弱，0.1 权重，clamp 到 [0,1]）
                 emotion_offset = context.get("emotion_offset", 0.0) if context else 0.0
                 if emotion_offset != 0.0:
-                    self._intensity = max(0.0, min(1.0, self._intensity + emotion_offset * 0.1))
-                    logger.debug("emotion_state.direction_applied",
-                                 offset=emotion_offset, intensity=f"{self._intensity:.2f}")
+                    # 与 update 主流程共用同一把锁，保证 _intensity 读改写原子性
+                    with self._lock:
+                        self._intensity = max(0.0, min(1.0, self._intensity + emotion_offset * 0.1))
+                        logger.debug("emotion_state.direction_applied",
+                                     offset=emotion_offset, intensity=f"{self._intensity:.2f}")
         except Exception as e:
             logger.debug("emotion_state.j_space_hook_failed", error=str(e))
 

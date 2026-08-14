@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, onMounted } from 'vue'
+import { ref, onMounted, onBeforeUnmount, watch } from 'vue'
 import SideBar from './SideBar.vue'
 import TopBar from './TopBar.vue'
 import AgentBackdrop from './AgentBackdrop.vue'
@@ -7,13 +7,36 @@ import { useAuthStore } from '../../stores/auth'
 import { useAgentsStore } from '../../stores/agents'
 import { useUiStore } from '../../stores/ui'
 import { getWsClient } from '../../api/ws'
-import { useRouter } from 'vue-router'
+import { useRouter, useRoute } from 'vue-router'
 
 const auth = useAuthStore()
 const agentsStore = useAgentsStore()
 const ui = useUiStore()
 const router = useRouter()
-const sidebarExpanded = ref(false)
+const route = useRoute()
+const desktopSidebarExpanded = ref(false)
+const mobileSidebarOpen = ref(false)
+
+function closeMobileSidebar() {
+  mobileSidebarOpen.value = false
+}
+
+function onShellKeydown(event: KeyboardEvent) {
+  if (mobileSidebarOpen.value && event.key === 'Escape') {
+    event.preventDefault()
+    closeMobileSidebar()
+  }
+}
+
+watch(() => route.fullPath, closeMobileSidebar)
+
+onMounted(() => {
+  window.addEventListener('keydown', onShellKeydown)
+})
+
+onBeforeUnmount(() => {
+  window.removeEventListener('keydown', onShellKeydown)
+})
 
 if (!auth.isLoggedIn) {
   router.replace('/login')
@@ -32,9 +55,22 @@ if (!auth.isLoggedIn) {
 <template>
   <div class="app-layout">
     <AgentBackdrop />
-    <SideBar :expanded="sidebarExpanded" @update:expanded="sidebarExpanded = $event" />
+    <div
+      v-if="mobileSidebarOpen"
+      class="mobile-overlay"
+      @click="closeMobileSidebar"
+    ></div>
+    <SideBar
+      :expanded="desktopSidebarExpanded"
+      :mobile-open="mobileSidebarOpen"
+      @update:expanded="desktopSidebarExpanded = $event"
+      @close="closeMobileSidebar"
+    />
     <div class="main-area">
-      <TopBar />
+      <TopBar
+        :mobile-sidebar-open="mobileSidebarOpen"
+        @toggle-sidebar="mobileSidebarOpen = !mobileSidebarOpen"
+      />
       <main class="content">
         <router-view v-slot="{ Component }">
           <transition name="leaf-flip" mode="out-in">
@@ -51,10 +87,18 @@ if (!auth.isLoggedIn) {
 <style scoped>
 .app-layout {
   display: flex;
-  height: 100vh;
+  height: 100dvh;
   width: 100vw;
   overflow: hidden;
   position: relative;
+}
+
+.mobile-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.45);
+  z-index: var(--z-overlay, 70);
+  display: none;
 }
 
 .main-area {
@@ -78,6 +122,7 @@ if (!auth.isLoggedIn) {
 
 @media (max-width: 768px) {
   .content { padding: 8px; }
+  .mobile-overlay { display: block; }
 }
 </style>
 

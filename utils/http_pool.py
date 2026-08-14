@@ -19,13 +19,23 @@ HTTP/2 优雅降级：
   warning 日志（一次性），保证应用可启动；HTTP/1.1 的连接池复用仍能提供
   主要性能收益（TLS 握手复用），仅失去多路复用。
 """
+import asyncio
 from typing import Optional
 
 import httpx
 from loguru import logger
 
 _shared_client: Optional[httpx.AsyncClient] = None
+_shared_loop: Optional[asyncio.AbstractEventLoop] = None
 _http2_warned: bool = False
+
+
+def _current_loop() -> Optional[asyncio.AbstractEventLoop]:
+    """返回当前运行中的事件循环；在同步上下文中返回 None。"""
+    try:
+        return asyncio.get_running_loop()
+    except RuntimeError:
+        return None
 
 
 def _detect_http2_available() -> bool:
@@ -57,7 +67,12 @@ def get_shared_client() -> httpx.AsyncClient:
     Returns:
         httpx.AsyncClient: 共享 client（如已关闭则自动重建）
     """
-    global _shared_client, _http2_warned
+    global _shared_client, _shared_loop, _http2_warned
+    loop = _current_loop()
+    if _shared_client is not None and not _shared_client.is_closed and _shared_loop is not loop:
+        # 绑定在旧事件循环上的 client 不能跨循环复用（其底层连接属于已关闭的旧循环），
+        # 直接丢弃引用，由 GC 回收，避免在新循环上 close 时抛 "Event loop is closed"。
+        _shared_client = None
     if _shared_client is None or _shared_client.is_closed:
         http2_enabled = _detect_http2_available()
         if not http2_enabled and not _http2_warned:
@@ -83,6 +98,7 @@ def get_shared_client() -> httpx.AsyncClient:
             timeout=httpx.Timeout(30.0, connect=15.0),
             http2=http2_enabled,
         )
+        _shared_loop = loop
     return _shared_client
 
 
@@ -91,7 +107,12 @@ async def close_shared_client() -> None:
 
     幂等：多次调用安全。关闭后再次 :func:`get_shared_client` 会重建实例。
     """
-    global _shared_client
+    global _shared_client, _shared_loop
     if _shared_client and not _shared_client.is_closed:
-        await _shared_client.aclose()
+        try:
+            await _shared_client.aclose()
+        except RuntimeError as e:
+            # 旧 client 绑定在已关闭的事件循环上时无法优雅关闭，直接丢弃引用。
+            logger.debug("http_pool.close_skipped", error=str(e))
     _shared_client = None
+    _shared_loop = None

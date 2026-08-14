@@ -315,7 +315,7 @@ class IMApprovalChannel:
     4. 主人（is_owner=true）白名单跳过确认
     """
 
-    # 关键词匹配（小写包含即视为该决定；confirm 先于 reject 检查）
+    # 关键词整词匹配（去除首尾空白并小写后精确相等；confirm 先于 reject 检查）
     _CONFIRM_KEYWORDS: tuple[str, ...] = ("确认", "确定", "yes", "y")
     _REJECT_KEYWORDS: tuple[str, ...] = ("取消", "拒绝", "no", "n")
 
@@ -340,15 +340,13 @@ class IMApprovalChannel:
         """将用户回复文本分类为 APPROVED / REJECTED / None。"""
         if not text:
             return None
-        lower = text.strip().lower()
-        if not lower:
+        normalized = text.strip().lower()
+        if not normalized:
             return None
-        for kw in self._CONFIRM_KEYWORDS:
-            if kw in lower:
-                return ApprovalStatus.APPROVED
-        for kw in self._REJECT_KEYWORDS:
-            if kw in lower:
-                return ApprovalStatus.REJECTED
+        if normalized in self._CONFIRM_KEYWORDS:
+            return ApprovalStatus.APPROVED
+        if normalized in self._REJECT_KEYWORDS:
+            return ApprovalStatus.REJECTED
         return None
 
     def _audit(self, req: ApprovalRequest, status: ApprovalStatus,

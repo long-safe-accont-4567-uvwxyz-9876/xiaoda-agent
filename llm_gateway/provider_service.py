@@ -222,17 +222,16 @@ class ProviderService:
             old_record = self.config.get(f"models.providers.{provider_id}")
             old_credential = self.credentials.read(provider_id)
             old_report = self._reports.get(provider_id)
-            clients = self._runtime_clients()
-            old_client = clients.get(provider_id)
+            old_client = self.runtime_router.get_custom_client(provider_id)
             try:
                 self.config.delete(f"models.providers.{provider_id}")
                 self.credentials.delete(provider_id)
-                clients.pop(provider_id, None)
+                self.runtime_router.remove_custom_client(provider_id)
                 self.catalog.unregister(provider_id)
                 self._reports.pop(provider_id, None)
             except Exception:
                 self._run_rollback(self._delete_rollback_actions(
-                    provider_id, definition, old_record, old_credential, old_report, clients, old_client))
+                    provider_id, definition, old_record, old_credential, old_report, old_client))
                 raise
 
     async def capabilities(self, provider_id: str) -> CapabilityReport:
@@ -274,10 +273,9 @@ class ProviderService:
             runtime_kind = "builtin"
             client_present = client is not None
         else:
-            clients = self._runtime_clients()
             runtime_kind = "custom"
-            client_present = provider_id in clients
-            client = clients.get(provider_id)
+            client = self.runtime_router.get_custom_client(provider_id)
+            client_present = self.runtime_router.has_custom_client(provider_id)
         return ProviderSnapshot(
             provider_id=provider_id,
             definition=definition,
@@ -320,11 +318,10 @@ class ProviderService:
                         raise RuntimeError("runtime router does not support builtin binding")
                     binder(provider_id, snapshot.client if snapshot.client_present else None)
                     return
-                clients = self._runtime_clients()
                 if snapshot.client_present:
-                    clients[provider_id] = snapshot.client
+                    self.runtime_router.set_custom_client(provider_id, snapshot.client)
                 else:
-                    clients.pop(provider_id, None)
+                    self.runtime_router.remove_custom_client(provider_id)
 
             def restore_report() -> None:
                 if snapshot.report_present:
@@ -373,7 +370,7 @@ class ProviderService:
             checker = getattr(self.runtime_router, "_is_client_configured", None)
             if checker is not None:
                 return bool(checker(definition.id))
-        return definition.id in self._runtime_clients()
+        return self.runtime_router.has_custom_client(definition.id)
 
     async def _stage(self, definition: ProviderDefinition, credential: str) -> tuple[CapabilityReport, Any]:
         report = await self.test(self._record(definition), {"api_key": credential})
@@ -385,9 +382,8 @@ class ProviderService:
         path = f"models.providers.{definition.id}"
         old_record = self.config.get(path)
         old_credential = self.credentials.read(definition.id)
-        clients = self._runtime_clients()
-        had_client = definition.id in clients
-        old_client = clients.get(definition.id)
+        had_client = self.runtime_router.has_custom_client(definition.id)
+        old_client = self.runtime_router.get_custom_client(definition.id)
         had_report = definition.id in self._reports
         old_report = self._reports.get(definition.id)
         try:
@@ -415,9 +411,9 @@ class ProviderService:
 
         def restore_runtime() -> None:
             if had_client:
-                clients[definition.id] = old_client
+                self.runtime_router.set_custom_client(definition.id, old_client)
             else:
-                clients.pop(definition.id, None)
+                self.runtime_router.remove_custom_client(definition.id)
 
         def restore_report() -> None:
             if had_report:
@@ -429,7 +425,7 @@ class ProviderService:
             self.credentials.write(definition.id, credential)
             self.config.set(path, self._record(definition))
             self.catalog.register(definition)
-            clients[definition.id] = client
+            self.runtime_router.set_custom_client(definition.id, client)
         except Exception:
             self._run_rollback([
                 restore_credential,
@@ -451,19 +447,19 @@ class ProviderService:
         path = f"models.providers.{provider_id}"
         old_record = self.config.get(path)
         old_credential = self.credentials.read(provider_id)
-        old_client = self._runtime_clients().get(provider_id)
+        old_client = self.runtime_router.get_custom_client(provider_id)
 
         def restore_runtime() -> None:
             if old_client is None:
-                self._runtime_clients().pop(provider_id, None)
+                self.runtime_router.remove_custom_client(provider_id)
             else:
-                self._runtime_clients()[provider_id] = old_client
+                self.runtime_router.set_custom_client(provider_id, old_client)
 
         try:
             self.credentials.write(provider_id, credential)
             self.config.set(path, self._record(definition))
             self.catalog.register(definition, replace_existing=True)
-            self._runtime_clients()[provider_id] = client
+            self.runtime_router.set_custom_client(provider_id, client)
         except Exception:
             self._run_rollback([
                 lambda: (self.credentials.write(provider_id, old_credential)
@@ -475,7 +471,6 @@ class ProviderService:
             raise
 
     def _restore_custom_definitions(self) -> None:
-        clients = self._runtime_clients()
         for provider_id, record in (self.config.get("models.providers", {}) or {}).items():
             try:
                 definition = self._definition(dict(record, id=provider_id))
@@ -488,13 +483,15 @@ class ProviderService:
                 self.catalog.register(definition)
             # 内置 provider 与凭证池 provider 不在重建范围：
             # 内置由 ModelRouter 初始化，凭证池由 _register_credential_pool_providers 注册。
-            if definition.builtin or provider_id in clients:
+            if definition.builtin or self.runtime_router.has_custom_client(provider_id):
                 continue
             try:
                 credential = self.credentials.read(provider_id)
                 if definition.auth.required and not credential:
                     continue
-                clients[provider_id] = self._runtime_client_factory(definition, credential)
+                self.runtime_router.set_custom_client(
+                    provider_id, self._runtime_client_factory(definition, credential)
+                )
             except Exception as error:
                 logger.warning(
                     "provider_service.restore_client_failed id={} error={}",
@@ -610,11 +607,6 @@ class ProviderService:
             "mapping": dict(definition.metadata.get("mapping") or {}),
         }
 
-    def _runtime_clients(self) -> dict[str, Any]:
-        if not hasattr(self.runtime_router, "_custom_clients"):
-            self.runtime_router._custom_clients = {}
-        return self.runtime_router._custom_clients
-
     def _lock(self, provider_id: str) -> asyncio.Lock:
         # 按规范化 provider ID 共享锁，避免 "Custom" 与 "custom" 各自持锁
         key = provider_id.strip().lower()
@@ -663,7 +655,7 @@ class ProviderService:
             pass
 
     def _delete_rollback_actions(self, provider_id, definition, old_record,
-                                 old_credential, old_report, clients, old_client) -> list[Callable[[], None]]:
+                                 old_credential, old_report, old_client) -> list[Callable[[], None]]:
         def restore_config() -> None:
             if old_record is not None:
                 self.config.set(f"models.providers.{provider_id}", old_record)
@@ -674,7 +666,7 @@ class ProviderService:
 
         def restore_runtime() -> None:
             if old_client is not None:
-                clients[provider_id] = old_client
+                self.runtime_router.set_custom_client(provider_id, old_client)
 
         def restore_catalog() -> None:
             try:

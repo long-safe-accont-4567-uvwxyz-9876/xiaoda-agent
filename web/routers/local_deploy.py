@@ -30,6 +30,45 @@ _DEVICE_CACHE_TTL = 300.0
 _CPU_SAMPLE: dict[str, Any] = {"ts": 0.0, "total": 0, "idle": 0}
 
 
+def _persist_embed_mode_by_rule(vs: Any) -> str:
+    """按持久化规则重算并写入 local_deploy.mode。
+
+    规则（2026-08-13 用户确认）：仅当「本地引擎已启动」且「功能节点里有节点
+    选择了本地模型」时持久化为 local（每次服务重启自动常驻）；二者缺一则
+    持久化失效，写入 remote（下次重启默认走 API）。
+    返回最终写入的 mode。
+    """
+    engine_running = False
+    if vs is not None:
+        try:
+            engine_running = bool(
+                vs.embed_engine_status().get("engine_running", False)
+            )
+        except Exception:  # noqa: BLE001
+            engine_running = False
+    node_local = False
+    try:
+        from web.local_deploy_nodes import NODES, get_backend
+
+        cfg = get_config_service()
+        for node in NODES:
+            if get_backend(cfg, node["id"]) == "local":
+                node_local = True
+                break
+    except Exception:  # noqa: BLE001
+        node_local = False
+    mode = "local" if (engine_running and node_local) else "remote"
+    try:
+        get_config_service().set("local_deploy.mode", mode)
+    except Exception as e:  # noqa: BLE001
+        logger.warning("local_deploy.mode_persist_failed error={}", str(e))
+    logger.info(
+        "local_deploy.mode_persisted mode={} engine_running={} node_local={}",
+        mode, engine_running, node_local,
+    )
+    return mode
+
+
 def _cpu_stats() -> dict:
     """CPU 性能与实时占用：核数 / 频率 / 占用百分比。
 
@@ -401,7 +440,9 @@ async def local_deploy_set_mode(request: Request, body: dict) -> Any:
     if mode not in ("local", "remote"):
         raise HTTPException(status_code=422, detail="mode must be 'local' or 'remote'")
     status = await asyncio.to_thread(vs.set_embed_mode, mode)
-    get_config_service().set("local_deploy.mode", mode)
+    # 持久化规则：手动切模式同样受「引擎已启动 + 节点选本地」约束，
+    # 缺任一条件则不持久化 local，重启默认回退 API
+    _persist_embed_mode_by_rule(vs)
     logger.info("local_deploy.mode_switched mode={}", mode)
     return Envelope(data=status)
 
@@ -413,7 +454,7 @@ async def local_deploy_start(request: Request) -> Any:
     if vs is None:
         raise HTTPException(status_code=409, detail="Vector store not initialized")
     status = await asyncio.to_thread(vs.start_local_engine)
-    get_config_service().set("local_deploy.mode", "local")
+    _persist_embed_mode_by_rule(vs)
     return Envelope(data=status)
 
 
@@ -424,6 +465,8 @@ async def local_deploy_stop(request: Request) -> Any:
     if vs is None:
         raise HTTPException(status_code=409, detail="Vector store not initialized")
     status = await asyncio.to_thread(vs.stop_local_engine)
+    # 引擎已停止：持久化失效，重启默认走 API
+    _persist_embed_mode_by_rule(vs)
     return Envelope(data=status)
 
 
@@ -484,6 +527,9 @@ async def local_deploy_set_model_node(request: Request, body: dict) -> Any:
             await asyncio.to_thread(_apply, core, vs, node_id, normalized)
         else:
             apply_to_runtime(core, vs, node_id, normalized, app=request.app, local_model=local_model)
+    # 持久化规则：节点选择变更后重算——仅「引擎已启动 + 任一节点选 local」才
+    # 持久化 local；缺一（如引擎未启动）则回退 remote，重启默认 API
+    _persist_embed_mode_by_rule(vs)
     return Envelope(data={
         "node_id": node_id,
         "backend": normalized,

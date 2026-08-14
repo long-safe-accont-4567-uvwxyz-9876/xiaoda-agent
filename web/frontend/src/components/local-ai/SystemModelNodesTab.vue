@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, onMounted, ref, watch } from 'vue'
 import { NButton, NTag, NEmpty, useMessage } from 'naive-ui'
-import { useLocalAiStore, type ModelNode } from '../../stores/localAi'
+import { useLocalAiStore, type ModelNode, type LocalDeployStatus } from '../../stores/localAi'
 import StoragePickerDialog from './StoragePickerDialog.vue'
 
 const store = useLocalAiStore()
@@ -9,6 +9,8 @@ const message = useMessage()
 const nodes = ref<ModelNode[]>([])
 const loading = ref(false)
 const saving = ref('')
+/** embedding 引擎实时状态（模式 / 是否已启动），用于持久化提示 */
+const deployStatus = ref<LocalDeployStatus | null>(null)
 /** 展开本地模型候选的节点（点击「本地模型」只展开，不切换） */
 const localOpen = ref<Record<string, boolean>>({})
 /** 正在下载的候选模型 id（用于显示 loading） */
@@ -45,10 +47,36 @@ const stateType = (node: ModelNode) => {
   return node.api_configured ? ('info' as const) : ('warning' as const)
 }
 
+// 持久化规则提示：本地引擎已启动 + 有节点选 local → 常驻；缺一 → 重启回退 API
+const anyNodeLocal = computed(() => nodes.value.some(node => node.backend === 'local'))
+const persistHint = computed(() => {
+  if (!deployStatus.value) return null
+  const running = deployStatus.value.engine_running
+  if (anyNodeLocal.value && running) {
+    return {
+      type: 'success' as const,
+      text: '本地引擎运行中，且已选择本地模型节点 —— 将持久化常驻，服务重启后自动恢复本地。',
+    }
+  }
+  if (anyNodeLocal.value) {
+    return {
+      type: 'warning' as const,
+      text: '已选本地模型节点，但本地引擎未启动 —— 持久化未生效，重启后将回退 API。请在「本地部署」页启动引擎。',
+    }
+  }
+  return {
+    type: 'info' as const,
+    text: '当前全部走 API —— 重启后保持 API（默认）。只有「启动本地引擎 + 选择本地节点」才会持久化为本地常驻。',
+  }
+})
+
 async function load() {
   loading.value = true
   try {
     nodes.value = await store.fetchModelNodes()
+    try {
+      deployStatus.value = await store.fetchLocalDeployStatus()
+    } catch { /* 状态拉取失败不影响节点列表 */ }
   } catch (error) {
     message.error(error instanceof Error ? error.message : String(error))
   } finally {
@@ -154,6 +182,12 @@ onMounted(load)
       <n-button :loading="loading" @click="load">刷新</n-button>
     </div>
 
+    <!-- 持久化状态提示：引擎启动 + 节点选本地 → 常驻；缺一 → 重启回退 API -->
+    <div v-if="persistHint" class="persist-hint" :data-type="persistHint.type">
+      <span class="persist-dot"></span>
+      <span>{{ persistHint.text }}</span>
+    </div>
+
     <template v-if="grouped.length">
       <section v-for="group in grouped" :key="group.key" class="node-group">
         <div class="group-head">
@@ -247,6 +281,12 @@ onMounted(load)
 .nodes-header { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; }
 .nodes-header h3 { margin: 0; font-family: 'Noto Serif SC', serif; }
 .nodes-header p { margin: 4px 0 0; color: var(--moon-dim); font-size: 12px; }
+
+.persist-hint { display: flex; align-items: center; gap: 8px; padding: 10px 14px; border-radius: 10px; border: 1px solid rgba(128, 128, 128, 0.18); background: rgba(255, 255, 255, 0.04); font-size: 12.5px; color: var(--text-2); }
+.persist-dot { width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; }
+.persist-hint[data-type='success'] .persist-dot { background: #8fe560; box-shadow: 0 0 8px rgba(143, 229, 96, 0.7); }
+.persist-hint[data-type='warning'] .persist-dot { background: #e8d5a3; box-shadow: 0 0 8px rgba(232, 213, 163, 0.7); }
+.persist-hint[data-type='info'] .persist-dot { background: #70c0e8; box-shadow: 0 0 8px rgba(112, 192, 232, 0.7); }
 
 .node-group { display: flex; flex-direction: column; gap: 12px; }
 .group-head { display: flex; align-items: center; gap: 12px; }

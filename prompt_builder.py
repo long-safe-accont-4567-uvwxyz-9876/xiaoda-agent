@@ -15,7 +15,7 @@ from pathlib import Path
 
 from loguru import logger
 
-from utils.canary_guard import CanaryManager
+from security.canary import get_canary_detector
 
 
 def _guard_injected_text(text: str) -> str:
@@ -32,8 +32,22 @@ def _guard_injected_text(text: str) -> str:
     return _re.sub(r"(?m)^(\s*)(\[|---+|\*{3,}|#{1,6}\s*)", r"\1［\2", text)
 
 
-# ── 安全：Canary Token 泄露检测管理器（全局单例） ──────────────
-_canary_manager = CanaryManager()
+# ── 安全：Canary Token 泄露检测（注入侧与扫描侧共享同一全局单例） ──
+# 旧版 utils.canary_guard.CanaryManager 已停用（无任何生产调用点，注入/检查/清理均未接线）。
+# `_canary_manager` 名称保留以兼容 config.py 的延迟重导出，实际指向 security.canary 的全局单例；
+# 注入（本模块）与扫描（agent_core/tool_executor.py）使用同一实例，链路才真正连通。
+_canary_manager = get_canary_detector()
+
+
+def _inject_canary(prompt: str) -> str:
+    """在 system prompt 末尾注入活跃 Canary Token（泄露检测蜜罐）。
+
+    使用 security.canary 全局单例：与 agent_core/tool_executor.py 的扫描点
+    共享同一 token 集合，确保注入侧与扫描侧互通。
+    """
+    if not prompt:
+        return prompt
+    return get_canary_detector().inject(prompt)
 
 # ── 缓存线程锁（保护模块级全局变量，防竞态条件） ─────────────
 _cache_lock = threading.Lock()
@@ -101,9 +115,12 @@ def clear_module_cache():
 #   - 阈值默认 0.5, 拦截低质量闲聊 (无意义单字、乱码、模糊输入)
 #   - 正常 B 级场景 (greeting/creative/learning) 权重通常 = 1.0, 不受影响
 #   - 可通过环境变量 SCENE_STICKINESS_THRESHOLD 覆盖
-_BASE_STICKINESS_THRESHOLD: float = float(
-    os.environ.get("SCENE_STICKINESS_THRESHOLD", "0.5")
-)
+try:
+    _BASE_STICKINESS_THRESHOLD: float = float(
+        os.environ.get("SCENE_STICKINESS_THRESHOLD", "0.5")
+    )
+except (ValueError, TypeError):
+    _BASE_STICKINESS_THRESHOLD = 0.5
 
 
 def _dynamic_stickiness_threshold(user_input: str, scene_sig: tuple) -> float:
@@ -907,7 +924,7 @@ def build_scene_aware_prompt(user_input: str, address_term: str = "爸爸",
     )
 
     if not scene_aware_names:
-        return stable_prefix
+        return _inject_canary(stable_prefix)
 
     weights = _classify_scene_blended(user_input)
     scene_level = _get_scene_level(weights)
@@ -970,7 +987,7 @@ def build_scene_aware_prompt(user_input: str, address_term: str = "爸爸",
 
     # 全局替换所有 agent 原名为 display_name（统一机制）
     from config import apply_agent_name_replacements
-    return apply_agent_name_replacements(result)
+    return _inject_canary(apply_agent_name_replacements(result))
 
 
 def get_scene_cache_stats() -> dict:
@@ -1415,7 +1432,7 @@ def build_system_prompt(extra_context: str = "", address_term: str = "爸爸",
     _prompt_tokens = int(_cn * 1.5 + _en * 0.25)
     logger.info("prompt_builder.system_prompt_tokens",
                 tokens_est=_prompt_tokens, length=len(_final_prompt))
-    return _final_prompt
+    return _inject_canary(_final_prompt)
 
 
 def _build_workspace_sections(address_term: str) -> list[str]:
@@ -1548,7 +1565,7 @@ def build_safe_system_prompt(extra_context: str = "", address_term: str = "你")
     if extra_context:
         safe_prompt += f"\n\n---\n\n{extra_context}"
 
-    return safe_prompt
+    return _inject_canary(safe_prompt)
 
 
 def _strip_owner_references(text: str) -> str:

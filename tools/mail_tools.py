@@ -103,6 +103,40 @@ _EXIT_CODE_HINTS: dict[int, str] = {
 }
 
 
+# ── 内容截断 ──────────────────────────────────────────────────────
+_MAIL_CONTENT_LIMIT = 8000
+
+
+def _truncate(text: str, limit: int = _MAIL_CONTENT_LIMIT) -> str:
+    """截断超长文本，防止单次工具结果打爆 LLM 上下文。"""
+    if len(text) <= limit:
+        return text
+    return text[:limit] + "\n...(内容过长已截断)"
+
+
+# 结构化字段键名标记：这些字段是 id/游标/下载链接/确认令牌，截断会使其失效。
+_MAIL_STRUCTURAL_KEY_MARKERS = ("id", "cursor", "url", "token")
+
+
+def _is_structural_mail_key(key: str) -> bool:
+    lowered = key.lower()
+    return any(marker in lowered for marker in _MAIL_STRUCTURAL_KEY_MARKERS)
+
+
+def _truncate_mail_data(data: Any) -> Any:
+    """递归截断邮件返回数据中的超长字符串字段（正文/摘要等），跳过结构化字段。"""
+    if isinstance(data, str):
+        return _truncate(data)
+    if isinstance(data, dict):
+        return {
+            k: (v if _is_structural_mail_key(k) else _truncate_mail_data(v))
+            for k, v in data.items()
+        }
+    if isinstance(data, list):
+        return [_truncate_mail_data(v) for v in data]
+    return data
+
+
 # ── 底层执行与解析 ──────────────────────────────────────────────────────
 def _ensure_node_in_path(env: dict[str, str]) -> None:
     """确保 env["PATH"] 包含 node 所在目录（symlink → run.js 需要 node）。"""
@@ -334,7 +368,10 @@ async def mail_read(id: str) -> ToolResult:
         return ToolResult.fail("请提供邮件 ID（msg_xxx）")
     args = ["message", "+read", "--id", id]
     rc, out, err = await _run_agently(args, timeout=30)
-    return _parse_output(rc, out, err)
+    result = _parse_output(rc, out, err)
+    if result.success and result.data is not None:
+        result.data = _truncate_mail_data(result.data)
+    return result
 
 
 @register_tool(
@@ -385,7 +422,10 @@ async def mail_search(q: str, search_in: str = "SEARCH_IN_ALL",
     _add_val(args, "--cursor", cursor)
 
     rc, out, err = await _run_agently(args, timeout=30)
-    return _parse_output(rc, out, err)
+    result = _parse_output(rc, out, err)
+    if result.success and result.data is not None:
+        result.data = _truncate_mail_data(result.data)
+    return result
 
 
 @register_tool(

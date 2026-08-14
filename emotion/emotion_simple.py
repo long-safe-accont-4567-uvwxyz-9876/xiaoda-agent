@@ -24,7 +24,7 @@ _EXCITED_KEYWORDS = {
 
 _NEGATIVE_KEYWORDS = {
     # 原有
-    "难过", "累", "烦", "孤独", "不开心", "哭",
+    "难过", "累", "烦", "孤独", "不开心", "不高兴", "哭",
     "伤心", "崩溃", "绝望", "痛苦", "抑郁", "受不了", "想哭", "好烦",
     "无聊", "郁闷", "沮丧", "失落", "压力", "烦躁",
     # 从 sticker_manager sad 合并
@@ -151,6 +151,68 @@ _EMOTION_CATEGORIES = [
 ]
 
 
+# 否定前缀排除表：与 sticker_manager.EMOTION_EXCLUSIONS 保持一致
+# 命中某情绪关键词前，若被否定前缀修饰（如"不开心"中的"开心"），则不计入该情绪计数。
+_NEGATION_EXCLUSIONS = {
+    "喜爱": ["不", "没", "别"],
+    "撒娇": ["不"],
+    "调皮": ["不"],
+    "感动": ["不"],
+    "惊讶": ["不"],
+    "问候": [],
+    "困惑": [],
+    "平静": [],
+    "兴奋": ["不", "没"],
+    "喜悦": ["不", "没", "别", "少"],
+    "悲伤": ["不", "别", "不用", "不要", "不会"],
+    "愤怒": ["不", "没", "别"],
+    "焦虑": ["不", "没", "别"],
+    "害羞": ["不"],
+    "好奇": [],
+    "思考": [],
+    "恐惧": ["不", "没", "别"],
+}
+
+
+def _is_cjk(ch: str) -> bool:
+    """判断单字符是否为 CJK 汉字（用于区分「别」的否定用法与词内字符）。"""
+    return bool(ch) and "\u4e00" <= ch <= "\u9fff"
+
+
+def _is_negated(text: str, idx: int, exclusions: list[str]) -> bool:
+    """判断关键词在 text[idx] 处是否被否定前缀修饰（前缀窗口与 sticker_manager 一致）。
+
+    单字否定「别」极易误伤「特别/离别/分别」等词内「别」，需单独精确判定：
+    「别」必须紧邻关键词、且其前一个字符不是汉字（即独立成词，如「别难过」），
+    才视为否定。其余否定词（不/没/少/不用/不要/不会）沿用前 2 字窗口子串匹配。
+    """
+    prefix = text[max(0, idx - 2):idx]
+    for ex in exclusions:
+        if ex != "别":
+            if ex in prefix:
+                return True
+        else:
+            if idx >= 1 and text[idx - 1] == "别" and not _is_cjk(text[idx - 2] if idx >= 2 else ""):
+                return True
+    return False
+
+
+def _count_hits(text: str, keywords: set[str], exclusions: list[str]) -> int:
+    """统计未被否定前缀修饰的关键词命中数（每个关键词存在即计 1）"""
+    hits = 0
+    for kw in keywords:
+        start = 0
+        while True:
+            idx = text.find(kw, start)
+            if idx == -1:
+                break
+            if not _is_negated(text, idx, exclusions):
+                hits += 1
+                break
+            start = idx + 1
+    return hits
+
+
 def detect_emotion(text: str) -> dict:
     """检测文本情绪，返回包含 primary/valence/intensity 的字典
 
@@ -164,10 +226,10 @@ def detect_emotion(text: str) -> dict:
             "pad": PADEmotion.neutral().to_dict(),
         }
 
-    # 计算每类命中数
+    # 计算每类命中数（排除被否定前缀修饰的关键词）
     scores = {}
     for label, keywords in _EMOTION_CATEGORIES:
-        scores[label] = sum(1 for kw in keywords if kw in text)
+        scores[label] = _count_hits(text, keywords, _NEGATION_EXCLUSIONS.get(label, []))
 
     # 找到命中数最多的类别
     best_label = max(scores, key=scores.get)

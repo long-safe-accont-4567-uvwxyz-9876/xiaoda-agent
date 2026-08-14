@@ -5,6 +5,7 @@ import asyncio
 import hashlib
 import importlib
 import json
+import re
 import sys
 from dataclasses import dataclass
 from enum import Enum
@@ -128,6 +129,29 @@ class PluginManager:
 
         return None
 
+    @staticmethod
+    def _resolve_entrypoint_module(module_path: str, plugin_dir: Path) -> str:
+        """校验 entrypoint 模块只能来自插件目录，阻止任意模块导入。
+
+        ``importlib.import_module(module_path)`` 会执行模块级代码；若
+        entrypoint 可指向 ``os`` / ``subprocess`` 等任意模块，等同于任意
+        代码执行。这里要求模块名是合法点分标识符、顶层名不是标准库模块，
+        且模块文件必须位于插件目录内。
+        """
+        if not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*(\.[A-Za-z_][A-Za-z0-9_]*)*", module_path):
+            raise ValueError(f"Invalid entrypoint module name: {module_path!r}")
+        top = module_path.split(".", 1)[0]
+        if top in sys.stdlib_module_names:
+            raise ValueError(f"Entrypoint module must not be a stdlib module: {module_path!r}")
+
+        plugin_dir = Path(plugin_dir).resolve()
+        parts = module_path.split(".")
+        module_file = plugin_dir.joinpath(*parts).with_suffix(".py")
+        package_init = plugin_dir.joinpath(*parts, "__init__.py")
+        if not (module_file.is_file() or package_init.is_file()):
+            raise ValueError(f"Entrypoint module must be inside the plugin directory: {module_path!r}")
+        return module_path
+
     # ── Discovery ──
     def discover(self, search_paths: list[str | Path] | None = None) -> list[str]:
         """扫描并注册发现的插件"""
@@ -173,6 +197,7 @@ class PluginManager:
 
             # Parse entrypoint "module.path:ClassName"
             module_path, class_name = manifest.entrypoint.rsplit(":", 1)
+            self._resolve_entrypoint_module(module_path, plugin_dir)
             module = importlib.import_module(module_path)
             plugin_class = getattr(module, class_name)
 

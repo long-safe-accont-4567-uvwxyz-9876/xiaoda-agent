@@ -1112,7 +1112,7 @@ QUERY_CACHE_ENABLED = os.getenv("QUERY_CACHE_ENABLED", "true").lower() in ("1", 
 # threshold: 余弦相似度阈值，>= 此值视为命中（0.88 严格匹配，避免误命中返回无关记忆）
 # max_size: LRU 最大条目数（256 足够覆盖活跃话题，过大占用内存）
 # ttl: 缓存过期时间秒（300s = 5 分钟，与 kg query_entity_cache 对齐）
-QUERY_CACHE_THRESHOLD = float(os.getenv("QUERY_CACHE_THRESHOLD", "0.88"))
+QUERY_CACHE_THRESHOLD = _safe_float(os.getenv("QUERY_CACHE_THRESHOLD", "0.88"), 0.88)
 QUERY_CACHE_MAX_SIZE = _safe_int(os.getenv("QUERY_CACHE_MAX_SIZE"), 256)
 QUERY_CACHE_TTL = _safe_int(os.getenv("QUERY_CACHE_TTL"), 300)
 # 单次记忆检索超时（秒）。主路径记忆检索在 LLM 调用前被 await，属串行瓶颈；

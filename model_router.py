@@ -6,6 +6,7 @@ import os
 import time
 import asyncio
 import contextvars
+import threading
 from openai import AsyncOpenAI
 import openai as _openai_mod  # 用于 openai.APIError 异常捕获
 from loguru import logger
@@ -165,6 +166,17 @@ def _load_provider_base_url(provider: str, env_var: str) -> str:
     return ""
 
 
+def _resolve_provider_key(name: str) -> str:
+    """统一解析 provider API Key：密文（enc:v1:）自动解密，明文原样返回。
+
+    与 config.MIMO_API_KEY 的内存态保护链路一致：get_secret 实时解密 enc:v1: 密文，
+    reveal_credential 还原明文。取代各处 os.getenv 直读（直读会把密文当 Key → 401）。
+    """
+    from config import get_secret
+    from utils.encrypted_credential import reveal_credential
+    return reveal_credential(get_secret(name, ""))
+
+
 # MIMO_MODEL/MIMO_PRO_MODEL 从 config.py + provider_metadata.json 读取（不再硬编码）
 # 保留模块级变量名以兼容 `from model_router import MIMO_MODEL` 的调用方
 MIMO_MODEL = _CFG_MIMO_MODEL
@@ -175,7 +187,7 @@ if not MIMO_PRO_MODEL and isinstance(_mimo_meta, dict):
     MIMO_PRO_MODEL = _mimo_meta.get("default_pro_model", "")
 # P0 修复：MIMO_BASE_URL 从 provider_metadata.json 读取（不再硬编码 "https://api.xiaomimimo.com/v1"）
 MIMO_BASE_URL = _load_provider_base_url("mimo", "MIMO_BASE_URL")
-MIMO_API_KEY = os.getenv("MIMO_API_KEY", "")
+MIMO_API_KEY = _resolve_provider_key("MIMO_API_KEY")
 
 MIMO_PRICING = {
     "standard": {
@@ -555,7 +567,7 @@ class ModelRouter:
                  api_key_2: str | None = None, db: Any=None) -> None:
         self.TASK_TIMEOUTS: dict[str, int] = dict(self._DEFAULT_TIMEOUTS)
         # 从 os.getenv() 实时读取，避免使用模块级冻结变量
-        _mimo_key = api_key or os.getenv("MIMO_API_KEY", "")
+        _mimo_key = api_key or _resolve_provider_key("MIMO_API_KEY")
         _mimo_url = base_url or os.getenv("MIMO_BASE_URL", "https://api.xiaomimimo.com/v1")
         _ssrf_check(_mimo_url)  # SSRF 防护：校验 base_url
         self._client = AsyncOpenAI(api_key=_mimo_key, base_url=_mimo_url) if _mimo_key else None
@@ -600,6 +612,7 @@ class ModelRouter:
             ) if _agnes_key else None
         )
 
+        self._custom_clients_lock = threading.Lock()
         self._custom_clients: dict[str, AsyncOpenAI] = {}
         self._register_credential_pool_providers()
         # 路由表注册中心：ROUTE_TABLE 的唯一读写入口
@@ -648,6 +661,42 @@ class ModelRouter:
         """
         return self._credential_locks.setdefault(provider, asyncio.Lock())
 
+    def _get_custom_clients_lock(self) -> threading.Lock:
+        """返回保护 _custom_clients 的统一锁，按需创建。
+
+        生产实例在 __init__ 中已创建；测试中通过 ModelRouter.__new__ 构造的
+        最小实例未走 __init__，这里懒创建以兼容。
+        """
+        lock = getattr(self, "_custom_clients_lock", None)
+        if lock is None:
+            lock = threading.Lock()
+            self._custom_clients_lock = lock
+        return lock
+
+    def get_custom_client(self, provider_id: str) -> Any | None:
+        with self._get_custom_clients_lock():
+            return self._custom_clients.get(provider_id)
+
+    def set_custom_client(self, provider_id: str, client: Any) -> None:
+        with self._get_custom_clients_lock():
+            self._custom_clients[provider_id] = client
+
+    def remove_custom_client(self, provider_id: str) -> None:
+        with self._get_custom_clients_lock():
+            self._custom_clients.pop(provider_id, None)
+
+    def has_custom_client(self, provider_id: str) -> bool:
+        with self._get_custom_clients_lock():
+            return provider_id in self._custom_clients
+
+    def list_custom_clients(self) -> list[tuple[str, Any]]:
+        with self._get_custom_clients_lock():
+            return list(self._custom_clients.items())
+
+    def clear_custom_clients(self) -> None:
+        with self._get_custom_clients_lock():
+            self._custom_clients.clear()
+
     def _register_credential_pool_providers(self) -> None:
         """从凭证池主动注册非 mimo/agnes 的 Provider 到 _custom_clients。
 
@@ -671,7 +720,7 @@ class ModelRouter:
         for provider, creds in pool._pool.items():
             if provider in _BUILTIN_PROVIDERS:
                 continue
-            if provider in self._custom_clients:
+            if self.has_custom_client(provider):
                 continue
             if not creds:
                 continue
@@ -711,7 +760,7 @@ class ModelRouter:
         """
         old_mimo = self._client  # 旧 MiMo 客户端（独立 httpx，替换后 close 释放连接）
 
-        new_mimo_key = os.getenv("MIMO_API_KEY", "")
+        new_mimo_key = _resolve_provider_key("MIMO_API_KEY")
         new_mimo_url = os.getenv("MIMO_BASE_URL", MIMO_BASE_URL)
         if new_mimo_key:
             _ssrf_check(new_mimo_url)  # SSRF 防护：校验 base_url
@@ -836,9 +885,9 @@ class ModelRouter:
         # local-ort 为本地 ONNX Runtime GenAI provider，无需云端 client 即可切换。
         if provider != _LOCAL_ORT_PROVIDER:
             if provider not in _get_builtin_providers():
-                if provider not in self._custom_clients:
+                if not self.has_custom_client(provider):
                     self._lazy_register_provider(provider)
-                if provider not in self._custom_clients:
+                if not self.has_custom_client(provider):
                     raise LLMError(f"自定义 provider {provider} 未注册，请先注册客户端")
 
         # Step 2: 保存 DEFAULT_PROVIDER 当前值用于失败回滚
@@ -1174,14 +1223,17 @@ class ModelRouter:
         self._client = None
         # 关闭自定义 provider 客户端（跳过 agnes：它复用共享 httpx client，由下方统一关闭）
         if hasattr(self, "_custom_clients"):
-            for cp_name, cp_client in list(self._custom_clients.items()):
+            for cp_name, cp_client in self.list_custom_clients():
                 if cp_name == "agnes":
                     continue
+                close_fn = getattr(cp_client, "close", None)
+                if close_fn is None:
+                    continue
                 try:
-                    await cp_client.close()
+                    await close_fn()
                 except (RuntimeError, OSError, _openai_mod.APIError):
                     logger.debug("model_router.close_custom_client_error", exc_info=True)
-            self._custom_clients.clear()
+            self.clear_custom_clients()
         # agnes 共享 httpx client：统一关闭一次（应用退出时调用，此时无在途请求）
         try:
             await close_agnes_shared_client()
@@ -1214,8 +1266,8 @@ class ModelRouter:
             # 根因：用户通过 WebUI 添加 agnes 时，客户端注册到 _custom_clients["agnes"]，
             # 但旧实现只检查 _agnes_client，导致 fallback 链跳过 agnes。
             return (self._agnes_client is not None
-                    or "agnes" in getattr(self, "_custom_clients", {}))
-        return provider in getattr(self, "_custom_clients", {})
+                    or self.has_custom_client("agnes"))
+        return self.has_custom_client(provider)
 
     def bind_builtin(self, provider: str, client: Any) -> Any:
         if provider == "mimo":
@@ -1359,8 +1411,8 @@ class ModelRouter:
 
         # 3. 尝试已注册的自定义 provider（SiliconFlow/OpenRouter/ModelScope 等）
         # 用户硬约束：禁止跨 provider 切换。仅当原 provider 本就是该自定义 provider 时才执行。
-        if task_type.startswith("chat") and self._custom_clients:
-            for cp_name, _cp_client in list(self._custom_clients.items()):
+        if task_type.startswith("chat"):
+            for cp_name, _cp_client in self.list_custom_clients():
                 # 跨 provider 切换一律跳过
                 if cp_name != _original_provider:
                     continue
@@ -1562,7 +1614,7 @@ class ModelRouter:
                     # 根因：旧实现直接走 env var 懒恢复，会绕过 _custom_clients["agnes"]
                     # 导致用户通过 WebUI 添加 agnes 后，调用仍走 env var 创建的新客户端，
                     # 而非用户注册的客户端（用户配置的 base_url/api_key 不生效）。
-                    _custom_agnes = getattr(self, "_custom_clients", {}).get("agnes")
+                    _custom_agnes = self.get_custom_client("agnes")
                     if _custom_agnes is not None:
                         client = _custom_agnes
                     else:
@@ -1587,11 +1639,11 @@ class ModelRouter:
             # N-2 修复收尾：内置 provider 集合从 provider_metadata.json 派生，不硬编码
             # （line 20 已 import _get_builtin_providers，line 686/1319 同款用法）
             elif provider not in _get_builtin_providers():
-                custom = getattr(self, "_custom_clients", {}).get(provider)
+                custom = self.get_custom_client(provider)
                 if custom is None:
                     # 懒注册：从 config_service 恢复未注册的自定义 provider
                     self._lazy_register_provider(provider)
-                    custom = getattr(self, "_custom_clients", {}).get(provider)
+                    custom = self.get_custom_client(provider)
                 if custom is None:
                     raise LLMError(
                         f"自定义 provider {provider} 未注册或缺少 API Key",
@@ -1602,7 +1654,7 @@ class ModelRouter:
                 # provider == "mimo"
                 # P0：mimo client 懒恢复（防止 refresh_client 把它置 None 后 vision API 全挂）
                 if client is None:
-                    _mimo_key = os.getenv("MIMO_API_KEY", "")
+                    _mimo_key = _resolve_provider_key("MIMO_API_KEY")
                     _mimo_url = os.getenv("MIMO_BASE_URL", MIMO_BASE_URL)
                     if _mimo_key:
                         try:
@@ -1661,7 +1713,7 @@ class ModelRouter:
                     if _m:
                         # 校验该 provider 是否已注册（有 client 可用）
                         try:
-                            if _p in _get_builtin_providers() or _p in getattr(self, "_custom_clients", {}):
+                            if _p in _get_builtin_providers() or self.has_custom_client(_p):
                                 return _p, _m
                         except Exception:
                             pass

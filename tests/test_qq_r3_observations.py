@@ -29,20 +29,24 @@ def test_msg_seq_monotonic_increasing():
 
 
 def test_msg_seq_aligned_to_wall_clock(monkeypatch):
-    """R3-1: 计数器落后于当前毫秒时间戳（时钟推进/进程休眠）时，
-    应跳到当前时间戳基数，保证不产生回退且远大于历史值。"""
+    """R3-1: 计数器落后于当前秒级时间戳（时钟推进/进程休眠）时，
+    应跳到当前时间戳基数，保证不产生回退且远大于历史值。
+
+    QQ API 要求 msg_seq 为 int32（毫秒时间戳 13 位会超范围被拒），
+    因此实现采用秒级时间戳（10 位），本测试按秒级墙钟对齐断言。
+    """
     import time
 
-    # 把计数器强制设为远小于当前毫秒时间戳的值
+    # 把计数器强制设为远小于当前秒级时间戳的值
     qba._msg_seq_counter = 1_000
-    now_ms = int(time.time() * 1000)
+    now_s = int(time.time())
 
     seq = _next_msg_seq()
-    assert seq >= now_ms, "计数器落后时应对齐当前毫秒时间戳"
+    assert seq >= now_s, "计数器落后时应对齐当前秒级时间戳"
     assert seq > 1_000
 
     # 恢复现场（后续测试不受影响）
-    qba._msg_seq_counter = now_ms
+    qba._msg_seq_counter = now_s
 
 
 def test_msg_seq_strict_increasing_after_clock_rollback(monkeypatch):

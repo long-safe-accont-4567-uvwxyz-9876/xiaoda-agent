@@ -12,6 +12,7 @@ from fastapi.testclient import TestClient
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 from security.permission_manager import get_permission_manager
+from web.routers.auth import get_current_user
 from web.routers.workspace import (router as workspace_router,
                                     register_cmd_decision_scope,
                                     _pending_cmd_decisions)
@@ -24,9 +25,14 @@ def D(r):
 
 @pytest.fixture
 def app():
-    """最小 FastAPI app，仅挂载 workspace 路由（避免全量 app 启动开销）"""
+    """最小 FastAPI app，仅挂载 workspace 路由（避免全量 app 启动开销）。
+
+    workspace 路由现要求鉴权，测试通过 dependency_overrides 覆盖 get_current_user，
+    使请求绕过真实 token 校验（这些测试关注的是工作目录授权业务逻辑，非 HTTP 认证）。
+    """
     app = FastAPI()
     app.include_router(workspace_router, prefix="/api/v1")
+    app.dependency_overrides[get_current_user] = lambda: "webui"
     return app
 
 

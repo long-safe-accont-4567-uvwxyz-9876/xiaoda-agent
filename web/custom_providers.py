@@ -355,12 +355,9 @@ def build_client(fmt: str, base_url: str, api_key: str) -> Any:
 def register_into_router(router: Any, provider_id: str, fmt: str,
                          base_url: str, api_key: str) -> None:
     """把自定义 provider 客户端注册进 ModelRouter._custom_clients。"""
-    if not hasattr(router, "_custom_clients"):
-        router._custom_clients = {}
-    router._custom_clients[provider_id] = build_client(fmt, base_url, api_key)
+    router.set_custom_client(provider_id, build_client(fmt, base_url, api_key))
     logger.info("custom_provider.registered id={} format={}", provider_id, fmt)
 
 
 def unregister_from_router(router: Any, provider_id: str) -> None:
-    if hasattr(router, "_custom_clients"):
-        router._custom_clients.pop(provider_id, None)
+    router.remove_custom_client(provider_id)

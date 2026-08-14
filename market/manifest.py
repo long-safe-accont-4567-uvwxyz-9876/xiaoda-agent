@@ -7,12 +7,13 @@
 from __future__ import annotations
 
 import json
+import re
 import time
 from pathlib import Path
 from typing import Any, Literal
 
 from loguru import logger
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 # 在线数据源（国内可访问，合法合规）
 MODELSCOPE_SKILLS_API = "https://www.modelscope.cn/openapi/v1/skills"
@@ -37,6 +38,16 @@ class MarketItem(BaseModel):
     """市场中的单个条目（插件、MCP 工具或技能）"""
     id: str = Field(description="唯一标识")
     type: Literal["skill", "mcp", "plugin"] = Field(description="类型")
+
+    @field_validator("id")
+    @classmethod
+    def validate_id(cls, v: str) -> str:
+        if not re.fullmatch(r"[a-zA-Z0-9][a-zA-Z0-9_-]*", v):
+            raise ValueError(
+                f"Invalid market item id: {v!r} (must match ^[a-zA-Z0-9][a-zA-Z0-9_-]*$)"
+            )
+        return v
+
     name: str = Field(description="显示名称")
     description: str = Field(default="", description="描述")
     version: str = Field(default="0.1.0", description="版本号")
@@ -165,19 +176,25 @@ class ManifestFetcher:
                                 continue
 
                         skill_id = skill.get("id", "")
-                        item = MarketItem(
-                            id=f"{self._item_type}-{skill_id}",
-                            type=self._item_type,
-                            name=skill.get("display_name", str(skill_id)),
-                            description=skill.get("description", ""),
-                            author=skill.get("developer", ""),
-                            tags=skill.get("tags", []) or [],
-                            icon=skill.get("logo_url", "") or "",
-                            homepage=skill.get("source_url", "") or "",
-                            download_url=skill.get("source_url", "") or "",
-                            license=skill.get("license", "") or "",
-                            use_count=skill.get("downloads", 0) or skill.get("view_count", 0),
-                        )
+                        try:
+                            item = MarketItem(
+                                id=f"{self._item_type}-{skill_id}",
+                                type=self._item_type,
+                                name=skill.get("display_name", str(skill_id)),
+                                description=skill.get("description", ""),
+                                author=skill.get("developer", ""),
+                                tags=skill.get("tags", []) or [],
+                                icon=skill.get("logo_url", "") or "",
+                                homepage=skill.get("source_url", "") or "",
+                                download_url=skill.get("source_url", "") or "",
+                                license=skill.get("license", "") or "",
+                                use_count=skill.get("downloads", 0) or skill.get("view_count", 0),
+                            )
+                        except Exception as e:
+                            # 单个脏 item（如非法 id）不应中止整份清单：跳过并记录
+                            logger.warning("market.modelscope_skip_invalid_item",
+                                           id=skill_id, error=str(e))
+                            continue
                         all_items.append(item)
 
                     total = data.get("total", 0)
@@ -236,20 +253,27 @@ class ManifestFetcher:
 
                         qualified = srv.get("qualified_name", "")
                         detail_url = f"https://www.mcp-cn.com/server/{srv.get('server_id', '')}"
+                        server_id = srv.get("server_id", qualified)
 
-                        item = MarketItem(
-                            id=f"mcp-{srv.get('server_id', qualified)}",
-                            type="mcp",
-                            name=srv.get("display_name", qualified),
-                            description=srv.get("description", ""),
-                            author=srv.get("creator", ""),
-                            tags=tags,
-                            icon=srv.get("logo", "") or "",
-                            homepage=detail_url,
-                            qualified_name=qualified,
-                            use_count=srv.get("use_count", 0),
-                            connections=srv.get("connections", ""),
-                        )
+                        try:
+                            item = MarketItem(
+                                id=f"mcp-{server_id}",
+                                type="mcp",
+                                name=srv.get("display_name", qualified),
+                                description=srv.get("description", ""),
+                                author=srv.get("creator", ""),
+                                tags=tags,
+                                icon=srv.get("logo", "") or "",
+                                homepage=detail_url,
+                                qualified_name=qualified,
+                                use_count=srv.get("use_count", 0),
+                                connections=srv.get("connections", ""),
+                            )
+                        except Exception as e:
+                            # 单个脏 item（如非法 id）不应中止整份清单：跳过并记录
+                            logger.warning("market.mcp_hub_skip_invalid_item",
+                                           id=server_id, error=str(e))
+                            continue
                         all_items.append(item)
 
                     pagination = body.get("pagination", {})

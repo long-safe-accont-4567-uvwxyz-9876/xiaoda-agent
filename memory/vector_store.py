@@ -31,6 +31,14 @@ except ImportError:
     APIConnectionError = ConnectionError  # type: ignore
     APIStatusError = Exception  # type: ignore
 
+# numpy 为可选依赖：EmbedCache 磁盘持久化用它（npz 存储），不可用时降级 pickle
+try:
+    import numpy as np
+    _HAS_NUMPY = True
+except ImportError:  # pragma: no cover
+    np = None  # type: ignore[assignment]
+    _HAS_NUMPY = False
+
 # 根因修复（2026-07-29）：embed client 复用全局共享 httpx client + connect=15s + max_retries=0
 # 原 AsyncOpenAI(api_key, base_url) 未传 timeout，SDK 默认 connect=5s 对跨网 SiliconFlow
 # embed API 过短，网络抖动期握手失败 → embed 慢 → 触发 memory_manager 外层 3s/3.5s 超时兜底（治标）。
@@ -49,20 +57,81 @@ _EMBED_HTTP_TIMEOUT = _httpx_embed.Timeout(connect=15.0, read=5.0, write=10.0, p
 
 
 class EmbedCache:
-    """基于 LRU 的文本嵌入向量缓存。"""
+    """基于 LRU 的文本嵌入向量缓存（可选磁盘持久化）。
 
-    def __init__(self, max_size: int = 256) -> None:
-        """初始化嵌入缓存。"""
+    P1-7: 进程重启后复用已缓存的嵌入向量，避免冷启动重复调用 embed API。
+    持久化策略：
+    - 持久化路径非空时，启动加载磁盘缓存，每次 put 后原子写盘（tmp + os.replace）
+    - numpy 可用时用 .npz（float32，~1MB/512 条），否则降级 pickle
+    - 加载/保存失败静默降级为空缓存/跳过写盘，不影响主流程
+    """
+
+    def __init__(self, max_size: int = 256, persist_path: str = "") -> None:
+        """初始化嵌入缓存。
+
+        persist_path: 磁盘缓存文件路径，为空则纯内存缓存（不持久化）。
+        """
         self._cache: OrderedDict[str, list[float]] = OrderedDict()
         self._max_size = max_size
         self._hits = 0
         self._misses = 0
         self._lock = threading.Lock()
+        self._persist_path = persist_path
+        if persist_path:
+            self._load_persisted()
 
     @staticmethod
     def _key(text: str) -> str:
         """生成缓存键 — 使用完整文本的 SHA256 哈希，避免截断导致碰撞。"""
         return hashlib.sha256(text.encode()).hexdigest()[:32]
+
+    def _load_persisted(self) -> None:
+        """从磁盘加载持久化的缓存条目（缺失/损坏时静默降级为空缓存）。"""
+        path = Path(self._persist_path)
+        if not path.exists():
+            return
+        try:
+            if _HAS_NUMPY:
+                data = np.load(self._persist_path, allow_pickle=False)
+                keys = data["keys"]
+                vecs = data["vecs"]
+                if len(keys) > 0:
+                    for k, v in zip(keys, vecs):
+                        if len(self._cache) >= self._max_size:
+                            break
+                        self._cache[str(k)] = [float(x) for x in v]
+            else:
+                import pickle
+                with open(self._persist_path, "rb") as f:
+                    self._cache.update(pickle.load(f))
+                # 超容量时按插入序淘汰（pickle 无 LRU 顺序，保留前 max_size 条）
+                while len(self._cache) > self._max_size:
+                    self._cache.popitem(last=False)
+            logger.info("embed_cache.loaded", path=self._persist_path,
+                        size=len(self._cache))
+        except Exception as e:
+            logger.warning("embed_cache.load_failed", path=self._persist_path,
+                           error=str(e))
+            self._cache.clear()
+
+    def _save_persisted(self) -> None:
+        """将缓存条目原子写入磁盘（失败静默降级，不影响主流程）。"""
+        try:
+            tmp = self._persist_path + ".tmp"
+            if _HAS_NUMPY:
+                np.savez(
+                    tmp,
+                    keys=np.array(list(self._cache.keys())),
+                    vecs=np.array(list(self._cache.values()), dtype=np.float32),
+                )
+            else:
+                import pickle
+                with open(tmp, "wb") as f:
+                    pickle.dump(dict(self._cache), f, protocol=pickle.HIGHEST_PROTOCOL)
+            os.replace(tmp, self._persist_path)
+        except Exception as e:
+            logger.debug("embed_cache.save_failed", path=self._persist_path,
+                         error=str(e))
 
     def __contains__(self, text: str) -> bool:
         """检查文本是否已存在于缓存中。"""
@@ -93,10 +162,19 @@ class EmbedCache:
             self._cache.move_to_end(key)
             if len(self._cache) > self._max_size:
                 self._cache.popitem(last=False)
+            # 持锁原子写盘：缓存写频次低（每次 embed 请求一次），
+            # 全量 ~1MB 写盘 <50ms，换取重启后免重复 embed
+            if self._persist_path:
+                self._save_persisted()
 
     def clear(self) -> None:
         with self._lock:
             self._cache.clear()
+            if self._persist_path:
+                try:
+                    Path(self._persist_path).unlink(missing_ok=True)
+                except OSError:
+                    pass
 
     @property
     def stats(self) -> dict:
@@ -154,7 +232,7 @@ class VectorStore:
         self._lock = threading.Lock()
         self._embed_client = None
         self._vec_conn = None
-        self._cache = EmbedCache(max_size=512)
+        self._cache = EmbedCache(max_size=512, persist_path=self._embed_cache_path())
         # numpy 内存暴力索引（可选，VECTOR_BRUTE_ENABLED=1 启用）：
         # BLAS 点积精确暴力 KNN（与 sqlite-vec 同 L2 度量，结果 100% 一致），
         # 13761×512 仅 23MB 常驻内存，4.5ms/次（SQLite 暴力 33.5ms）。
@@ -188,6 +266,20 @@ class VectorStore:
                 logger.warning("vector_store.local_embed_init_failed provider=None")
         elif HAS_OPENAI and self._embed_api_key:
             self._embed_client = self._build_remote_client()
+
+    def _embed_cache_path(self) -> str:
+        """EmbedCache 磁盘持久化路径（与 db 同目录，按模型区分避免维度冲突）。
+
+        例: data/embed_cache_BAAI_bge-m3.npz。模型升级（维度变化）时文件名不同，
+        旧缓存自然失效，不会出现维度不匹配。
+        """
+        _model_slug = self._embed_model.replace("/", "_").replace(":", "_")
+        _base = Path(self._db_path).parent
+        try:
+            _base.mkdir(parents=True, exist_ok=True)
+        except OSError:
+            return ""
+        return str(_base / f"embed_cache_{_model_slug}.npz")
 
     # ── embedding 引擎构建 / 热切换（WebUI 本地部署页）──────────
 
@@ -322,6 +414,21 @@ class VectorStore:
     def dimensions(self) -> int:
         """返回嵌入向量的维度。"""
         return self._dimensions
+
+    def get_memories_vec_rowids(self) -> set[int]:
+        """获取 memories_vec 表已存在的 rowid 集合（用于主表↔向量索引对账）。
+
+        返回空集合表示向量库未初始化、表为空或查询失败（由调用方按"无索引"处理）。
+        """
+        if not self._initialized or not self._vec_conn:
+            return set()
+        try:
+            with self._lock:
+                rows = self._vec_conn.execute("SELECT rowid FROM memories_vec").fetchall()
+            return {int(r[0]) for r in rows}
+        except Exception as e:
+            logger.warning("vector_store.get_memories_vec_rowids_failed", error=str(e))
+            return set()
 
     async def init(self) -> None:
         """初始化 SQLite 数据库，加载 sqlite_vec 扩展并创建向量虚拟表。"""
@@ -960,7 +1067,8 @@ class VectorStore:
 
     async def search(self, query_text: str, top_k: int = 5,
                      candidate_ids: list[int] | None = None,
-                     deterministic: bool = True) -> list[tuple[int, float]]:
+                     deterministic: bool = True,
+                     query_vec: list[float] | None = None) -> list[tuple[int, float]]:
         """基于查询文本进行向量相似度搜索，返回最相似的 top_k 条记录。
 
         ContextNest 论文实证: dense+HNSW 在 80% 查询上非确定 (mean Jaccard 0.611)。
@@ -974,12 +1082,17 @@ class VectorStore:
             candidate_ids: 确定性预过滤的候选 rowid 集合 (ContextNest selector 层)
                 提供时只在该集合内做向量排序, 候选集本身是确定的 (Jaccard 1.0)
             deterministic: 启用 tie-breaking + oversample
+            query_vec: 预计算查询向量（P1-4：多查询场景由调用方批量 embed 后传入，
+                避免每个子查询各自调用一次 embed API）；None 时内部 embed
         """
         if not self._initialized or not self._vec_conn:
             return []
 
-        vectors = await self.embed([query_text])
-        vec = vectors[0] if vectors else []
+        if query_vec is not None:
+            vec = query_vec
+        else:
+            vectors = await self.embed([query_text])
+            vec = vectors[0] if vectors else []
         if not vec:
             return []
 

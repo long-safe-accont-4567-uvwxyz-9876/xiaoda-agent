@@ -6,6 +6,33 @@ import aiosqlite
 from loguru import logger
 
 
+# FTS 同步失败计数（模块级，便于外部观测/对账）。主表写入成功后 FTS 索引同步
+# 失败会导致记忆"查不到"，此前仅 debug 静默吞掉，无任何告警与计数。
+_fts_sync_failures = 0
+
+
+def get_fts_sync_failures() -> int:
+    """返回 FTS 同步失败累计计数（便于外部观测/对账）。"""
+    return _fts_sync_failures
+
+
+def _record_fts_sync_failure(event: str, error: Exception) -> None:
+    """记录一次 FTS 同步失败：告警 + 递增计数，避免静默丢失索引。"""
+    global _fts_sync_failures
+    _fts_sync_failures += 1
+    logger.warning(event, error=str(error), fts_sync_failures_total=_fts_sync_failures)
+
+
+def compute_missing_vec_ids(memory_ids: list[int], vec_rowids: set[int]) -> list[int]:
+    """对账：返回在主表存在但向量表缺失的记忆 id 列表。
+
+    Args:
+        memory_ids: 主表 episodic_memories 中应被向量索引的记忆 id（保持传入顺序）。
+        vec_rowids: 向量表 memories_vec 中已存在的 rowid 集合。
+    """
+    return [mid for mid in memory_ids if mid not in vec_rowids]
+
+
 class MemoryDB:
     """管理情景记忆、画像等记忆数据的读写。"""
 
@@ -90,8 +117,7 @@ class MemoryDB:
                 if auto_commit:
                     await self._conn.commit()
         except Exception as e:
-            from loguru import logger
-            logger.debug("db_memory.fts_insert_failed", error=str(e))
+            _record_fts_sync_failure("db_memory.fts_insert_failed", e)
         return mem_id
 
     async def get_memory_by_id(self, memory_id: int) -> dict | None:
@@ -147,8 +173,7 @@ class MemoryDB:
                     (mem_id, tokenized),
                 )
         except Exception as e:
-            from loguru import logger
-            logger.debug("db_memory.fts_sync_on_summary_update_failed", error=str(e))
+            _record_fts_sync_failure("db_memory.fts_sync_on_summary_update_failed", e)
         await self._conn.commit()
 
     async def update_fallback_raw(self, mem_id: int, new_summary: str, label: str,
@@ -176,8 +201,7 @@ class MemoryDB:
                     (mem_id, tokenized),
                 )
         except Exception as e:
-            from loguru import logger
-            logger.debug("db_memory.fts_sync_on_fallback_failed", error=str(e))
+            _record_fts_sync_failure("db_memory.fts_sync_on_fallback_failed", e)
         await self._conn.commit()
 
     async def increment_access_count(self, memory_id: int, auto_commit: bool = True) -> None:
@@ -870,6 +894,18 @@ class MemoryDB:
         cursor = await self._read_conn().execute("SELECT COUNT(*) as cnt FROM episodic_memories")
         row = await cursor.fetchone()
         return row["cnt"] if row else 0
+
+    async def get_raw_memory_ids(self) -> list[int]:
+        """获取主表所有 is_raw=1 且未归档的记忆 id（用于向量索引对账）。"""
+        try:
+            cursor = await self._read_conn().execute(
+                "SELECT id FROM episodic_memories WHERE is_raw=1 AND session_id != 'archived'"
+            )
+            rows = await cursor.fetchall()
+            return [int(r["id"]) for r in rows]
+        except Exception as e:
+            logger.warning("db_memory.get_raw_memory_ids_failed", error=str(e))
+            return []
 
     async def get_unmigrated_memories(self, limit: int = 50) -> list[dict]:
         """获取未迁移到 concept_nodes 的记忆"""
