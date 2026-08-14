@@ -617,14 +617,17 @@ class DatabaseManager:
 
     async def _migrate_v1(self) -> None:
         """v1: knowledge_relations 新增时间字段（valid_from/valid_to/confidence）。"""
-        await self._conn.execute("""ALTER TABLE knowledge_relations ADD COLUMN valid_from REAL DEFAULT 0""")
-        await self._conn.execute("""ALTER TABLE knowledge_relations ADD COLUMN valid_to REAL DEFAULT 0""")
-        await self._conn.execute("""ALTER TABLE knowledge_relations ADD COLUMN confidence REAL DEFAULT 1.0""")
+        await self._ensure_columns("knowledge_relations", {
+            "valid_from": "valid_from REAL DEFAULT 0",
+            "valid_to": "valid_to REAL DEFAULT 0",
+            "confidence": "confidence REAL DEFAULT 1.0",
+        })
 
     async def _migrate_v2(self) -> None:
         """v2: conversation_logs 新增 session_id 列。"""
-        await self._conn.execute(
-            "ALTER TABLE conversation_logs ADD COLUMN session_id TEXT DEFAULT ''")
+        await self._ensure_columns("conversation_logs", {
+            "session_id": "session_id TEXT DEFAULT ''",
+        })
 
     async def _migrate_v3(self) -> None:
         """v3: 创建 FTS5 虚拟表 + 回填已有记忆到 FTS 索引 + 创建审计表。"""
@@ -663,42 +666,27 @@ class DatabaseManager:
 
     async def _migrate_v6(self) -> None:
         """v6: episodic_memories 新增 access_count 列。"""
-        cols = [r["name"] for r in await self.fetch_all("PRAGMA table_info(episodic_memories)")]
-        if "access_count" not in cols:
-            await self._conn.execute(
-                "ALTER TABLE episodic_memories ADD COLUMN access_count INTEGER DEFAULT 0"
-            )
+        await self._ensure_columns("episodic_memories", {
+            "access_count": "access_count INTEGER DEFAULT 0",
+        })
 
     async def _migrate_v7(self) -> None:
         """v7: 修复旧版 episodic_memories 缺少 session_id 和 embedding_id 列。
 
         新安装时 CREATE TABLE 已包含这些列，需先检查再添加。
         """
-        cols = [r["name"] for r in await self.fetch_all("PRAGMA table_info(episodic_memories)")]
-        if "session_id" not in cols:
-            await self._conn.execute(
-                "ALTER TABLE episodic_memories ADD COLUMN session_id TEXT DEFAULT 'user'"
-            )
-        if "embedding_id" not in cols:
-            await self._conn.execute(
-                "ALTER TABLE episodic_memories ADD COLUMN embedding_id INTEGER DEFAULT -1"
-            )
+        await self._ensure_columns("episodic_memories", {
+            "session_id": "session_id TEXT DEFAULT 'user'",
+            "embedding_id": "embedding_id INTEGER DEFAULT -1",
+        })
 
     async def _migrate_v8(self) -> None:
         """v8: episodic_memories 新增 RAG 同步相关列（rag_status/rag_synced_at/doc_id）。"""
-        cols = [r["name"] for r in await self.fetch_all("PRAGMA table_info(episodic_memories)")]
-        if "rag_status" not in cols:
-            await self._conn.execute(
-                "ALTER TABLE episodic_memories ADD COLUMN rag_status TEXT DEFAULT 'pending'"
-            )
-        if "rag_synced_at" not in cols:
-            await self._conn.execute(
-                "ALTER TABLE episodic_memories ADD COLUMN rag_synced_at REAL DEFAULT 0"
-            )
-        if "doc_id" not in cols:
-            await self._conn.execute(
-                "ALTER TABLE episodic_memories ADD COLUMN doc_id TEXT DEFAULT ''"
-            )
+        await self._ensure_columns("episodic_memories", {
+            "rag_status": "rag_status TEXT DEFAULT 'pending'",
+            "rag_synced_at": "rag_synced_at REAL DEFAULT 0",
+            "doc_id": "doc_id TEXT DEFAULT ''",
+        })
 
     async def _migrate_v9(self) -> None:
         """v9: P3 记忆蒸馏：新增 memory_summaries 表 + episodic_memories.distilled 列。"""
@@ -710,27 +698,17 @@ class DatabaseManager:
                 memory_count INTEGER DEFAULT 0
             )
         """)
-        cols = [r["name"] for r in await self.fetch_all("PRAGMA table_info(episodic_memories)")]
-        if "distilled" not in cols:
-            await self._conn.execute(
-                "ALTER TABLE episodic_memories ADD COLUMN distilled INTEGER DEFAULT 0"
-            )
+        await self._ensure_columns("episodic_memories", {
+            "distilled": "distilled INTEGER DEFAULT 0",
+        })
 
     async def _migrate_v10(self) -> None:
         """v10: 记忆结构化提取：新增 entities/event_type/metadata_json 列。"""
-        cols = [r["name"] for r in await self.fetch_all("PRAGMA table_info(episodic_memories)")]
-        if "entities" not in cols:
-            await self._conn.execute(
-                "ALTER TABLE episodic_memories ADD COLUMN entities TEXT DEFAULT ''"
-            )
-        if "event_type" not in cols:
-            await self._conn.execute(
-                "ALTER TABLE episodic_memories ADD COLUMN event_type TEXT DEFAULT ''"
-            )
-        if "metadata_json" not in cols:
-            await self._conn.execute(
-                "ALTER TABLE episodic_memories ADD COLUMN metadata_json TEXT DEFAULT '{}'"
-            )
+        await self._ensure_columns("episodic_memories", {
+            "entities": "entities TEXT DEFAULT ''",
+            "event_type": "event_type TEXT DEFAULT ''",
+            "metadata_json": "metadata_json TEXT DEFAULT '{}'",
+        })
 
     async def _migrate_v11(self) -> None:
         """v11: 主动检索 B：定时回忆笔记表。
@@ -761,15 +739,10 @@ class DatabaseManager:
         - memory_versions 表: 哈希链 (prev_hash → content_hash), tamper-evident
         - context_audit_log 表: 记录每次响应注入了哪些记忆版本, 支持 point-in-time 重建
         """
-        cols = [r["name"] for r in await self.fetch_all("PRAGMA table_info(episodic_memories)")]
-        if "content_hash" not in cols:
-            await self._conn.execute(
-                "ALTER TABLE episodic_memories ADD COLUMN content_hash TEXT DEFAULT ''"
-            )
-        if "version" not in cols:
-            await self._conn.execute(
-                "ALTER TABLE episodic_memories ADD COLUMN version INTEGER DEFAULT 1"
-            )
+        await self._ensure_columns("episodic_memories", {
+            "content_hash": "content_hash TEXT DEFAULT ''",
+            "version": "version INTEGER DEFAULT 1",
+        })
         await self._conn.execute("""
             CREATE TABLE IF NOT EXISTS memory_versions (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -856,19 +829,11 @@ class DatabaseManager:
         - memory_edges: 类型化记忆边（supersedes/supports/similar/bridge）
         """
         # 1. episodic_memories 新增 3 列（幂等：先检查列是否存在）
-        cols = [r["name"] for r in await self.fetch_all("PRAGMA table_info(episodic_memories)")]
-        if "user_id" not in cols:
-            await self._conn.execute(
-                "ALTER TABLE episodic_memories ADD COLUMN user_id TEXT DEFAULT 'default'"
-            )
-        if "agent_id" not in cols:
-            await self._conn.execute(
-                "ALTER TABLE episodic_memories ADD COLUMN agent_id TEXT DEFAULT 'xiaoda'"
-            )
-        if "is_raw" not in cols:
-            await self._conn.execute(
-                "ALTER TABLE episodic_memories ADD COLUMN is_raw INTEGER DEFAULT 0"
-            )
+        await self._ensure_columns("episodic_memories", {
+            "user_id": "user_id TEXT DEFAULT 'default'",
+            "agent_id": "agent_id TEXT DEFAULT 'xiaoda'",
+            "is_raw": "is_raw INTEGER DEFAULT 0",
+        })
 
         # 2. 回填现有记忆的默认值（确保旧数据有 scope 字段）
         await self._conn.execute(
@@ -949,19 +914,11 @@ class DatabaseManager:
             logger.warning("database.fts5_not_available - FTS5虚拟表将跳过创建")
 
         # 1. episodic_memories 新增 3 列（幂等：先检查列是否存在，镜像 v13 模式）
-        cols = [r["name"] for r in await self.fetch_all("PRAGMA table_info(episodic_memories)")]
-        if "salience" not in cols:
-            await self._conn.execute(
-                "ALTER TABLE episodic_memories ADD COLUMN salience REAL DEFAULT 0.5"
-            )
-        if "last_accessed" not in cols:
-            await self._conn.execute(
-                "ALTER TABLE episodic_memories ADD COLUMN last_accessed REAL DEFAULT 0"
-            )
-        if "status" not in cols:
-            await self._conn.execute(
-                "ALTER TABLE episodic_memories ADD COLUMN status TEXT DEFAULT 'active'"
-            )
+        await self._ensure_columns("episodic_memories", {
+            "salience": "salience REAL DEFAULT 0.5",
+            "last_accessed": "last_accessed REAL DEFAULT 0",
+            "status": "status TEXT DEFAULT 'active'",
+        })
 
         # 2. 新建 5 张认知表（CREATE TABLE IF NOT EXISTS，天然幂等）
         await self._conn.execute("""CREATE TABLE IF NOT EXISTS semantic_memories ( id INTEGER PRIMARY KEY AUTOINCREMENT, source_memory_id INTEGER, content TEXT NOT NULL, embedding_id INTEGER DEFAULT -1, cluster_id INTEGER DEFAULT -1, salience REAL DEFAULT 0.5, access_count INTEGER DEFAULT 0, last_accessed REAL DEFAULT 0, created_at REAL NOT NULL, emotion_label TEXT DEFAULT '', metadata_json TEXT DEFAULT '{}' )""")
@@ -1009,25 +966,23 @@ class DatabaseManager:
                 _fts5_available = False
 
         # 1b. 幂等添加 community_id 列（修复 name_embedding 语义劫持）
-        kg_cols = [r["name"] for r in await self.fetch_all("PRAGMA table_info(kg_entities_v2)")]
-        if "community_id" not in kg_cols:
-            await self._conn.execute(
-                "ALTER TABLE kg_entities_v2 ADD COLUMN community_id TEXT DEFAULT NULL"
-            )
-            await self._conn.execute(
-                "CREATE INDEX IF NOT EXISTS idx_kg_entity_v2_community ON kg_entities_v2(community_id)"
-            )
-            # 迁移旧的 name_embedding 中的 community_id 到专用列
-            await self._conn.execute(
-                """UPDATE kg_entities_v2 SET community_id = name_embedding
-                   WHERE name_embedding IS NOT NULL
-                     AND name_embedding LIKE 'COM-%'"""
-            )
-            # 清理被劫持的 name_embedding（恢复为 NULL，后续由向量表使用）
-            await self._conn.execute(
-                """UPDATE kg_entities_v2 SET name_embedding = NULL
-                   WHERE name_embedding LIKE 'COM-%'"""
-            )
+        await self._ensure_columns("kg_entities_v2", {
+            "community_id": "community_id TEXT DEFAULT NULL",
+        })
+        await self._conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_kg_entity_v2_community ON kg_entities_v2(community_id)"
+        )
+        # 迁移旧的 name_embedding 中的 community_id 到专用列
+        await self._conn.execute(
+            """UPDATE kg_entities_v2 SET community_id = name_embedding
+               WHERE name_embedding IS NOT NULL
+                 AND name_embedding LIKE 'COM-%'"""
+        )
+        # 清理被劫持的 name_embedding（恢复为 NULL，后续由向量表使用）
+        await self._conn.execute(
+            """UPDATE kg_entities_v2 SET name_embedding = NULL
+               WHERE name_embedding LIKE 'COM-%'"""
+        )
 
         # 2. 迁移 entities: knowledge_entities → kg_entities_v2
         await self._conn.execute("""
@@ -1045,11 +1000,9 @@ class DatabaseManager:
         # 旧版数据库的 knowledge_relations 表可能缺少 created_at 列（DDL 用 CREATE TABLE IF NOT EXISTS
         # 不会为已存在的表补列，v1 迁移也只加了 valid_from/valid_to/confidence）。
         # v14 数据迁移引用 created_at，缺失会导致 OperationalError。
-        kr_cols = [r["name"] for r in await self.fetch_all("PRAGMA table_info(knowledge_relations)")]
-        if "created_at" not in kr_cols:
-            await self._conn.execute(
-                "ALTER TABLE knowledge_relations ADD COLUMN created_at REAL DEFAULT 0"
-            )
+        await self._ensure_columns("knowledge_relations", {
+            "created_at": "created_at REAL DEFAULT 0",
+        })
 
         # 3. 迁移 relations: knowledge_relations → kg_relations_v2
         await self._conn.execute("""
@@ -1105,49 +1058,21 @@ class DatabaseManager:
         - 旧数据统一 S=3.0, phase='buffer'
         - access_count >= 5 的旧数据直接标记为 phase='permanent'
         """
-        epi_cols = [r["name"] for r in await self.fetch_all("PRAGMA table_info(episodic_memories)")]
-        if "difficulty" not in epi_cols:
-            await self._conn.execute(
-                "ALTER TABLE episodic_memories ADD COLUMN difficulty REAL DEFAULT 5.0"
-            )
-        if "stability" not in epi_cols:
-            await self._conn.execute(
-                "ALTER TABLE episodic_memories ADD COLUMN stability REAL DEFAULT 3.0"
-            )
-        if "phase" not in epi_cols:
-            await self._conn.execute(
-                "ALTER TABLE episodic_memories ADD COLUMN phase TEXT DEFAULT 'buffer'"
-            )
-        if "last_review" not in epi_cols:
-            await self._conn.execute(
-                "ALTER TABLE episodic_memories ADD COLUMN last_review REAL DEFAULT 0"
-            )
-        if "reinforcement_count" not in epi_cols:
-            await self._conn.execute(
-                "ALTER TABLE episodic_memories ADD COLUMN reinforcement_count INTEGER DEFAULT 0"
-            )
+        await self._ensure_columns("episodic_memories", {
+            "difficulty": "difficulty REAL DEFAULT 5.0",
+            "stability": "stability REAL DEFAULT 3.0",
+            "phase": "phase TEXT DEFAULT 'buffer'",
+            "last_review": "last_review REAL DEFAULT 0",
+            "reinforcement_count": "reinforcement_count INTEGER DEFAULT 0",
+        })
 
-        concept_cols = [r["name"] for r in await self.fetch_all("PRAGMA table_info(concept_nodes)")]
-        if "difficulty" not in concept_cols:
-            await self._conn.execute(
-                "ALTER TABLE concept_nodes ADD COLUMN difficulty REAL DEFAULT 5.0"
-            )
-        if "stability" not in concept_cols:
-            await self._conn.execute(
-                "ALTER TABLE concept_nodes ADD COLUMN stability REAL DEFAULT 3.0"
-            )
-        if "phase" not in concept_cols:
-            await self._conn.execute(
-                "ALTER TABLE concept_nodes ADD COLUMN phase TEXT DEFAULT 'buffer'"
-            )
-        if "last_review" not in concept_cols:
-            await self._conn.execute(
-                "ALTER TABLE concept_nodes ADD COLUMN last_review REAL DEFAULT 0"
-            )
-        if "reinforcement_count" not in concept_cols:
-            await self._conn.execute(
-                "ALTER TABLE concept_nodes ADD COLUMN reinforcement_count INTEGER DEFAULT 0"
-            )
+        await self._ensure_columns("concept_nodes", {
+            "difficulty": "difficulty REAL DEFAULT 5.0",
+            "stability": "stability REAL DEFAULT 3.0",
+            "phase": "phase TEXT DEFAULT 'buffer'",
+            "last_review": "last_review REAL DEFAULT 0",
+            "reinforcement_count": "reinforcement_count INTEGER DEFAULT 0",
+        })
 
         # 旧数据迁移：access_count >= 5 → permanent
         await self._conn.execute(
@@ -1171,17 +1096,13 @@ class DatabaseManager:
 
     async def _migrate_v16(self) -> None:
         """v16: Add created_at REAL column + backfill last_review=0 rows."""
-        concept_cols = [r["name"] for r in await self.fetch_all("PRAGMA table_info(concept_nodes)")]
-        if "created_at" not in concept_cols:
-            await self._conn.execute(
-                "ALTER TABLE concept_nodes ADD COLUMN created_at REAL DEFAULT 0"
-            )
+        await self._ensure_columns("concept_nodes", {
+            "created_at": "created_at REAL DEFAULT 0",
+        })
 
-        epi_cols = [r["name"] for r in await self.fetch_all("PRAGMA table_info(episodic_memories)")]
-        if "created_at" not in epi_cols:
-            await self._conn.execute(
-                "ALTER TABLE episodic_memories ADD COLUMN created_at REAL DEFAULT 0"
-            )
+        await self._ensure_columns("episodic_memories", {
+            "created_at": "created_at REAL DEFAULT 0",
+        })
 
         await self._conn.execute("""
             UPDATE concept_nodes
@@ -1231,11 +1152,9 @@ class DatabaseManager:
 
     async def _migrate_v18(self) -> None:
         """v18: 添加 distill_status 列，用于跟踪蒸馏状态（替代 emotion_label 滥用）。"""
-        cols = {r["name"] for r in await self.fetch_all("PRAGMA table_info(episodic_memories)")}
-        if "distill_status" not in cols:
-            await self._conn.execute(
-                "ALTER TABLE episodic_memories ADD COLUMN distill_status TEXT DEFAULT ''"
-            )
+        await self._ensure_columns("episodic_memories", {
+            "distill_status": "distill_status TEXT DEFAULT ''",
+        })
         # 回填：把旧的 emotion_label='distill_failed' 记录标记为 distill_status='failed'
         await self._conn.execute(
             "UPDATE episodic_memories SET distill_status = 'failed' "
@@ -1253,11 +1172,9 @@ class DatabaseManager:
         SQLite 默认 recursive_triggers=OFF，AFTER UPDATE 内对同表非触发列的
         UPDATE 不会递归触发自身，所以触发器是安全的。
         """
-        cols = {r["name"] for r in await self.fetch_all("PRAGMA table_info(episodic_memories)")}
-        if "updated_at" not in cols:
-            await self._conn.execute(
-                "ALTER TABLE episodic_memories ADD COLUMN updated_at REAL DEFAULT 0"
-            )
+        await self._ensure_columns("episodic_memories", {
+            "updated_at": "updated_at REAL DEFAULT 0",
+        })
 
         # 回填：已有记录的 updated_at 初始化为 timestamp（创建时间）
         # 后续 summary 变更时由触发器自动更新
@@ -1285,15 +1202,10 @@ class DatabaseManager:
         历史数据回填为 'default' (任何已登录用户均可访问, 兼容旧逻辑);
         新建 reminder 由调用方传入 user_id, 实现按用户隔离 update/delete.
         """
-        cols = {r["name"] for r in await self.fetch_all(
-            "PRAGMA table_info(greeting_schedules)")}
-        if "user_id" not in cols:
-            await self._conn.execute(
-                "ALTER TABLE greeting_schedules ADD COLUMN user_id TEXT NOT NULL DEFAULT 'default'"
-            )
-            logger.info("database.migration_v20_user_id_added")
-        else:
-            logger.info("database.migration_v20_skipped_column_exists")
+        await self._ensure_columns("greeting_schedules", {
+            "user_id": "user_id TEXT NOT NULL DEFAULT 'default'",
+        })
+        logger.info("database.migration_v20_user_id_added")
 
     async def _migrate_v21(self) -> None:
         """v21: 废弃 knowledge_entities_fts 触发器，改应用层维护 FTS。
@@ -1518,14 +1430,9 @@ class DatabaseManager:
             )
 
     async def _migrate_v26(self) -> None:
-        columns = await self._conn.execute_fetchall(
-            "PRAGMA table_info(conversation_logs)"
-        )
-        if "request_context_json" not in {row[1] for row in columns}:
-            await self._conn.execute(
-                "ALTER TABLE conversation_logs "
-                "ADD COLUMN request_context_json TEXT DEFAULT '{}'"
-            )
+        await self._ensure_columns("conversation_logs", {
+            "request_context_json": "request_context_json TEXT DEFAULT '{}'",
+        })
 
     async def _migrate_v27(self) -> None:
         # workflow_v2 表（CREATE TABLE IF NOT EXISTS，幂等）
