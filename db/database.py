@@ -146,53 +146,13 @@ class DatabaseManager:
 
         self._conn = await aiosqlite.connect(str(self.db_path))
         self._conn.row_factory = aiosqlite.Row
-        # busy_timeout 必须最先设置，防止后续 PRAGMA 因锁竞争失败
-        # 5000→15000：greeting_scheduler/memory_encoding/portrait 等后台任务并发写入时，
-        # 5s 不够等待锁释放，导致 create_session 失败 → QQ 消息处理中断，用户收不到回复
-        try:
-            await self._conn.execute("PRAGMA busy_timeout=15000")
-        except (OSError, RuntimeError) as e:
-            logger.warning(f"PRAGMA busy_timeout 失败: {e}")
         # vfat/exfat 不支持 WAL 共享内存和 FTS5 delete 命令，必须用 DELETE 模式
         # NTFS 完全支持 WAL 和 FTS5，不需要特殊处理
         fs_type = _detect_fs_type(self.db_path)
         self._is_fat_fs = fs_type in ("vfat", "fat", "msdos", "exfat", "fat32")
         if self._is_fat_fs:
             logger.info(f"database.fat_fs_detected fs={fs_type} → 使用 DELETE journal_mode, 禁用 FTS5 触发器")
-        journal_mode_sql = "PRAGMA journal_mode=DELETE" if self._is_fat_fs else "PRAGMA journal_mode=WAL"
-        pragmas = [
-            "PRAGMA foreign_keys=ON",
-            journal_mode_sql,
-            "PRAGMA synchronous=NORMAL",
-            "PRAGMA cache_size=-20000",      # ~20MB
-            "PRAGMA temp_store=MEMORY",
-        ]
-        # mmap 在 vfat 上不可靠，仅在非 fat 文件系统启用
-        if not self._is_fat_fs:
-            pragmas.append("PRAGMA mmap_size=67108864")  # 64MB
-            # WAL checkpoint 阈值 1000→10000 页（4MB→40MB）：
-            # agent.db 位于 U 盘时，每 4MB 触发一次 checkpoint 会在外置盘上
-            # 频繁写回 208MB 主库 + fsync，造成检索/写入偶发秒级阻塞（连锁排队根因）。
-            # 40MB 阈值把 checkpoint 频率降到 1/10，仅在写入高峰后触发一次，大幅减少对
-            # U 盘 IO 的周期干扰。
-            pragmas.append("PRAGMA wal_autocheckpoint=10000")
-        for pragma_sql in pragmas:
-            try:
-                await self._conn.execute(pragma_sql)
-            except (OSError, RuntimeError) as e:
-                logger.warning(f"PRAGMA 失败: {pragma_sql} - {e}")
-        # 验证 journal_mode
-        try:
-            cursor = await self._conn.execute("PRAGMA journal_mode")
-            row = await cursor.fetchone()
-            mode = row[0] if row else "unknown"
-            expected = "delete" if self._is_fat_fs else "wal"
-            if mode.lower() != expected:
-                logger.warning(f"journal_mode 未生效，期望={expected} 当前={mode}")
-            else:
-                logger.info(f"database.journal_mode={mode}")
-        except (OSError, RuntimeError) as e:
-            logger.warning(f"验证 journal_mode 失败: {e}")
+        await self._setup_pragmas(self._is_fat_fs)
         self.memory = MemoryDB(self._conn)
         await self._create_tables()
         # Phase 6: 创建复合索引 (P2 性能优化)
@@ -234,6 +194,48 @@ class DatabaseManager:
             self._readonly_conn = None
         # 只读连接池（检索并发分流）：WAL 下多连接可并发读
         # 幂等：重复 init() 先关闭旧池
+        await self._setup_read_pool()
+        logger.info("database.ready", path=str(self.db_path))
+
+    async def _setup_pragmas(self, is_fat_fs: bool) -> None:
+        """配置 SQLite PRAGMA；每个失败只记 warning 并继续，不阻断启动。"""
+        # busy_timeout 必须最先设置，防止后续 PRAGMA 因锁竞争失败
+        # 5000→15000：greeting_scheduler/memory_encoding/portrait 等后台任务并发写入时，
+        # 5s 不够等待锁释放，导致 create_session 失败 → QQ 消息处理中断，用户收不到回复
+        try:
+            await self._conn.execute("PRAGMA busy_timeout=15000")
+        except (OSError, RuntimeError) as e:
+            logger.warning(f"PRAGMA busy_timeout 失败: {e}")
+        journal_mode_sql = "PRAGMA journal_mode=DELETE" if is_fat_fs else "PRAGMA journal_mode=WAL"
+        pragmas = [
+            "PRAGMA foreign_keys=ON",
+            journal_mode_sql,
+            "PRAGMA synchronous=NORMAL",
+            "PRAGMA cache_size=-20000",
+            "PRAGMA temp_store=MEMORY",
+        ]
+        if not is_fat_fs:
+            pragmas.append("PRAGMA mmap_size=67108864")
+            pragmas.append("PRAGMA wal_autocheckpoint=10000")
+        for pragma_sql in pragmas:
+            try:
+                await self._conn.execute(pragma_sql)
+            except (OSError, RuntimeError) as e:
+                logger.warning(f"PRAGMA 失败: {pragma_sql} - {e}")
+        try:
+            cursor = await self._conn.execute("PRAGMA journal_mode")
+            row = await cursor.fetchone()
+            mode = row[0] if row else "unknown"
+            expected = "delete" if is_fat_fs else "wal"
+            if mode.lower() != expected:
+                logger.warning(f"journal_mode 未生效，期望={expected} 当前={mode}")
+            else:
+                logger.info(f"database.journal_mode={mode}")
+        except (OSError, RuntimeError) as e:
+            logger.warning(f"验证 journal_mode 失败: {e}")
+
+    async def _setup_read_pool(self) -> None:
+        """初始化只读连接池；单个连接失败记 warning 并停止。"""
         if self._read_pool:
             for _c in self._read_pool:
                 try:
@@ -246,9 +248,6 @@ class DatabaseManager:
                 _rc = await aiosqlite.connect(self._db_ro_uri(), uri=True)
                 _rc.row_factory = aiosqlite.Row
                 await _rc.execute("PRAGMA query_only=1")
-                # 6000（原 5000）：检索 7 路通道并发 + 后台任务共享只读池，
-                # 适度放宽锁等待避免偶发失败；仍 < 检索超时 8s，防止超时取消后
-                # 孤儿 SQL 长时间占用连接线程（导致后续 DB 操作连锁排队）
                 await _rc.execute("PRAGMA busy_timeout=6000")
                 self._read_pool.append(_rc)
             except Exception as e:
@@ -259,7 +258,6 @@ class DatabaseManager:
             logger.info("database.read_pool_ready", size=len(self._read_pool))
         if self.memory is not None:
             self.memory._read_pool = self._read_pool
-        logger.info("database.ready", path=str(self.db_path))
 
     async def _apply_composite_indexes(self) -> None:
         """创建内置复合索引 (幂等)
@@ -2193,39 +2191,41 @@ class DatabaseManager:
 
         results: list[SessionInfo] = []
         for row in rows:
-            sid = row["id"]
-            summary_text = row["summary"] or ""
-            mtime = row["mtime"] or int((row["ended_at"] or row["started_at"] or 0) * 1000)
-
-            # 尝试从增量摘要中获取更丰富的信息
-            summary_data = {}
-            try:
-                summary_data = json.loads(row["summary_data"]) if row["summary_data"] else {}
-            except (json.JSONDecodeError, TypeError):
-                logger.debug("database.summary_data_parse_failed", exc_info=True)
-
-            custom_title = summary_data.get("custom_title") or summary_data.get("ai_title")
-            first_prompt = summary_data.get("first_prompt") if summary_data.get("first_prompt_locked") else None
-            display_summary = (
-                custom_title
-                or summary_data.get("last_prompt")
-                or summary_data.get("summary_hint")
-                or first_prompt
-                or summary_text
-            )
-            if not display_summary:
-                continue
-
-            results.append(SessionInfo(
-                session_id=sid,
-                summary=display_summary,
-                last_modified=mtime,
-                custom_title=custom_title,
-                first_prompt=first_prompt,
-                tag=summary_data.get("tag"),
-                created_at=summary_data.get("created_at"),
-            ))
+            info = self._build_session_info(row)
+            if info is not None:
+                results.append(info)
         return results
+
+    def _build_session_info(self, row: Any) -> SessionInfo | None:
+        """从一行 sessions+session_summaries 联表结果构造 SessionInfo；无有效摘要返回 None。"""
+        sid = row["id"]
+        summary_text = row["summary"] or ""
+        mtime = row["mtime"] or int((row["ended_at"] or row["started_at"] or 0) * 1000)
+        summary_data = {}
+        try:
+            summary_data = json.loads(row["summary_data"]) if row["summary_data"] else {}
+        except (json.JSONDecodeError, TypeError):
+            logger.debug("database.summary_data_parse_failed", exc_info=True)
+        custom_title = summary_data.get("custom_title") or summary_data.get("ai_title")
+        first_prompt = summary_data.get("first_prompt") if summary_data.get("first_prompt_locked") else None
+        display_summary = (
+            custom_title
+            or summary_data.get("last_prompt")
+            or summary_data.get("summary_hint")
+            or first_prompt
+            or summary_text
+        )
+        if not display_summary:
+            return None
+        return SessionInfo(
+            session_id=sid,
+            summary=display_summary,
+            last_modified=mtime,
+            custom_title=custom_title,
+            first_prompt=first_prompt,
+            tag=summary_data.get("tag"),
+            created_at=summary_data.get("created_at"),
+        )
 
     async def delete_session(self, session_id: str) -> None:
         """删除会话及其所有条目和摘要"""
