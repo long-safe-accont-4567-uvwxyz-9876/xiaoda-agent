@@ -495,6 +495,51 @@ class MessageProcessorMixin:
 
         return reply
 
+    def _parse_mode_markers(self, user_input: str) -> str:
+        """解析前端模式标记（[Search:]/[Think:]/[Doc:]），剥离标记并注入模式提示。
+
+        返回剥离标记后的 user_input。模式指令通过 system_context 注入（不入库）。
+        """
+        self._think_mode = False
+        self._search_mode = False
+        _mode_system_hint = ""
+        if isinstance(user_input, str):
+            _stripped_ui = user_input.strip()
+            _m_search = re.match(r'^\[Search:\s*(.+?)\]\s*$', _stripped_ui)
+            if _m_search:
+                _sq = _m_search.group(1)
+                self._search_mode = True
+                user_input = _sq
+                _mode_system_hint = "本次回复请优先使用 web_search 工具搜索最新信息后回答。"
+            else:
+                _m_think = re.match(r'^\[Think:\s*(.+?)\]\s*$', _stripped_ui)
+                if _m_think:
+                    self._think_mode = True
+                    user_input = _m_think.group(1)
+                    _mode_system_hint = "本次回复请进行更深入的思考，可以分步骤推理。"
+            _m_doc = re.search(r'\n?\[Doc:\s*([^\]]+)\]\s*', user_input)
+            if _m_doc:
+                _doc_path = _m_doc.group(1).strip()
+                user_input = user_input.replace(_m_doc.group(0), "").strip()
+                _doc_hint = f"用户上传了文档：{_doc_path}。请使用 document_reader 工具读取该文档内容后回答用户的问题。"
+                _mode_system_hint = (_mode_system_hint + "\n" + _doc_hint).strip() if _mode_system_hint else _doc_hint
+                logger.info("agent.doc_marker_parsed", doc_path=_doc_path)
+        if _mode_system_hint:
+            self._system_context = (self._system_context + "\n" + _mode_system_hint).strip() if self._system_context else _mode_system_hint
+            _system_context_var.set(self._system_context)
+        return user_input
+
+    async def _call_with_timeout(self, coro: Any, *, timeout: float,
+                                 timeout_log: str, error_log: str,
+                                 timeout_kwargs: dict | None = None) -> None:
+        """带超时执行协程；超时/异常均降级跳过并记录日志，不抛异常。"""
+        try:
+            await asyncio.wait_for(coro, timeout=timeout)
+        except asyncio.TimeoutError:
+            logger.warning(timeout_log, timeout=timeout, **(timeout_kwargs or {}))
+        except Exception as e:
+            logger.warning(error_log, error=str(e))
+
     async def _run_verification_loop(
         self,
         first_result: Any,
