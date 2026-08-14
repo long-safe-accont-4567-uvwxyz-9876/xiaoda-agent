@@ -1347,6 +1347,42 @@ class AIQQBot(botpy.Client):
             return end
         return url_end if url_end > end else end
 
+    @staticmethod
+    def _remaining_segments_after_error(segments: list[str], index: int,
+                                        exc: BaseException) -> str:
+        """发送失败后计算需要合并的剩余文本。
+
+        TimeoutError 时请求可能已发出但响应超时，QQ 服务端可能已接收当前段，
+        重发会重复 → 跳过当前段（segments[index+1:]），宁可丢一段也不重复；
+        其他异常（连接错误）当前段可能没发出 → 重发含当前段（segments[index:]）。
+        """
+        if isinstance(exc, TimeoutError):
+            return "".join(segments[index + 1:])
+        return "".join(segments[index:])
+
+    def _cap_stream_segments(self, segments: list[str], is_group: bool,
+                             resplit_event: str, capped_event: str) -> list[str]:
+        """按被动回复配额截断流式分片，超出的尾部合并到最后一片。
+
+        C2C 合并后按字节上限重切（避免单条超 QQ API 8000 字节上限）；
+        群聊走 split_for_group_passive，每段 ≤4000 字节，最多 4 片不会触发本分支。
+        """
+        max_segs = QQ_GROUP_MAX_SEGMENTS if is_group else QQ_C2C_MAX_SEGMENTS
+        if len(segments) <= max_segs:
+            return segments
+        original_segment_count = len(segments)
+        merged_tail = "".join(segments[max_segs - 1:])
+        if not is_group:
+            resplit = self._split_text_by_bytes(merged_tail, 7800)
+            segments = segments[:max_segs - 1] + resplit
+            logger.info(resplit_event + " original={} final={} max_segs={}",
+                        original_segment_count, len(segments), max_segs)
+        else:
+            segments = segments[:max_segs - 1] + [merged_tail]
+            logger.info(capped_event + " original={} capped={}",
+                        original_segment_count, max_segs)
+        return segments
+
     async def _send_streaming_reply(self, message: Any, full_text: str) -> None:
         """流式分片发送回复，模拟打字效果。
 
@@ -1375,23 +1411,9 @@ class AIQQBot(botpy.Client):
             segments = self._split_text_for_streaming(full_text, chunk_size=300)
 
         # P0-10: C2C 被动回复最多 4 次，超出部分合并到最后一片
-        max_segs = QQ_GROUP_MAX_SEGMENTS if is_group else QQ_C2C_MAX_SEGMENTS
-        if len(segments) > max_segs:
-            original_segment_count = len(segments)
-            merged_tail = "".join(segments[max_segs - 1:])
-            # P1-6 修复：合并后调用字节分割再逐片发送，避免单条消息超 QQ API 8000 字节上限。
-            # C2C 按 300 字符切片，合并后可能远超 8000 字节（中文 3 字节/字符，
-            # 10 段 * 300 字符 = 9000 字节，已超限）。
-            # 群聊走 split_for_group_passive，每段 ≤ 4000 字节，且 max_segments=4 不会触发本分支。
-            if not is_group:
-                resplit = self._split_text_by_bytes(merged_tail, 7800)
-                segments = segments[:max_segs - 1] + resplit
-                logger.info("qq_bot.stream_capped_resplit original={} final={} max_segs={}",
-                            original_segment_count, len(segments), max_segs)
-            else:
-                segments = segments[:max_segs - 1] + [merged_tail]
-                logger.info("qq_bot.stream_capped original={} capped={}",
-                            original_segment_count, max_segs)
+        segments = self._cap_stream_segments(
+            segments, is_group,
+            "qq_bot.stream_capped_resplit", "qq_bot.stream_capped")
 
         _group_no_proactive = ("被动回复", "超过限制", "无权限", "40034105")
 
@@ -1499,10 +1521,7 @@ class AIQQBot(botpy.Client):
                 #     重发会重复 → 跳过当前段（segments[i+1:]），宁可丢一段也不重复。
                 #   - OSError/RuntimeError：连接错误，当前段可能没发出 → 重发含当前段（segments[i:]），
                 #     避免丢失。重复只在超时场景发生，连接错误场景不会重复。
-                if isinstance(e, TimeoutError):
-                    remaining = "".join(segments[i+1:])
-                else:
-                    remaining = "".join(segments[i:])
+                remaining = self._remaining_segments_after_error(segments, i, e)
                 # P1-6 修复：合并后按字节上限再分割逐片发送，避免单条超 8000 字节被 QQ API 拒绝
                 # Q4 修复：群聊 recovery 也重切——原合并为单条可能超限，统一按字节重切
                 recovery_pieces = self._split_text_by_bytes(remaining, 7800)
@@ -1565,22 +1584,9 @@ class AIQQBot(botpy.Client):
             segments = self._split_text_for_streaming(clean_reply, chunk_size=300)
 
         # P0-10: C2C 被动回复最多 4 次，超出部分合并到最后一片
-        max_segs = QQ_GROUP_MAX_SEGMENTS if is_group else QQ_C2C_MAX_SEGMENTS
-        if len(segments) > max_segs:
-            original_segment_count = len(segments)
-            merged_tail = "".join(segments[max_segs - 1:])
-            # Q3 修复：合并后按字节上限重切分，避免单条超 QQ API 8000 字节上限被拒绝
-            #（与 _send_streaming_reply 对齐；群聊 split_for_group_passive 每段 ≤4000
-            #  字节且 max_segs=4 不触发本分支，仅 C2C 需要重切）
-            if not is_group:
-                resplit = self._split_text_by_bytes(merged_tail, 7800)
-                segments = segments[:max_segs - 1] + resplit
-                logger.info("qq_bot.stream_sticker_capped_resplit original={} final={} max_segs={}",
-                            original_segment_count, len(segments), max_segs)
-            else:
-                segments = segments[:max_segs - 1] + [merged_tail]
-                logger.info("qq_bot.stream_sticker_capped original={} capped={}",
-                            original_segment_count, max_segs)
+        segments = self._cap_stream_segments(
+            segments, is_group,
+            "qq_bot.stream_sticker_capped_resplit", "qq_bot.stream_sticker_capped")
 
         if len(segments) <= 1:
             # 短回复：文字+表情包合并为一条消息发送
@@ -1650,7 +1656,7 @@ class AIQQBot(botpy.Client):
             except (TimeoutError, OSError, RuntimeError) as e:
                 logger.warning("qq_bot.stream_sticker_segment_failed", error=str(e))
                 # 异常恢复：合并剩余内容（含最后一片）与 sticker 一起发送
-                remaining = "".join(segments[i+1:] if isinstance(e, TimeoutError) else segments[i:])
+                remaining = self._remaining_segments_after_error(segments, i, e)
                 if not remaining:
                     return
                 try:
@@ -1726,10 +1732,7 @@ class AIQQBot(botpy.Client):
                     # P0 治本修复（重复发送根因，与流式路径同构）：
                     #   TimeoutError 跳过当前段（可能已发，避免重复）；
                     #   其他异常重发含当前段（可能没发，避免丢失）。
-                    if isinstance(e, TimeoutError):
-                        remaining = "".join(segments[i+1:])
-                    else:
-                        remaining = "".join(segments[i:])
+                    remaining = self._remaining_segments_after_error(segments, i, e)
                     try:
                         await message.reply(content=remaining, msg_seq=_next_msg_seq())
                         sent_count += 1
@@ -1772,10 +1775,7 @@ class AIQQBot(botpy.Client):
                         # P0 治本修复（重复发送根因，与流式/群聊路径同构）：
                         #   TimeoutError 跳过当前段（可能已发，避免重复）；
                         #   其他异常重发含当前段（可能没发，避免丢失）。
-                        if isinstance(e, TimeoutError):
-                            remaining = "".join(parts[i+1:])
-                        else:
-                            remaining = "".join(parts[i:])
+                        remaining = self._remaining_segments_after_error(parts, i, e)
                         try:
                             for piece in self._split_text_by_bytes(remaining, 7800):
                                 await message.reply(content=piece, msg_seq=_next_msg_seq())

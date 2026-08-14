@@ -2,6 +2,7 @@ from typing import Any
 import os
 import sys
 import asyncio
+import socket
 import argparse
 from pathlib import Path
 
@@ -429,28 +430,33 @@ def _run_web(host: str, port: int) -> None:
     )
 
 
+def _port_bind_ok(host: str, port: int) -> bool:
+    """单次 socket bind 检测：返回端口当前是否可绑定。"""
+    try:
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+            s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+            s.settimeout(1)
+            s.bind((host, port))
+            return True
+    except OSError:
+        return False
+
+
 async def _wait_for_port_available_async(host: str, port: int) -> None:
     """端口冲突检测（异步版）：等待旧进程释放端口，最多 60s。
 
     用 asyncio.sleep 替代 time.sleep，避免阻塞事件循环。
     """
-    import socket
-    from loguru import logger
     for attempt in range(30):
-        try:
-            with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
-                s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-                s.settimeout(1)
-                s.bind((host, port))
-                break
-        except OSError:
-            if attempt == 0:
-                logger.warning(f"agent.port_in_use port={port}, waiting for old process to release...")
-            if attempt < 29:
-                await asyncio.sleep(2)
-            else:
-                logger.error(f"agent.port_still_in_use port={port}, giving up after 60s")
-                sys.exit(1)
+        if _port_bind_ok(host, port):
+            break
+        if attempt == 0:
+            logger.warning(f"agent.port_in_use port={port}, waiting for old process to release...")
+        if attempt < 29:
+            await asyncio.sleep(2)
+        else:
+            logger.error(f"agent.port_still_in_use port={port}, giving up after 60s")
+            sys.exit(1)
 
 
 def _wait_for_port_available(host: str, port: int) -> None:
@@ -459,24 +465,17 @@ def _wait_for_port_available(host: str, port: int) -> None:
     桌面模式此时 UI 尚未启动，主线程同步 sleep 仅影响 splash 显示时长，可接受。
     重试间隔缩短到 0.5s 以减少 splash 等待。
     """
-    import socket
     import time
-    from loguru import logger
     for attempt in range(120):  # 120 * 0.5s = 60s
-        try:
-            with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
-                s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-                s.settimeout(1)
-                s.bind((host, port))
-                break
-        except OSError:
-            if attempt == 0:
-                logger.warning(f"agent.port_in_use port={port}, waiting for old process to release...")
-            if attempt < 119:
-                time.sleep(0.5)
-            else:
-                logger.error(f"agent.port_still_in_use port={port}, giving up after 60s")
-                sys.exit(1)
+        if _port_bind_ok(host, port):
+            break
+        if attempt == 0:
+            logger.warning(f"agent.port_in_use port={port}, waiting for old process to release...")
+        if attempt < 119:
+            time.sleep(0.5)
+        else:
+            logger.error(f"agent.port_still_in_use port={port}, giving up after 60s")
+            sys.exit(1)
 
 
 def _import_web_server_safe() -> Any:
