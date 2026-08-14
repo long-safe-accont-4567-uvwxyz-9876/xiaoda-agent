@@ -12,11 +12,14 @@ mkdir -p /tmp/dumps
 
 # 统一的快照动作：py-spy dump（暂停 + 非阻塞）+ journalctl 近 3 分钟日志 + 追加记录。
 dump_snapshot() {
-  local reason="$1" TS PID
+  local reason="$1" trigger="${2:-}" TS PID
   TS=$(date +%Y%m%d_%H%M%S)
   PID=$(systemctl show -p MainPID --value xiaoda-agent)
   {
     echo "=== $reason at $TS pid=$PID ==="
+    if [ -n "$trigger" ]; then
+      echo "=== trigger line: $trigger ==="
+    fi
     echo "=== py-spy dump (暂停) ==="
     sudo -n /home/orangepi/ai-agent/.venv/bin/py-spy dump --pid "$PID" 2>&1
     echo "=== py-spy dump (非阻塞) ==="
@@ -52,7 +55,7 @@ else
   # 超时后快照：流式扫描超时/错误关键字，命中即 dump，之后冷却 45s 避免刷屏。
   journalctl -u xiaoda-agent.service -f -o cat 2>/dev/null | while read -r line; do
     echo "$line" | grep -qE "memory\.retrieve_global_timeout|agent\.model_error|stage_slow stage=main_path elapsed_ms=[0-9]{5}" || continue
-    dump_snapshot "block"
+    dump_snapshot "block" "$line"
     sleep 45
   done
 fi
