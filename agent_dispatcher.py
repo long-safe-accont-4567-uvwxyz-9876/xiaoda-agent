@@ -130,6 +130,13 @@ DELEGATE_BLOCKED_TOOLS = {
 
 _RESOURCE_PATH_TOOLS = {"list_files", "read_file", "write_file", "search_files", "delete_file", "edit_file", "create_file", "document_reader"}
 
+SUB_AGENT_PROFILE_TOOLS = frozenset({
+    "profile_get", "profile_set", "profile_history", "profile_forget",
+})
+SUB_AGENT_MEMORY_TOOL = "submit_memory"
+SUB_AGENT_MESSAGE_TOOL = "send_message_to_agent"
+SUB_AGENT_EXTRA_TOOLS = frozenset({SUB_AGENT_MEMORY_TOOL, SUB_AGENT_MESSAGE_TOOL})
+
 
 def _safe_log_path(path: str) -> str:
     return path.replace("\r", " ").replace("\n", " ").replace("\x00", " ")[:200]
@@ -278,18 +285,22 @@ class SubAgent:
         """降级模式：探活失败但仍注册，实际调用时回退到主体 agent。"""
         return self._degraded
 
+    def _excluded_tool_names(self) -> set[str]:
+        """子代理过滤工具时排除的集合：配置排除项 + 画像工具（实例方法拦截）。"""
+        return self.config.excluded_tools | SUB_AGENT_PROFILE_TOOLS
+
     def _filtered_tools(self) -> list[dict] | None:
         if not self._tool_executor:
             return None
         all_tools = to_openai_tools()
-        excluded = self.config.excluded_tools | {"profile_get", "profile_set", "profile_history", "profile_forget"}
+        excluded = self._excluded_tool_names()
         tools = [t for t in all_tools if t["function"]["name"] not in excluded]
 
         # 子代理专属工具：submit_memory（受控记忆提交，实例方法拦截执行）
         tools.append({
             "type": "function",
             "function": {
-                "name": "submit_memory",
+                "name": SUB_AGENT_MEMORY_TOOL,
                 "description": "向主记忆提交重要观察（单次任务最多 3 次）",
                 "parameters": {
                     "type": "object",
@@ -315,7 +326,7 @@ class SubAgent:
         tools.append({
             "type": "function",
             "function": {
-                "name": "send_message_to_agent",
+                "name": SUB_AGENT_MESSAGE_TOOL,
                 "description": f"直接向另一个子代理发消息获取响应（无需通过{get_agent_display_name('xiaoda')}中转）",
                 "parameters": {
                     "type": "object",
@@ -346,10 +357,9 @@ class SubAgent:
     def _filtered_tool_names(self) -> set[str]:
         if not self._tool_executor:
             return set()
-        excluded = self.config.excluded_tools | {"profile_get", "profile_set", "profile_history", "profile_forget"}
+        excluded = self._excluded_tool_names()
         names = {t["function"]["name"] for t in to_openai_tools() if t["function"]["name"] not in excluded}
-        names.add("submit_memory")  # 子代理专属工具
-        names.add("send_message_to_agent")  # 子代理专属工具：子代理间直接通信
+        names.update(SUB_AGENT_EXTRA_TOOLS)  # 子代理专属工具
         return names
 
     async def chat(self, message: str, context: str = "", status_callback: Any | None=None, address_term: str = "爸爸", extra_system_prompt: str = "", invocation: Any | None = None) -> str:
@@ -725,7 +735,7 @@ class SubAgent:
         if invocation is not None and tool_name not in invocation.allowed_tools:
             return {"tool_call_id": tc.id, "content": json.dumps({"error": f"工具 {tool_name} 未授权"}, ensure_ascii=False)}
 
-        if invocation is not None and tool_name == "send_message_to_agent":
+        if invocation is not None and tool_name == SUB_AGENT_MESSAGE_TOOL:
             return {"tool_call_id": tc.id, "content": json.dumps({"error": "结构化隔离调用禁止嵌套代理通信"}, ensure_ascii=False)}
 
         if invocation is not None and tool_name in _RESOURCE_PATH_TOOLS:
@@ -802,7 +812,7 @@ class SubAgent:
             return {"tool_call_id": tc.id, "content": tool_result_content}
 
         # 子代理专属工具：submit_memory（实例方法拦截，不走全局 executor）
-        if tool_name == "submit_memory":
+        if tool_name == SUB_AGENT_MEMORY_TOOL:
             try:
                 result_text = await self.submit_memory(**args)
             except (OSError, ValueError, RuntimeError) as e:
@@ -811,7 +821,7 @@ class SubAgent:
             return {"tool_call_id": tc.id, "content": result_text}
 
         # 子代理专属工具：send_message_to_agent（实例方法拦截，不走全局 executor）
-        if tool_name == "send_message_to_agent":
+        if tool_name == SUB_AGENT_MESSAGE_TOOL:
             try:
                 result_text = await self.send_message_to_agent(**args)
             except (OSError, ValueError, RuntimeError) as e:
