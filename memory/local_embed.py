@@ -165,6 +165,7 @@ class LocalEmbeddingProvider:
 
         模型目录约定（与下载脚本一致）：
         - model.onnx / onnx/model.onnx：优先
+        - 缺省时按量化变体降级（model_quantized / model_int8 / model_uint8）
         - tokenizer.json：必需
         """
         if self._loaded:
@@ -175,10 +176,21 @@ class LocalEmbeddingProvider:
             try:
                 if not HAS_LOCAL_EMBED_DEPS:
                     raise RuntimeError("onnxruntime/tokenizers not installed")
-                onnx_path = self._model_dir / "model.onnx"
-                if not onnx_path.exists():
-                    onnx_path = self._model_dir / "onnx" / "model.onnx"
-                if not onnx_path.exists():
+                onnx_path = None
+                for candidate in (
+                    self._model_dir / "model.onnx",
+                    self._model_dir / "onnx" / "model.onnx",
+                    self._model_dir / "model_quantized.onnx",
+                    self._model_dir / "onnx" / "model_quantized.onnx",
+                    self._model_dir / "model_int8.onnx",
+                    self._model_dir / "onnx" / "model_int8.onnx",
+                    self._model_dir / "model_uint8.onnx",
+                    self._model_dir / "onnx" / "model_uint8.onnx",
+                ):
+                    if candidate.exists():
+                        onnx_path = candidate
+                        break
+                if onnx_path is None:
                     raise FileNotFoundError(f"model.onnx not found in {self._model_dir}")
                 tokenizer_path = self._model_dir / "tokenizer.json"
                 if not tokenizer_path.exists():
