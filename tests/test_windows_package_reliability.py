@@ -526,7 +526,6 @@ def test_linux_operational_scripts_use_installed_service_name():
         "scripts/start.sh",
         "scripts/healthcheck.sh",
         "scripts/block_watchdog.sh",
-        "scripts/block_watchdog2.sh",
         "slash_commands.py",
     ]
     for path in paths:

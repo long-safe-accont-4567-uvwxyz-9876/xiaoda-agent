@@ -12,6 +12,7 @@ from loguru import logger
 
 from web.routers.auth import get_current_user
 from web.schemas import Envelope, SystemStatus
+from utils.common import DEFAULT_WEBUI_PORT
 
 router = APIRouter(tags=["system"], dependencies=[Depends(get_current_user)])
 # 公开路由（无需认证）：OS 信息不敏感，终端需在 token 未就绪/失效时也能正确探测服务端 OS，
@@ -209,7 +210,7 @@ async def get_lan_addresses(request: Request) -> Any:
     """返回局域网访问地址，供同一 WiFi 下手机访问。"""
     import socket
     # 从请求中获取实际运行端口，而非环境变量
-    port = request.url.port or 8082
+    port = request.url.port or DEFAULT_WEBUI_PORT
     # 获取本机局域网 IP
     lan_ips = []
     try:
@@ -308,7 +309,7 @@ async def restart_service(request: Request) -> Any:
             import tempfile
             python = sys.executable
             script = os.path.abspath(sys.argv[0]) if sys.argv and sys.argv[0] else 'agent.py'
-            args = sys.argv[1:] if len(sys.argv) > 1 else ['--web', '--host', '0.0.0.0', '--port', '8082']
+            args = sys.argv[1:] if len(sys.argv) > 1 else ['--web', '--host', '0.0.0.0', '--port', str(DEFAULT_WEBUI_PORT)]
             bat_path = ""
             with tempfile.NamedTemporaryFile(suffix='.bat', delete=False, mode='w') as bat:
                 safe_args = [shlex.quote(a) for a in args]

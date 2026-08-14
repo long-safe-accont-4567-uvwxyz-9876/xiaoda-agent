@@ -23,12 +23,14 @@ from typing import Any
 
 from loguru import logger
 
+from utils.common import DEFAULT_WEBUI_PORT
+
 # 与 WebUI 一致的主机/端口（agent.py 默认 WEBUI_PORT=8082）
 _DEFAULT_HOST = "127.0.0.1"
 # 兜底端口固定为代码默认 8082，不在此处读取环境变量 —— 否则 WEBUI_PORT 被设为
 # 非数字（如 "abc"）时 int() 会在模块导入阶段抛 ValueError，导致整个模块崩溃。
 # 环境变量统一由 _resolve_port() 运行时解析并做 isdigit() 校验。
-_FALLBACK_PORT = 8082
+_FALLBACK_PORT = DEFAULT_WEBUI_PORT
 _SYSTEMD_SERVICE = "xiaoda-agent"
 # 会话级缓存：首次解析后的端口在整个 CLI 生命周期内复用，避免每次构造 URL /
 # 探测端口都重复执行 systemctl cat 子进程（确保轮询循环每秒一次也不起子进程）。

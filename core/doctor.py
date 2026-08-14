@@ -15,7 +15,7 @@ from pathlib import Path
 from loguru import logger
 
 
-from utils.common import safe_int as _safe_int
+from utils.common import DEFAULT_WEBUI_PORT, safe_int as _safe_int
 import contextlib
 
 
@@ -347,7 +347,7 @@ def _register_self_heal_checks(doc: DoctorCheck) -> None:
 
     def _check_port_conflict() -> tuple:
         import socket
-        port = _safe_int(os.getenv("WEBUI_PORT", "8082"), 8082)
+        port = _safe_int(os.getenv("WEBUI_PORT", str(DEFAULT_WEBUI_PORT)), DEFAULT_WEBUI_PORT)
         s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         s.settimeout(1)
         try:
@@ -359,7 +359,7 @@ def _register_self_heal_checks(doc: DoctorCheck) -> None:
             return False, f"Port {port} in use by another process"
 
     def _fix_port_conflict() -> None:
-        port_str = os.getenv("WEBUI_PORT", "8082")
+        port_str = os.getenv("WEBUI_PORT", str(DEFAULT_WEBUI_PORT))
         if not port_str.isdigit() or not (1 <= int(port_str) <= 65535):
             logger.warning("doctor.invalid_port value={}", port_str)
             return

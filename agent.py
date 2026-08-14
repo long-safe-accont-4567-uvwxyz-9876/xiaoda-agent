@@ -8,7 +8,7 @@ from pathlib import Path
 from loguru import logger
 import contextlib
 
-from utils.common import safe_int as _safe_int
+from utils.common import DEFAULT_WEBUI_PORT, safe_int as _safe_int
 
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -217,7 +217,7 @@ def main() -> None:
 
     # watchdog 子命令: xiaoda-agent watchdog [--port] [--mode] ...
     wd_parser = subparsers.add_parser("watchdog", help="以看门狗模式启动（自动重启卡死/崩溃的主进程）")
-    wd_parser.add_argument("--port", type=int, default=_safe_int(os.getenv("WEBUI_PORT", "8082"), 8082))
+    wd_parser.add_argument("--port", type=int, default=_safe_int(os.getenv("WEBUI_PORT", str(DEFAULT_WEBUI_PORT)), DEFAULT_WEBUI_PORT))
     wd_parser.add_argument("--host", type=str, default=os.getenv("WEBUI_HOST", "127.0.0.1"))
     wd_parser.add_argument("--mode", choices=["web", "desktop"], default="web")
     wd_parser.add_argument("--check-interval", type=int, default=15)
@@ -238,7 +238,7 @@ def main() -> None:
     parser.add_argument("--web", action="store_true", help="启动 Web UI 模式")
     parser.add_argument("--desktop", action="store_true", help="启动桌面模式（pywebview 原生窗口）")
     parser.add_argument("--cli", action="store_true", help="启动 CLI 交互界面")
-    parser.add_argument("--port", type=int, default=_safe_int(os.getenv("WEBUI_PORT", "8082"), 8082), help="Web UI 端口")
+    parser.add_argument("--port", type=int, default=_safe_int(os.getenv("WEBUI_PORT", str(DEFAULT_WEBUI_PORT)), DEFAULT_WEBUI_PORT), help="Web UI 端口")
     parser.add_argument("--host", type=str, default=os.getenv("WEBUI_HOST", "127.0.0.1"), help="Web UI 监听地址")
     parser.add_argument("--setup", action="store_true", help="运行配置向导")
     args = parser.parse_args()

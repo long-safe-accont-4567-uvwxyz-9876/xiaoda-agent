@@ -33,6 +33,8 @@ try:
 except ImportError:
     _HAS_PSUTIL = False
 
+from utils.common import DEFAULT_WEBUI_PORT
+
 # ──────────────────────────────────────────────────────────────
 # 默认配置
 # ──────────────────────────────────────────────────────────────
@@ -43,9 +45,9 @@ except ImportError:
 _EXIT_ALREADY_RUNNING = 77
 
 DEFAULTS = {
-    "ping_url": "http://127.0.0.1:8082/api/v1/ping",
+    "ping_url": f"http://127.0.0.1:{DEFAULT_WEBUI_PORT}/api/v1/ping",
     "host": "127.0.0.1",         # 端口释放检测用
-    "port": 8082,                # 端口释放检测用
+    "port": DEFAULT_WEBUI_PORT,  # 端口释放检测用
     "ping_timeout": 5,           # 单次 HTTP 超时，秒
     "ping_retries": 3,           # 探活重试次数（I1: 避免单次抖动误判）
     "check_interval": 15,        # 探活间隔，秒
@@ -308,7 +310,7 @@ class Watchdog:
 
         # W3: 等待端口释放
         host = self.cfg.get("host", "127.0.0.1")
-        port = self.cfg.get("port", 8082)
+        port = self.cfg.get("port", DEFAULT_WEBUI_PORT)
         if not _wait_port_release(host, port, timeout=10):
             self.log.error("watchdog.port_not_released host=%s port=%d — 仍尝试启动", host, port)
 
@@ -395,7 +397,8 @@ class Watchdog:
 def run_watchdog_cli(argv: list[str] | None = None) -> int:
     """解析参数并运行看门狗，供 agent.py watchdog 子命令调用。"""
     p = argparse.ArgumentParser(prog="watchdog", description="Xiaoda Agent 看门狗")
-    p.add_argument("--port", type=int, default=8082, help="主进程端口（默认 8082）")
+    p.add_argument("--port", type=int, default=DEFAULT_WEBUI_PORT,
+                   help=f"主进程端口（默认 {DEFAULT_WEBUI_PORT}）")
     p.add_argument("--host", type=str, default="127.0.0.1")
     p.add_argument("--mode", choices=["web", "desktop"], default="web")
     p.add_argument("--check-interval", type=int, default=DEFAULTS["check_interval"])
