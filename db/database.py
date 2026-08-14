@@ -1550,6 +1550,17 @@ class DatabaseManager:
         rows = await self.fetch_all(sql, params)
         return rows[0] if rows else None
 
+    async def _ensure_columns(self, table: str, columns: dict[str, str]) -> None:
+        """幂等批量添加列：一次 PRAGMA 检查，缺失列逐个 ALTER TABLE ADD COLUMN。
+
+        columns 形如 {"salience": "salience REAL DEFAULT 0.5"}，键为列名，值为列定义。
+        表名为内部硬编码调用，无用户输入，不存在 SQL 注入面。
+        """
+        existing = {r["name"] for r in await self.fetch_all(f"PRAGMA table_info({table})")}
+        for name, spec in columns.items():
+            if name not in existing:
+                await self._conn.execute(f"ALTER TABLE {table} ADD COLUMN {spec}")
+
     async def execute(self, sql: str, params: tuple = (), auto_commit: bool = True) -> int:
         """通用写语句。INSERT 返回 lastrowid，UPDATE/DELETE 返回 rowcount。"""
         if auto_commit:
