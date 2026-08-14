@@ -1521,6 +1521,9 @@ def test_local_embedding_forwards_registry_provider_configuration(monkeypatch, t
         def get_outputs(self):
             return [SimpleNamespace(shape=(None, None, 512))]
 
+        def get_inputs(self):
+            return [SimpleNamespace(name="input_ids", type="tensor(int64)", shape=(None, None))]
+
         def get_providers(self):
             return ["ROCMExecutionProvider", "CPUExecutionProvider"]
 
@@ -1572,6 +1575,9 @@ def test_legacy_local_embedding_disable_fallback_requires_exact_provider_chain(
 
         def get_outputs(self):
             return [SimpleNamespace(shape=(None, None, 512))]
+
+        def get_inputs(self):
+            return [SimpleNamespace(name="input_ids", type="tensor(int64)", shape=(None, None))]
 
         def get_providers(self):
             return [*self.providers, "CPUExecutionProvider"]
@@ -1801,6 +1807,9 @@ def test_local_embedding_consumes_runtime_profile_provider_chain(monkeypatch, tm
         def get_outputs(self):
             return [SimpleNamespace(shape=(None, None, 512))]
 
+        def get_inputs(self):
+            return [SimpleNamespace(name="input_ids", type="tensor(int64)", shape=(None, None))]
+
         def get_providers(self):
             return self.providers
 
@@ -1867,6 +1876,9 @@ def test_local_embedding_builds_provider_chain_from_fallback_bindings(monkeypatc
         def get_outputs(self):
             return [SimpleNamespace(shape=(None, None, 512))]
 
+        def get_inputs(self):
+            return [SimpleNamespace(name="input_ids", type="tensor(int64)", shape=(None, None))]
+
         def get_providers(self):
             return self.providers
 
@@ -1929,6 +1941,9 @@ def test_local_embedding_creates_one_session_per_manifest_binding(monkeypatch, t
 
         def get_outputs(self):
             return [SimpleNamespace(shape=(None, None, 512))]
+
+        def get_inputs(self):
+            return [SimpleNamespace(name="input_ids", type="tensor(int64)", shape=(None, None))]
 
         def get_providers(self):
             return self.providers
@@ -2003,6 +2018,9 @@ def test_local_embedding_load_is_transactional_and_retry_does_not_duplicate_sess
         def get_outputs(self):
             return [SimpleNamespace(shape=(None, None, 512))]
 
+        def get_inputs(self):
+            return [SimpleNamespace(name="input_ids", type="tensor(int64)", shape=(None, None))]
+
         def get_providers(self):
             return [self.provider]
 
@@ -2062,6 +2080,9 @@ def test_local_embedding_retries_next_session_and_promotes_successful_binding(
 
         def get_outputs(self):
             return [SimpleNamespace(shape=(None, None, 2))]
+
+        def get_inputs(self):
+            return [SimpleNamespace(name="input_ids", type="tensor(int64)", shape=(None, None))]
 
         def get_providers(self):
             return self.providers
@@ -2126,6 +2147,9 @@ def test_local_embedding_ignores_non_manifest_provider_chain(monkeypatch, tmp_pa
         def get_outputs(self):
             return [SimpleNamespace(shape=(None, None, 512))]
 
+        def get_inputs(self):
+            return [SimpleNamespace(name="input_ids", type="tensor(int64)", shape=(None, None))]
+
         def get_providers(self):
             return ["CUDAExecutionProvider"]
 
@@ -2182,6 +2206,9 @@ def test_local_embedding_directml_load_uses_supported_session_options(monkeypatc
 
         def get_outputs(self):
             return [SimpleNamespace(shape=(None, None, 512))]
+
+        def get_inputs(self):
+            return [SimpleNamespace(name="input_ids", type="tensor(int64)", shape=(None, None))]
 
         def get_providers(self):
             return ["DmlExecutionProvider"]
