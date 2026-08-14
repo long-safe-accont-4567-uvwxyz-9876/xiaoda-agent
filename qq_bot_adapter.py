@@ -270,6 +270,17 @@ def _save_master_openid(openid: str) -> None:
         logger.info("qq_bot.master_openid_saved", openid=openid, total=len(ids))
 
 
+def _parse_master_ids() -> list[str]:
+    """解析 MASTER_QQ_OPENID 环境变量为去空白的 openid 列表（逗号分隔）。"""
+    raw = os.getenv("MASTER_QQ_OPENID", "").strip()
+    return [x.strip() for x in raw.split(",") if x.strip()]
+
+
+def _build_user_input(content: str, attachment_info: str) -> str:
+    """拼接文本与附件描述为用户输入。"""
+    return f"{content} {attachment_info}".strip() if content else attachment_info
+
+
 # 当前活跃的 bot 实例（同进程内 GreetingScheduler 等主动消息入口使用）
 _ACTIVE_BOT: "AIQQBot | None" = None
 
