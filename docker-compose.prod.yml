@@ -3,7 +3,8 @@ services:
     image: ghcr.io/${GITHUB_OWNER:-long-safe-accont-4567-uvwxyz-9876}/xiaoda-agent:latest
     container_name: xiaoda-agent
     ports:
-      - "${WEBUI_PORT:-8082}:${WEBUI_PORT:-8082}"
+      # 默认仅绑定宿主机回环；如需局域网/公网暴露，去掉 127.0.0.1 前缀并务必设置 WEBUI_PASSWORD
+      - "127.0.0.1:${WEBUI_PORT:-8082}:${WEBUI_PORT:-8082}"
     volumes:
       # 数据独立持久化，更新镜像不丢配置
       - agent-data:/data

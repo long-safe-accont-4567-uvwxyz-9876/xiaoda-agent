@@ -3,6 +3,9 @@ __pycache__/
 *.pyo
 .env
 .env.prod
+.env.bak-*
+.env.*.bak
+.env.*~
 *.db
 *.sqlite
 *.sqlite3

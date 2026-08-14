@@ -46,7 +46,7 @@ install_agent() {
     if [ ! -f "$INSTALL_DIR/.env" ]; then
         cat > "$INSTALL_DIR/.env" <<'ENVEOF'
 # ── 小达 Agent 配置 ──
-WEBUI_HOST=0.0.0.0
+WEBUI_HOST=127.0.0.1
 WEBUI_PORT=8082
 # LLM_API_KEY=sk-your-key-here
 # LLM_BASE_URL=https://api.openai.com/v1
@@ -143,7 +143,7 @@ After=network.target
 [Service]
 Type=simple
 WorkingDirectory=$INSTALL_DIR
-ExecStart=$INSTALL_DIR/scripts/start-linux.sh --web --host 0.0.0.0 --port \${WEBUI_PORT}
+ExecStart=$INSTALL_DIR/scripts/start-linux.sh --web --host 127.0.0.1 --port \${WEBUI_PORT}
 Restart=on-failure
 RestartSec=5
 # 看门狗达到 MAX_RESTARTS 后 exit 0 停止重启，systemd 不应对 exit 0 重启

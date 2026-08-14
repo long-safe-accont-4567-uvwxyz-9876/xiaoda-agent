@@ -12,7 +12,7 @@ import httpx
 from fastapi import APIRouter, Depends, HTTPException, Request
 from loguru import logger
 
-from web.routers.auth import get_current_user
+from web.routers.auth import get_current_user, _get_client_ip, _is_private_ip
 from web.schemas import Envelope
 
 # test-key 速率限制：每 IP 最多 10 次/分钟
@@ -65,6 +65,22 @@ def _mask_key_value(val: str) -> str:
     return val[:4] + "***...***" + val[-4:]
 
 
+def _require_local_source(request: Request) -> None:
+    """引导期免认证的补充约束：仅允许私网/回环来源访问引导端点。
+
+    防止公网部署未完成配置时，引导端点（覆写 .env、读取用户 PII）被公网
+    未授权访问。注意：受 TRUST_FORWARDED_FOR 影响，反代场景下若未信任 XFF，
+    此检查退化为对反代对端（通常 127.0.0.1）的校验，无法识别真实公网客户端；
+    该场景的安全仍依赖 WEBUI_PASSWORD 已设置（见 auth.login 的公网拒绝逻辑）。
+    """
+    client_ip = _get_client_ip(request)
+    if not _is_private_ip(client_ip):
+        raise HTTPException(
+            403,
+            "Setup endpoints require local/private network access until configuration is complete",
+        )
+
+
 async def _is_first_run_or_authenticated(request: Request) -> str:
     """认证依赖：首次运行（.env 不存在或任一必填 key 为空）时允许无认证访问；
     非首次运行时必须携带有效 Bearer Token。返回用户标识。
@@ -84,6 +100,7 @@ async def _is_first_run_or_authenticated(request: Request) -> str:
             detail="Setup availability check failed. Configure .env manually or contact admin."
         )
     if first_run:
+        _require_local_source(request)
         return "setup"
     return await get_current_user(request)
 
@@ -135,8 +152,10 @@ async def _profile_endpoint_access(request: Request) -> str:
             detail="Setup availability check failed. Configure .env manually or contact admin."
         )
     if first_run:
+        _require_local_source(request)
         return "setup"
     if not _is_profile_done():
+        _require_local_source(request)
         return "setup"
     return await get_current_user(request)
 
