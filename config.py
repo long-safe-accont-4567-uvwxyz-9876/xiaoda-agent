@@ -818,6 +818,11 @@ def get_agent_display_name(name: str) -> str:
     return dn
 
 
+def _best_display_name(agent_key: str) -> str:
+    """返回 agent 的显示名；未配置时回退为 agent key。"""
+    return get_agent_display_name(agent_key) or agent_key
+
+
 # ── Agent 原名 → display_name 全局替换 ────────────────────────
 # 每个 agent 的人格文件中使用原名，运行时自动替换为用户配置的显示名。
 # 全局统一机制：所有 agent 共用一套替换逻辑，不分主次。
@@ -876,19 +881,16 @@ def apply_agent_name_replacements(content: str) -> str:
     3. agent key（如 xiaoda）
     按原名长度降序替换，避免短名破坏长名。
     """
-    def _best(agent_key: str) -> str:
-        return get_agent_display_name(agent_key) or agent_key
-
     # 1. 替换旧名（从配置文件读取）
     for old_name, agent_key in sorted(
         get_all_deprecated_names().items(), key=lambda x: -len(x[0])
     ):
-        dn = _best(agent_key)
+        dn = _best_display_name(agent_key)
         if dn and dn != old_name:
             content = content.replace(old_name, dn)
     # 2. 替换当前 display_name（如用户改了显示名，旧人格文件中的新名也要同步）
     for agent_key in agent_names():
-        dn = _best(agent_key)
+        dn = _best_display_name(agent_key)
         if dn and dn != agent_key:
             content = content.replace(agent_key, dn)
     return content
@@ -900,17 +902,14 @@ def reverse_agent_name_replacements(content: str) -> str:
     与 apply_agent_name_replacements 互为逆操作。
     还原中文显示名 → 原名、agent key → 原名。
     """
-    def _best(agent_key: str) -> str:
-        return get_agent_display_name(agent_key) or agent_key
-
     # 还原 agent key（必须先还原，因为显示名可能包含 agent key）
     for agent_key in agent_names():
-        dn = _best(agent_key)
+        dn = _best_display_name(agent_key)
         if dn and dn != agent_key:
             content = content.replace(dn, agent_key)
     # 还原中文 display_name → 原名（使用配置文件中的第一个旧名）
     for agent_key in agent_names():
-        dn = _best(agent_key)
+        dn = _best_display_name(agent_key)
         deprecated = get_agent_deprecated_names(agent_key)
         if dn and deprecated:
             # 还原到第一个中文旧名（优先）
