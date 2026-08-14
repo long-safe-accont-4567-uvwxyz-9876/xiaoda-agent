@@ -174,101 +174,19 @@ class RetrievalEngine:
         recall_limit = getattr(_cfg, 'RAG_RECALL_LIMIT', 50)  # 每路召回 Top-N
         rerank_limit = getattr(_cfg, 'RAG_RERANK_LIMIT', 50)   # RRF 融合后送 Reranker 的数量
 
-        # KG v2 混合检索协程 (定义于早期返回之前, 确保 cold/warm/hot 所有路径均能召回 KG v2 事实)
-        async def _kg_v2_recall() -> list[dict]:
-            """KG v2: 直接返回 KG 事实/实体作为上下文候选。"""
-            import config as _v2_cfg
-            if not getattr(_v2_cfg, 'KG_V2_ENABLED', False) or not getattr(self._mm, '_kg_v2_engine', None):
-                return []
-            try:
-                results = await self._mm._kg_v2_engine.search(query, top_k=recall_limit)
-                if not results:
-                    return []
-                # 将 KG 事实格式化为 dict 供上下文使用
-                formatted = []
-                for r in results:
-                    if r.get("type") == "relation":
-                        formatted.append({
-                            "summary": r.get("fact", ""),
-                            "source": "kg_v2",
-                            "rrf_score": r.get("rrf_score", 0),
-                        })
-                    elif r.get("type") == "entity":
-                        summary_text = f"{r.get('name', '')}({r.get('kind', '')}): {r.get('summary', '')}"
-                        formatted.append({
-                            "summary": summary_text,
-                            "source": "kg_v2",
-                            "rrf_score": r.get("rrf_score", 0),
-                        })
-                return formatted
-            except Exception as e:
-                logger.debug("memory.kg_v2_recall_failed", error=str(e))
-                return []
-
         # ── 冷启动路由: 判断用户记忆档位 ──
         tier = await self._mm.get_memory_tier()
         is_cold = tier == "cold"
         is_warm = tier == "warm"
 
         # 冷用户: 仅 FTS (scope 过滤), 完全跳过向量检索 (零 Embedding 开销)
-        # 但 FTS 无结果时仍尝试向量检索作为兜底（避免 cold_max > 0 时丢失向量召回）
         if is_cold:
-            fts_items, kg_v2_items = await asyncio.gather(
-                self._mm._hybrid_fts_search_scoped(
-                    query, recall_limit, scope, is_raw_filter),
-                _kg_v2_recall(),
-            )
-            if fts_items:
-                results = fts_items[:k]
-                # KG v2 事实作为补充候选追加 (已带 rrf_score, 不参与 ID-based 去重)
-                if kg_v2_items and len(results) < k:
-                    results.extend(kg_v2_items[:k - len(results)])
-                logger.info("memory.search", event="memory_search",
-                            query=query[:100], tier="cold", results=len(results),
-                            duration_ms=int((time.time() - _start) * 1000))
-                return results
-            # FTS 无结果，尝试向量兜底 + KG v2
-            vec_items = await self._mm._hybrid_vec_search(query, recall_limit, is_raw=is_raw_filter, scope=scope, query_vec=query_vec)
-            if vec_items:
-                results = vec_items[:k]
-                if kg_v2_items and len(results) < k:
-                    results.extend(kg_v2_items[:k - len(results)])
-                logger.info("memory.search", event="memory_search",
-                            query=query[:100], tier="cold+vec_fallback", results=len(results),
-                            duration_ms=int((time.time() - _start) * 1000))
-                return results
-            # FTS + 向量均无结果, 仅返回 KG v2 事实 (若存在)
-            if kg_v2_items:
-                results = kg_v2_items[:k]
-                logger.info("memory.search", event="memory_search",
-                            query=query[:100], tier="cold+kg_v2_only", results=len(results),
-                            duration_ms=int((time.time() - _start) * 1000))
-                return results
-            logger.info("memory.search", event="memory_search",
-                        query=query[:100], tier="cold", results=0,
-                        duration_ms=int((time.time() - _start) * 1000))
-            return []
+            return await self._cold_start_recall(query, k, recall_limit, scope, is_raw_filter, query_vec, _start)
 
         # 懒迁移：concept_nodes 数 < episodic_memories 数时触发（5分钟节流）
-        if self._mm.concept_graph and not is_cold:
-            if time.time() - self._mm._last_lazy_migrate_ts > 300:  # 5分钟
-                try:
-                    self._mm._last_lazy_migrate_ts = time.time()
-                    ep_count = await self._mm.memory.get_episodic_count()
-                    node_count = await self._mm.spreading_engine.db.get_node_count()
-                    if node_count < ep_count:
-                        unmigrated = await self._mm.memory.get_unmigrated_memories(limit=50)
-                        if unmigrated:
-                            await self._mm.concept_graph.lazy_migrate(unmigrated, limit=50)
-                            # G13: lazy_migrate 写入新 concept_nodes，失效 recall 缓存
-                            # 避免命中陈旧 (query, top_k) 缓存而遗漏新迁移节点（TTL 最长 5 分钟）
-                            _engine = getattr(self._mm, 'spreading_engine', None)
-                            if _engine:
-                                _engine.clear_cache()
-                except Exception as e:
-                    logger.debug("memory.lazy_migrate_failed", error=str(e))
+        await self._maybe_lazy_migrate()
 
-        # ── 温/热用户: 并行执行 FTS、向量、KG 三路检索 ──
+        # ── 温/热用户: 并行执行 FTS、向量、KG、子chunk、扩散、实体、KG v2 七路召回 ──
         # ContextNest A1: 提取确定性 selector → 候选集, 向量检索在候选集内排序
         selectors = self._mm._extract_deterministic_selectors(query)
         candidate_ids = await self._mm._get_candidate_ids_by_selectors(
@@ -278,131 +196,257 @@ class RetrievalEngine:
                          selector_keys=[sk for sk in selectors if sk != "has_selectors"],
                          candidate_count=len(candidate_ids))
 
-        # KG 召回协程（KG 可用时启用第三路，失败/空结果自动降级为两路融合）
-        async def _kg_recall() -> list[dict]:
-            if not self._mm.kg or not use_kg:
+        fts_items, vec_items, kg_items, child_items, spread_items, entity_items, kg_v2_items = await self._run_multi_recall(
+            query, recall_limit, scope, is_raw_filter, query_vec, candidate_ids, use_kg)
+
+        routed = await self._resolve_fallback_or_single_channel(
+            fts_items, vec_items, kg_items, child_items, spread_items, entity_items, kg_v2_items,
+            query, k, tier, _start, candidate_ids, recall_limit, scope, query_vec)
+        if routed is not None:
+            return routed
+
+        return await self._fuse_and_rank(
+            query, k, use_reranker, tier, is_warm, rerank_limit,
+            fts_items, vec_items, kg_items, child_items, spread_items, entity_items, kg_v2_items,
+            scope, _start)
+
+    async def _recall_kg_v2(self, query: str, recall_limit: int) -> list[dict]:
+        """KG v2: 直接返回 KG 事实/实体作为上下文候选。"""
+        import config as _v2_cfg
+        if not getattr(_v2_cfg, 'KG_V2_ENABLED', False) or not getattr(self._mm, '_kg_v2_engine', None):
+            return []
+        try:
+            results = await self._mm._kg_v2_engine.search(query, top_k=recall_limit)
+            if not results:
                 return []
+            # 将 KG 事实格式化为 dict 供上下文使用
+            formatted = []
+            for r in results:
+                if r.get("type") == "relation":
+                    formatted.append({
+                        "summary": r.get("fact", ""),
+                        "source": "kg_v2",
+                        "rrf_score": r.get("rrf_score", 0),
+                    })
+                elif r.get("type") == "entity":
+                    summary_text = f"{r.get('name', '')}({r.get('kind', '')}): {r.get('summary', '')}"
+                    formatted.append({
+                        "summary": summary_text,
+                        "source": "kg_v2",
+                        "rrf_score": r.get("rrf_score", 0),
+                    })
+            return formatted
+        except Exception as e:
+            logger.debug("memory.kg_v2_recall_failed", error=str(e))
+            return []
+
+    async def _cold_start_recall(self, query: str, k: int, recall_limit: int,
+                                 scope: Any, is_raw_filter: Any,
+                                 query_vec: list[float] | None,
+                                 _start: float) -> list[dict]:
+        """冷启动: 仅 FTS (scope 过滤), 完全跳过向量检索 (零 Embedding 开销)。
+
+        但 FTS 无结果时仍尝试向量检索作为兜底（避免 cold_max > 0 时丢失向量召回）。
+        """
+        fts_items, kg_v2_items = await asyncio.gather(
+            self._mm._hybrid_fts_search_scoped(
+                query, recall_limit, scope, is_raw_filter),
+            self._recall_kg_v2(query, recall_limit),
+        )
+        if fts_items:
+            results = fts_items[:k]
+            # KG v2 事实作为补充候选追加 (已带 rrf_score, 不参与 ID-based 去重)
+            if kg_v2_items and len(results) < k:
+                results.extend(kg_v2_items[:k - len(results)])
+            logger.info("memory.search", event="memory_search",
+                        query=query[:100], tier="cold", results=len(results),
+                        duration_ms=int((time.time() - _start) * 1000))
+            return results
+        # FTS 无结果，尝试向量兜底 + KG v2
+        vec_items = await self._mm._hybrid_vec_search(query, recall_limit, is_raw=is_raw_filter, scope=scope, query_vec=query_vec)
+        if vec_items:
+            results = vec_items[:k]
+            if kg_v2_items and len(results) < k:
+                results.extend(kg_v2_items[:k - len(results)])
+            logger.info("memory.search", event="memory_search",
+                        query=query[:100], tier="cold+vec_fallback", results=len(results),
+                        duration_ms=int((time.time() - _start) * 1000))
+            return results
+        # FTS + 向量均无结果, 仅返回 KG v2 事实 (若存在)
+        if kg_v2_items:
+            results = kg_v2_items[:k]
+            logger.info("memory.search", event="memory_search",
+                        query=query[:100], tier="cold+kg_v2_only", results=len(results),
+                        duration_ms=int((time.time() - _start) * 1000))
+            return results
+        logger.info("memory.search", event="memory_search",
+                    query=query[:100], tier="cold", results=0,
+                    duration_ms=int((time.time() - _start) * 1000))
+        return []
+
+    async def _maybe_lazy_migrate(self) -> None:
+        """懒迁移：concept_nodes 数 < episodic_memories 数时触发（5分钟节流）。"""
+        if not self._mm.concept_graph:
+            return
+        if time.time() - self._mm._last_lazy_migrate_ts > 300:  # 5分钟
             try:
-                related_names = await self._mm.kg.recall_by_query(query, limit=recall_limit)
-                if not related_names:
-                    return []
-                return await self._mm.memory.search_memories_by_entities_scoped(
-                    related_names, limit=recall_limit, scope=scope)
+                self._mm._last_lazy_migrate_ts = time.time()
+                ep_count = await self._mm.memory.get_episodic_count()
+                node_count = await self._mm.spreading_engine.db.get_node_count()
+                if node_count < ep_count:
+                    unmigrated = await self._mm.memory.get_unmigrated_memories(limit=50)
+                    if unmigrated:
+                        await self._mm.concept_graph.lazy_migrate(unmigrated, limit=50)
+                        # G13: lazy_migrate 写入新 concept_nodes，失效 recall 缓存
+                        # 避免命中陈旧 (query, top_k) 缓存而遗漏新迁移节点（TTL 最长 5 分钟）
+                        _engine = getattr(self._mm, 'spreading_engine', None)
+                        if _engine:
+                            _engine.clear_cache()
             except Exception as e:
-                logger.debug("memory.kg_recall_failed", error=str(e))
+                logger.debug("memory.lazy_migrate_failed", error=str(e))
+
+    async def _recall_kg(self, query: str, recall_limit: int, scope: Any,
+                         use_kg: bool) -> list[dict]:
+        """KG 召回（KG 可用时启用第三路，失败/空结果自动降级为两路融合）。"""
+        if not self._mm.kg or not use_kg:
+            return []
+        try:
+            related_names = await self._mm.kg.recall_by_query(query, limit=recall_limit)
+            if not related_names:
                 return []
+            return await self._mm.memory.search_memories_by_entities_scoped(
+                related_names, limit=recall_limit, scope=scope)
+        except Exception as e:
+            logger.debug("memory.kg_recall_failed", error=str(e))
+            return []
 
-        # ── 子chunk召回协程（父子Chunk RAG优化）──
-        async def _child_recall() -> list[dict]:
-            """子chunk FTS+Vec并行检索 → 映射到父chunk记录。"""
-            import config as _child_cfg
-            if not getattr(_child_cfg, 'PARENT_CHILD_CHUNK_ENABLED', True):
-                return []
-            try:
-                # 子chunk FTS + Vec 并行
-                async def _child_vec_recall() -> list[int]:
-                    if not self._mm.vec or not self._mm.vec.enabled:
-                        return []
-                    # 根因修复（2026-07-29）：移除外层 3s wait_for 超时（治标）。
-                    # embed client 已配 connect=15s + max_retries=0 + 共享 httpx client，
-                    # 内层 embed 有 10s 单次超时 + 重试保护。原外层 3s 必然先于内层 10s 触发，
-                    # 导致 embed 重试机制完全失效，网络抖动时子chunk向量召回被错误跳过。
-                    # P1-4: 复用上层预计算的 query_vec（多查询场景批量 embed），
-                    # 未提供时回退独立 embed
-                    _qv = query_vec
-                    if _qv is None:
-                        query_vectors = await self._mm.vec.embed([query])
-                        _qv = query_vectors[0] if query_vectors else []
-                    if not _qv:
-                        return []
-                    results = await self._mm.vec.search_child(_qv, top_k=recall_limit)
-                    if not results:
-                        return []
-                    child_ids = [r["id"] for r in results]
-                    return await self._mm.memory.get_child_parent_ids(child_ids)
-
-                # return_exceptions=True：两个独立检索任务互不取消。
-                # 修复 RuntimeWarning: coroutine '_child_vec_recall' was never awaited：
-                # 原实现 search_child_fts 抛异常时 gather 立即取消 _child_vec_recall，
-                # 若 _child_vec_recall 尚未被 event loop 调度，coroutine 被创建后
-                # 未 await 即被丢弃 → Python RuntimeWarning + 记忆检索逻辑未执行。
-                # return_exceptions=True 让两个 task 都完成执行，异常作为结果返回。
-                #
-                # 协程泄漏防御：先创建协程对象再传入 gather。
-                # 若 gather 因参数非 awaitable（如测试中 mock 返回 MagicMock）在
-                # 同步阶段抛异常，已创建的协程未被调度 → 手动 close 避免 RuntimeWarning。
-                _child_fts_coro = self._mm.memory.search_child_fts(query, recall_limit)
-                _child_vec_coro = _child_vec_recall()
-                try:
-                    _child_results = await asyncio.gather(
-                        _child_fts_coro,
-                        _child_vec_coro,
-                        return_exceptions=True,
-                    )
-                except Exception:
-                    # gather 同步阶段失败（参数非 awaitable），
-                    # 关闭未调度的协程避免 "was never awaited" 警告
-                    for _c in (_child_fts_coro, _child_vec_coro):
-                        if asyncio.iscoroutine(_c):
-                            _c.close()
-                    raise
-                # 分别处理异常：一个检索通道失败不影响另一个的结果
-                if isinstance(_child_results[0], Exception):
-                    logger.debug("memory.child_fts_failed",
-                                 error=f"{type(_child_results[0]).__name__}: {_child_results[0]}")
-                    child_fts_results = []
-                else:
-                    child_fts_results = _child_results[0]
-                if isinstance(_child_results[1], Exception):
-                    logger.debug("memory.child_vec_recall_failed",
-                                 error=f"{type(_child_results[1]).__name__}: {_child_results[1]}")
-                    child_vec_parent_ids = []
-                else:
-                    child_vec_parent_ids = _child_results[1]
-
-                # 合并 parent_ids（去重）
-                parent_ids: set[int] = set()
-                for r in child_fts_results:
-                    parent_ids.add(r["parent_id"])
-                for pid in child_vec_parent_ids:
-                    parent_ids.add(pid)
-
-                if not parent_ids:
+    async def _recall_child(self, query: str, recall_limit: int, scope: Any,
+                            query_vec: list[float] | None) -> list[dict]:
+        """子chunk FTS+Vec并行检索 → 映射到父chunk记录。"""
+        import config as _child_cfg
+        if not getattr(_child_cfg, 'PARENT_CHILD_CHUNK_ENABLED', True):
+            return []
+        try:
+            # 子chunk FTS + Vec 并行
+            async def _child_vec_recall() -> list[int]:
+                if not self._mm.vec or not self._mm.vec.enabled:
                     return []
+                # 根因修复（2026-07-29）：移除外层 3s wait_for 超时（治标）。
+                # embed client 已配 connect=15s + max_retries=0 + 共享 httpx client，
+                # 内层 embed 有 10s 单次超时 + 重试保护。原外层 3s 必然先于内层 10s 触发，
+                # 导致 embed 重试机制完全失效，网络抖动时子chunk向量召回被错误跳过。
+                # P1-4: 复用上层预计算的 query_vec（多查询场景批量 embed），
+                # 未提供时回退独立 embed
+                _qv = query_vec
+                if _qv is None:
+                    query_vectors = await self._mm.vec.embed([query])
+                    _qv = query_vectors[0] if query_vectors else []
+                if not _qv:
+                    return []
+                results = await self._mm.vec.search_child(_qv, top_k=recall_limit)
+                if not results:
+                    return []
+                child_ids = [r["id"] for r in results]
+                return await self._mm.memory.get_child_parent_ids(child_ids)
 
-                # 获取父chunk完整记录
-                parent_mems = await self._mm.memory.get_memories_by_ids(list(parent_ids))
-                # scope 后过滤：子chunk向量检索是全局的，需确保父记忆不跨用户泄露
-                parent_mems = [pm for pm in parent_mems
-                               if pm.get("user_id") == scope.user_id
-                               and pm.get("agent_id") == scope.agent_id]
-                for pm in parent_mems:
-                    pm["child_recall"] = True
-                return parent_mems
-            except Exception as e:
-                logger.debug("memory.child_recall_failed", error=str(e))
+            # return_exceptions=True：两个独立检索任务互不取消。
+            # 修复 RuntimeWarning: coroutine '_child_vec_recall' was never awaited：
+            # 原实现 search_child_fts 抛异常时 gather 立即取消 _child_vec_recall，
+            # 若 _child_vec_recall 尚未被 event loop 调度，coroutine 被创建后
+            # 未 await 即被丢弃 → Python RuntimeWarning + 记忆检索逻辑未执行。
+            # return_exceptions=True 让两个 task 都完成执行，异常作为结果返回。
+            #
+            # 协程泄漏防御：先创建协程对象再传入 gather。
+            # 若 gather 因参数非 awaitable（如测试中 mock 返回 MagicMock）在
+            # 同步阶段抛异常，已创建的协程未被调度 → 手动 close 避免 RuntimeWarning。
+            _child_fts_coro = self._mm.memory.search_child_fts(query, recall_limit)
+            _child_vec_coro = _child_vec_recall()
+            try:
+                _child_results = await asyncio.gather(
+                    _child_fts_coro,
+                    _child_vec_coro,
+                    return_exceptions=True,
+                )
+            except Exception:
+                # gather 同步阶段失败（参数非 awaitable），
+                # 关闭未调度的协程避免 "was never awaited" 警告
+                for _c in (_child_fts_coro, _child_vec_coro):
+                    if asyncio.iscoroutine(_c):
+                        _c.close()
+                raise
+            # 分别处理异常：一个检索通道失败不影响另一个的结果
+            if isinstance(_child_results[0], Exception):
+                logger.debug("memory.child_fts_failed",
+                             error=f"{type(_child_results[0]).__name__}: {_child_results[0]}")
+                child_fts_results = []
+            else:
+                child_fts_results = _child_results[0]
+            if isinstance(_child_results[1], Exception):
+                logger.debug("memory.child_vec_recall_failed",
+                             error=f"{type(_child_results[1]).__name__}: {_child_results[1]}")
+                child_vec_parent_ids = []
+            else:
+                child_vec_parent_ids = _child_results[1]
+
+            # 合并 parent_ids（去重）
+            parent_ids: set[int] = set()
+            for r in child_fts_results:
+                parent_ids.add(r["parent_id"])
+            for pid in child_vec_parent_ids:
+                parent_ids.add(pid)
+
+            if not parent_ids:
                 return []
 
-        # 每通道独立计时（并行执行，各通道耗时互不影响，日志定位最慢通道）
-        async def _timed(channel: str, coro: Any) -> Any:
-            _ch_st = time.time()
-            try:
-                return await coro
-            finally:
-                _stage_log(f"channel_{channel}", _ch_st, query)
+            # 获取父chunk完整记录
+            parent_mems = await self._mm.memory.get_memories_by_ids(list(parent_ids))
+            # scope 后过滤：子chunk向量检索是全局的，需确保父记忆不跨用户泄露
+            parent_mems = [pm for pm in parent_mems
+                           if pm.get("user_id") == scope.user_id
+                           and pm.get("agent_id") == scope.agent_id]
+            for pm in parent_mems:
+                pm["child_recall"] = True
+            return parent_mems
+        except Exception as e:
+            logger.debug("memory.child_recall_failed", error=str(e))
+            return []
 
+    async def _timed(self, channel: str, coro: Any, query: str) -> Any:
+        """每通道独立计时（并行执行，各通道耗时互不影响，日志定位最慢通道）。"""
+        _ch_st = time.time()
+        try:
+            return await coro
+        finally:
+            _stage_log(f"channel_{channel}", _ch_st, query)
+
+    async def _run_multi_recall(self, query: str, recall_limit: int, scope: Any,
+                                is_raw_filter: Any, query_vec: list[float] | None,
+                                candidate_ids: Any, use_kg: bool) -> tuple:
+        """温/热用户: 并行执行 FTS、向量、KG、子chunk、扩散、实体、KG v2 七路召回。"""
         logger.info("memory.gather_start", query=query[:30])
 
         fts_items, vec_items, kg_items, child_items, spread_items, entity_items, kg_v2_items = await asyncio.gather(
-            _timed("fts", self._mm._hybrid_fts_search_scoped(query, recall_limit, scope, is_raw_filter)),
-            _timed("vec", self._mm._hybrid_vec_search(query, recall_limit, candidate_ids=candidate_ids, is_raw=is_raw_filter, scope=scope, query_vec=query_vec)),
-            _timed("kg", _kg_recall()),
-            _timed("child", _child_recall()),
-            _timed("spreading", self._mm._spreading_recall(query, recall_limit, scope=scope)),
-            _timed("entity", self._mm._entity_recall(query, scope, recall_limit)),
-            _timed("kg_v2", _kg_v2_recall()),
+            self._timed("fts", self._mm._hybrid_fts_search_scoped(query, recall_limit, scope, is_raw_filter), query),
+            self._timed("vec", self._mm._hybrid_vec_search(query, recall_limit, candidate_ids=candidate_ids, is_raw=is_raw_filter, scope=scope, query_vec=query_vec), query),
+            self._timed("kg", self._recall_kg(query, recall_limit, scope, use_kg), query),
+            self._timed("child", self._recall_child(query, recall_limit, scope, query_vec), query),
+            self._timed("spreading", self._mm._spreading_recall(query, recall_limit, scope=scope), query),
+            self._timed("entity", self._mm._entity_recall(query, scope, recall_limit), query),
+            self._timed("kg_v2", self._recall_kg_v2(query, recall_limit), query),
         )
+        return fts_items, vec_items, kg_items, child_items, spread_items, entity_items, kg_v2_items
 
+    async def _resolve_fallback_or_single_channel(
+            self, fts_items: list, vec_items: list, kg_items: list, child_items: list,
+            spread_items: list, entity_items: list, kg_v2_items: list,
+            query: str, k: int, tier: str, _start: float, candidate_ids: Any,
+            recall_limit: int, scope: Any,
+            query_vec: list[float] | None) -> list[dict] | None:
+        """空通道自动剔除 + 单路短路返回。
+
+        七路都空则 fallback 查原始记忆（蒸馏失败时兜底）；仅一路（或仅 KG v2）
+        有结果时直接返回；否则返回 None 交给 RRF 融合。
+        """
         # 空通道自动剔除: 七路都空则 fallback 查原始记忆（蒸馏失败时兜底）
         if not fts_items and not vec_items and not kg_items and not child_items and not spread_items and not entity_items and not kg_v2_items:
             # Fallback: 用相同 FTS+Vec 检索，但 include_raw（is_raw=0 和 is_raw=1 都返回）
@@ -496,8 +540,15 @@ class RetrievalEngine:
                         query=query[:100], tier=tier, results=len(results),
                         duration_ms=int((time.time() - _start) * 1000))
             return results
+        return None
 
-        # ── 加权 RRF 融合（六路，空通道自动剔除） ──
+    async def _fuse_and_rank(self, query: str, k: int, use_reranker: bool, tier: str,
+                             is_warm: bool, rerank_limit: int,
+                             fts_items: list, vec_items: list, kg_items: list,
+                             child_items: list, spread_items: list, entity_items: list,
+                             kg_v2_items: list, scope: Any,
+                             _start: float) -> list[dict]:
+        """加权 RRF 融合（多路，空通道自动剔除）+ Entity Boost + Reranker 精排。"""
         try:
             import config as _cfg
             warm_vec_weight = getattr(_cfg, "MEMORY_WARM_VEC_WEIGHT", 0.2)
@@ -1171,6 +1222,45 @@ class RetrievalEngine:
                 await self._mm._query_cache.put(_cache_key, results)
             return results
 
+        # 查询变换 + 多查询检索
+        results = await self._run_query_search(query, context, k, scope, config)
+
+        # 降级：纯向量检索
+        if not results:
+            __st = time.time()
+            results = await self._mm._vector_fallback_search(query, k, scope=scope)
+            _stage_log("vector_fallback", __st, query)
+
+        # 注：移除 importance fallback（同上，会注入"重要但无关"的记忆）
+        # 空结果如实返回空，由模型调 recall 工具或如实说"不记得"
+
+        # FSRS 打分 + 综合评分 + CRAG 评估重试 + 最终排序截断
+        results = await self._score_and_rank_results(
+            query, results, k, config, intent, _retry_attempted, scope)
+
+        # 话题触发器 + KG 增强 + 去重 + 统一截断 + 最低分过滤
+        results = await self._postprocess_results(
+            query, results, k, config, intent, apply_min_score, scope)
+
+        # 写入缓存（P0: 使用 user_id 隔离的 cache key）
+        # 治本修复（2026-08-05）：put 改 fire-and-forget。
+        # 根因：_query_cache.put 内部调 embed API（网络 1-2s），await 阻塞检索返回。
+        # 缓存写入不影响当前检索结果，无需让用户等待。
+        if getattr(config, 'QUERY_CACHE_ENABLED', True) and results:
+            _spawn(self._mm._query_cache.put(_cache_key, results))
+
+        # 检索命中后批量递增 access_count（passive_use）
+        # 修复：此前 increment_access_count 从未被调用，导致记忆永远无法进入 PERMANENT 状态
+        # 这里使用 fire-and-forget 方式，不阻塞检索返回
+        if results:
+            hit_ids = [r.get("id") for r in results if r.get("id")]
+            if hit_ids:
+                _spawn(self._mm._batch_touch_memories(hit_ids))
+        return results
+
+    async def _run_query_search(self, query: str, context: str, k: int,
+                                scope: Any | None, config) -> list[dict]:
+        """查询变换 + 多查询/单查询检索。"""
         # 查询变换：改写 + 扩展
         __st = time.time()
         queries = await self._mm._transform_queries(query, context)
@@ -1182,28 +1272,26 @@ class RetrievalEngine:
         if len(queries) > 1:
             if getattr(config, "RETRIEVAL_PARALLEL_SEARCH", True):
                 __st = time.time()
-                all_results = await self._mm._multi_query_parallel_search(queries, query, k, scope=scope)
+                all_results = await self._mm._multi_query_parallel_search(
+                    queries, query, k, scope=scope)
                 _stage_log("multi_query_search", __st, query)
             else:
                 __st = time.time()
-                all_results = await self._mm._multi_query_serial_search(queries, k, scope=scope)
+                all_results = await self._mm._multi_query_serial_search(
+                    queries, k, scope=scope)
                 _stage_log("multi_query_search", __st, query)
         else:
             # 单查询直接混合检索（与包装层行为一致：use_reranker/use_kg 默认 True，
             # 闲聊型查询同样走全量 Reranker + KG + CRAG，保证主战场记忆检索质量）
             all_results = await self._mm.retrieve_memories_hybrid(
                 query, k=k, scope=scope)
-        results = all_results
+        return all_results
 
-        # 降级：纯向量检索
-        if not results:
-            __st = time.time()
-            results = await self._mm._vector_fallback_search(query, k, scope=scope)
-            _stage_log("vector_fallback", __st, query)
-
-        # 注：移除 importance fallback（同上，会注入"重要但无关"的记忆）
-        # 空结果如实返回空，由模型调 recall 工具或如实说"不记得"
-
+    async def _score_and_rank_results(self, query: str, results: list[dict],
+                                       k: int, config, intent: str,
+                                       _retry_attempted: bool,
+                                       scope: Any | None) -> list[dict]:
+        """FSRS 打分 + 综合评分 + CRAG 评估重试 + 最终排序截断。"""
         # 流体记忆评分（艾宾浩斯遗忘曲线 + 访问强化）
         __st = time.time()
         results = await self._mm._apply_fsrs_scoring(results)
@@ -1235,8 +1323,10 @@ class RetrievalEngine:
                     query, k=retry_k, use_reranker=True, use_kg=True, scope=scope)
                 if retry_results:
                     retry_results = await self._mm._apply_fsrs_scoring(retry_results)
-                    await self._mm._compute_final_scores(query, retry_results, config, query_entities)
-                    retry_results.sort(key=lambda x: x.get("final_score", 0), reverse=True)
+                    await self._mm._compute_final_scores(
+                        query, retry_results, config, query_entities)
+                    retry_results.sort(
+                        key=lambda x: x.get("final_score", 0), reverse=True)
                     results = retry_results[:k]
                     # 重新评估
                     reassessment = self._mm._assessor.assess(query, results)
@@ -1248,7 +1338,13 @@ class RetrievalEngine:
 
         results.sort(key=lambda x: x.get("final_score", 0), reverse=True)
         results = results[:k]
+        return results
 
+    async def _postprocess_results(self, query: str, results: list[dict],
+                                   k: int, config, intent: str,
+                                   apply_min_score: bool,
+                                   scope: Any | None) -> list[dict]:
+        """话题触发器 + KG 增强 + 去重 + 统一截断 + 最低分过滤。"""
         # 主动检索 A：话题触发器
         # 从 query 抽取 top-N 话题关键词，对每个词做轻量 FTS 检索，
         # 把"主题相关但未被主路命中"的记忆补充进来，扩大主动联想。
@@ -1284,21 +1380,6 @@ class RetrievalEngine:
                             query=query[:60],
                             before=_before, after=len(results),
                             min_score=_min_score)
-
-        # 写入缓存（P0: 使用 user_id 隔离的 cache key）
-        # 治本修复（2026-08-05）：put 改 fire-and-forget。
-        # 根因：_query_cache.put 内部调 embed API（网络 1-2s），await 阻塞检索返回。
-        # 缓存写入不影响当前检索结果，无需让用户等待。
-        if getattr(config, 'QUERY_CACHE_ENABLED', True) and results:
-            _spawn(self._mm._query_cache.put(_cache_key, results))
-
-        # 检索命中后批量递增 access_count（passive_use）
-        # 修复：此前 increment_access_count 从未被调用，导致记忆永远无法进入 PERMANENT 状态
-        # 这里使用 fire-and-forget 方式，不阻塞检索返回
-        if results:
-            hit_ids = [r.get("id") for r in results if r.get("id")]
-            if hit_ids:
-                _spawn(self._mm._batch_touch_memories(hit_ids))
         return results
 
     async def _try_temporal_search(self, query: str, k: int,

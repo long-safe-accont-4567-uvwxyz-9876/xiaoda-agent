@@ -63,40 +63,8 @@ class MemoryEncoder:
         _t0 = time.time()
         emotion = context.get("emotion", {}).get("primary", "")
 
-        def _prep_encode():
-            """单线程完成所有同步预处理：摘要→安全过滤→安全扫描→重要性→规则提取。
-
-            返回 (summary, validation, threat, importance, rule_matches,
-                   gen_secs, sec_secs)；validation/threat 非空时后续字段为 None。
-            """
-            _s0 = time.time()
-            summary = self._mm._generate_summary(exchanges)
-            _s1 = time.time()
-            validation = validate_memory_content(summary)
-            if validation:
-                return summary, validation, None, 0.0, [], _s1 - _s0, 0.0
-            _s2 = time.time()
-            from security.security import SecurityFilter
-            security = self._mm._security_filter or SecurityFilter()
-            threat = security.scan_threats(summary, scope="strict")
-            _s3 = time.time()
-            if not threat.is_safe and threat.action == "block":
-                return summary, validation, threat, 0.0, [], _s1 - _s0, _s3 - _s2
-            importance = self._mm._estimate_importance(exchanges, context)
-            # 规则提取增强重要性
-            user_msg = ""
-            assistant_msg = ""
-            for msg in exchanges[-6:]:
-                if msg.get("role") == "user":
-                    user_msg += msg.get("content", "") + " "
-                elif msg.get("role") == "assistant":
-                    assistant_msg += msg.get("content", "") + " "
-            rule_extractor = RuleBasedMemoryExtractor()
-            rule_matches = rule_extractor.extract(user_msg, assistant_msg)
-            return summary, validation, threat, importance, rule_matches, _s1 - _s0, _s3 - _s2
-
         summary, validation, threat_result, importance, rule_matches, _gen_secs, _sec_secs = \
-            await asyncio.to_thread(_prep_encode)
+            await asyncio.to_thread(self._prep_encode_sync, exchanges, context)
         _t1 = time.time()
         # 诊断：to_thread 总耗时（含排队）vs 各步骤纯执行时间
         # 若 total >> gen+sec，说明 to_thread 线程池排队（线程池被并发检索等占用）
@@ -181,158 +149,213 @@ class MemoryEncoder:
             # 长时间占用共享 aiosqlite 连接，导致其他后台任务（flush_costs/auto_note/extract_instincts）
             # 的 DB 操作排队等待 45s+ 超时。episodic memory 已写入，索引层是优化层，可异步补建。
             # 改为 create_task 后，编码主流程立即继续到 entity/distill/save_state 并快速返回，释放 DB 连接。
-            async def _indexing_task() -> None:
-                _it0 = time.time()
-                # 1. vec_upsert（15s 超时）
-                if self._mm.vec and summary:
-                    try:
-                        await asyncio.wait_for(self._mm.vec.upsert(mem_id, summary), timeout=15.0)
-                    except asyncio.TimeoutError:
-                        logger.error("degradation_triggered memory.encode_vec_upsert_timeout "
-                                     "hint=vec_upsert 15s 超时，跳过向量索引（episodic 已保存）")
-                    except Exception as e:
-                        logger.warning("memory.initial_vec_upsert_failed", error=str(e))
-                _it1 = time.time()
-                if _it1 - _it0 > 3:
-                    logger.warning("memory.encode_slow_step", step="vec_upsert",
-                                   elapsed_ms=int((_it1 - _it0) * 1000))
-
-                # 2. concept_graph 双写（15s 超时）
-                if self._mm.concept_graph and mem_id:
-                    try:
-                        await asyncio.wait_for(
-                            self._mm.concept_graph.remember(summary, source_mem_id=mem_id),
-                            timeout=15.0)
-                    except asyncio.TimeoutError:
-                        logger.error("degradation_triggered memory.encode_concept_timeout "
-                                     "hint=concept_graph 15s 超时，跳过（lazy_migrate 可补）")
-                    except Exception as e:
-                        logger.warning("memory.concept_dual_write_failed", error=str(e))
-                _it2 = time.time()
-                if _it2 - _it1 > 3:
-                    logger.warning("memory.encode_slow_step", step="concept_graph",
-                                   elapsed_ms=int((_it2 - _it1) * 1000))
-
-                # 3. 父子Chunk: 生成并写入子chunk（整体 25s 超时保护）
-                import config as _cfg
-                if getattr(_cfg, 'PARENT_CHILD_CHUNK_ENABLED', True):
-                    try:
-                        async def _do_children():
-                            children = await asyncio.to_thread(
-                                self._mm._split_into_children, exchanges, mem_id, summary)
-                            if not children or not self._mm.vec:
-                                return
-                            indexed = await asyncio.wait_for(
-                                self._mm._insert_indexed_children(mem_id, children, importance),
-                                timeout=20.0,
-                            )
-                            if indexed:
-                                logger.debug("memory.child_chunks_created",
-                                             parent_id=mem_id, count=len(children))
-                        await asyncio.wait_for(_do_children(), timeout=25.0)
-                    except asyncio.TimeoutError:
-                        logger.error("degradation_triggered memory.encode_children_section_timeout "
-                                     "hint=子chunk生成+写入 25s 整体超时，跳过（episodic 已保存）")
-                    except Exception as e:
-                        logger.warning("memory.child_chunk_failed", error=str(e))
-                _it3 = time.time()
-                logger.info("memory.indexing_done",
-                            total_ms=int((_it3 - _it0) * 1000), mem_id=mem_id)
-
-            _idx_task = asyncio.create_task(_indexing_task())
+            _idx_task = asyncio.create_task(
+                self._indexing_task(mem_id, summary, importance, exchanges))
             _bg_tasks.add(_idx_task)
             _idx_task.add_done_callback(_bg_tasks.discard)
             _idx_task.add_done_callback(_log_task_exception)
 
             # ── mem0 SPEC: 异步触发实体提取+链接 ──
-            if self._mm.entity_extractor and self._mm.entity_store:
-                try:
-                    _entity_task = asyncio.create_task(
-                        self._mm._extract_and_link_entities(mem_id, summary, scope)
-                    )
-                    _bg_tasks.add(_entity_task)
-                    _entity_task.add_done_callback(_bg_tasks.discard)
-                    def _log_entity_exception(t: asyncio.Task) -> None:
-                        if t.cancelled():
-                            return
-                        exc = t.exception()
-                        if exc:
-                            logger.warning("memory.entity_async_failed", error=str(exc))
-                    _entity_task.add_done_callback(_log_entity_exception)
-                except Exception as e:
-                    logger.debug("memory.entity_spawn_failed", error=str(e))
+            self._schedule_entity_extraction(mem_id, summary, scope)
 
             # ── mem0 SPEC: 异步触发蒸馏（原始记忆 → is_raw=0 提炼知识）──
-            full_text_parts = []
-            for msg in exchanges[-6:]:
-                role = msg.get("role", "")
-                content = msg.get("content", "")
-                if role == "user" and content:
-                    full_text_parts.append(f"你说了：{content}")
-                elif role == "assistant" and content:
-                    full_text_parts.append(f"我回应：{content}")
-            full_text = "；".join(full_text_parts)[:3000]
+            self._schedule_distill(mem_id, summary, scope, importance, emotion, exchanges)
 
-            if self._mm.distiller:
-                try:
-                    _distill_task = asyncio.create_task(
-                        self._mm._distill_to_knowledge(
-                            mem_id, summary, scope, importance, emotion,
-                            full_text=full_text
-                        )
-                    )
-                    _bg_tasks.add(_distill_task)
-                    _distill_task.add_done_callback(_bg_tasks.discard)
-                    def _log_distill_exception(t: asyncio.Task) -> None:
-                        if t.cancelled():
-                            return
-                        exc = t.exception()
-                        if exc:
-                            logger.warning("memory.distill_async_failed", error=str(exc))
-                    _distill_task.add_done_callback(_log_distill_exception)
-                except Exception as e:
-                    logger.debug("memory.distill_spawn_failed", error=str(e))
+            await self._finalize_encode(mem_id, summary, importance, emotion, exchanges)
+        except Exception as e:
+            logger.warning("memory.encode_failed", error=str(e))
 
-            self._mm._last_encode_time = time.time()
-            logger.info("memory.encoded", summary=summary[:80], importance=importance, is_raw=1)
+        self._schedule_kg_extraction(summary)
 
-            # 冷启动路由: 新记忆写入后失效计数缓存, 下次检索立即感知档位变化
-            self._mm.invalidate_memory_count_cache()
+    def _prep_encode_sync(self, exchanges: list[dict], context: dict) -> tuple:
+        """单线程完成所有同步预处理：摘要→安全过滤→安全扫描→重要性→规则提取。
 
-            if self._mm._query_cache:
-                # P1-6: invalidate 改 fire-and-forget（原 await 会与持锁的 get/put
-                # 竞争：get/put 在 await embed（最长 1.5s）时持锁，写路径被拖慢。
-                # 缓存失效不依赖写入结果，无需阻塞写入流程）
-                _spawn(self._mm._query_cache.invalidate())
+        返回 (summary, validation, threat, importance, rule_matches,
+               gen_secs, sec_secs)；validation/threat 非空时后续字段为 None。
+        """
+        _s0 = time.time()
+        summary = self._mm._generate_summary(exchanges)
+        _s1 = time.time()
+        validation = validate_memory_content(summary)
+        if validation:
+            return summary, validation, None, 0.0, [], _s1 - _s0, 0.0
+        _s2 = time.time()
+        from security.security import SecurityFilter
+        security = self._mm._security_filter or SecurityFilter()
+        threat = security.scan_threats(summary, scope="strict")
+        _s3 = time.time()
+        if not threat.is_safe and threat.action == "block":
+            return summary, validation, threat, 0.0, [], _s1 - _s0, _s3 - _s2
+        importance = self._mm._estimate_importance(exchanges, context)
+        # 规则提取增强重要性
+        user_msg = ""
+        assistant_msg = ""
+        for msg in exchanges[-6:]:
+            if msg.get("role") == "user":
+                user_msg += msg.get("content", "") + " "
+            elif msg.get("role") == "assistant":
+                assistant_msg += msg.get("content", "") + " "
+        rule_extractor = RuleBasedMemoryExtractor()
+        rule_matches = rule_extractor.extract(user_msg, assistant_msg)
+        return summary, validation, threat, importance, rule_matches, _s1 - _s0, _s3 - _s2
 
-            # G13: 失效扩散激活 recall 缓存（concept_nodes 已写入，避免返回旧结果）
-            if getattr(self._mm, 'spreading_engine', None) and self._mm.spreading_engine:
-                self._mm.spreading_engine.clear_cache()
-
-            # 同步文件写入移到线程池（USB 盘 I/O 可能慢）
-            await asyncio.to_thread(self._mm._save_state_json, summary, importance, emotion)
-
-            # fire-and-forget 后台 LLM 结构化提取（不阻塞主流程）
-            # 用 GLM-4-9B-0414 提取实体/事件/决策/偏好，完成后更新记忆条目
+    async def _indexing_task(self, mem_id: int, summary: str,
+                             importance: float, exchanges: list[dict]) -> None:
+        """索引层 fire-and-forget 任务：vec_upsert → concept_graph → 父子 chunk。"""
+        _it0 = time.time()
+        # 1. vec_upsert（15s 超时）
+        if self._mm.vec and summary:
             try:
-                _enrich_task = asyncio.create_task(
-                    self._mm._enrich_memory_async(mem_id, exchanges)
+                await asyncio.wait_for(self._mm.vec.upsert(mem_id, summary), timeout=15.0)
+            except asyncio.TimeoutError:
+                logger.error("degradation_triggered memory.encode_vec_upsert_timeout "
+                             "hint=vec_upsert 15s 超时，跳过向量索引（episodic 已保存）")
+            except Exception as e:
+                logger.warning("memory.initial_vec_upsert_failed", error=str(e))
+        _it1 = time.time()
+        if _it1 - _it0 > 3:
+            logger.warning("memory.encode_slow_step", step="vec_upsert",
+                           elapsed_ms=int((_it1 - _it0) * 1000))
+
+        # 2. concept_graph 双写（15s 超时）
+        if self._mm.concept_graph and mem_id:
+            try:
+                await asyncio.wait_for(
+                    self._mm.concept_graph.remember(summary, source_mem_id=mem_id),
+                    timeout=15.0)
+            except asyncio.TimeoutError:
+                logger.error("degradation_triggered memory.encode_concept_timeout "
+                             "hint=concept_graph 15s 超时，跳过（lazy_migrate 可补）")
+            except Exception as e:
+                logger.warning("memory.concept_dual_write_failed", error=str(e))
+        _it2 = time.time()
+        if _it2 - _it1 > 3:
+            logger.warning("memory.encode_slow_step", step="concept_graph",
+                           elapsed_ms=int((_it2 - _it1) * 1000))
+
+        # 3. 父子Chunk: 生成并写入子chunk（整体 25s 超时保护）
+        import config as _cfg
+        if getattr(_cfg, 'PARENT_CHILD_CHUNK_ENABLED', True):
+            try:
+                async def _do_children():
+                    children = await asyncio.to_thread(
+                        self._mm._split_into_children, exchanges, mem_id, summary)
+                    if not children or not self._mm.vec:
+                        return
+                    indexed = await asyncio.wait_for(
+                        self._mm._insert_indexed_children(mem_id, children, importance),
+                        timeout=20.0,
+                    )
+                    if indexed:
+                        logger.debug("memory.child_chunks_created",
+                                     parent_id=mem_id, count=len(children))
+                await asyncio.wait_for(_do_children(), timeout=25.0)
+            except asyncio.TimeoutError:
+                logger.error("degradation_triggered memory.encode_children_section_timeout "
+                             "hint=子chunk生成+写入 25s 整体超时，跳过（episodic 已保存）")
+            except Exception as e:
+                logger.warning("memory.child_chunk_failed", error=str(e))
+        _it3 = time.time()
+        logger.info("memory.indexing_done",
+                    total_ms=int((_it3 - _it0) * 1000), mem_id=mem_id)
+
+    def _schedule_entity_extraction(self, mem_id: int, summary: str, scope: Any) -> None:
+        """异步调度实体提取+链接（fire-and-forget）。"""
+        if self._mm.entity_extractor and self._mm.entity_store:
+            try:
+                _entity_task = asyncio.create_task(
+                    self._mm._extract_and_link_entities(mem_id, summary, scope)
                 )
-                _bg_tasks.add(_enrich_task)
-                _enrich_task.add_done_callback(_bg_tasks.discard)
-                def _log_enrich_exception(t: asyncio.Task) -> None:
+                _bg_tasks.add(_entity_task)
+                _entity_task.add_done_callback(_bg_tasks.discard)
+                def _log_entity_exception(t: asyncio.Task) -> None:
                     if t.cancelled():
                         return
                     exc = t.exception()
                     if exc:
-                        logger.warning("memory.enrich_async_failed", error=str(exc))
-
-                _enrich_task.add_done_callback(_log_enrich_exception)
+                        logger.warning("memory.entity_async_failed", error=str(exc))
+                _entity_task.add_done_callback(_log_entity_exception)
             except Exception as e:
-                logger.debug("memory.enrich_spawn_failed", error=str(e))
-        except Exception as e:
-            logger.warning("memory.encode_failed", error=str(e))
+                logger.debug("memory.entity_spawn_failed", error=str(e))
 
+    def _schedule_distill(self, mem_id: int, summary: str, scope: Any,
+                          importance: float, emotion: str,
+                          exchanges: list[dict]) -> None:
+        """异步调度蒸馏（原始记忆 → is_raw=0 提炼知识，fire-and-forget）。"""
+        full_text_parts = []
+        for msg in exchanges[-6:]:
+            role = msg.get("role", "")
+            content = msg.get("content", "")
+            if role == "user" and content:
+                full_text_parts.append(f"你说了：{content}")
+            elif role == "assistant" and content:
+                full_text_parts.append(f"我回应：{content}")
+        full_text = "；".join(full_text_parts)[:3000]
+
+        if self._mm.distiller:
+            try:
+                _distill_task = asyncio.create_task(
+                    self._mm._distill_to_knowledge(
+                        mem_id, summary, scope, importance, emotion,
+                        full_text=full_text
+                    )
+                )
+                _bg_tasks.add(_distill_task)
+                _distill_task.add_done_callback(_bg_tasks.discard)
+                def _log_distill_exception(t: asyncio.Task) -> None:
+                    if t.cancelled():
+                        return
+                    exc = t.exception()
+                    if exc:
+                        logger.warning("memory.distill_async_failed", error=str(exc))
+                _distill_task.add_done_callback(_log_distill_exception)
+            except Exception as e:
+                logger.debug("memory.distill_spawn_failed", error=str(e))
+
+    async def _finalize_encode(self, mem_id: int, summary: str,
+                               importance: float, emotion: str,
+                               exchanges: list[dict]) -> None:
+        """编码收尾：更新状态、失效缓存、保存状态文件并调度 enrichment。"""
+        self._mm._last_encode_time = time.time()
+        logger.info("memory.encoded", summary=summary[:80], importance=importance, is_raw=1)
+
+        # 冷启动路由: 新记忆写入后失效计数缓存, 下次检索立即感知档位变化
+        self._mm.invalidate_memory_count_cache()
+
+        if self._mm._query_cache:
+            # P1-6: invalidate 改 fire-and-forget（原 await 会与持锁的 get/put
+            # 竞争：get/put 在 await embed（最长 1.5s）时持锁，写路径被拖慢。
+            # 缓存失效不依赖写入结果，无需阻塞写入流程）
+            _spawn(self._mm._query_cache.invalidate())
+
+        # G13: 失效扩散激活 recall 缓存（concept_nodes 已写入，避免返回旧结果）
+        if getattr(self._mm, 'spreading_engine', None) and self._mm.spreading_engine:
+            self._mm.spreading_engine.clear_cache()
+
+        # 同步文件写入移到线程池（USB 盘 I/O 可能慢）
+        await asyncio.to_thread(self._mm._save_state_json, summary, importance, emotion)
+
+        # fire-and-forget 后台 LLM 结构化提取（不阻塞主流程）
+        # 用 GLM-4-9B-0414 提取实体/事件/决策/偏好，完成后更新记忆条目
+        try:
+            _enrich_task = asyncio.create_task(
+                self._mm._enrich_memory_async(mem_id, exchanges)
+            )
+            _bg_tasks.add(_enrich_task)
+            _enrich_task.add_done_callback(_bg_tasks.discard)
+            def _log_enrich_exception(t: asyncio.Task) -> None:
+                if t.cancelled():
+                    return
+                exc = t.exception()
+                if exc:
+                    logger.warning("memory.enrich_async_failed", error=str(exc))
+
+            _enrich_task.add_done_callback(_log_enrich_exception)
+        except Exception as e:
+            logger.debug("memory.enrich_spawn_failed", error=str(e))
+
+    def _schedule_kg_extraction(self, summary: str) -> None:
+        """异步调度知识图谱提取（fire-and-forget）。"""
         if self._mm.kg and summary:
             # KG 提取改为 fire-and-forget：auto_extract_and_merge 内部调用 LLM（10s+8s 超时）
             # + DB merge 操作，直接 await 会阻塞主编码流程 10-20s。
