@@ -1462,11 +1462,13 @@ class DatabaseManager:
 
         columns 形如 {"salience": "salience REAL DEFAULT 0.5"}，键为列名，值为列定义。
         表名为内部硬编码调用，无用户输入，不存在 SQL 注入面。
+        用 execute_fetchall + row[1] 读取列名（兼容无 row_factory 的裸连接）。
         """
-        existing = {r["name"] for r in await self.fetch_all(f"PRAGMA table_info({table})")}
+        rows = await self._conn.execute_fetchall(f"PRAGMA table_info({table})")
+        existing = {row[1] for row in rows}
         for name, spec in columns.items():
             if name not in existing:
-                await self._conn.execute(f"ALTER TABLE {table} ADD COLUMN {spec}")
+                await self._conn.execute(f"ALTER TABLE {table} ADD COLUMN {name} {spec}")
 
     async def execute(self, sql: str, params: tuple = (), auto_commit: bool = True) -> int:
         """通用写语句。INSERT 返回 lastrowid，UPDATE/DELETE 返回 rowcount。"""
