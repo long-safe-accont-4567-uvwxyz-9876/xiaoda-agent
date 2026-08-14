@@ -49,7 +49,7 @@ class BehavioralMetrics:
         return "Failed (zombie?)"
 
 
-class ZombieDetector:
+class BehavioralZombieDetector:
     """Zombie 状态检测 — 端口在监听但行为异常"""
 
     def detect(self, metrics: BehavioralMetrics) -> list[str]:
@@ -71,7 +71,7 @@ class BehavioralHealthMonitor:
     def __init__(self) -> None:
         self._metrics = BehavioralMetrics()
         self._tool_history: deque = deque(maxlen=100)
-        self._zombie_detector = ZombieDetector()
+        self._zombie_detector = BehavioralZombieDetector()
 
     def record_tool_call(self, tool_name: str, success: bool) -> None:
         """记录工具调用"""

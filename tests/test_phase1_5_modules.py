@@ -329,16 +329,16 @@ class TestBehavioralHealth:
         assert "Degraded" in m.health_status or "Healthy" in m.health_status
 
     def test_zombie_detection(self):
-        from doctor.behavioral_health import BehavioralMetrics, ZombieDetector
+        from doctor.behavioral_health import BehavioralMetrics, BehavioralZombieDetector
         m = BehavioralMetrics(goal_completion_rate=0.05)
-        detector = ZombieDetector()
+        detector = BehavioralZombieDetector()
         alerts = detector.detect(m)
         assert any("Zombie" in a for a in alerts)
 
     def test_loop_detection(self):
-        from doctor.behavioral_health import BehavioralMetrics, ZombieDetector
+        from doctor.behavioral_health import BehavioralMetrics, BehavioralZombieDetector
         m = BehavioralMetrics(loop_signal=0.6)
-        detector = ZombieDetector()
+        detector = BehavioralZombieDetector()
         alerts = detector.detect(m)
         assert any("循环" in a for a in alerts)
 
