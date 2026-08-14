@@ -1451,7 +1451,27 @@ class DatabaseManager:
             logger.error("db.fetch_all.blocked_write_sql", sql=sql[:120])
             raise ValueError(f"fetch_all 仅允许只读查询(SELECT/PRAGMA)，收到：{normalized[:30]}")
         rows = await self._conn.execute_fetchall(sql, params)
-        return [dict(r) for r in rows]
+        try:
+            return [dict(r) for r in rows]
+        except (TypeError, ValueError) as e:
+            # 根因诊断：dict(r) 失败通常是 self._conn.row_factory 未设为 aiosqlite.Row，
+            # 此时 execute_fetchall 返回 tuple（而非支持 keys() 的 Row），dict(tuple) 抛
+            # TypeError「cannot convert dictionary update sequence element #0 to a sequence」。
+            # 常见于 __new__ 构造的最小实例或测试用裸 aiosqlite.connect（未设 row_factory）。
+            # 修复方式：connect 后设置 conn.row_factory = aiosqlite.Row；
+            #           或改用 _conn.execute_fetchall 直接按索引 row[0]/row[1] 取值。
+            _rf = getattr(self._conn, "row_factory", None)
+            _first = rows[0] if rows else None
+            logger.error(
+                "db.fetch_all.row_to_dict_failed",
+                error=str(e),
+                row_factory=repr(_rf),
+                row_type=type(_first).__name__ if _first is not None else "none",
+                sample_row=repr(_first)[:200] if _first is not None else "",
+                sql=sql[:120],
+                hint="请确认 self._conn.row_factory = aiosqlite.Row；裸连接请改用 _conn.execute_fetchall 按索引取值",
+            )
+            raise
 
     async def fetch_one(self, sql: str, params: tuple = ()) -> dict | None:
         rows = await self.fetch_all(sql, params)
