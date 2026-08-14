@@ -37,20 +37,23 @@ PREFILL_CONTEXTS = {
 # after_tools 站点（保留 assume_tail=False，因为保留 user 消息）
 AFTER_TOOLS_CONTEXTS = {"after_tools_retry"}
 
-# 所有可能包含 merge_continuation 调用的源文件
+# 所有可能包含 _retry_continuation 调用的源文件
 SOURCE_FILES = ["agent_core/message_processor.py"]
 
 
-def _extract_merge_continuation_calls(source: str) -> list[dict]:
-    """从源码中提取所有 merge_continuation 调用及其参数。
+def _extract_retry_continuation_calls(source: str) -> list[dict]:
+    """从源码中提取所有 _retry_continuation 调用及其参数。
+
+    _retry_continuation 是 message_processor 重构后收敛续写重试的统一入口，
+    内部负责把 context/assume_tail 透传给 merge_continuation。
 
     返回 [{"context": str, "assume_tail": bool|None, "line": int}, ...]
     assume_tail=None 表示未传该参数（使用默认值 False）。
     """
     calls = []
-    # 匹配 merge_continuation( ... ) 调用块（支持多行）
-    # 用简单的括号匹配：找到 merge_continuation( 后匹配到对应的 )
-    pattern = re.compile(r'merge_continuation\s*\(', re.MULTILINE)
+    # 匹配 _retry_continuation( ... ) 调用块（支持多行），
+    # 用 (?<!def ) 排除方法定义行，只保留调用站点。
+    pattern = re.compile(r'(?<!def )_retry_continuation\s*\(', re.MULTILINE)
     for m in pattern.finditer(source):
         start = m.end()  # ( 之后
         depth = 1
@@ -97,7 +100,7 @@ class TestPrefillSitesPassAssumeTail:
            导致此路径为死代码，现已通过分档判定激活）
         """
         source = _load_source("agent_core/message_processor.py")
-        calls = _extract_merge_continuation_calls(source)
+        calls = _extract_retry_continuation_calls(source)
         for ctx in PREFILL_CONTEXTS:
             site_calls = [c for c in calls if c["context"] == ctx]
             assert len(site_calls) == 1, \
@@ -119,7 +122,7 @@ class TestAfterToolsSiteKeepsDefault:
         - 需要走"重生成"判定（discarded/replaced），而非 appended
         """
         source = _load_source("agent_core/message_processor.py")
-        calls = _extract_merge_continuation_calls(source)
+        calls = _extract_retry_continuation_calls(source)
         after_tools_calls = [c for c in calls if c["context"] == "after_tools_retry"]
         assert len(after_tools_calls) == 1, \
             f"应只有 1 个 after_tools_retry 调用，实际：{len(after_tools_calls)}"
@@ -143,7 +146,7 @@ class TestNoUnexpectedMergeContinuationCalls:
         known_contexts = PREFILL_CONTEXTS | AFTER_TOOLS_CONTEXTS
         for rel_path in SOURCE_FILES:
             source = _load_source(rel_path)
-            calls = _extract_merge_continuation_calls(source)
+            calls = _extract_retry_continuation_calls(source)
             assert calls, f"{rel_path} 应至少有 1 个 merge_continuation 调用"
             for call in calls:
                 ctx = call["context"]
