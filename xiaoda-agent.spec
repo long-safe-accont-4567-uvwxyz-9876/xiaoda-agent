@@ -359,7 +359,6 @@ hiddenimports = [
     'agent_core.core',
     'agent_core.message_processor',
     'agent_core.shared_blackboard',
-    'agent_core.shared_blackboard_db',
     'agent_core.structured_blackboard',
     'agent_core.sub_agent_manager',
     'agent_core.tool_executor',
@@ -408,7 +407,6 @@ hiddenimports = [
     'core.preference_validator',
     'core.recovery_orchestrator',
     'core.risk_classifier',
-    'core.secrets_broker',
     'core.self_diagnostic',
     'core.self_model',
     'core.sla_exporter',
@@ -449,10 +447,8 @@ hiddenimports = [
     'utils.canary_guard',
     'utils.encrypted_credential',
     'utils.env_reader',
-    'utils.instruction_hierarchy',
     'utils.llm_cleanup',
     'utils.watchdog_runner',
-    'utils.ssrf_guard',
 
     # web sub-modules
     'web._app_ref',

@@ -90,69 +90,6 @@ class TestCanaryGuard:
         assert len(mgr._canaries) == 0
 
 
-class TestInstructionHierarchy:
-    """S7: 指令层级与内容边界标记"""
-
-    def test_levels_ordered(self):
-        from utils.instruction_hierarchy import InstructionLevel
-        assert InstructionLevel.SYSTEM > InstructionLevel.APPLICATION
-        assert InstructionLevel.APPLICATION > InstructionLevel.USER
-        assert InstructionLevel.USER > InstructionLevel.EXTERNAL
-
-    def test_build_contains_anti_injection(self):
-        from utils.instruction_hierarchy import InstructionBuilder, InstructionLevel
-        builder = InstructionBuilder()
-        builder.add(InstructionLevel.SYSTEM, "Be helpful.")
-        builder.add(InstructionLevel.EXTERNAL, "untrusted data")
-        result = builder.build()
-        assert "CRITICAL" in result
-        assert "SYSTEM_INSTRUCTIONS" in result
-        assert "UNTRUSTED DATA" in result
-
-    def test_build_empty(self):
-        from utils.instruction_hierarchy import InstructionBuilder
-        builder = InstructionBuilder()
-        result = builder.build()
-        assert "CRITICAL" in result
-
-    def test_reset(self):
-        from utils.instruction_hierarchy import InstructionBuilder, InstructionLevel
-        builder = InstructionBuilder()
-        builder.add(InstructionLevel.SYSTEM, "test")
-        builder.reset()
-        result = builder.build()
-        assert "test" not in result
-
-
-class TestSSRFGuard:
-    """S5: SSRF 防护"""
-
-    def test_private_ip_blocked(self):
-        from utils.ssrf_guard import SSRFGuardV2
-        guard = SSRFGuardV2()
-        assert not guard.is_safe("http://127.0.0.1/admin")
-        assert not guard.is_safe("http://10.0.0.1/internal")
-        assert not guard.is_safe("http://192.168.1.1/config")
-
-    def test_normal_url_allowed(self):
-        from utils.ssrf_guard import SSRFGuardV2
-        guard = SSRFGuardV2()
-        # duckduckgo.com 在白名单
-        assert guard.is_safe("https://duckduckgo.com/search")
-
-    def test_normalize_url(self):
-        from utils.ssrf_guard import SSRFGuardV2
-        guard = SSRFGuardV2()
-        normalized = guard._normalize_url("https://example.com%2Fpath")
-        assert "%2F" not in normalized
-
-    def test_embedded_credentials_removed(self):
-        from utils.ssrf_guard import SSRFGuardV2
-        guard = SSRFGuardV2()
-        normalized = guard._normalize_url("https://user:pass@example.com/path")
-        assert "user:pass" not in normalized
-
-
 class TestRateLimit:
     """S4: 速率限制"""
 
