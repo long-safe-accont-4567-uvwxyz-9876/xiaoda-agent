@@ -621,7 +621,7 @@ class AIQQBot(botpy.Client):
                             try:
                                 mime, img_b64 = encode_image_to_base64(save_path)
                                 image_data.append({"mimeType": mime, "data": img_b64})
-                            except (FileNotFoundError, ValueError):
+                            except FileNotFoundError:
                                 pass
                             except (OSError, ValueError, RuntimeError) as e:
                                 logger.warning("qq_bot.image_encode_failed", error=str(e))
@@ -695,7 +695,7 @@ class AIQQBot(botpy.Client):
         image_data, attachment_info = await self._process_message_attachments(message)
         if not content and not attachment_info:
             return None
-        user_input = f"{content} {attachment_info}".strip() if content else attachment_info
+        user_input = _build_user_input(content, attachment_info)
 
         user_openid = getattr(message.author, 'user_openid', '') if hasattr(message, 'author') else ''
         user_id = f"qq_{user_openid}" if user_openid else "qq_unknown"
@@ -712,8 +712,7 @@ class AIQQBot(botpy.Client):
         在 Setup Wizard 中显式录入主人 openid。这避免公开部署时任意第一个
         私聊者窃取主人权限。
         """
-        master_raw = os.getenv("MASTER_QQ_OPENID", "").strip()
-        master_ids = [x.strip() for x in master_raw.split(",") if x.strip()]
+        master_ids = _parse_master_ids()
         is_master = bool(master_ids) and user_openid in master_ids
         if not is_master and user_openid and not master_ids:
             # 仅记录一次警告，引导用户去 Setup Wizard 配置主人 openid
@@ -906,7 +905,7 @@ class AIQQBot(botpy.Client):
                     if not content and not attachment_info:
                         return
 
-                    user_input = f"{content} {attachment_info}".strip() if content else attachment_info
+                    user_input = _build_user_input(content, attachment_info)
 
                     member_openid = getattr(message.author, 'member_openid', '') if hasattr(message, 'author') else ''
                     user_id = f"qq_{member_openid}" if member_openid else "qq_unknown"
@@ -914,8 +913,7 @@ class AIQQBot(botpy.Client):
 
                     # 主人识别：对比 member_openid 与 MASTER_QQ_OPENID（逗号分隔多值）
                     # on_group_add_robot 已自动绑定拉群者的 member_openid
-                    master_raw = os.getenv("MASTER_QQ_OPENID", "").strip()
-                    master_ids = [x.strip() for x in master_raw.split(",") if x.strip()]
+                    master_ids = _parse_master_ids()
                     is_master = bool(master_ids) and member_openid in master_ids
                     if is_master:
                         logger.info("qq_bot.master_identified", member_openid=member_openid)
