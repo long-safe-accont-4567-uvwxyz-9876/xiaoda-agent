@@ -104,8 +104,8 @@ def _parse_agnes_error(e: Exception) -> tuple[str, str, int]:
             if isinstance(err_obj, dict):
                 error_code = error_code or err_obj.get("code", "") or err_obj.get("type", "")
                 error_msg = err_obj.get("message", "") or error_msg
-        except Exception:
-            pass
+        except Exception as e:
+            logger.debug("agnes.parse_error_response_failed error={}", str(e))
     return error_code, error_msg, status_code
 
 

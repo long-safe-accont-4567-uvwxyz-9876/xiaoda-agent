@@ -3,6 +3,7 @@ import os
 import asyncio
 import httpx
 from openai import AsyncOpenAI
+from loguru import logger
 from transports.base import ProviderTransport, TransportResponse
 
 # agnes API max_tokens 上限 65536，超出返回 500 invalid_request
@@ -78,8 +79,8 @@ async def close_agnes_shared_client() -> None:
     if _agnes_http_client is not None and not _agnes_http_client.is_closed:
         try:
             await _agnes_http_client.aclose()
-        except Exception:
-            pass
+        except Exception as e:
+            logger.warning("agnes_transport.close_shared_client_failed error={}", str(e))
     _agnes_http_client = None
 
 

@@ -767,8 +767,8 @@ async def lifespan(app: FastAPI) -> AsyncIterator[Any]:
     if _stop_watchdog is not None:
         try:
             _stop_watchdog()
-        except Exception:
-            pass
+        except Exception as e:
+            logger.warning("webui.stop_watchdog_failed error={}", str(e))
 
     logger.info("webui.lifespan.shutdown")
     await _shutdown_lifespan(app, core, owns_core)

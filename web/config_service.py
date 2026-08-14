@@ -51,8 +51,8 @@ class _TrackedDict(dict):
                 "config_service.data_mutation_direct path={}.{} op={} key={} value={} stack=\n{}",
                 self._track_path, op, str(key)[:50], val_str, stack,
             )
-        except Exception:
-            pass
+        except Exception as e:
+            logger.warning("config_service.mutation_logging_failed error={}", str(e))
 
     def __setitem__(self, key: Any, value: Any) -> None:
         if self._should_log() and isinstance(key, str):

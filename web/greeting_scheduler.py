@@ -63,8 +63,8 @@ class GreetingScheduler:
             self._task.cancel()
             try:
                 await self._task
-            except (asyncio.CancelledError, Exception):
-                pass
+            except (asyncio.CancelledError, Exception) as e:
+                logger.debug("greeting_scheduler.stop_task_await error={}", str(e))
             self._task = None
 
     async def _loop(self) -> None:

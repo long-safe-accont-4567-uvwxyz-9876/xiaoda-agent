@@ -53,8 +53,8 @@ def _resolve_user_id(explicit: str = "") -> str:
         ctx = _current_request_ctx.get()
         if ctx is not None and getattr(ctx, "user_id", ""):
             return ctx.user_id
-    except Exception:
-        pass
+    except Exception as e:
+        logger.debug("schedule_tool.resolve_user_id_failed error={}", str(e))
     return "default"
 
 

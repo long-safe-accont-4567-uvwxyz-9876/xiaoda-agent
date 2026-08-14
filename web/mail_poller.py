@@ -65,8 +65,8 @@ class MailPoller:
             self._task.cancel()
             try:
                 await self._task
-            except (asyncio.CancelledError, Exception):
-                pass
+            except (asyncio.CancelledError, Exception) as e:
+                logger.debug("mail.poller.stop_task_await error={}", str(e))
             self._task = None
             logger.info("mail.poller.stopped")
 

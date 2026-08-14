@@ -67,8 +67,8 @@ def _resolve_port(explicit: int | None = None) -> int:
         if m:
             _RESOLVED_PORT = int(m.group(1))
             return _RESOLVED_PORT
-    except Exception:
-        pass
+    except Exception as e:
+        logger.warning("cli.resolve_port_systemctl_failed error={}", str(e))
     _RESOLVED_PORT = _FALLBACK_PORT
     return _RESOLVED_PORT
 
@@ -373,8 +373,8 @@ class WSClient:
                 if text:
                     try:
                         await status_callback(text)
-                    except Exception:
-                        pass
+                    except Exception as e:
+                        logger.warning("cli.status_callback_failed error={}", str(e))
 
     async def chat(self, text: str, status_callback: Any = None) -> str:
         """发送一条消息，返回最终回复。斜杠命令由主进程共享 AgentCore 处理。"""

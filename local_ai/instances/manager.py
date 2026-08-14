@@ -9,6 +9,8 @@ from inspect import isawaitable
 from typing import Any
 from uuid import uuid4
 
+from loguru import logger
+
 from local_ai.contracts import (
     CatalogFile,
     CatalogModel,
@@ -606,8 +608,8 @@ class InstanceManager:
             for task in tasks:
                 try:
                     await self._await_completion(task, propagate_cancel=False)
-                except Exception:
-                    pass
+                except Exception as e:
+                    logger.warning("local_ai.await_lifecycle_tasks_failed error={}", str(e))
 
     @staticmethod
     async def _await_completion(
