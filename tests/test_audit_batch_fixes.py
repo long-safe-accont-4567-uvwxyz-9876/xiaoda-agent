@@ -92,8 +92,8 @@ class TestH4SingleChannelRrfScore:
     """H-4: 单通道检索结果应补充 rrf_score"""
 
     def test_single_channel_has_rrf_score(self):
-        from memory import memory_manager
-        source = inspect.getsource(memory_manager)
+        from memory import _retrieval_engine
+        source = inspect.getsource(_retrieval_engine)
         # 单通道路径应设置 rrf_score
         assert "rrf_score" in source, "单通道结果应补充rrf_score字段"
 

@@ -179,7 +179,7 @@ class TestReconcileWiredAtStartup:
 class TestIndexingTaskFailureLogLevel:
     def test_normal_failures_are_warning_not_debug(self):
         src = (Path(__file__).resolve().parent.parent
-               / "memory" / "memory_manager.py").read_text(encoding="utf-8")
+               / "memory" / "_memory_encoder.py").read_text(encoding="utf-8")
 
         for key in (
             "memory.initial_vec_upsert_failed",
@@ -191,7 +191,7 @@ class TestIndexingTaskFailureLogLevel:
 
     def test_timeouts_stay_error(self):
         src = (Path(__file__).resolve().parent.parent
-               / "memory" / "memory_manager.py").read_text(encoding="utf-8")
+               / "memory" / "_memory_encoder.py").read_text(encoding="utf-8")
 
         for key in (
             "memory.encode_vec_upsert_timeout",
