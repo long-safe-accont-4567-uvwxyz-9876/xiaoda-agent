@@ -249,7 +249,7 @@ FALLBACK_ROUTE = {
 #       但 agnes-2.0-flash 实际上限是 65536，超过会返回 500 InternalServerError
 #       "max_tokens exceeds the limit of 65536"（日志中 286 次错误根因）。
 #       之前的"一刀切"提升 max_tokens 到 131072 反而打破了 agnes provider。
-# 修复：在 _build_route_kwargs / _build_stream_kwargs 中按 provider 取 min(mt, cap)。
+# 修复：在 _build_route_kwargs 中按 provider 取 min(mt, cap)。
 #
 # 上限来源（用户问"PROVIDER_MAX_TOKENS_CAP 上限来源呢？"）：
 #   不再硬编码在代码里。来源链路如下（优先级从高到低）：
@@ -1723,37 +1723,6 @@ class ModelRouter:
         except (TypeError, ValueError):
             return cap
         return min(_mt, cap) if _mt > 0 else cap
-
-    @staticmethod
-    def _build_stream_kwargs(model: str, messages: list[dict], temperature: float,
-                             mt: int, extra_headers: dict | None,
-                             config: dict, provider: str) -> dict:
-        """构造流式调用 kwargs。"""
-        # P0 修复：按 provider 上限裁剪 max_tokens（agnes 上限 65536）
-        mt = ModelRouter._cap_max_tokens(mt, provider)
-        # Ollama 模型名翻译：把工作流/云模型名映射为本地实际模型名（真实代理核心配套）
-        _send_model = translate_model_for_provider(provider, model)
-        kwargs = {
-            "model": _send_model,
-            "messages": messages,
-            "temperature": temperature,
-            "max_tokens": mt,
-            "stream": True,
-        }
-        if extra_headers:
-            kwargs["extra_headers"] = extra_headers
-        # 支持 thinking 参数（通用）
-        # 关键修复：thinking 关闭时也要传递 enable_thinking: false，否则 agnes 模型使用默认行为
-        thinking_config = config.get("thinking")
-        # P0 修复：thinking_debug 从 INFO 降为 DEBUG（每次 stream 调用都触发，INFO 级别刷屏）
-        logger.debug("router.thinking_debug provider={} thinking={}", provider, thinking_config)
-        if provider == "agnes":
-            # agnes 模型需要明确传递 enable_thinking 参数
-            enabled = bool(thinking_config and thinking_config.get("type") == "enabled")
-            kwargs["extra_body"] = {"chat_template_kwargs": {"enable_thinking": enabled}}
-        elif thinking_config:
-            kwargs["extra_body"] = {"thinking": thinking_config}
-        return kwargs
 
     async def chat_stream(self, messages: list, task_type: str = "chat",
                           temperature: float = 0.7, max_tokens: int = 2000,

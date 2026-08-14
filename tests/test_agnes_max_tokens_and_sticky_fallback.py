@@ -79,22 +79,6 @@ def test_build_route_kwargs_mimo_keeps_large_max_tokens():
     assert kwargs["max_tokens"] == 131072
 
 
-def test_build_stream_kwargs_agnes_clamps_max_tokens():
-    """agnes 流式调用同样要夹紧 max_tokens。"""
-    from model_router import ModelRouter
-
-    kwargs = ModelRouter._build_stream_kwargs(
-        model="agnes-2.0-flash",
-        messages=[{"role": "user", "content": "hi"}],
-        temperature=0.7,
-        mt=131072,
-        extra_headers=None,
-        config={"thinking": {"type": "disabled"}},
-        provider="agnes",
-    )
-    assert kwargs["max_tokens"] == 65535
-
-
 def test_restore_chat_model_fallback_preserves_route_table(monkeypatch):
     """_restore_chat_model fallback 分支：当 provider 未注册时回退到 mimo（内存）。
 
