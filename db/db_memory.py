@@ -33,6 +33,17 @@ def compute_missing_vec_ids(memory_ids: list[int], vec_rowids: set[int]) -> list
     return [mid for mid in memory_ids if mid not in vec_rowids]
 
 
+def _parse_entity_list(raw: Any) -> list:
+    """解析 entities 字段：JSON 字符串 → list；list 原样；其它 → []。"""
+    if isinstance(raw, str) and raw:
+        import json
+        try:
+            return json.loads(raw)
+        except (json.JSONDecodeError, TypeError):
+            return []
+    return raw if isinstance(raw, list) else []
+
+
 class MemoryDB:
     """管理情景记忆、画像等记忆数据的读写。"""
 
@@ -106,18 +117,8 @@ class MemoryDB:
         if auto_commit:
             await self._conn.commit()
         # 同步写入 FTS 索引
-        try:
-            from db.fts_utils import _tokenize_for_fts
-            tokenized = _tokenize_for_fts(summary)
-            if tokenized.strip():
-                await self._conn.execute(
-                    "INSERT INTO episodic_memory_fts(id, summary_index) VALUES(?, ?)",
-                    (mem_id, tokenized),
-                )
-                if auto_commit:
-                    await self._conn.commit()
-        except Exception as e:
-            _record_fts_sync_failure("db_memory.fts_insert_failed", e)
+        await self._sync_fts(mem_id, summary, "db_memory.fts_insert_failed",
+                             delete_first=False, auto_commit=auto_commit)
         return mem_id
 
     async def get_memory_by_id(self, memory_id: int) -> dict | None:
@@ -160,20 +161,7 @@ class MemoryDB:
             "UPDATE episodic_memories SET summary = ? WHERE id = ?",
             (new_summary, mem_id),
         )
-        try:
-            from db.fts_utils import _tokenize_for_fts
-            tokenized = _tokenize_for_fts(new_summary)
-            if tokenized.strip():
-                await self._conn.execute(
-                    "DELETE FROM episodic_memory_fts WHERE id = ?",
-                    (mem_id,),
-                )
-                await self._conn.execute(
-                    "INSERT INTO episodic_memory_fts(id, summary_index) VALUES(?, ?)",
-                    (mem_id, tokenized),
-                )
-        except Exception as e:
-            _record_fts_sync_failure("db_memory.fts_sync_on_summary_update_failed", e)
+        await self._sync_fts(mem_id, new_summary, "db_memory.fts_sync_on_summary_update_failed")
         await self._conn.commit()
 
     async def update_fallback_raw(self, mem_id: int, new_summary: str, label: str,
@@ -188,21 +176,30 @@ class MemoryDB:
                 "UPDATE episodic_memories SET summary = ?, emotion_label = ? WHERE id = ?",
                 (new_summary, label, mem_id),
             )
+        await self._sync_fts(mem_id, new_summary, "db_memory.fts_sync_on_fallback_failed")
+        await self._conn.commit()
+
+    async def _sync_fts(self, memory_id: int, summary: str, event_label: str, *,
+                        delete_first: bool = True, auto_commit: bool = False) -> None:
+        """同步 episodic_memory_fts 索引：分词 → (可选 DELETE) → INSERT → (可选 commit)。
+
+        失败统一走 _record_fts_sync_failure（告警 + 计数），不抛出。
+        """
         try:
             from db.fts_utils import _tokenize_for_fts
-            tokenized = _tokenize_for_fts(new_summary)
+            tokenized = _tokenize_for_fts(summary)
             if tokenized.strip():
-                await self._conn.execute(
-                    "DELETE FROM episodic_memory_fts WHERE id = ?",
-                    (mem_id,),
-                )
+                if delete_first:
+                    await self._conn.execute(
+                        "DELETE FROM episodic_memory_fts WHERE id = ?", (memory_id,))
                 await self._conn.execute(
                     "INSERT INTO episodic_memory_fts(id, summary_index) VALUES(?, ?)",
-                    (mem_id, tokenized),
+                    (memory_id, tokenized),
                 )
+                if auto_commit:
+                    await self._conn.commit()
         except Exception as e:
-            _record_fts_sync_failure("db_memory.fts_sync_on_fallback_failed", e)
-        await self._conn.commit()
+            _record_fts_sync_failure(event_label, e)
 
     async def increment_access_count(self, memory_id: int, auto_commit: bool = True) -> None:
         """递增记忆访问计数（检索强化）"""
@@ -742,7 +739,6 @@ class MemoryDB:
         if not entity_names:
             return []
         try:
-            import json
             conditions = " OR ".join(["entities LIKE ?" for _ in entity_names])
             params = [f'%"{e}"%' for e in entity_names]
             cursor = await self._read_conn().execute(
@@ -756,14 +752,7 @@ class MemoryDB:
             for r in rows:
                 d = dict(r)
                 # 解析 entities JSON 字符串为列表，供后续 KG 评分复用
-                raw = d.get("entities", "")
-                if isinstance(raw, str) and raw:
-                    try:
-                        d["entity_list"] = json.loads(raw)
-                    except (json.JSONDecodeError, TypeError):
-                        d["entity_list"] = []
-                else:
-                    d["entity_list"] = raw if isinstance(raw, list) else []
+                d["entity_list"] = _parse_entity_list(d.get("entities", ""))
                 results.append(d)
             return results
         except Exception as e:
@@ -785,7 +774,6 @@ class MemoryDB:
         if not entity_names:
             return []
         try:
-            import json
             conditions = " OR ".join(["entities LIKE ?" for _ in entity_names])
             params = [f'%"{e}"%' for e in entity_names]
             params.extend([scope.user_id, scope.agent_id])
@@ -801,14 +789,7 @@ class MemoryDB:
             results = []
             for r in rows:
                 d = dict(r)
-                raw = d.get("entities", "")
-                if isinstance(raw, str) and raw:
-                    try:
-                        d["entity_list"] = json.loads(raw)
-                    except (json.JSONDecodeError, TypeError):
-                        d["entity_list"] = []
-                else:
-                    d["entity_list"] = raw if isinstance(raw, list) else []
+                d["entity_list"] = _parse_entity_list(d.get("entities", ""))
                 results.append(d)
             return results
         except Exception as e:
@@ -1004,23 +985,8 @@ class MemoryDB:
                 await self._conn.commit()
             # 如果 summary 更新了，同步更新 FTS 索引
             if summary:
-                try:
-                    from db.fts_utils import _tokenize_for_fts
-                    tokens = _tokenize_for_fts(summary)
-                    if tokens.strip():
-                        await self._conn.execute(
-                            "DELETE FROM episodic_memory_fts WHERE id = ?",
-                            (memory_id,),
-                        )
-                        await self._conn.execute(
-                            "INSERT INTO episodic_memory_fts(id, summary_index) VALUES(?, ?)",
-                            (memory_id, tokens),
-                        )
-                        if auto_commit:
-                            await self._conn.commit()
-                except Exception as e:
-                    from loguru import logger
-                    logger.debug("db_memory.fts_update_failed", error=str(e))
+                await self._sync_fts(memory_id, summary, "db_memory.fts_update_failed",
+                                     auto_commit=auto_commit)
             return True
         except Exception as e:
             from loguru import logger
