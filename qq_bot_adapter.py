@@ -27,15 +27,8 @@ except ImportError:
     load_dotenv()
 
 
-from utils.common import safe_int as _safe_int
+from utils.common import safe_int as _safe_int, safe_float as _safe_float
 from utils.llm_cleanup import strip_qq_face_tags
-
-
-def _safe_float(val, default):
-    try:
-        return float(val)
-    except (ValueError, TypeError):
-        return default
 
 # 安全加固：不再全局 monkey patch ssl.create_default_context
 # botpy 内部已使用 SSLContext() 处理 WebSocket SSL，无需全局禁用证书验证

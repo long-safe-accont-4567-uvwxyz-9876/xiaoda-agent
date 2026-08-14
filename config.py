@@ -1057,17 +1057,7 @@ RERANKER_MODEL = os.getenv("RERANKER_MODEL", "BAAI/bge-reranker-v2-m3")
 RERANKER_ENABLED = os.getenv("RERANKER_ENABLED", "true").lower() in ("1", "true", "yes")
 
 
-from utils.common import safe_int as _safe_int
-
-
-def _safe_float(env_val: str | None, default: float) -> float:
-    """安全解析浮点数环境变量, 非法值回退到 default."""
-    if env_val is None:
-        return default
-    try:
-        return float(env_val)
-    except (ValueError, TypeError):
-        return default
+from utils.common import safe_int as _safe_int, safe_float as _safe_float
 
 
 def _safe_positive_float(env_val: str | None, default: float) -> float:

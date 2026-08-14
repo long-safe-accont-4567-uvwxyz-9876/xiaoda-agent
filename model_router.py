@@ -1,7 +1,6 @@
 from typing import Any, ClassVar
 from collections.abc import AsyncIterator
 import copy
-import hashlib
 import os
 import time
 import asyncio
@@ -26,23 +25,12 @@ from utils.prompt_caching import apply_cache_control
 from utils.llm_cleanup import merge_continuation
 from utils.error_classifier import ErrorClassifier, RecoveryAction
 from utils.credential_pool import get_credential_pool
+from utils.common import mask_api_key as _mask_api_key
 from security.ssrf_guard import validate_url as _ssrf_validate_url
 from core.app_exception import LLMError
 from core.error_codes import ErrorCodeEnum
 from llm_gateway.transports import CompletionRequest, TransportError
 import contextlib
-
-
-def _mask_api_key(key: str) -> str:
-    """返回 API key 的 SHA-256 哈希前 8 字符，用于日志标识而不泄漏 key 片段。
-
-    与 key_prefix/key_suffix 不同，hash 无法逆推出原始 key 内容；
-    同一 key 的 hash 稳定，可用于日志中追踪凭证轮换。
-    """
-    if not key or len(key) < 8:
-        # 短 key 通常是测试或无效值，直接返回占位符
-        return "***"
-    return hashlib.sha256(key.encode("utf-8")).hexdigest()[:8]
 
 
 # ── Provider 元数据加载（替代代码中所有硬编码的 base_url / max_tokens_cap / 跨 provider 映射） ──

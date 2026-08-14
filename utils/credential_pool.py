@@ -4,7 +4,6 @@
 """
 
 import asyncio
-import hashlib
 import os
 import time
 import threading
@@ -13,16 +12,7 @@ from dataclasses import dataclass
 from loguru import logger
 
 from .error_classifier import ClassifiedError, FailoverReason
-
-
-def _mask_api_key(key: str) -> str:
-    """将 api_key 转为 8 字符 sha256 前缀，避免日志泄漏真实 key 片段。
-
-    同一 key 哈希稳定，不同 key 哈希不同，无法逆推原始 key。
-    """
-    if not key:
-        return "***"
-    return hashlib.sha256(key.encode("utf-8")).hexdigest()[:8]
+from utils.common import mask_api_key as _mask_api_key
 
 
 class CredentialState(Enum):

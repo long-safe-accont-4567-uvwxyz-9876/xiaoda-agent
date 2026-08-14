@@ -24,6 +24,8 @@ from typing import Any
 
 from loguru import logger
 
+from utils.common import safe_float as _safe_float
+
 # 使用相对导入避免循环依赖
 try:
     from utils.atomic_write import atomic_json_write
@@ -42,14 +44,6 @@ def _is_enabled() -> bool:
     """
     val = os.getenv("MENTAL_STATE_ENABLED", "1").strip().lower()
     return val not in ("0", "false", "off", "no", "")
-
-
-def _safe_float(val: Any, default: float = 0.0) -> float:
-    """安全转 float，失败返回默认值（处理 null / 非法字符串）。"""
-    try:
-        return float(val)
-    except (TypeError, ValueError):
-        return default
 
 
 def _safe_str_list(val: Any) -> list[str]:

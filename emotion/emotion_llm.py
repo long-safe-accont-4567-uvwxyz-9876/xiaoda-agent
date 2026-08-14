@@ -20,6 +20,7 @@ from typing import Any
 from loguru import logger
 
 from utils.free_model_backend import FreeModelBackend
+from utils.common import safe_float as _safe_float
 
 # 超时时间（秒）
 LLM_EMOTION_TIMEOUT = 0.5  # 500ms
@@ -171,14 +172,6 @@ def _parse_llm_response(raw: str) -> dict:
         "style": str(data.get("style", "")),
     }
     return result
-
-
-def _safe_float(val: Any, default: float = 0.0) -> float:
-    """安全转换为 float，失败时返回默认值"""
-    try:
-        return float(val)
-    except (TypeError, ValueError):
-        return default
 
 
 def _clamp(value: float, min_val: float, max_val: float) -> float:
