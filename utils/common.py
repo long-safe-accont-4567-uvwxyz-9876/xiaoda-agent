@@ -6,6 +6,10 @@ import hashlib
 # system 路由）统一引用此常量，避免 "8082" 魔法数字散落多处导致端口不一致。
 DEFAULT_WEBUI_PORT = 8082
 
+# LLM 响应 max_tokens 的默认值（生成 token 上限）。transport 层与 model_router /
+# message_processor 统一引用，避免 "4096" 魔法数字散落多处。
+DEFAULT_MAX_TOKENS = 4096
+
 
 def safe_int(val, default):
     """安全解析整数值，非法值回退到 default."""

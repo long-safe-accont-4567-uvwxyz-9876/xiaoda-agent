@@ -25,31 +25,6 @@ def _deep_search(query: str, max_results: int = 10) -> tuple[list[dict], str]:
     return [], ""
 
 
-# multi_search 已禁用，不再注册到工具列表。
-# 如需重新启用，取消下方注释即可。
-
-# @register_tool(
-#     name="multi_search",
-#     description="多源搜索：先尝试 Bing，无结果时回退到 Tavily。",
-#     schema={
-#         "type": "object",
-#         "properties": {
-#             "query": {"type": "string", "description": "搜索关键词"},
-#         },
-#         "required": ["query"],
-#     },
-#     permission=ToolPermission.READ_ONLY,
-#     category="search",
-#     max_frequency=5,
-# )
-# def multi_search(query: str) -> ToolResult:
-#     results, source = _deep_search(query)
-#     if not results:
-#         return ToolResult.fail("搜索无结果，请尝试其他关键词")
-#     formatted = _format_results(results, source)
-#     return ToolResult.ok(formatted)
-
-
 def _wolfram_api_query(query: str) -> ToolResult | None:
     """使用 WolframAlpha Full Results API v2 查询，失败返回 None 以便回退。"""
     try:

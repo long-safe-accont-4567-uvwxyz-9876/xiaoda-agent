@@ -630,8 +630,6 @@ class AgentContext:
         # 导致"答非所问"（如回复开头是 "· 起床的温柔 -..."）。
         # instinct 提取质量不可靠（LLM 过度解读用户行为），即使过滤后仍可能误导。
         # 暂时禁用注入，instinct 数据仍保留供未来更可靠的注入方式使用。
-        # if self.instinct_prompt:
-        #     stable_content = stable_content + "\n\n---\n\n" + self.instinct_prompt if stable_content else self.instinct_prompt
 
         # Stable 层追加项目硬约束（Always，~150 token，每次必注入）
         try:

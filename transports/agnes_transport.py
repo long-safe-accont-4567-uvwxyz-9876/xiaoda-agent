@@ -4,7 +4,7 @@ import asyncio
 import httpx
 from openai import AsyncOpenAI
 from loguru import logger
-from transports.base import ProviderTransport, TransportResponse
+from transports.base import ProviderTransport, TransportResponse, DEFAULT_MAX_TOKENS
 
 # agnes API max_tokens 上限 65536，超出返回 500 invalid_request
 # 直接调用 transport.chat() 的路径（绕过 model_router._build_route_kwargs）
@@ -120,7 +120,7 @@ class AgnesTransport(ProviderTransport):
         return self._client is not None
 
     async def chat(self, model: str, messages: list[dict],
-                   temperature: float = 0.7, max_tokens: int = 4096,
+                   temperature: float = 0.7, max_tokens: int = DEFAULT_MAX_TOKENS,
                    tools: list[dict] | None = None,
                    tool_choice: str | None = None,
                    stream: bool = False,

@@ -25,7 +25,7 @@ from utils.prompt_caching import apply_cache_control
 from utils.llm_cleanup import merge_continuation
 from utils.error_classifier import ErrorClassifier, RecoveryAction
 from utils.credential_pool import get_credential_pool
-from utils.common import mask_api_key as _mask_api_key
+from utils.common import mask_api_key as _mask_api_key, DEFAULT_MAX_TOKENS
 from security.ssrf_guard import validate_url as _ssrf_validate_url
 from core.app_exception import LLMError
 from core.error_codes import ErrorCodeEnum
@@ -217,7 +217,7 @@ ROUTE_TABLE = {
     "chat": {"model": _CFG_MODEL_NAME, "max_tokens": 131072, "client": _CFG_DEFAULT_PROVIDER, "thinking": {"type": "disabled"}},
     "emotion_analysis": {"model": _CFG_FLASH_MODEL or _CFG_MODEL_NAME, "max_tokens": 1024, "client": _CFG_DEFAULT_PROVIDER, "thinking": {"type": "disabled"}},
     "tool_result_wrap": {"model": _CFG_FLASH_MODEL or _CFG_MODEL_NAME, "max_tokens": 2048, "client": _CFG_DEFAULT_PROVIDER, "thinking": {"type": "disabled"}},
-    "memory_encoding": {"model": _CFG_FLASH_MODEL or _CFG_MODEL_NAME, "max_tokens": 4096, "client": _CFG_DEFAULT_PROVIDER, "thinking": {"type": "disabled"}},
+    "memory_encoding": {"model": _CFG_FLASH_MODEL or _CFG_MODEL_NAME, "max_tokens": DEFAULT_MAX_TOKENS, "client": _CFG_DEFAULT_PROVIDER, "thinking": {"type": "disabled"}},
     "chat_agnes": {"model": AGNES_TEXT_MODEL, "max_tokens": 131072, "client": "agnes", "thinking": {"type": "disabled"},
                    "presence_penalty": 0.3, "frequency_penalty": 0.0},
 }
@@ -1447,7 +1447,7 @@ class ModelRouter:
         # 所以 registry._table 与 ROUTE_TABLE 永远是同一对象，读哪个都行，
         # 但走 registry 是语义上的唯一入口，未来若 registry 改实现也不用改 route()。
         config = self._registry.get_task_ref(task_type) or self._registry.get_task_ref("chat") or {}
-        mt = max_tokens or config.get("max_tokens", 4096)
+        mt = max_tokens or config.get("max_tokens", DEFAULT_MAX_TOKENS)
         if timeout is None:
             timeout = self.TASK_TIMEOUTS.get(task_type, 30)
 
@@ -1559,7 +1559,7 @@ class ModelRouter:
                 self._chat_idle.set()
 
     async def route_config(self, config: dict, messages: list[dict],
-                           temperature: float = 0.7, max_tokens: int = 4096,
+                           temperature: float = 0.7, max_tokens: int = DEFAULT_MAX_TOKENS,
                            tools: list[dict] | None = None,
                            tool_choice: str | None = None,
                            timeout: int = 30) -> str | object:
@@ -1788,7 +1788,7 @@ class ModelRouter:
         """
         config = self._registry.get_task_ref(task_type) or self._registry.get_task_ref("chat") or {}
         model = config["model"]
-        mt = max_tokens or config.get("max_tokens", 4096)
+        mt = max_tokens or config.get("max_tokens", DEFAULT_MAX_TOKENS)
         provider = config.get("client", _CFG_DEFAULT_PROVIDER)
         timeout = self.TASK_TIMEOUTS.get(task_type, 30)
 
@@ -2437,7 +2437,7 @@ class ModelRouter:
         config = self._registry.get_task_ref(task_type) or self._registry.get_task_ref("chat") or {}
         model = config["model"]
         provider = config.get("client", _CFG_DEFAULT_PROVIDER)
-        mt = max_tokens or config.get("max_tokens", 4096)
+        mt = max_tokens or config.get("max_tokens", DEFAULT_MAX_TOKENS)
         timeout = self.TASK_TIMEOUTS.get(task_type, 30)
 
         # 应用 prompt caching（与主路由保持一致）

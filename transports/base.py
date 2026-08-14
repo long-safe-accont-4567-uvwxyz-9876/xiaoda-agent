@@ -3,6 +3,8 @@ from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from typing import Any
 
+from utils.common import DEFAULT_MAX_TOKENS
+
 
 @dataclass
 class TransportResponse:
@@ -25,7 +27,7 @@ class ProviderTransport(ABC):
 
     @abstractmethod
     async def chat(self, model: str, messages: list[dict],
-                   temperature: float = 0.7, max_tokens: int = 4096,
+                   temperature: float = 0.7, max_tokens: int = DEFAULT_MAX_TOKENS,
                    tools: list[dict] | None = None,
                    tool_choice: str | None = None,
                    stream: bool = False,

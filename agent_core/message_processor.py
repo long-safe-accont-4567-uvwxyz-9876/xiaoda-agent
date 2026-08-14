@@ -20,7 +20,7 @@ from zoneinfo import ZoneInfo
 import openai as _openai_mod  # P0 Task 1.8：用于捕获 BadRequestError/APIError
 
 
-from utils.common import safe_int as _safe_int
+from utils.common import safe_int as _safe_int, DEFAULT_MAX_TOKENS
 
 from loguru import logger
 
@@ -1543,7 +1543,7 @@ class MessageProcessorMixin:
                 "role": "system",
                 "content": "[系统警告] 当前认知状态不佳，请简化回复。"
             })
-            _base_mt = _cb_max_tokens if _cb_max_tokens else _model_cfg.get("max_tokens", 4096)
+            _base_mt = _cb_max_tokens if _cb_max_tokens else _model_cfg.get("max_tokens", DEFAULT_MAX_TOKENS)
             _cb_max_tokens = int(_base_mt * 0.8)
         return None, task_type, _cb_max_tokens, circuit_state, _model_cfg
 
