@@ -1,20 +1,21 @@
 """_create_completion 单元测试：验证调用核心的编排顺序与参数透传。"""
 from __future__ import annotations
 
+import asyncio
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from model_router import ModelRouter
+from model_router import MAX_PROVIDER_CONCURRENCY, ModelRouter
 
 
 def _make_router():
     router = MagicMock(spec=ModelRouter)
     router._select_client_for_provider = AsyncMock(return_value="CLIENT")
     router._build_route_kwargs = MagicMock(return_value={"model": "m", "stream": False})
-    router._get_credential_lock = MagicMock()
-    router._get_credential_lock.return_value.__aenter__ = AsyncMock(return_value=None)
-    router._get_credential_lock.return_value.__aexit__ = AsyncMock(return_value=False)
+    router._get_provider_call_semaphore = MagicMock()
+    router._get_provider_call_semaphore.return_value.__aenter__ = AsyncMock(return_value=None)
+    router._get_provider_call_semaphore.return_value.__aexit__ = AsyncMock(return_value=False)
     return router
 
 
@@ -55,3 +56,16 @@ async def test_create_completion_passes_stream_options():
     )
     kwargs = client.chat.completions.create.await_args.kwargs
     assert kwargs["stream_options"] == {"include_usage": True}
+
+
+def test_provider_call_semaphore_caps_at_three():
+    """每个 provider 的 LLM 调用并发上限应为 3（asyncio.Semaphore）。"""
+    assert MAX_PROVIDER_CONCURRENCY == 3
+
+    router = MagicMock(spec=ModelRouter)
+    router._provider_semaphores = {}
+    sem = ModelRouter._get_provider_call_semaphore(router, "agnes")
+    assert isinstance(sem, asyncio.Semaphore)
+    assert sem._value == MAX_PROVIDER_CONCURRENCY
+    # 同一 provider 复用同一个信号量
+    assert ModelRouter._get_provider_call_semaphore(router, "agnes") is sem

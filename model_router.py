@@ -238,6 +238,9 @@ MODEL_PREFERENCES = {
 # connection_error 保留重试（握手失败重试有意义，且 connect 慢的情况少见）。
 RETRYABLE_ERRORS = {'rate_limit', 'connection_error'}
 MAX_RETRIES = 1
+# per-provider LLM 调用并发上限：agnes 支持最多 3 并发，统一各 provider 上限为 3，
+# 取代原先 asyncio.Lock 的串行（1 并发）。凭证轮换/客户端刷新仍走 _get_credential_lock 串行。
+MAX_PROVIDER_CONCURRENCY = 3
 # chat_pro/chat_flash 已合并进 chat（同一 provider 同一 model，无区分意义）
 # 降级链：chat 失败 → chat_agnes（agnes provider 作为独立兜底）
 FALLBACK_ROUTE = {
@@ -572,6 +575,7 @@ class ModelRouter:
         self._error_classifier = ErrorClassifier()
         self._credential_pool = get_credential_pool()
         self._credential_locks: dict[str, asyncio.Lock] = {}
+        self._provider_semaphores: dict[str, asyncio.Semaphore] = {}
         # agnes 密钥优先级：环境变量 → 加密文件 → credential_pool
         # 根因：用户通过 Web UI 添加 agnes 时，密钥保存在加密文件，但 __init__ 只从环境变量读取
         _agnes_key = os.getenv("AGNES_API_KEY", "")
@@ -619,8 +623,9 @@ class ModelRouter:
         # 用户硬约束（2026-08-04）：删除全局 _llm_call_gate 锁。
         # 根因：全局锁让所有 provider 的 LLM 调用串行，主 chat 调用 agnes 时，
         # 即使是不同 provider 的调用也被阻塞 → 阻塞级联。
-        # 改为 per-provider 锁（复用 _get_credential_lock），agnes 调用之间串行
-        # （agnes 不支持并发），但不阻塞其他 provider。详见 _route_with_retry。
+        # 改为 per-provider 并发信号量（_get_provider_call_semaphore），每个 provider
+        # 最多 MAX_PROVIDER_CONCURRENCY 并发（agnes 支持最多 3 并发），且不阻塞其他 provider。
+        # 详见 _route_with_retry / _create_completion / chat_stream。
         self._active_bg_llm_tasks: set[asyncio.Task] = set()
         self._cache_stats = {
             "total_calls": 0,
@@ -648,6 +653,20 @@ class ModelRouter:
         不同 provider 之间不再互相阻塞，相同 provider 仍然串行化以保护凭证轮换。
         """
         return self._credential_locks.setdefault(provider, asyncio.Lock())
+
+    def _get_provider_call_semaphore(self, provider: str) -> asyncio.Semaphore:
+        """返回指定 provider 的 LLM 调用并发信号量（最大 MAX_PROVIDER_CONCURRENCY 并发）。
+
+        与 _get_credential_lock 分离：前者限制 LLM 调用并发（agnes 最多 3 并发），
+        后者仍用于凭证轮换/客户端刷新等需要串行的变更操作。
+        懒创建以兼容 __new__ 构造的最小实例（测试用）。
+        """
+        semaphores = getattr(self, "_provider_semaphores", None)
+        if semaphores is None:
+            semaphores = {}
+            self._provider_semaphores = semaphores
+        return semaphores.setdefault(
+            provider, asyncio.Semaphore(MAX_PROVIDER_CONCURRENCY))
 
     def _get_custom_clients_lock(self) -> threading.Lock:
         """返回保护 _custom_clients 的统一锁，按需创建。
@@ -1785,47 +1804,58 @@ class ModelRouter:
         for attempt in range(MAX_RETRIES + 1):
             try:
                 _stream_finish_reason = None
-                stream = await self._create_completion(
-                    provider,
-                    model=model, messages=messages, temperature=temperature,
-                    max_tokens=mt, stream=True, tools=tools, tool_choice=tool_choice,
-                    extra_headers=extra_headers, config=config, timeout=timeout,
-                    stream_options={"include_usage": True},
+                client = await self._select_client_for_provider(provider)
+                kwargs = self._build_route_kwargs(
+                    model, messages, temperature, mt, True,
+                    tools, tool_choice, extra_headers, config, provider,
                 )
-                # P0 修复（qq_group 截断根因）：添加 stall timeout 检测死流
-                # 根因：原实现在 async for chunk in stream 中无 stall timeout，
-                # 如果 provider 中途关闭连接且不发送 finish_reason chunk，
-                # 循环会正常结束（无异常），content 被静默截断，
-                # _stream_finish_reason 保持 None → 不触发 length retry → 用户看到截断回复。
-                # 修复：用 asyncio.wait_for 包装每个 chunk 的读取，15 秒无新 chunk → TimeoutError
-                # _stall_timeout 已在循环外初始化（except 分支需引用）
-                _chunk_count = 0
-                _stream_usage = None
-                while True:
-                    try:
-                        chunk = await asyncio.wait_for(
-                            stream.__anext__(),
-                            timeout=_stall_timeout,
-                        )
-                    except StopAsyncIteration:
-                        break  # 流正常结束
-                    _chunk_count += 1
-                    # CR-Major-1：捕获 usage（最后一个 chunk 才有，include_usage=True 时）
-                    _chunk_usage = getattr(chunk, "usage", None)
-                    if _chunk_usage is not None:
-                        _stream_usage = _chunk_usage
-                    try:
-                        _choice = chunk.choices[0]
-                    except (AttributeError, IndexError):
-                        continue
-                    # P0 修复：捕获 finish_reason（最后一个 chunk 才有）
-                    _chunk_fr = getattr(_choice, "finish_reason", None)
-                    if _chunk_fr:
-                        _stream_finish_reason = _chunk_fr
-                    delta = getattr(_choice.delta, "content", None)
-                    if delta:
-                        _content_yielded = True
-                        yield delta
+                # CR-Major-1 修复：stream_options include_usage，让 provider 在最后一个
+                # chunk 返回 usage，供 _record_stream_usage 记录费用。
+                kwargs["stream_options"] = {"include_usage": True}
+                # per-provider 并发信号量：agnes 最多 3 并发，create + stream 消费期间
+                # 占用信号量，保证同 provider 并发流不超过 MAX_PROVIDER_CONCURRENCY；
+                # 不同 provider 之间不互斥。
+                # 注意：不复用 _create_completion，因为其信号量仅覆盖 create；
+                #       chat_stream 需在流消费期间也占用信号量（限制并发流数量）。
+                async with self._get_provider_call_semaphore(provider):
+                    stream = await asyncio.wait_for(
+                        client.chat.completions.create(**kwargs),
+                        timeout=timeout,
+                    )
+                    # P0 修复（qq_group 截断根因）：添加 stall timeout 检测死流
+                    # 根因：原实现在 async for chunk in stream 中无 stall timeout，
+                    # 如果 provider 中途关闭连接且不发送 finish_reason chunk，
+                    # 循环会正常结束（无异常），content 被静默截断，
+                    # _stream_finish_reason 保持 None → 不触发 length retry → 用户看到截断回复。
+                    # 修复：用 asyncio.wait_for 包装每个 chunk 的读取，15 秒无新 chunk → TimeoutError
+                    # _stall_timeout 已在循环外初始化（except 分支需引用）
+                    _chunk_count = 0
+                    _stream_usage = None
+                    while True:
+                        try:
+                            chunk = await asyncio.wait_for(
+                                stream.__anext__(),
+                                timeout=_stall_timeout,
+                            )
+                        except StopAsyncIteration:
+                            break  # 流正常结束
+                        _chunk_count += 1
+                        # CR-Major-1：捕获 usage（最后一个 chunk 才有，include_usage=True 时）
+                        _chunk_usage = getattr(chunk, "usage", None)
+                        if _chunk_usage is not None:
+                            _stream_usage = _chunk_usage
+                        try:
+                            _choice = chunk.choices[0]
+                        except (AttributeError, IndexError):
+                            continue
+                        # P0 修复：捕获 finish_reason（最后一个 chunk 才有）
+                        _chunk_fr = getattr(_choice, "finish_reason", None)
+                        if _chunk_fr:
+                            _stream_finish_reason = _chunk_fr
+                        delta = getattr(_choice.delta, "content", None)
+                        if delta:
+                            _content_yielded = True
+                            yield delta
                 # P0 修复：流结束后检测是否收到 finish_reason
                 # 如果未收到，说明 provider 可能中途关闭连接（死流），content 可能被截断
                 if not _stream_finish_reason:
@@ -2094,7 +2124,7 @@ class ModelRouter:
         )
         if stream_options:
             kwargs["stream_options"] = stream_options
-        async with self._get_credential_lock(provider):
+        async with self._get_provider_call_semaphore(provider):
             return await asyncio.wait_for(
                 client.chat.completions.create(**kwargs),
                 timeout=timeout,
