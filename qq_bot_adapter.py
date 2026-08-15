@@ -589,6 +589,33 @@ class AIQQBot(botpy.Client):
             result.reply = "⚠️ 高危操作已取消"
         return result
 
+    @staticmethod
+    def _attachment_ok_part(ct: str, fn: str, result: dict) -> tuple[str, dict | None]:
+        """附件接收成功时返回 (描述文本, 图片数据或 None)。"""
+        if result.get("text_preview"):
+            return f"[文件: {fn}]\n内容预览:\n{result['text_preview'][:500]}", None
+        if ct.startswith("image/"):
+            save_path = result.get('save_path', '')
+            part = f"[图片: {fn}，已保存到 {save_path}]"
+            try:
+                mime, img_b64 = encode_image_to_base64(save_path)
+                return part, {"mimeType": mime, "data": img_b64}
+            except FileNotFoundError:
+                return part, None
+            except (OSError, ValueError, RuntimeError) as e:
+                logger.warning("qq_bot.image_encode_failed", error=str(e))
+                return part, None
+        return f"[文件: {fn}，已保存到 {result['save_path']}]", None
+
+    @staticmethod
+    def _attachment_failed_part(ct: str, fn: str) -> str:
+        """附件接收失败时的描述文本。"""
+        if ct.startswith("image/"):
+            return f"[图片: {fn or 'image'}]"
+        if ct.startswith("video/"):
+            return f"[视频: {fn or 'video'}]"
+        return f"[附件: {fn or 'unknown'}]"
+
     async def _process_message_attachments(self, message: Any) -> tuple[list[dict], str]:
         """处理消息中的附件，返回图片数据和附件描述文本。
 
@@ -612,28 +639,12 @@ class AIQQBot(botpy.Client):
                 fn = getattr(att, 'filename', '') or ''
                 result = await self.agent.receive_file(att)
                 if result["status"] == "ok":
-                    if result.get("text_preview"):
-                        parts.append(f"[文件: {fn}]\n内容预览:\n{result['text_preview'][:500]}")
-                    else:
-                        if ct.startswith("image/"):
-                            save_path = result.get('save_path', '')
-                            parts.append(f"[图片: {fn}，已保存到 {save_path}]")
-                            try:
-                                mime, img_b64 = encode_image_to_base64(save_path)
-                                image_data.append({"mimeType": mime, "data": img_b64})
-                            except FileNotFoundError:
-                                pass
-                            except (OSError, ValueError, RuntimeError) as e:
-                                logger.warning("qq_bot.image_encode_failed", error=str(e))
-                        else:
-                            parts.append(f"[文件: {fn}，已保存到 {result['save_path']}]")
+                    part, img = self._attachment_ok_part(ct, fn, result)
+                    parts.append(part)
+                    if img is not None:
+                        image_data.append(img)
                 else:
-                    if ct.startswith("image/"):
-                        parts.append(f"[图片: {fn or 'image'}]")
-                    elif ct.startswith("video/"):
-                        parts.append(f"[视频: {fn or 'video'}]")
-                    else:
-                        parts.append(f"[附件: {fn or 'unknown'}]")
+                    parts.append(self._attachment_failed_part(ct, fn))
             attachment_info = " ".join(str(p) for p in parts)
         return image_data, attachment_info
 
@@ -684,6 +695,14 @@ class AIQQBot(botpy.Client):
         from core.background_tasks import _spawn
         _spawn(_c2c_reply_with_lock())
 
+    def _extract_c2c_sender(self, message: C2CMessage) -> tuple[str, str]:
+        """提取 C2C 发送者 openid 与规范化 user_id，并缓存最近 openid。"""
+        user_openid = getattr(message.author, 'user_openid', '') if hasattr(message, 'author') else ''
+        user_id = f"qq_{user_openid}" if user_openid else "qq_unknown"
+        if user_openid:
+            self._last_c2c_openid = user_openid
+        return user_openid, user_id
+
     async def _parse_c2c_message(self, message: C2CMessage) -> tuple[str, list, str, str, str] | None:
         """解析 C2C 消息内容和发送者信息。
 
@@ -697,10 +716,7 @@ class AIQQBot(botpy.Client):
             return None
         user_input = _build_user_input(content, attachment_info)
 
-        user_openid = getattr(message.author, 'user_openid', '') if hasattr(message, 'author') else ''
-        user_id = f"qq_{user_openid}" if user_openid else "qq_unknown"
-        if user_openid:
-            self._last_c2c_openid = user_openid
+        user_openid, user_id = self._extract_c2c_sender(message)
         logger.info("qq_bot.c2c_message", user_id=user_id, openid=user_openid, content=user_input[:80])
         return content, image_data, user_input, user_openid, user_id
 
