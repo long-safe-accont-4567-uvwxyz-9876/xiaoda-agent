@@ -410,8 +410,7 @@ class DatabaseManager:
         self._read_idx += 1
         return conn
 
-    async def _run_migrations(self) -> None:
-        """按 version 顺序执行所有数据库迁移。每个迁移独立事务，失败时 fail-fast 阻止启动。"""
+    async def _setup_migration_state(self) -> None:
         # 逐条执行 DDL，避免 executescript() 在 vfat 上的隐式 commit 问题
         await self._conn.execute("""
             CREATE TABLE IF NOT EXISTS schema_version (
@@ -433,6 +432,7 @@ class DatabaseManager:
         """)
         await self._conn.commit()
 
+    async def _recover_dirty_state(self) -> None:
         # Dirty state 检测：上次迁移未完成
         state_row = await self._conn.execute_fetchall(
             "SELECT dirty, last_version, last_error FROM migration_state WHERE id = 1"
@@ -468,9 +468,11 @@ class DatabaseManager:
                     pass
                 sys.exit(1)
 
+    async def _current_schema_version(self) -> int:
         row = await self._conn.execute_fetchall("SELECT MAX(version) FROM schema_version")
-        current = row[0][0] if row and row[0][0] is not None else 0
+        return row[0][0] if row and row[0][0] is not None else 0
 
+    async def _check_migration_integrity(self, current: int) -> int:
         # 防御性校验：检查关键列是否真正存在（防止 schema_version 被标记但列未实际添加）
         if current >= 10:
             epi_cols = {r["name"] for r in await self.fetch_all("PRAGMA table_info(episodic_memories)")}
@@ -490,9 +492,11 @@ class DatabaseManager:
                 await self._conn.execute("DELETE FROM schema_version WHERE version >= 18")
                 await self._conn.commit()
                 current = 17
+        return current
 
-        # (version, description, migrate_fn) 三元组列表
-        migrations = [
+    def _migration_entries(self) -> list:
+        """返回 (version, description, migrate_fn) 三元组列表，按 version 升序。"""
+        return [
             (1, "temporal_knowledge_graph", self._migrate_v1),
             (2, "conversation_logs.session_id", self._migrate_v2),
             (3, "fts5_index+consolidation_candidates", self._migrate_v3),
@@ -521,7 +525,14 @@ class DatabaseManager:
             (26, "conversation_logs.request_context_json", self._migrate_v26),
             (27, "workflow_v2_tables", self._migrate_v27),
         ]
-        for version, desc, migrate_fn in migrations:
+
+    async def _run_migrations(self) -> None:
+        """按 version 顺序执行所有数据库迁移。每个迁移独立事务，失败时 fail-fast 阻止启动。"""
+        await self._setup_migration_state()
+        await self._recover_dirty_state()
+        current = await self._current_schema_version()
+        current = await self._check_migration_integrity(current)
+        for version, desc, migrate_fn in self._migration_entries():
             if current < version:
                 await self._apply_migration(version, desc, migrate_fn)
         await self._conn.commit()
@@ -883,34 +894,21 @@ class DatabaseManager:
         await self._conn.execute("""CREATE INDEX IF NOT EXISTS idx_memory_edges_source ON memory_edges(source_memory_id, edge_type)""")
         await self._conn.execute("""CREATE INDEX IF NOT EXISTS idx_memory_edges_target ON memory_edges(target_memory_id, edge_type)""")
 
-    async def _migrate_v14(self) -> None:
-        """v14: v0.6 认知架构 + 知识图谱 v2 — 5 张认知表 + episodic_memories 3 列 + 9 索引 + KG v2 表。
-
-        Part 1 (cognitive):
-        - semantic_memories: 语义记忆（consolidation 后的长期记忆）
-        - memory_connections: 记忆连接图
-        - bridge_memories: 桥接记忆
-        - memory_revisions: 冲突修订链
-        - preference_patterns: 偏好模式
-        - episodic_memories: salience/last_accessed/status（ALTER TABLE 加列，幂等守卫）
-        - 9 个索引（CREATE INDEX IF NOT EXISTS，天然幂等）
-
-        Part 2 (kg_v2):
-        - kg_episodes/kg_entities_v2/kg_relations_v2/kg_communities
-        - 数据迁移: knowledge_entities → kg_entities_v2, knowledge_relations → kg_relations_v2
-        - FTS5 索引回填（含 FTS5 可用性检测，降级为空表）
-        """
-        # 0. 检测 FTS5 可用性（Windows 用户可能缺少 FTS5 扩展）
-        _fts5_available = True
+    async def _detect_fts5(self) -> bool:
+        """检测 FTS5 可用性（Windows 用户可能缺少 FTS5 扩展）。"""
         try:
             await self._conn.execute(
                 "CREATE VIRTUAL TABLE IF NOT EXISTS _fts5_check USING fts5(x UNINDEXED, y)"
             )
             await self._conn.execute("DROP TABLE IF EXISTS _fts5_check")
+            return True
         except Exception:
-            _fts5_available = False
             logger.warning("database.fts5_not_available - FTS5虚拟表将跳过创建")
+            return False
 
+    async def _migrate_v14_cognitive_tables(self, fts5_available: bool) -> None:
+        """v14 Part 1 (cognitive)：semantic_memories/memory_connections/bridge_memories/
+        memory_revisions/preference_patterns 5 张认知表 + episodic_memories 3 列 + 9 索引。"""
         # 1. episodic_memories 新增 3 列（幂等：先检查列是否存在，镜像 v13 模式）
         await self._ensure_columns("episodic_memories", {
             "salience": "salience REAL DEFAULT 0.5",
@@ -936,6 +934,9 @@ class DatabaseManager:
 
         logger.info("database.migration_v14_cognitive_tables_done")
 
+    async def _migrate_v14_kg_v2_tables(self, fts5_available: bool) -> None:
+        """v14 Part 2 (kg_v2)：kg_episodes/kg_entities_v2/kg_relations_v2/kg_communities 表
+        + knowledge_entities/relations 数据迁移 + FTS5 索引回填。"""
         # ── Part 2: kg_v2 tables — 时序事实、实体演化、Episode溯源、社区发现 ──
         # 1. 创建 v2 表
         await self._conn.execute("""CREATE TABLE IF NOT EXISTS kg_episodes ( id TEXT PRIMARY KEY, content TEXT NOT NULL, source_type TEXT DEFAULT 'summary', source_description TEXT DEFAULT '', valid_at REAL NOT NULL, created_at REAL NOT NULL, group_id TEXT DEFAULT 'default' )""")
@@ -955,13 +956,13 @@ class DatabaseManager:
         await self._conn.execute("""CREATE INDEX IF NOT EXISTS idx_kg_eer_edge ON kg_edge_episode_refs(edge_id)""")
 
         # FTS5 虚拟表单独创建（条件守卫：FTS5不可用时降级跳过）
-        if _fts5_available:
+        if fts5_available:
             try:
                 await self._conn.execute("""CREATE VIRTUAL TABLE IF NOT EXISTS kg_entities_v2_fts USING fts5( id UNINDEXED, name_summary )""")
                 await self._conn.execute("""CREATE VIRTUAL TABLE IF NOT EXISTS kg_relations_v2_fts USING fts5( id UNINDEXED, fact )""")
             except Exception as e:
                 logger.warning("database.fts5_create_failed", error=str(e))
-                _fts5_available = False
+                fts5_available = False
 
         # 1b. 幂等添加 community_id 列（修复 name_embedding 语义劫持）
         await self._ensure_columns("kg_entities_v2", {
@@ -1019,7 +1020,7 @@ class DatabaseManager:
         """)
 
         # 4. 回填 FTS5 索引 (条件守卫: FTS5不可用时跳过，数据完整性不受影响)
-        if _fts5_available:
+        if fts5_available:
             try:
                 await self._conn.execute("""
                     INSERT OR IGNORE INTO kg_entities_v2_fts (id, name_summary)
@@ -1034,6 +1035,12 @@ class DatabaseManager:
             except Exception as e:
                 logger.warning("database.fts5_backfill_failed", error=str(e))
                 # FTS5回填失败非致命，KG搜索降级为LIKE查询
+
+    async def _migrate_v14(self) -> None:
+        """v14: v0.6 认知架构 + 知识图谱 v2 — 5 张认知表 + episodic_memories 3 列 + 9 索引 + KG v2 表。"""
+        _fts5_available = await self._detect_fts5()
+        await self._migrate_v14_cognitive_tables(_fts5_available)
+        await self._migrate_v14_kg_v2_tables(_fts5_available)
 
     async def _migrate_v15(self) -> None:
         """v15: FSRS-DSR 记忆模型 — 为 episodic_memories 和 concept_nodes 添加 FSRS 列。
