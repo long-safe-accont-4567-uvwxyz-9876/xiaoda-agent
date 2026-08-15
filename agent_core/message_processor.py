@@ -763,33 +763,12 @@ class MessageProcessorMixin:
         _stage_t1 = time.time()
         chat_targets = await self._parse_chat_target(user_input, user_id)
         clean_input = ChatProcessor.clean_mention_from_input(user_input)
+        force_voice = self._resolve_voice_force(clean_input)
 
-        voice_intent = self._detect_voice_intent(clean_input)
-        if voice_intent == "off":
-            self.set_voice_mode(False)
-            force_voice = False
-        elif voice_intent == "on":
-            force_voice = not self._voice_mode
-        else:
-            force_voice = False
-
-        if not clean_input:
-            target_name = get_agent_display_name(chat_targets[0]) if chat_targets else get_agent_display_name('xiaoda')
-            confirm_msg = f"好～现在跟{target_name}说话啦！有什么想聊的呀？"
-            trace.info("agent.chat_target_switch", target=chat_targets)
-            return ProcessResult(reply=confirm_msg, emotion="greeting")
-
-        non_xiaoda_targets = [t for t in chat_targets if t != "xiaoda"]
-        if non_xiaoda_targets:
-            if len(non_xiaoda_targets) == 1:
-                return await self._dispatch_single_sub_agent(
-                    non_xiaoda_targets[0], clean_input, user_id, source, session_id, trace,
-                    force_voice=force_voice, ctx=ctx,
-                )
-            return await self._dispatch_parallel_sub_agents(
-                non_xiaoda_targets, clean_input, user_id, source, session_id, trace,
-                force_voice=force_voice, ctx=ctx,
-            )
+        early_result = await self._maybe_dispatch_chat_target(
+            chat_targets, clean_input, user_id, source, session_id, trace, force_voice, ctx)
+        if early_result is not None:
+            return early_result
 
         # P0 修复：取消 fastpath 机制（用户明确要求"取消fastpath机制，通道分类性价比太低了"）
         # 根因：fastpath 把天气/时间等需要工具的问题误判为"简单闲聊"，跳过工具调用 → 瞎扯。
@@ -809,6 +788,40 @@ class MessageProcessorMixin:
             logger.warning(f"agent.stage_slow stage=main_path elapsed_ms={_stage_main_ms} pre_main_ms={_pre_ms} restore_ms={_stage_restore_ms}")
 
         return result
+
+    def _resolve_voice_force(self, clean_input: str) -> bool:
+        """根据语音意图切换 voice_mode，返回本轮是否强制语音。"""
+        voice_intent = self._detect_voice_intent(clean_input)
+        if voice_intent == "off":
+            self.set_voice_mode(False)
+            return False
+        if voice_intent == "on":
+            return not self._voice_mode
+        return False
+
+    async def _maybe_dispatch_chat_target(
+        self, chat_targets: list[str], clean_input: str, user_id: str, source: str,
+        session_id: str, trace: Any, force_voice: bool, ctx: RequestContext,
+    ) -> ProcessResult | None:
+        """处理空输入确认与子 agent 路由；命中返回结果，否则返回 None 走主路径。"""
+        if not clean_input:
+            target_name = get_agent_display_name(chat_targets[0]) if chat_targets else get_agent_display_name('xiaoda')
+            confirm_msg = f"好～现在跟{target_name}说话啦！有什么想聊的呀？"
+            trace.info("agent.chat_target_switch", target=chat_targets)
+            return ProcessResult(reply=confirm_msg, emotion="greeting")
+
+        non_xiaoda_targets = [t for t in chat_targets if t != "xiaoda"]
+        if non_xiaoda_targets:
+            if len(non_xiaoda_targets) == 1:
+                return await self._dispatch_single_sub_agent(
+                    non_xiaoda_targets[0], clean_input, user_id, source, session_id, trace,
+                    force_voice=force_voice, ctx=ctx,
+                )
+            return await self._dispatch_parallel_sub_agents(
+                non_xiaoda_targets, clean_input, user_id, source, session_id, trace,
+                force_voice=force_voice, ctx=ctx,
+            )
+        return None
 
     async def _init_and_restore_context(self, ctx: Any, user_input: Any, user_id: Any, source: Any,
                                          status_callback: Any, user_openid: Any, session_id: Any) -> tuple:
@@ -837,25 +850,33 @@ class MessageProcessorMixin:
             _orig_suffix = session_id.rsplit(":", 1)[-1] if session_id else ""
             session_id = f"qq_group:{user_openid}:{_orig_suffix}" if _orig_suffix else f"qq_group:{user_openid}"
 
-        # 按当前用户恢复历史摘要（群聊多用户上下文隔离）
-        # P0 修复（用户反馈"对话链路阻塞"根因）：
-        # switch_user_context 和 restore_from_db 曾因数据库连接竞争/锁等待阻塞 38 秒
-        # （日志 17:23:16 agent.process.start → 17:23:54 context.restored）。
-        # 修复：给两步分别加超时，超时后降级跳过（宁可上下文不完整也不阻塞主流程）。
-        # P0-1 修复（QQ 会话恢复键与写库键不一致 → 突然失忆）：
-        # 写库键为 qq_{openid}（qq_bot_adapter.py:628），恢复必须用同一 user_id，
-        # 否则 restore_from_db 用裸 openid 查询 → DB 返回 0 行 → 每次重启后完全失忆。
+        # 按当前用户恢复历史摘要（群聊多用户上下文隔离），带超时降级
         _restore_id = user_id or user_openid
         if _restore_id:
-            await MessageProcessorMixin._call_with_timeout(
-                self,
-                self.context.switch_user_context(_restore_id),
-                timeout=5.0,
-                timeout_log="agent.switch_user_context_timeout",
-                error_log="agent.switch_user_context_failed",
-                timeout_kwargs={"user_id": _restore_id, "hint": "锁竞争或事件循环阻塞，跳过用户切换"},
-            )
-        if _restore_id and self.db:
+            await MessageProcessorMixin._restore_user_context(self, _restore_id)
+
+        logger.info("pipeline.restore.done proc_id={} elapsed_ms={}",
+                    _proc_id, int((time.time() - _restore_t0) * 1000))
+        return trace, session_id, allowed, reason
+
+    async def _restore_user_context(self, _restore_id: str) -> None:
+        """按当前用户恢复历史摘要（群聊多用户上下文隔离），带超时降级。
+
+        P0 修复（用户反馈"对话链路阻塞"根因）：switch_user_context 和 restore_from_db
+        曾因数据库连接竞争/锁等待阻塞 38 秒，故给两步分别加超时，超时降级跳过
+        （宁可上下文不完整也不阻塞主流程）。
+        P0-1 修复（QQ 会话恢复键与写库键不一致 → 突然失忆）：写库键为 qq_{openid}，
+        恢复必须用同一 user_id，否则 restore_from_db 用裸 openid 查询 → DB 0 行 → 失忆。
+        """
+        await MessageProcessorMixin._call_with_timeout(
+            self,
+            self.context.switch_user_context(_restore_id),
+            timeout=5.0,
+            timeout_log="agent.switch_user_context_timeout",
+            error_log="agent.switch_user_context_failed",
+            timeout_kwargs={"user_id": _restore_id, "hint": "锁竞争或事件循环阻塞，跳过用户切换"},
+        )
+        if self.db:
             await MessageProcessorMixin._call_with_timeout(
                 self,
                 self.context.restore_from_db(
@@ -866,10 +887,6 @@ class MessageProcessorMixin:
                 error_log="agent.restore_failed",
                 timeout_kwargs={"user_id": _restore_id, "hint": "数据库查询阻塞，跳过历史摘要恢复"},
             )
-
-        logger.info("pipeline.restore.done proc_id={} elapsed_ms={}",
-                    _proc_id, int((time.time() - _restore_t0) * 1000))
-        return trace, session_id, allowed, reason
 
     def _try_greeting_shortcut(self, user_input: str, user_id: str, source: str) -> ProcessResult | None:
         """G1: 纯问候短路 - 跳过 LLM 直接返回 <100ms.
