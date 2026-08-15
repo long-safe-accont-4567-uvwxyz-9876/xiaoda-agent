@@ -373,7 +373,10 @@ class MemoryDB:
                 [min_importance, *scope_params, limit],
             )
         rows = await cursor.fetchall()
-        return [dict(r) for r in rows]
+        result = [dict(r) for r in rows]
+        logger.debug("db_memory.search_by_importance", scoped=scope is not None,
+                     limit=limit, count=len(result))
+        return result
 
     async def search_memories_by_importance(self, min_importance: float = 0.3, limit: int = 10) -> Any:
         return await self._search_by_importance_impl(min_importance, limit, None)
@@ -419,7 +422,10 @@ class MemoryDB:
                     [fts_query, *scope_params, limit],
                 )
             rows = await cursor.fetchall()
-            return _rows_to_fts_results(rows)
+            result = _rows_to_fts_results(rows)
+            logger.debug("db_memory.search_fts", scoped=scope is not None,
+                         limit=limit, count=len(result))
+            return result
         except Exception as e:
             logger.warning(event_label, error=str(e))
             return []
@@ -458,7 +464,10 @@ class MemoryDB:
                 [start_ts, end_ts, *scope_params, limit],
             )
         rows = await cursor.fetchall()
-        return [dict(r) for r in rows]
+        result = [dict(r) for r in rows]
+        logger.debug("db_memory.search_by_time", scoped=scope is not None,
+                     limit=limit, count=len(result))
+        return result
 
     async def search_memories_by_time_scoped(self, start_ts: float, end_ts: float,
                                               scope: Any, limit: int = 20,
@@ -1197,7 +1206,10 @@ class MemoryDB:
                     [*clean_labels, *scope_params, limit],
                 )
             rows = await cursor.fetchall()
-            return [dict(r) for r in rows]
+            result = [dict(r) for r in rows]
+            logger.debug("db_memory.search_by_emotion", scoped=scope is not None,
+                         limit=limit, count=len(result))
+            return result
         except Exception as e:
             logger.warning(event_label, error=str(e))
             return []
