@@ -879,6 +879,135 @@ class AIQQBot(botpy.Client):
             except (OSError, RuntimeError, ConnectionError) as e:
                 logger.error(f"qq_bot.c2c_fallback_reply_failed: {e}")
 
+    async def _extract_group_message_input(self, message: GroupMessage) -> tuple[str, Any, Any, str, str]:
+        """提取群消息输入：返回 (content, image_data, attachment_info, member_openid, user_id)。"""
+        content = (getattr(message, 'content', None) or "").strip()
+        content = strip_qq_face_tags(content)  # 剥离 QQ 表情标签，防止污染 LLM 上下文被模仿
+        image_data, attachment_info = await self._process_message_attachments(message)
+        member_openid = getattr(message.author, 'member_openid', '') if hasattr(message, 'author') else ''
+        user_id = f"qq_{member_openid}" if member_openid else "qq_unknown"
+        return content, image_data, attachment_info, member_openid, user_id
+
+    async def _handle_group_whoami(self, message: Any, content: str, member_openid: str) -> bool:
+        """/whoami 指令：回复发送者 openid；命中返回 True。"""
+        if content.strip() in ("/whoami", "/whoami "):
+            await message.reply(
+                content=f"你的 OpenID 是：\n{member_openid}\n\n在 Setup 配置页面的「主人 QQ OpenID」填入此值即可绑定主人身份。",
+                msg_seq=_next_msg_seq(),
+            )
+            return True
+        return False
+
+    async def _handle_group_hitl(self, content: str, member_openid: str, user_id: str) -> bool:
+        """HITL 待审批回复匹配（"确认"/"取消"）；命中返回 True。"""
+        if not self.hitl_enabled:
+            return False
+        approval_user = member_openid or user_id
+        return await self.im_approval.handle_user_reply(approval_user, content)
+
+    async def _send_group_ack(self, message: Any) -> None:
+        """立即发送 ACK（群聊被动回复配额 1 次）。失败只记 debug。"""
+        try:
+            await message.reply(content=get_ack_message('xiaoda'), msg_seq=_next_msg_seq())
+        except (OSError, RuntimeError, ConnectionError) as e:
+            logger.debug("qq_bot.ack_send_failed", error=str(e))
+
+    async def _run_group_agent(self, message: Any, user_input: str, user_id: str,
+                               member_openid: str, image_data: Any, is_master: bool) -> Any:
+        """绑定 QQUser、调用 agent.process、解绑、高危审批，返回 result。"""
+        async def status_notify(msg: str) -> None:
+            pass
+
+        async def _group_reply(content: str, msg_seq: int = 0) -> None:
+            await message.reply(content=content, msg_seq=msg_seq)
+
+        # Q1 修复：群聊被动回复配额 5 次/5 分钟，ACK+4 片回复已占满 5 次，
+        # SUB_STARTED 通知会击穿配额触发 40034105 → 群聊禁用开始通知。
+        qq_user = QQUser(
+            reply_fn=_group_reply,
+            msg_seq_fn=_next_msg_seq,
+            notify_started=False,
+        )
+        token = event_bus.bind_user(qq_user)
+        try:
+            result = await asyncio.wait_for(
+                self.agent.process(user_input, user_id=user_id, source="qq_group",
+                                  user_openid=member_openid,
+                                  status_callback=status_notify,
+                                  image_data=image_data if image_data else None,
+                                  is_master=is_master),
+                timeout=120,  # 降低兜底超时，避免长时间堵塞用户消息队列
+            )
+        finally:
+            event_bus.unbind_user(token)
+        # HITL: 高危操作两段式确认（检测 __HIGH_RISK_OP__ 标记）
+        return await self._check_high_risk_approval(
+            result, message, member_openid or user_id, is_master)
+
+    async def _handle_group_at_message(self, message: GroupMessage, group_lock_key: str) -> None:
+        # Q5 修复：user_id/user_input 定义于 try 块内，_process_message_attachments
+        # 等步骤抛异常时 TimeoutError/error 分支引用它们会 NameError——
+        # 在方法入口预置默认值，保证异常分支可安全引用（对齐 c2c 的参数绑定）。
+        user_id = "qq_unknown"
+        user_input = ""
+        try:
+            async with self._group_locks[group_lock_key]:
+                content, image_data, attachment_info, member_openid, user_id = \
+                    await self._extract_group_message_input(message)
+
+                if not content and not attachment_info:
+                    return
+
+                user_input = _build_user_input(content, attachment_info)
+                logger.info("qq_bot.group_message", user_id=user_id, openid=member_openid, content=user_input[:80])
+
+                # 主人识别：对比 member_openid 与 MASTER_QQ_OPENID（逗号分隔多值）
+                # on_group_add_robot 已自动绑定拉群者的 member_openid
+                master_ids = _parse_master_ids()
+                is_master = bool(master_ids) and member_openid in master_ids
+                if is_master:
+                    logger.info("qq_bot.master_identified", member_openid=member_openid)
+                else:
+                    logger.info("qq_bot.non_master_message", user_id=user_id, openid=member_openid, content=user_input[:80])
+
+                if self.nudge_engine:
+                    self.nudge_engine.poke()
+
+                if await self._handle_group_whoami(message, content, member_openid):
+                    return
+
+                if await self._handle_group_hitl(content, member_openid, user_id):
+                    return
+
+                await self._send_group_ack(message)
+
+                result = await self._run_group_agent(
+                    message, user_input, user_id, member_openid, image_data, is_master)
+                if result.reply:
+                    await self._send_reply_with_sticker(message, result)
+        except TimeoutError:
+            logger.warning("qq_bot.group_timeout user=%s", user_id)
+            if hasattr(self.agent, 'context') and self.agent.context:
+                self.agent.context.record_failure("处理超时", user_input)
+            try:
+                await message.reply(
+                    content=f"{get_agent_display_name('xiaoda')}想得太入神了……能再说一次吗？🌱",
+                    msg_seq=_next_msg_seq(),
+                )
+            except (OSError, RuntimeError, ConnectionError) as _e:
+                logger.debug("qq_bot.group_timeout_reply_failed", error=str(_e))
+        except (RuntimeError, OSError, ValueError) as e:
+            logger.error(f"qq_bot.group_error: {e}", exc_info=True)
+            try:
+                await message.reply(
+                    content="嗯……出了点小问题，等会儿再聊好不好？",
+                    msg_seq=_next_msg_seq(),
+                )
+            except (OSError, RuntimeError, ConnectionError) as e2:
+                logger.error(f"qq_bot.group_fallback_reply_failed: {e2}")
+        finally:
+            self._cleanup_message_lock(self._group_locks, group_lock_key)
+
     async def on_group_at_message_create(self, message: GroupMessage) -> None:
         msg_id = getattr(message, 'id', '') or getattr(message, 'message_id', '')
         if msg_id and self._is_duplicate_msg(msg_id):
@@ -889,111 +1018,9 @@ class AIQQBot(botpy.Client):
         if _group_lock_key not in self._group_locks:
             self._group_locks[_group_lock_key] = asyncio.Lock()
 
-        async def _group_reply_with_lock() -> None:
-            # Q5 修复：user_id/user_input 定义于 try 块内，_process_message_attachments
-            # 等步骤抛异常时 TimeoutError/error 分支引用它们会 NameError——
-            # 在闭包入口预置默认值，保证异常分支可安全引用（对齐 c2c 的参数绑定）。
-            user_id = "qq_unknown"
-            user_input = ""
-            try:
-                async with self._group_locks[_group_lock_key]:
-                    content = (getattr(message, 'content', None) or "").strip()
-                    content = strip_qq_face_tags(content)  # 剥离 QQ 表情标签，防止污染 LLM 上下文被模仿
-
-                    image_data, attachment_info = await self._process_message_attachments(message)
-
-                    if not content and not attachment_info:
-                        return
-
-                    user_input = _build_user_input(content, attachment_info)
-
-                    member_openid = getattr(message.author, 'member_openid', '') if hasattr(message, 'author') else ''
-                    user_id = f"qq_{member_openid}" if member_openid else "qq_unknown"
-                    logger.info("qq_bot.group_message", user_id=user_id, openid=member_openid, content=user_input[:80])
-
-                    # 主人识别：对比 member_openid 与 MASTER_QQ_OPENID（逗号分隔多值）
-                    # on_group_add_robot 已自动绑定拉群者的 member_openid
-                    master_ids = _parse_master_ids()
-                    is_master = bool(master_ids) and member_openid in master_ids
-                    if is_master:
-                        logger.info("qq_bot.master_identified", member_openid=member_openid)
-                    else:
-                        logger.info("qq_bot.non_master_message", user_id=user_id, openid=member_openid, content=user_input[:80])
-
-                    if self.nudge_engine:
-                        self.nudge_engine.poke()
-
-                    # /whoami 指令：回复发送者的 openid（用于主人在 Setup 中填写）
-                    if content.strip() in ("/whoami", "/whoami "):
-                        await message.reply(content=f"你的 OpenID 是：\n{member_openid}\n\n在 Setup 配置页面的「主人 QQ OpenID」填入此值即可绑定主人身份。", msg_seq=_next_msg_seq())
-                        return
-
-                    # HITL: 若用户有待审批请求，先尝试匹配回复（"确认"/"取消"），匹配则跳过正常处理
-                    if self.hitl_enabled:
-                        approval_user = member_openid or user_id
-                        if await self.im_approval.handle_user_reply(approval_user, content):
-                            return
-
-                    # 群聊被动回复 5 分钟内最多 2 次，无主动消息权限（40034105）
-                    # 策略：每次都先发 ACK（1 次配额），再用单条发送回复（1 次配额）
-                    # status_callback 静默（不消耗配额）
-                    async def status_notify(msg: str) -> None:
-                        pass
-
-                    # 立即发送 ACK
-                    try:
-                        await message.reply(content=get_ack_message('xiaoda'), msg_seq=_next_msg_seq())
-                    except (OSError, RuntimeError, ConnectionError) as e:
-                        logger.debug("qq_bot.ack_send_failed", error=str(e))
-
-                    # 绑定 QQUser 到 EventBus（群聊也需要子代理事件投递）
-                    async def _group_reply(content: str, msg_seq: int = 0) -> None:
-                        await message.reply(content=content, msg_seq=msg_seq)
-                    # Q1 修复：群聊被动回复配额 5 次/5 分钟，ACK+4 片回复已占满 5 次，
-                    # SUB_STARTED 通知会击穿配额触发 40034105 → 群聊禁用开始通知。
-                    qq_user = QQUser(
-                        reply_fn=_group_reply,
-                        msg_seq_fn=_next_msg_seq,
-                        notify_started=False,
-                    )
-                    token = event_bus.bind_user(qq_user)
-                    try:
-                        result = await asyncio.wait_for(
-                            self.agent.process(user_input, user_id=user_id, source="qq_group",
-                                              user_openid=member_openid,
-                                              status_callback=status_notify,
-                                              image_data=image_data if image_data else None,
-                                              is_master=is_master),
-                            timeout=120,  # 降低兜底超时，避免长时间堵塞用户消息队列
-                        )
-                    finally:
-                        event_bus.unbind_user(token)
-                    # HITL: 高危操作两段式确认（检测 __HIGH_RISK_OP__ 标记）
-                    result = await self._check_high_risk_approval(
-                        result, message, member_openid or user_id, is_master)
-                    if result.reply:
-                        await self._send_reply_with_sticker(message, result)
-            except TimeoutError:
-                logger.warning("qq_bot.group_timeout user=%s", user_id)
-                if hasattr(self.agent, 'context') and self.agent.context:
-                    self.agent.context.record_failure("处理超时", user_input)
-                try:
-                    await message.reply(content=f"{get_agent_display_name('xiaoda')}想得太入神了……能再说一次吗？🌱", msg_seq=_next_msg_seq())
-                except (OSError, RuntimeError, ConnectionError) as _e:
-                    logger.debug("qq_bot.group_timeout_reply_failed", error=str(_e))
-            except (RuntimeError, OSError, ValueError) as e:
-                logger.error(f"qq_bot.group_error: {e}", exc_info=True)
-                try:
-                    await message.reply(content="嗯……出了点小问题，等会儿再聊好不好？", msg_seq=_next_msg_seq())
-                except (OSError, RuntimeError, ConnectionError) as e2:
-                    logger.error(f"qq_bot.group_fallback_reply_failed: {e2}")
-            finally:
-                self._cleanup_message_lock(self._group_locks, _group_lock_key)
-
-
         # 同类副作用修复：裸 create_task 无强引用会被 GC 回收导致回复丢失。
         from core.background_tasks import _spawn
-        _spawn(_group_reply_with_lock())
+        _spawn(self._handle_group_at_message(message, _group_lock_key))
     async def _send_reply_with_media(self, message: Any, reply: str,
                                       image_path: Path | None = None,
                                       image_url: str | None = None) -> None:
