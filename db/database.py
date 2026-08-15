@@ -1047,6 +1047,15 @@ class DatabaseManager:
         await self._migrate_v14_cognitive_tables(_fts5_available)
         await self._migrate_v14_kg_v2_tables(_fts5_available)
 
+    # FSRS-DSR 迁移列定义（episodic_memories 与 concept_nodes 共用）
+    _FSRS_COLUMNS = {
+        "difficulty": "difficulty REAL DEFAULT 5.0",
+        "stability": "stability REAL DEFAULT 3.0",
+        "phase": "phase TEXT DEFAULT 'buffer'",
+        "last_review": "last_review REAL DEFAULT 0",
+        "reinforcement_count": "reinforcement_count INTEGER DEFAULT 0",
+    }
+
     async def _migrate_v15(self) -> None:
         """v15: FSRS-DSR 记忆模型 — 为 episodic_memories 和 concept_nodes 添加 FSRS 列。
 
@@ -1068,21 +1077,8 @@ class DatabaseManager:
         - 旧数据统一 S=3.0, phase='buffer'
         - access_count >= 5 的旧数据直接标记为 phase='permanent'
         """
-        await self._ensure_columns("episodic_memories", {
-            "difficulty": "difficulty REAL DEFAULT 5.0",
-            "stability": "stability REAL DEFAULT 3.0",
-            "phase": "phase TEXT DEFAULT 'buffer'",
-            "last_review": "last_review REAL DEFAULT 0",
-            "reinforcement_count": "reinforcement_count INTEGER DEFAULT 0",
-        })
-
-        await self._ensure_columns("concept_nodes", {
-            "difficulty": "difficulty REAL DEFAULT 5.0",
-            "stability": "stability REAL DEFAULT 3.0",
-            "phase": "phase TEXT DEFAULT 'buffer'",
-            "last_review": "last_review REAL DEFAULT 0",
-            "reinforcement_count": "reinforcement_count INTEGER DEFAULT 0",
-        })
+        await self._ensure_columns("episodic_memories", self._FSRS_COLUMNS)
+        await self._ensure_columns("concept_nodes", self._FSRS_COLUMNS)
 
         # 旧数据迁移：access_count >= 5 → permanent
         await self._conn.execute(
