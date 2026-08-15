@@ -315,14 +315,14 @@ class MemoryDB:
     async def get_recent_conversations(self, limit: int = 20, user_id: str = "") -> Any:
         """获取最近的对话记录。支持按 user_id 过滤（群聊场景下隔离不同用户的历史）。"""
         if user_id:
-            cursor = await self._conn.execute(
+            cursor = await self._read_conn().execute(
                 """SELECT * FROM conversation_logs
                    WHERE user_id = ?
                    ORDER BY id DESC LIMIT ?""",
                 (user_id, limit),
             )
         else:
-            cursor = await self._conn.execute(
+            cursor = await self._read_conn().execute(
                 """SELECT * FROM conversation_logs
                    ORDER BY id DESC LIMIT ?""",
                 (limit,),
@@ -344,7 +344,7 @@ class MemoryDB:
             where += " AND user_id = ?"
             params.append(user_id)
         params.append(limit)
-        cursor = await self._conn.execute(
+        cursor = await self._read_conn().execute(
             f"""SELECT timestamp, user_message, assistant_reply FROM conversation_logs
                 {where} ORDER BY timestamp DESC LIMIT ?""",
             params,
@@ -577,7 +577,7 @@ class MemoryDB:
                                           entity_type: str = "TOPIC") -> dict | None:
         """按名称+类型查找实体"""
         try:
-            cursor = await self._conn.execute(
+            cursor = await self._read_conn().execute(
                 "SELECT * FROM memory_entities WHERE name=? AND entity_type=?",
                 (name, entity_type),
             )
@@ -590,7 +590,7 @@ class MemoryDB:
     async def find_memory_entity_by_id(self, entity_id: int) -> dict | None:
         """按 ID 查找实体"""
         try:
-            cursor = await self._conn.execute(
+            cursor = await self._read_conn().execute(
                 "SELECT * FROM memory_entities WHERE id=?", (entity_id,)
             )
             row = await cursor.fetchone()
@@ -606,7 +606,7 @@ class MemoryDB:
         if not fts_query:
             return []
         try:
-            cursor = await self._conn.execute(
+            cursor = await self._read_conn().execute(
                 """SELECT DISTINCT me.* FROM memory_entities_fts
                    JOIN memory_entities me ON me.id = memory_entities_fts.id
                    WHERE memory_entities_fts MATCH ?
@@ -733,7 +733,7 @@ class MemoryDB:
             scope_where, scope_params = _scope_where(
                 scope, is_raw=is_raw, table="em", include_archived_filter=False)
             params: list = [*entity_names, *scope_params, limit]
-            cursor = await self._conn.execute(
+            cursor = await self._read_conn().execute(
                 f"""SELECT DISTINCT em.* FROM entity_memory_links eml
                    JOIN memory_entities me ON me.id = eml.entity_id
                    JOIN episodic_memories em ON em.id = eml.memory_id
@@ -751,7 +751,7 @@ class MemoryDB:
     async def get_entities_by_memory_id(self, memory_id: int) -> list[dict]:
         """按记忆 ID 查询关联的实体列表"""
         try:
-            cursor = await self._conn.execute(
+            cursor = await self._read_conn().execute(
                 """SELECT me.* FROM entity_memory_links eml
                    JOIN memory_entities me ON me.id = eml.entity_id
                    WHERE eml.memory_id=?""",
@@ -814,7 +814,7 @@ class MemoryDB:
 
     async def get_all_memories(self, limit: int = 100) -> Any:
         """获取所有活跃记忆（排除已归档）"""
-        cursor = await self._conn.execute(
+        cursor = await self._read_conn().execute(
             "SELECT * FROM episodic_memories WHERE session_id != 'archived' ORDER BY timestamp DESC LIMIT ?",
             (limit,),
         )
@@ -827,7 +827,6 @@ class MemoryDB:
         try:
             await self._conn.execute("DELETE FROM episodic_memory_fts WHERE id=?", (memory_id,))
         except Exception as e:
-            from loguru import logger
             logger.debug("db_memory.fts_delete_failed", error=str(e))
         if auto_commit:
             await self._conn.commit()
@@ -934,7 +933,7 @@ class MemoryDB:
         if not fts_query:
             return []
         try:
-            cursor = await self._conn.execute(
+            cursor = await self._read_conn().execute(
                 """SELECT em.*, bm25(episodic_memory_fts) AS score
                    FROM episodic_memory_fts
                    JOIN episodic_memories em ON em.id = episodic_memory_fts.id
@@ -952,7 +951,6 @@ class MemoryDB:
                 results.append(d)
             return results
         except Exception as e:
-            from loguru import logger
             logger.warning("db_memory.fts_time_search_failed", error=str(e))
             return []
 
@@ -998,7 +996,6 @@ class MemoryDB:
                                      auto_commit=auto_commit)
             return True
         except Exception as e:
-            from loguru import logger
             logger.warning("db_memory.enrichment_update_failed", error=str(e))
             return False
 
@@ -1015,7 +1012,7 @@ class MemoryDB:
         return cursor.lastrowid
 
     async def get_latest_portrait(self) -> dict | None:
-        cursor = await self._conn.execute(
+        cursor = await self._read_conn().execute(
             "SELECT * FROM user_portrait ORDER BY id DESC LIMIT 1"
         )
         row = await cursor.fetchone()
@@ -1073,7 +1070,7 @@ class MemoryDB:
 
     async def get_pending_memories(self, limit: int = 100) -> list[dict]:
         """查询待索引的 RAG 记忆（rag_status='pending'），按时间升序"""
-        cursor = await self._conn.execute(
+        cursor = await self._read_conn().execute(
             """SELECT id, timestamp, summary, importance FROM episodic_memories
                WHERE rag_status='pending'
                ORDER BY timestamp ASC LIMIT ?""",
@@ -1087,7 +1084,7 @@ class MemoryDB:
     async def get_episodic_count_undistilled(self) -> int:
         """统计未蒸馏的情景记忆数量（distilled=0）"""
         try:
-            cursor = await self._conn.execute(
+            cursor = await self._read_conn().execute(
                 "SELECT COUNT(*) as cnt FROM episodic_memories WHERE distilled=0"
             )
             row = await cursor.fetchone()
@@ -1100,7 +1097,7 @@ class MemoryDB:
     async def get_distill_candidates(self, limit: int = 30) -> list[dict]:
         """查询最旧的未蒸馏记忆（按时间升序），用于蒸馏压缩"""
         try:
-            cursor = await self._conn.execute(
+            cursor = await self._read_conn().execute(
                 """SELECT id, timestamp, summary, importance FROM episodic_memories
                    WHERE distilled=0
                    ORDER BY timestamp ASC LIMIT ?""",
@@ -1158,7 +1155,7 @@ class MemoryDB:
     async def get_recent_undistilled(self, limit: int = 20) -> list[dict]:
         """获取最近的未蒸馏记忆（按时间降序），用于构建记忆提示"""
         try:
-            cursor = await self._conn.execute(
+            cursor = await self._read_conn().execute(
                 """SELECT id, timestamp, summary, importance FROM episodic_memories
                    WHERE distilled=0
                    ORDER BY timestamp DESC LIMIT ?""",
@@ -1244,7 +1241,7 @@ class MemoryDB:
         避免在 Python 层二次过滤。
         """
         try:
-            cursor = await self._conn.execute(
+            cursor = await self._read_conn().execute(
                 """SELECT * FROM episodic_memories
                    WHERE timestamp >= ? AND importance >= ?
                    ORDER BY importance DESC, timestamp DESC LIMIT ?""",
@@ -1298,14 +1295,14 @@ class MemoryDB:
         """
         try:
             if since_ts > 0:
-                cursor = await self._conn.execute(
+                cursor = await self._read_conn().execute(
                     """SELECT * FROM memory_recall_notes
                        WHERE created_at >= ?
                        ORDER BY created_at DESC LIMIT ?""",
                     (since_ts, limit),
                 )
             else:
-                cursor = await self._conn.execute(
+                cursor = await self._read_conn().execute(
                     """SELECT * FROM memory_recall_notes
                        ORDER BY created_at DESC LIMIT ?""",
                     (limit,),
@@ -1406,7 +1403,6 @@ class MemoryDB:
             rows = await cursor.fetchall()
             return [dict(r) for r in rows]
         except Exception as e:
-            from loguru import logger
             logger.warning("db_memory.child_fts_search_failed", error=str(e))
             return []
 
@@ -1449,7 +1445,7 @@ class MemoryDB:
     async def delete_children_by_parent(self, parent_id: int) -> int:
         """删除指定父chunk的所有子chunk（含FTS索引）。返回删除数量。"""
         # 先删FTS
-        cursor = await self._conn.execute(
+        cursor = await self._read_conn().execute(
             "SELECT id FROM memory_child_chunks WHERE parent_id=?", (parent_id,)
         )
         rows = await cursor.fetchall()
@@ -1483,7 +1479,7 @@ class MemoryDB:
 
     async def get_memories_since(self, since_ts: float,
                                   limit: int = 200) -> list[dict]:
-        cursor = await self._conn.execute(
+        cursor = await self._read_conn().execute(
             """SELECT * FROM episodic_memories
                WHERE timestamp >= ? AND session_id != 'archived'
                ORDER BY timestamp DESC LIMIT ?""",
