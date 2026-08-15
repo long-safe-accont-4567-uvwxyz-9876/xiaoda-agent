@@ -243,10 +243,7 @@ class DatabaseManager:
         """初始化只读连接池；单个连接失败记 warning 并停止。"""
         if self._read_pool:
             for _c in self._read_pool:
-                try:
-                    await _c.close()
-                except (OSError, RuntimeError):
-                    pass
+                await self._close_if_present(_c, "database.setup_read_pool_close_old_error")
             self._read_pool = []
         for _ in range(self._READ_POOL_SIZE):
             try:
@@ -388,23 +385,15 @@ class DatabaseManager:
         return result
 
     async def close(self) -> None:
-        if self._profile_conn:
-            await self._profile_conn.close()
-            self._profile_conn = None
-        if self._conn:
-            await self._conn.close()
-            self._conn = None
-        if self._readonly_conn:
-            try:
-                await self._readonly_conn.close()
-            except (OSError, RuntimeError):
-                pass
-            self._readonly_conn = None
+        """关闭所有连接（幂等，任一连接关闭失败不阻断后续关闭，避免泄漏）。"""
+        await self._close_if_present(self._profile_conn, "database.close_profile_conn_error")
+        self._profile_conn = None
+        await self._close_if_present(self._conn, "database.close_main_conn_error")
+        self._conn = None
+        await self._close_if_present(self._readonly_conn, "database.close_readonly_conn_error")
+        self._readonly_conn = None
         for _rc in self._read_pool:
-            try:
-                await _rc.close()
-            except (OSError, RuntimeError):
-                pass
+            await self._close_if_present(_rc, "database.close_read_pool_conn_error")
         self._read_pool = []
 
     def get_read_conn(self) -> aiosqlite.Connection:
