@@ -603,7 +603,8 @@ class ModelRouter:
         _ssrf_check(_mimo_url)  # SSRF 防护：校验 base_url
         self._client = AsyncOpenAI(api_key=_mimo_key, base_url=_mimo_url) if _mimo_key else None
         self._db = db
-        self._model_preference = "mimo"
+        # 默认偏好跟随 DEFAULT_PROVIDER（默认 mimo，但通过 provider_metadata.json 表达）
+        self._model_preference = _CFG_DEFAULT_PROVIDER
         self._cost_buffer: list[dict] = []
         self._cost_flush_threshold = 3
         self._last_cache_warning = 0.0
@@ -755,7 +756,7 @@ class ModelRouter:
         except ImportError:
             logger.debug("router.credential_pool_register_skip web module unavailable")
             return
-        _BUILTIN_PROVIDERS = {"mimo", "agnes"}
+        _BUILTIN_PROVIDERS = set(_get_builtin_providers())
         _PROVIDER_FORMAT = {
             "ollama": "openai",
             "llama.cpp": "openai",

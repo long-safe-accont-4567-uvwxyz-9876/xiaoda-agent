@@ -1,8 +1,10 @@
 {
   "schema_version": 1,
+  "default_provider": "mimo",
   "_comment": "Provider 元数据配置（替代 model_router.py / config.py 中的硬编码默认值）",
   "_doc": "所有默认值均来自各 provider 官方文档，标注 doc_url + doc_note 以便溯源。用户可通过此文件直接编辑，或通过环境变量覆盖（环境变量优先级最高）。",
   "_env_override": {
+    "DEFAULT_PROVIDER": "覆盖默认 provider（默认 mimo，不硬编码在代码里）",
     "AGNES_MAX_TOKENS_CAP": "覆盖 agnes.max_tokens_cap",
     "MIMO_MAX_TOKENS_CAP": "覆盖 mimo.max_tokens_cap",
     "OLLAMA_MAX_TOKENS_CAP": "覆盖 ollama.max_tokens_cap（0=不裁剪）",

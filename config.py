@@ -642,6 +642,24 @@ DEEPSEEK_BASE_URL = get_base_url_for_provider("deepseek")
 MIMO_BASE_URL = get_base_url_for_provider("mimo")
 
 
+def get_default_provider() -> str:
+    """返回默认 provider。
+
+    优先级：
+      1. 环境变量 DEFAULT_PROVIDER（最高）
+      2. provider_metadata.json 的顶层 default_provider
+      3. 空串（调用方负责兜底）
+
+    默认 mimo 通过 provider_metadata.json 的 default_provider 字段表达，
+    代码里不再硬编码 "mimo" 字符串。
+    """
+    env_val = os.getenv("DEFAULT_PROVIDER", "").strip()
+    if env_val:
+        return env_val.lower()
+    meta = _load_provider_metadata_cached()
+    return str(meta.get("default_provider", "") or "").strip().lower()
+
+
 # ── 内置 Provider 集合（从 provider_metadata.json 派生，无硬编码）──
 # N-2 修复：原代码多处硬编码 ("mimo", "agnes") 判断是否为内置 provider，
 # 新增第三个内置 provider 时需改多处代码。改为从 metadata 的 builtin: true 字段派生。
@@ -657,14 +675,12 @@ def get_builtin_providers() -> frozenset[str]:
     只需在 provider_metadata.json 标记 builtin: true，无需改代码。
 
     Returns:
-        内置 provider 名称的 frozenset，至少包含 "mimo"（最终兜底）
+        内置 provider 名称的 frozenset（从 metadata builtin: true 派生）
     """
     global _BUILTIN_PROVIDERS_CACHE
     if _BUILTIN_PROVIDERS_CACHE is not None:
         return _BUILTIN_PROVIDERS_CACHE
     builtin = {provider.id for provider in get_provider_catalog().list() if provider.builtin}
-    # mimo 是最终兜底，必须包含（即使 metadata 异常未标记也保留）
-    builtin.add("mimo")
     _BUILTIN_PROVIDERS_CACHE = frozenset(builtin)
     return _BUILTIN_PROVIDERS_CACHE
 
@@ -678,9 +694,9 @@ MIMO_MODEL = get_default_model_for_provider("mimo")
 TRUST_FORWARDED_FOR = os.getenv("TRUST_FORWARDED_FOR", "").strip().lower() in ("1", "true", "yes", "on")
 
 # ── 默认 Provider ──
-# 初始值：环境变量 DEFAULT_PROVIDER > mimo（MiMo 是默认兜底）
+# 初始值：环境变量 DEFAULT_PROVIDER > provider_metadata.json 的 default_provider（默认 mimo）
 # 运行时可通过 set_default_provider() 动态更新（Web UI 切换模型时调用）
-DEFAULT_PROVIDER = os.getenv("DEFAULT_PROVIDER", "mimo").strip().lower()
+DEFAULT_PROVIDER = get_default_provider()
 
 
 def set_default_provider(provider: str) -> None:
