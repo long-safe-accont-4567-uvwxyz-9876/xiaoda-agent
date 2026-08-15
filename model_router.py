@@ -82,8 +82,8 @@ _PROVIDER_CAPS_FROM_FILE: dict = _PROVIDER_METADATA.get("providers", {}) if isin
 # 先做"翻译（映射）"：把云模型名映射为用户本地实际 pull 的模型名。
 # 配置来源（无硬编码）：config/provider_metadata.json 的 ollama.model_name_map + ollama.default_model，
 # 用户可编辑，也可用环境变量覆盖（见下方 _OLLAMA_MODEL_MAP_OVERRIDE）。
-def _load_ollama_model_map() -> tuple[dict, str]:
-    """从 provider_metadata.json + 环境变量加载 Ollama 模型名映射。"""
+def _ollama_model_map_from_file() -> tuple[dict, str]:
+    """从 provider_metadata.json 读 ollama.model_name_map + default_model。"""
     _meta = _PROVIDER_CAPS_FROM_FILE.get("ollama", {}) if isinstance(_PROVIDER_CAPS_FROM_FILE, dict) else {}
     _map: dict = {}
     _default = ""
@@ -93,19 +93,35 @@ def _load_ollama_model_map() -> tuple[dict, str]:
             # 过滤以下划线开头的元字段（如 "_comment"）
             _map = {k: v for k, v in _mm.items() if not k.startswith("_")}
         _default = str(_meta.get("default_model", "") or "")
-    # 环境变量覆盖：OLLAMA_MODEL_MAP 为 JSON 字典，OLLAMA_DEFAULT_MODEL 为单个模型名
+    return _map, _default
+
+
+def _ollama_model_map_from_env(file_map: dict) -> dict:
+    """环境变量 OLLAMA_MODEL_MAP（JSON 字典）覆盖文件映射；解析失败告警并忽略。"""
     _env_map = os.getenv("OLLAMA_MODEL_MAP", "").strip()
-    if _env_map:
-        try:
-            import json as _json
-            _parsed = _json.loads(_env_map)
-            if isinstance(_parsed, dict):
-                _map = {k: v for k, v in _parsed.items() if isinstance(v, str) and v}
-        except (ValueError, TypeError):
-            logger.warning("router.ollama_model_map_env_invalid raw={}", _env_map)
+    if not _env_map:
+        return file_map
+    try:
+        import json as _json
+        _parsed = _json.loads(_env_map)
+        if isinstance(_parsed, dict):
+            return {k: v for k, v in _parsed.items() if isinstance(v, str) and v}
+    except (ValueError, TypeError):
+        logger.warning("router.ollama_model_map_env_invalid raw={}", _env_map)
+    return file_map
+
+
+def _ollama_default_model_from_env(file_default: str) -> str:
+    """环境变量 OLLAMA_DEFAULT_MODEL 覆盖文件默认模型名。"""
     _env_default = os.getenv("OLLAMA_DEFAULT_MODEL", "").strip()
-    if _env_default:
-        _default = _env_default
+    return _env_default if _env_default else file_default
+
+
+def _load_ollama_model_map() -> tuple[dict, str]:
+    """从 provider_metadata.json + 环境变量加载 Ollama 模型名映射。"""
+    _map, _default = _ollama_model_map_from_file()
+    _map = _ollama_model_map_from_env(_map)
+    _default = _ollama_default_model_from_env(_default)
     return _map, _default
 
 
@@ -313,11 +329,8 @@ PROVIDER_MAX_TOKENS_CAP: dict[str, int | None] = _load_provider_max_tokens_cap()
 
 # 跨 provider 映射：主 provider 故障时，flash/mini 切换到不同 provider
 # P0 修复：从 provider_metadata.json 的 _cross_provider_fallback 加载（不再硬编码）
-def _load_cross_provider_map() -> dict[str, tuple[str, str]]:
-    """从 provider_metadata.json 加载跨 provider 兜底映射。
-
-    优先级：provider_metadata.json > 环境变量推导 > 空字典（不兜底）。
-    """
+def _cross_provider_map_from_file() -> dict[str, tuple[str, str]]:
+    """从 provider_metadata.json 的 _cross_provider_fallback 读跨 provider 兜底映射。"""
     _result: dict[str, tuple[str, str]] = {}
     _cfg = _PROVIDER_METADATA.get("_cross_provider_fallback", {}) if isinstance(_PROVIDER_METADATA, dict) else {}
     for _p, _fb in _cfg.items():
@@ -328,12 +341,24 @@ def _load_cross_provider_map() -> dict[str, tuple[str, str]]:
             _fm = _fb.get("fallback_model", "")
             if _fp and _fm:
                 _result[_p] = (_fp, _fm)
-    # 兜底：环境变量推导（用户未配置 JSON 时仍可用）
-    if "agnes" not in _result and os.getenv("MIMO_MODEL_NAME"):
-        _result["agnes"] = ("mimo", os.getenv("MIMO_MODEL_NAME"))
-    if "mimo" not in _result and os.getenv("AGNES_TEXT_MODEL"):
-        _result["mimo"] = ("agnes", os.getenv("AGNES_TEXT_MODEL"))
     return _result
+
+
+def _apply_env_cross_provider_fallback(result: dict[str, tuple[str, str]]) -> dict[str, tuple[str, str]]:
+    """用环境变量推导的兜底映射补齐（用户未配置 JSON 时仍可用）。"""
+    if "agnes" not in result and os.getenv("MIMO_MODEL_NAME"):
+        result["agnes"] = ("mimo", os.getenv("MIMO_MODEL_NAME"))
+    if "mimo" not in result and os.getenv("AGNES_TEXT_MODEL"):
+        result["mimo"] = ("agnes", os.getenv("AGNES_TEXT_MODEL"))
+    return result
+
+
+def _load_cross_provider_map() -> dict[str, tuple[str, str]]:
+    """从 provider_metadata.json 加载跨 provider 兜底映射。
+
+    优先级：provider_metadata.json > 环境变量推导 > 空字典（不兜底）。
+    """
+    return _apply_env_cross_provider_fallback(_cross_provider_map_from_file())
 
 _CROSS_PROVIDER_MAP: dict[str, tuple[str, str]] = _load_cross_provider_map()
 
