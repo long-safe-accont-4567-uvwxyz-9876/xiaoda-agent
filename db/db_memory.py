@@ -95,6 +95,16 @@ def _scope_where(scope: Any, *, is_raw: int | None = None,
     return where, params
 
 
+def _rows_to_fts_results(rows: list) -> list[dict]:
+    """把 FTS 查询行转为 dict 列表，并将 bm25 负分转为正分。"""
+    results = []
+    for r in rows:
+        d = dict(r)
+        d["score"] = -d.get("score", 0)
+        results.append(d)
+    return results
+
+
 class MemoryDB:
     """管理情景记忆、画像等记忆数据的读写。"""
 
@@ -345,15 +355,28 @@ class MemoryDB:
         result.reverse()
         return result
 
-    async def search_memories_by_importance(self, min_importance: float = 0.3, limit: int = 10) -> Any:
-        cursor = await self._read_conn().execute(
-            """SELECT * FROM episodic_memories
-               WHERE importance >= ?
-               ORDER BY timestamp DESC LIMIT ?""",
-            (min_importance, limit),
-        )
+    async def _search_by_importance_impl(self, min_importance: float, limit: int,
+                                         scope: Any | None) -> list[dict]:
+        if scope is None:
+            cursor = await self._read_conn().execute(
+                """SELECT * FROM episodic_memories
+                   WHERE importance >= ?
+                   ORDER BY timestamp DESC LIMIT ?""",
+                (min_importance, limit),
+            )
+        else:
+            scope_where, scope_params = _scope_where(scope)
+            cursor = await self._read_conn().execute(
+                f"""SELECT * FROM episodic_memories
+                   WHERE importance >= ?{scope_where}
+                   ORDER BY timestamp DESC LIMIT ?""",
+                [min_importance, *scope_params, limit],
+            )
         rows = await cursor.fetchall()
         return [dict(r) for r in rows]
+
+    async def search_memories_by_importance(self, min_importance: float = 0.3, limit: int = 10) -> Any:
+        return await self._search_by_importance_impl(min_importance, limit, None)
 
     async def search_memories_by_importance_scoped(self, min_importance: float = 0.3,
                                                      limit: int = 10,
@@ -365,45 +388,45 @@ class MemoryDB:
         """
         if scope is None:
             return await self.search_memories_by_importance(min_importance, limit)
-        cursor = await self._read_conn().execute(
-            """SELECT * FROM episodic_memories
-               WHERE importance >= ?
-                 AND user_id = ? AND agent_id = ?
-                 AND session_id != 'archived'
-               ORDER BY timestamp DESC LIMIT ?""",
-            (min_importance, scope.user_id, scope.agent_id, limit),
-        )
-        rows = await cursor.fetchall()
-        return [dict(r) for r in rows]
+        return await self._search_by_importance_impl(min_importance, limit, scope)
 
-    async def search_memories_fts(self, query: str, limit: int = 20) -> list[dict]:
-        """FTS5 BM25 全文检索"""
+    async def _search_fts_impl(self, query: str, limit: int, scope: Any | None,
+                               is_raw: int | None, event_label: str) -> list[dict]:
         from db.fts_utils import _build_fts_query
         fts_query = _build_fts_query(query)
         if not fts_query:
             return []
         try:
-            cursor = await self._read_conn().execute(
-                """SELECT em.*, bm25(episodic_memory_fts) AS score
-                   FROM episodic_memory_fts
-                   JOIN episodic_memories em ON em.id = episodic_memory_fts.id
-                   WHERE episodic_memory_fts MATCH ?
-                   ORDER BY score ASC, em.importance DESC, em.timestamp DESC
-                   LIMIT ?""",
-                (fts_query, limit),
-            )
+            if scope is None:
+                cursor = await self._read_conn().execute(
+                    """SELECT em.*, bm25(episodic_memory_fts) AS score
+                       FROM episodic_memory_fts
+                       JOIN episodic_memories em ON em.id = episodic_memory_fts.id
+                       WHERE episodic_memory_fts MATCH ?
+                       ORDER BY score ASC, em.importance DESC, em.timestamp DESC
+                       LIMIT ?""",
+                    (fts_query, limit),
+                )
+            else:
+                scope_where, scope_params = _scope_where(scope, is_raw=is_raw, table="em")
+                cursor = await self._read_conn().execute(
+                    f"""SELECT em.*, bm25(episodic_memory_fts) AS score
+                       FROM episodic_memory_fts
+                       JOIN episodic_memories em ON em.id = episodic_memory_fts.id
+                       WHERE episodic_memory_fts MATCH ?{scope_where}
+                       ORDER BY score ASC, em.importance DESC, em.timestamp DESC
+                       LIMIT ?""",
+                    [fts_query, *scope_params, limit],
+                )
             rows = await cursor.fetchall()
-            results = []
-            for r in rows:
-                d = dict(r)
-                # bm25 returns negative values, convert to positive score
-                d["score"] = -d.get("score", 0)
-                results.append(d)
-            return results
+            return _rows_to_fts_results(rows)
         except Exception as e:
-            from loguru import logger
-            logger.warning("db_memory.fts_search_failed", error=str(e))
+            logger.warning(event_label, error=str(e))
             return []
+
+    async def search_memories_fts(self, query: str, limit: int = 20) -> list[dict]:
+        """FTS5 BM25 全文检索"""
+        return await self._search_fts_impl(query, limit, None, None, "db_memory.fts_search_failed")
 
     async def search_memories_fts_scoped(self, query: str, scope: Any,
                                           limit: int = 20,
@@ -415,33 +438,27 @@ class MemoryDB:
             limit: 返回条数上限
             is_raw: None=不限, 0=只查提炼知识, 1=只查原始记录
         """
-        from db.fts_utils import _build_fts_query
-        fts_query = _build_fts_query(query)
-        if not fts_query:
-            return []
-        try:
-            scope_where, scope_params = _scope_where(scope, is_raw=is_raw, table="em")
-            params: list = [fts_query, *scope_params, limit]
+        return await self._search_fts_impl(query, limit, scope, is_raw, "db_memory.fts_scoped_search_failed")
+
+    async def _search_by_time_impl(self, start_ts: float, end_ts: float, limit: int,
+                                   scope: Any | None, is_raw: int | None) -> list[dict]:
+        if scope is None:
             cursor = await self._read_conn().execute(
-                f"""SELECT em.*, bm25(episodic_memory_fts) AS score
-                   FROM episodic_memory_fts
-                   JOIN episodic_memories em ON em.id = episodic_memory_fts.id
-                   WHERE episodic_memory_fts MATCH ?
-                     {scope_where}
-                   ORDER BY score ASC, em.importance DESC, em.timestamp DESC
-                   LIMIT ?""",
-                params,
+                """SELECT * FROM episodic_memories
+                   WHERE timestamp >= ? AND timestamp < ?
+                   ORDER BY timestamp DESC LIMIT ?""",
+                (start_ts, end_ts, limit),
             )
-            rows = await cursor.fetchall()
-            results = []
-            for r in rows:
-                d = dict(r)
-                d["score"] = -d.get("score", 0)
-                results.append(d)
-            return results
-        except Exception as e:
-            logger.warning("db_memory.fts_scoped_search_failed", error=str(e))
-            return []
+        else:
+            scope_where, scope_params = _scope_where(scope, is_raw=is_raw)
+            cursor = await self._read_conn().execute(
+                f"""SELECT * FROM episodic_memories
+                   WHERE timestamp >= ? AND timestamp < ?{scope_where}
+                   ORDER BY timestamp DESC LIMIT ?""",
+                [start_ts, end_ts, *scope_params, limit],
+            )
+        rows = await cursor.fetchall()
+        return [dict(r) for r in rows]
 
     async def search_memories_by_time_scoped(self, start_ts: float, end_ts: float,
                                               scope: Any, limit: int = 20,
@@ -453,19 +470,7 @@ class MemoryDB:
             is_raw: None=不限, 0=只查提炼知识, 1=只查原始记录
         """
         try:
-            scope_where, scope_params = _scope_where(scope, is_raw=is_raw)
-            params: list = [start_ts, end_ts, *scope_params, limit]
-            # 2026-08-08 阻塞根因修复：原用写连接 _conn，后台写事务占用时
-            # 时间检索排队数秒 → 首条消息 8s 全空白超时。改读连接池，与 FTS/实体一致。
-            cursor = await self._read_conn().execute(
-                f"""SELECT * FROM episodic_memories
-                   WHERE timestamp >= ? AND timestamp < ?
-                     {scope_where}
-                   ORDER BY timestamp DESC LIMIT ?""",
-                params,
-            )
-            rows = await cursor.fetchall()
-            return [dict(r) for r in rows]
+            return await self._search_by_time_impl(start_ts, end_ts, limit, scope, is_raw)
         except Exception as e:
             logger.warning("db_memory.time_scoped_search_failed", error=str(e))
             return []
@@ -919,14 +924,7 @@ class MemoryDB:
             end_ts: 结束时间戳（秒）
             limit: 返回条数上限
         """
-        cursor = await self._conn.execute(
-            """SELECT * FROM episodic_memories
-               WHERE timestamp >= ? AND timestamp < ?
-               ORDER BY timestamp DESC LIMIT ?""",
-            (start_ts, end_ts, limit),
-        )
-        rows = await cursor.fetchall()
-        return [dict(r) for r in rows]
+        return await self._search_by_time_impl(start_ts, end_ts, limit, None, None)
 
     async def search_memories_fts_with_time(self, query: str, start_ts: float,
                                              end_ts: float, limit: int = 10) -> list[dict]:
@@ -1175,6 +1173,38 @@ class MemoryDB:
 
     # ── 主动检索 B/C：定时回忆笔记 + 情绪触发检索 ────────────────
 
+    async def _search_by_emotion_impl(self, emotion_labels: list[str], limit: int,
+                                      scope: Any | None, event_label: str) -> list[dict]:
+        if not emotion_labels:
+            return []
+        # 防注入：标签是有限集合，但仍做白名单校验
+        clean_labels = [str(line).strip() for line in emotion_labels if str(line).strip()]
+        if not clean_labels:
+            return []
+        placeholders = _sql_placeholders(clean_labels)
+        try:
+            if scope is None:
+                cursor = await self._read_conn().execute(
+                    f"""SELECT * FROM episodic_memories
+                        WHERE emotion_label IN ({placeholders})
+                          AND session_id != 'archived'
+                        ORDER BY importance DESC, timestamp DESC LIMIT ?""",
+                    (*clean_labels, limit),
+                )
+            else:
+                scope_where, scope_params = _scope_where(scope)
+                cursor = await self._read_conn().execute(
+                    f"""SELECT * FROM episodic_memories
+                        WHERE emotion_label IN ({placeholders}){scope_where}
+                        ORDER BY importance DESC, timestamp DESC LIMIT ?""",
+                    [*clean_labels, *scope_params, limit],
+                )
+            rows = await cursor.fetchall()
+            return [dict(r) for r in rows]
+        except Exception as e:
+            logger.warning(event_label, error=str(e))
+            return []
+
     async def search_memories_by_emotion(self, emotion_labels: list[str],
                                           limit: int = 5) -> list[dict]:
         """按情绪标签检索记忆（用于情绪触发主动检索）。
@@ -1187,26 +1217,8 @@ class MemoryDB:
         Returns:
             匹配的记忆列表，按 importance DESC, timestamp DESC 排序
         """
-        if not emotion_labels:
-            return []
-        # 防注入：标签是有限集合，但仍做白名单校验
-        clean_labels = [str(line).strip() for line in emotion_labels if str(line).strip()]
-        if not clean_labels:
-            return []
-        try:
-            placeholders = _sql_placeholders(clean_labels)
-            cursor = await self._conn.execute(
-                f"""SELECT * FROM episodic_memories
-                    WHERE emotion_label IN ({placeholders})
-                      AND session_id != 'archived'
-                    ORDER BY importance DESC, timestamp DESC LIMIT ?""",
-                (*clean_labels, limit),
-            )
-            rows = await cursor.fetchall()
-            return [dict(r) for r in rows]
-        except Exception as e:
-            logger.warning("db_memory.search_by_emotion_failed", error=str(e))
-            return []
+        return await self._search_by_emotion_impl(
+            emotion_labels, limit, None, "db_memory.search_by_emotion_failed")
 
     async def search_memories_by_emotion_scoped(self, emotion_labels: list[str],
                                                   limit: int = 5,
@@ -1220,26 +1232,8 @@ class MemoryDB:
         """
         if scope is None:
             return await self.search_memories_by_emotion(emotion_labels, limit)
-        if not emotion_labels:
-            return []
-        clean_labels = [str(line).strip() for line in emotion_labels if str(line).strip()]
-        if not clean_labels:
-            return []
-        try:
-            placeholders = _sql_placeholders(clean_labels)
-            cursor = await self._conn.execute(
-                f"""SELECT * FROM episodic_memories
-                    WHERE emotion_label IN ({placeholders})
-                      AND session_id != 'archived'
-                      AND user_id = ? AND agent_id = ?
-                    ORDER BY importance DESC, timestamp DESC LIMIT ?""",
-                (*clean_labels, scope.user_id, scope.agent_id, limit),
-            )
-            rows = await cursor.fetchall()
-            return [dict(r) for r in rows]
-        except Exception as e:
-            logger.warning("db_memory.search_by_emotion_scoped_failed", error=str(e))
-            return []
+        return await self._search_by_emotion_impl(
+            emotion_labels, limit, scope, "db_memory.search_by_emotion_scoped_failed")
 
     async def get_high_importance_since(self, start_ts: float,
                                          min_importance: float = 0.6,
