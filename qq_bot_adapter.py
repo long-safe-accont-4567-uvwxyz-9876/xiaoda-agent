@@ -1021,6 +1021,7 @@ class AIQQBot(botpy.Client):
         # 同类副作用修复：裸 create_task 无强引用会被 GC 回收导致回复丢失。
         from core.background_tasks import _spawn
         _spawn(self._handle_group_at_message(message, _group_lock_key))
+
     async def _send_reply_with_media(self, message: Any, reply: str,
                                       image_path: Path | None = None,
                                       image_url: str | None = None) -> None:
@@ -1030,48 +1031,9 @@ class AIQQBot(botpy.Client):
 
         try:
             if isinstance(message, C2CMessage):
-                openid = message.author.user_openid
-                if image_path:
-                    file_info = await self._upload_c2c_base64(openid, image_path)
-                else:
-                    media = await self.api.post_c2c_file(
-                        openid=openid, file_type=1, url=image_url
-                    )
-                    file_info = getattr(media, "file_info", "")
-                if not file_info:
-                    raise RuntimeError("C2C媒体接口返回空file_info")
-                response = await self.api.post_c2c_message(
-                    openid=openid, msg_id=message.id,
-                    msg_type=7, content=reply,
-                    media={"file_info": file_info}, msg_seq=_next_msg_seq()
-                )
-                if response is None:
-                    raise RuntimeError("C2C消息接口返回None")
+                await self._send_c2c_media(message, reply, image_path, image_url)
             elif isinstance(message, GroupMessage):
-                group_openid = message.group_openid
-                if image_path:
-                    file_info = await self._upload_group_base64(group_openid, image_path)
-                else:
-                    media = await self.api.post_group_file(
-                        group_openid=group_openid, file_type=1, url=image_url
-                    )
-                    file_info = getattr(media, "file_info", "")
-                if not file_info:
-                    raise RuntimeError("群媒体接口返回空file_info")
-                try:
-                    # 被动回复（需要 msg_id）；无主动消息权限，超限直接失败
-                    await self.api.post_group_message(
-                        group_openid=group_openid, msg_id=message.id,
-                        msg_type=7, content=reply,
-                        media={"file_info": file_info}, msg_seq=_next_msg_seq()
-                    )
-                except (OSError, RuntimeError, ConnectionError) as e:
-                    if "被动回复" in str(e) or "超过限制" in str(e):
-                        # 被动回复超限，无主动消息权限，记录后跳过（不再降级为主动消息）
-                        logger.warning("qq_bot.group_media_passive_limited_no_proactive",
-                                       error=str(e))
-                    else:
-                        raise
+                await self._send_group_media(message, reply, image_path, image_url)
             else:
                 await message.reply(content=reply, msg_seq=_next_msg_seq())
         except (OSError, RuntimeError, ConnectionError, ValueError) as e:
@@ -1081,6 +1043,58 @@ class AIQQBot(botpy.Client):
                 await message.reply(content=reply, msg_seq=_next_msg_seq())
             except (OSError, RuntimeError, ConnectionError) as _e:
                 logger.debug("qq_bot.fallback_reply_failed", error=str(_e))
+
+    async def _send_c2c_media(self, message: Any, reply: str,
+                               image_path: Path | None, image_url: str | None) -> None:
+        """C2C 媒体回复：上传 base64/URL 文件后 post_c2c_message。失败抛异常由调用方兜底。"""
+        openid = message.author.user_openid
+        if image_path:
+            file_info = await self._upload_c2c_base64(openid, image_path)
+        else:
+            media = await self.api.post_c2c_file(
+                openid=openid, file_type=1, url=image_url
+            )
+            file_info = getattr(media, "file_info", "")
+        if not file_info:
+            raise RuntimeError("C2C媒体接口返回空file_info")
+        response = await self.api.post_c2c_message(
+            openid=openid, msg_id=message.id,
+            msg_type=7, content=reply,
+            media={"file_info": file_info}, msg_seq=_next_msg_seq()
+        )
+        if response is None:
+            raise RuntimeError("C2C消息接口返回None")
+
+    async def _send_group_media(self, message: Any, reply: str,
+                                 image_path: Path | None, image_url: str | None) -> None:
+        """群媒体回复：上传 base64/URL 文件后 post_group_message。
+
+        被动回复超限时记录后跳过（无主动消息权限，不再降级）；其它异常上抛由调用方兜底。
+        """
+        group_openid = message.group_openid
+        if image_path:
+            file_info = await self._upload_group_base64(group_openid, image_path)
+        else:
+            media = await self.api.post_group_file(
+                group_openid=group_openid, file_type=1, url=image_url
+            )
+            file_info = getattr(media, "file_info", "")
+        if not file_info:
+            raise RuntimeError("群媒体接口返回空file_info")
+        try:
+            # 被动回复（需要 msg_id）；无主动消息权限，超限直接失败
+            await self.api.post_group_message(
+                group_openid=group_openid, msg_id=message.id,
+                msg_type=7, content=reply,
+                media={"file_info": file_info}, msg_seq=_next_msg_seq()
+            )
+        except (OSError, RuntimeError, ConnectionError) as e:
+            if "被动回复" in str(e) or "超过限制" in str(e):
+                # 被动回复超限，无主动消息权限，记录后跳过（不再降级为主动消息）
+                logger.warning("qq_bot.group_media_passive_limited_no_proactive",
+                               error=str(e))
+            else:
+                raise
 
     async def _upload_c2c_base64(self, openid: str, image_path: Path, file_type: int = 1) -> str:
         return await self._upload_base64(openid, image_path, file_type, group=False)
