@@ -269,44 +269,44 @@ FALLBACK_ROUTE = {
 #     已在文件顶部（imports 之后）定义，此处直接复用。
 
 
+def _env_max_tokens_cap(env_var: str) -> int | None:
+    """从环境变量读 max_tokens cap；空/无效值返回 None（而非 0）。"""
+    from utils.common import safe_int as _safe_int
+    v = os.getenv(env_var)
+    if v is None:
+        return None
+    # CodeRabbit #5 修复：空/无效值返回 None 而非 0
+    # 原 implementation _safe_int(v, 0) 解析失败返回 0，被当作合法 cap
+    # 导致 PROVIDER_MAX_TOKENS_CAP[p] = 0，所有请求 max_tokens=0，LLM 无法生成
+    parsed = _safe_int(v, 0)
+    return parsed if parsed > 0 else None
+
+
+def _file_max_tokens_cap(provider: str) -> int | None:
+    """从 provider_metadata.json 读 max_tokens cap；缺失/无效返回 None。"""
+    meta = _PROVIDER_CAPS_FROM_FILE.get(provider, {})
+    v = meta.get("max_tokens_cap") if isinstance(meta, dict) else None
+    if v is None or v == 0:
+        return None
+    try:
+        return int(v)
+    except (TypeError, ValueError):
+        return None
+
+
 def _load_provider_max_tokens_cap() -> dict[str, int | None]:
     """加载各 provider 的 max_tokens 上限。
 
     优先级：环境变量 > provider_metadata.json > None（不裁剪）。
     未配置的 provider 返回 None（不裁剪）。
     """
-    from utils.common import safe_int as _safe_int
-
-    def _env_cap(env_var: str) -> int | None:
-        v = os.getenv(env_var)
-        if v is None:
-            return None
-        # CodeRabbit #5 修复：空/无效值返回 None 而非 0
-        # 原 implementation _safe_int(v, 0) 解析失败返回 0，被当作合法 cap
-        # 导致 PROVIDER_MAX_TOKENS_CAP[p] = 0，所有请求 max_tokens=0，LLM 无法生成
-        parsed = _safe_int(v, 0)
-        return parsed if parsed > 0 else None
-
-    def _file_cap(provider: str) -> int | None:
-        meta = _PROVIDER_CAPS_FROM_FILE.get(provider, {})
-        v = meta.get("max_tokens_cap") if isinstance(meta, dict) else None
-        if v is None or v == 0:
-            return None
-        try:
-            return int(v)
-        except (TypeError, ValueError):
-            return None
-
+    _env_var_map = {"agnes": "AGNES_MAX_TOKENS_CAP", "mimo": "MIMO_MAX_TOKENS_CAP", "ollama": "OLLAMA_MAX_TOKENS_CAP"}
     # 已知 provider 列表（从元数据文件取，找不到则空）
     _known_providers = set(_PROVIDER_CAPS_FROM_FILE.keys()) | {"agnes", "mimo", "ollama"}
     cap: dict[str, int | None] = {}
     for p in _known_providers:
-        _env_var_map = {"agnes": "AGNES_MAX_TOKENS_CAP", "mimo": "MIMO_MAX_TOKENS_CAP", "ollama": "OLLAMA_MAX_TOKENS_CAP"}
-        env_v = _env_cap(_env_var_map.get(p, f"{p.upper()}_MAX_TOKENS_CAP"))
-        if env_v is not None:
-            cap[p] = env_v
-        else:
-            cap[p] = _file_cap(p)
+        env_v = _env_max_tokens_cap(_env_var_map.get(p, f"{p.upper()}_MAX_TOKENS_CAP"))
+        cap[p] = env_v if env_v is not None else _file_max_tokens_cap(p)
     return cap
 
 PROVIDER_MAX_TOKENS_CAP: dict[str, int | None] = _load_provider_max_tokens_cap()
@@ -479,17 +479,8 @@ class ModelRouteRegistry:
         old_entry = copy.deepcopy(self._table[task])
 
         # 构造新 entry
-        new_entry = copy.deepcopy(old_entry)
-        new_entry["model"] = model_id
-        new_entry["client"] = provider
-        if max_tokens is not None:
-            new_entry["max_tokens"] = max_tokens
-        if thinking is not None:
-            new_entry["thinking"] = copy.deepcopy(thinking)
-        # CodeRabbit#7 修复：timeout 也合并进 new_entry，
-        # 这样持久化时 new_entry.get("timeout") 能拿到有效值
-        if timeout is not None:
-            new_entry["timeout"] = timeout
+        new_entry = self._merge_route_entry(
+            old_entry, model_id, provider, max_tokens, thinking, timeout)
 
         # 写内存
         self._table[task] = new_entry
@@ -499,25 +490,7 @@ class ModelRouteRegistry:
             cfg = self._get_cfg()
             if cfg is not None:
                 try:
-                    # CodeRabbit#3+#9 + Qodo#3 修复：持久化用 new_entry 的有效值。
-                    # new_entry 已在上方合并了 old_entry（max_tokens/thinking/timeout 继承自旧值），
-                    # 所以这里直接序列化 new_entry 即可，不会再把 omitted 误存为 false/60。
-                    _effective_thinking = new_entry.get("thinking")
-                    _thinking_bool = bool(
-                        _effective_thinking and isinstance(_effective_thinking, dict)
-                        and _effective_thinking.get("type") == "enabled"
-                    )
-                    # timeout：new_entry 已继承 old_entry.timeout；若 new_entry 无则用入参兜底
-                    _effective_timeout = new_entry.get("timeout")
-                    if _effective_timeout is None and timeout is not None:
-                        _effective_timeout = timeout
-                    route_value = {
-                        "model": new_entry["model"],
-                        "client": new_entry["client"],
-                        "max_tokens": new_entry.get("max_tokens"),
-                        "thinking": _thinking_bool,
-                        "timeout": _effective_timeout,
-                    }
+                    route_value = self._build_route_persist_value(new_entry, timeout)
                     if extra_persist:
                         cfg.set_many({f"models.routes.{task}": route_value, **extra_persist})
                     else:
@@ -530,6 +503,48 @@ class ModelRouteRegistry:
                     raise RuntimeError(f"持久化路由 {task} 失败: {e}") from e
 
         return copy.deepcopy(new_entry)
+
+    @staticmethod
+    def _merge_route_entry(old_entry: dict, model_id: str, provider: str,
+                           max_tokens: int | None, thinking: dict | None,
+                           timeout: int | None) -> dict:
+        """基于旧 entry 构造新 entry（deepcopy 后合并新值）。"""
+        new_entry = copy.deepcopy(old_entry)
+        new_entry["model"] = model_id
+        new_entry["client"] = provider
+        if max_tokens is not None:
+            new_entry["max_tokens"] = max_tokens
+        if thinking is not None:
+            new_entry["thinking"] = copy.deepcopy(thinking)
+        # CodeRabbit#7 修复：timeout 也合并进 new_entry，
+        # 这样持久化时 new_entry.get("timeout") 能拿到有效值
+        if timeout is not None:
+            new_entry["timeout"] = timeout
+        return new_entry
+
+    @staticmethod
+    def _build_route_persist_value(new_entry: dict, timeout: int | None) -> dict:
+        """从 new_entry 构造持久化的 route_value。
+
+        CodeRabbit#3+#9 + Qodo#3 修复：持久化用 new_entry 的有效值（max_tokens/
+        thinking/timeout 已继承自旧值），不会再省略字段误存为 false/60。
+        """
+        _effective_thinking = new_entry.get("thinking")
+        _thinking_bool = bool(
+            _effective_thinking and isinstance(_effective_thinking, dict)
+            and _effective_thinking.get("type") == "enabled"
+        )
+        # timeout：new_entry 已继承 old_entry.timeout；若 new_entry 无则用入参兜底
+        _effective_timeout = new_entry.get("timeout")
+        if _effective_timeout is None and timeout is not None:
+            _effective_timeout = timeout
+        return {
+            "model": new_entry["model"],
+            "client": new_entry["client"],
+            "max_tokens": new_entry.get("max_tokens"),
+            "thinking": _thinking_bool,
+            "timeout": _effective_timeout,
+        }
 
 
 class ModelRouter:
