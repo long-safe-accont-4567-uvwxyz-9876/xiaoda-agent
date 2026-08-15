@@ -44,6 +44,23 @@ def _parse_entity_list(raw: Any) -> list:
     return raw if isinstance(raw, list) else []
 
 
+def _entity_like_conditions(entity_names: list[str]) -> tuple[str, list[str]]:
+    """构建 entities LIKE 模糊匹配条件与参数（用于实体反查）。"""
+    conditions = " OR ".join(["entities LIKE ?" for _ in entity_names])
+    params = [f'%"{e}"%' for e in entity_names]
+    return conditions, params
+
+
+def _rows_to_entity_results(rows: list) -> list[dict]:
+    """把查询行转为 dict 列表，并解析 entities JSON 为 entity_list。"""
+    results = []
+    for r in rows:
+        d = dict(r)
+        d["entity_list"] = _parse_entity_list(d.get("entities", ""))
+        results.append(d)
+    return results
+
+
 class MemoryDB:
     """管理情景记忆、画像等记忆数据的读写。"""
 
@@ -730,34 +747,38 @@ class MemoryDB:
             logger.debug("db_memory.get_entities_by_memory_failed", error=str(e))
             return []
 
+    async def _search_entities_impl(self, entity_names: list[str], limit: int,
+                                    user_id: str | None, agent_id: str | None,
+                                    event_label: str) -> list[dict]:
+        """实体反查共享实现：可选 user_id/agent_id scope 过滤。失败记 warning 返回 []。"""
+        if not entity_names:
+            return []
+        try:
+            conditions, params = _entity_like_conditions(entity_names)
+            where = "session_id != 'archived' AND (" + conditions + ")"
+            if user_id is not None and agent_id is not None:
+                where += " AND user_id = ? AND agent_id = ?"
+                params = [*params, user_id, agent_id]
+            cursor = await self._read_conn().execute(
+                f"""SELECT * FROM episodic_memories
+                    WHERE {where}
+                    ORDER BY importance DESC, timestamp DESC LIMIT ?""",
+                [*params, limit],
+            )
+            rows = await cursor.fetchall()
+            return _rows_to_entity_results(rows)
+        except Exception as e:
+            logger.warning(event_label, error=str(e))
+            return []
+
     async def search_memories_by_entities(self, entity_names: list[str],
                                             limit: int = 5) -> list[dict]:
         """按实体反查情景记忆（entities 字段为 JSON 数组字符串）。
 
         I6: KG 召回通道 — 让 KG 关联的实体能反查到对应记忆，参与 RAG 候选池。
         """
-        if not entity_names:
-            return []
-        try:
-            conditions = " OR ".join(["entities LIKE ?" for _ in entity_names])
-            params = [f'%"{e}"%' for e in entity_names]
-            cursor = await self._read_conn().execute(
-                f"""SELECT * FROM episodic_memories
-                   WHERE session_id != 'archived' AND ({conditions})
-                   ORDER BY importance DESC, timestamp DESC LIMIT ?""",
-                [*params, limit],
-            )
-            rows = await cursor.fetchall()
-            results = []
-            for r in rows:
-                d = dict(r)
-                # 解析 entities JSON 字符串为列表，供后续 KG 评分复用
-                d["entity_list"] = _parse_entity_list(d.get("entities", ""))
-                results.append(d)
-            return results
-        except Exception as e:
-            logger.warning("db_memory.entity_search_failed", error=str(e))
-            return []
+        return await self._search_entities_impl(
+            entity_names, limit, None, None, "db_memory.entity_search_failed")
 
     async def search_memories_by_entities_scoped(self, entity_names: list[str],
                                                    limit: int = 5,
@@ -771,30 +792,9 @@ class MemoryDB:
         """
         if scope is None:
             return await self.search_memories_by_entities(entity_names, limit)
-        if not entity_names:
-            return []
-        try:
-            conditions = " OR ".join(["entities LIKE ?" for _ in entity_names])
-            params = [f'%"{e}"%' for e in entity_names]
-            params.extend([scope.user_id, scope.agent_id])
-            cursor = await self._read_conn().execute(
-                f"""SELECT * FROM episodic_memories
-                   WHERE session_id != 'archived'
-                     AND ({conditions})
-                     AND user_id = ? AND agent_id = ?
-                   ORDER BY importance DESC, timestamp DESC LIMIT ?""",
-                [*params, limit],
-            )
-            rows = await cursor.fetchall()
-            results = []
-            for r in rows:
-                d = dict(r)
-                d["entity_list"] = _parse_entity_list(d.get("entities", ""))
-                results.append(d)
-            return results
-        except Exception as e:
-            logger.warning("db_memory.entity_search_scoped_failed", error=str(e))
-            return []
+        return await self._search_entities_impl(
+            entity_names, limit, scope.user_id, scope.agent_id,
+            "db_memory.entity_search_scoped_failed")
 
     async def get_all_memories(self, limit: int = 100) -> Any:
         """获取所有活跃记忆（排除已归档）"""
