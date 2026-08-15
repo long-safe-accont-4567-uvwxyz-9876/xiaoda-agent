@@ -44,6 +44,11 @@ def _parse_entity_list(raw: Any) -> list:
     return raw if isinstance(raw, list) else []
 
 
+def _sql_placeholders(ids: list) -> str:
+    """生成 SQL IN 子句的占位符串（如 '?,?,?'）。"""
+    return ",".join("?" * len(ids))
+
+
 def _entity_like_conditions(entity_names: list[str]) -> tuple[str, list[str]]:
     """构建 entities LIKE 模糊匹配条件与参数（用于实体反查）。"""
     conditions = " OR ".join(["entities LIKE ?" for _ in entity_names])
@@ -150,7 +155,7 @@ class MemoryDB:
         if not ids:
             return []
         # 参数化占位符，防止 SQL 注入
-        placeholders = ",".join("?" * len(ids))
+        placeholders = _sql_placeholders(ids)
         cursor = await self._read_conn().execute(
             f"SELECT * FROM episodic_memories WHERE id IN ({placeholders})",
             ids,
@@ -236,7 +241,7 @@ class MemoryDB:
         """
         if not memory_ids:
             return
-        placeholders = ",".join("?" * len(memory_ids))
+        placeholders = _sql_placeholders(memory_ids)
         await self._conn.execute(
             f"UPDATE episodic_memories SET access_count = access_count + 1 "
             f"WHERE id IN ({placeholders})",
@@ -261,7 +266,7 @@ class MemoryDB:
         """
         if not memory_ids:
             return
-        placeholders = ",".join("?" * len(memory_ids))
+        placeholders = _sql_placeholders(memory_ids)
         await self._conn.execute(
             f"UPDATE episodic_memories SET session_id = 'archived' WHERE id IN ({placeholders})",
             memory_ids,
@@ -459,7 +464,7 @@ class MemoryDB:
         if not memory_ids:
             return []
         try:
-            placeholders = ",".join("?" * len(memory_ids))
+            placeholders = _sql_placeholders(memory_ids)
             where_extra = ""
             params: list = list(memory_ids) + [scope.user_id, scope.agent_id]
             if is_raw is not None:
@@ -710,7 +715,7 @@ class MemoryDB:
         if not entity_names:
             return []
         try:
-            placeholders = ",".join("?" * len(entity_names))
+            placeholders = _sql_placeholders(entity_names)
             where_raw = ""
             params: list = list(entity_names) + [scope.user_id, scope.agent_id]
             if is_raw is not None:
@@ -836,7 +841,7 @@ class MemoryDB:
                                  memory_id=mid, error=str(e))
                     # 单条向量删除失败不阻塞主表清理，但向上抛出由调用方决策
                     raise
-        placeholders = ",".join("?" * len(memory_ids))
+        placeholders = _sql_placeholders(memory_ids)
         await self._conn.execute(
             f"DELETE FROM episodic_memories WHERE id IN ({placeholders})",
             memory_ids,
@@ -1108,7 +1113,7 @@ class MemoryDB:
         """将指定记忆标记为已蒸馏（distilled=1），保留不删除"""
         if not memory_ids:
             return
-        placeholders = ",".join("?" * len(memory_ids))
+        placeholders = _sql_placeholders(memory_ids)
         try:
             await self._conn.execute(
                 f"UPDATE episodic_memories SET distilled=1 WHERE id IN ({placeholders})",
@@ -1183,7 +1188,7 @@ class MemoryDB:
         if not clean_labels:
             return []
         try:
-            placeholders = ",".join("?" * len(clean_labels))
+            placeholders = _sql_placeholders(clean_labels)
             cursor = await self._conn.execute(
                 f"""SELECT * FROM episodic_memories
                     WHERE emotion_label IN ({placeholders})
@@ -1215,7 +1220,7 @@ class MemoryDB:
         if not clean_labels:
             return []
         try:
-            placeholders = ",".join("?" * len(clean_labels))
+            placeholders = _sql_placeholders(clean_labels)
             cursor = await self._conn.execute(
                 f"""SELECT * FROM episodic_memories
                     WHERE emotion_label IN ({placeholders})
@@ -1409,7 +1414,7 @@ class MemoryDB:
         """根据子chunk ID列表获取去重后的父chunk ID列表。"""
         if not child_ids:
             return []
-        placeholders = ",".join("?" * len(child_ids))
+        placeholders = _sql_placeholders(child_ids)
         cursor = await self._read_conn().execute(
             f"SELECT DISTINCT parent_id FROM memory_child_chunks WHERE id IN ({placeholders})",
             child_ids,
@@ -1429,7 +1434,7 @@ class MemoryDB:
     async def delete_child_chunks(self, child_ids: list[int], auto_commit: bool = True) -> None:
         if not child_ids:
             return
-        placeholders = ",".join("?" * len(child_ids))
+        placeholders = _sql_placeholders(child_ids)
         await self._conn.execute(
             f"DELETE FROM memory_child_chunks_fts WHERE rowid IN ({placeholders})",
             child_ids,
@@ -1450,7 +1455,7 @@ class MemoryDB:
         rows = await cursor.fetchall()
         child_ids = [r["id"] for r in rows]
         if child_ids:
-            placeholders = ",".join("?" * len(child_ids))
+            placeholders = _sql_placeholders(child_ids)
             await self._conn.execute(
                 f"DELETE FROM memory_child_chunks_fts WHERE rowid IN ({placeholders})",
                 child_ids,
