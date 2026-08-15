@@ -39,7 +39,12 @@ def _make_app_with_metrics_router() -> FastAPI:
     """
     app = FastAPI()
     from web.routers.metrics import router as metrics_router
+    from web.routers.auth import get_current_user
     app.include_router(metrics_router)
+    # 本测试文件聚焦 metrics 指标内容与 localhost 访问控制，不测 token 认证
+    # （认证由 test_metrics_auth.py 覆盖）。此处 override 掉认证依赖，
+    # 让下方用例专注验证指标输出与 localhost 限制，避免与新的 401 契约冲突。
+    app.dependency_overrides[get_current_user] = lambda: "test_user"
     return app
 
 

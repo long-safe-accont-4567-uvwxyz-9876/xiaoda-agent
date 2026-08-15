@@ -38,9 +38,9 @@ def _mock_ws(subprotocol=None):
 
 async def test_invalid_token_closes_with_4001():
     """无效 token：close code 必须为 4001（前端据此停止重连），且不 accept。"""
-    ws = _mock_ws()
+    ws = _mock_ws(subprotocol="invalid-token")
     with patch("web.routers.auth._validate_token", return_value=False):
-        await websocket_endpoint(ws, token="invalid-token")
+        await websocket_endpoint(ws)
     ws.close.assert_awaited_once_with(code=4001, reason="Unauthorized")
     ws.accept.assert_not_awaited()
 
@@ -48,7 +48,7 @@ async def test_invalid_token_closes_with_4001():
 async def test_missing_token_closes_with_4001():
     """缺失 token：同样以 4001 关闭，不 accept。"""
     ws = _mock_ws()
-    await websocket_endpoint(ws, token="")
+    await websocket_endpoint(ws)
     ws.close.assert_awaited_once_with(code=4001, reason="Unauthorized")
     ws.accept.assert_not_awaited()
 
@@ -58,7 +58,7 @@ async def test_subprotocol_valid_token_accepts_with_subprotocol():
     ws = _mock_ws(subprotocol="valid-token")
     with patch("web.routers.auth._validate_token", return_value=True), \
             patch("web.ws_hub.manager.register", side_effect=ValueError):
-        await websocket_endpoint(ws, token="")
+        await websocket_endpoint(ws)
     ws.accept.assert_awaited_once_with(subprotocol="valid-token")
 
 
@@ -66,24 +66,24 @@ async def test_subprotocol_invalid_token_closes_with_4001():
     """子协议携带无效 token：以 4001 关闭，且不 accept。"""
     ws = _mock_ws(subprotocol="bad-token")
     with patch("web.routers.auth._validate_token", return_value=False):
-        await websocket_endpoint(ws, token="")
+        await websocket_endpoint(ws)
     ws.close.assert_awaited_once_with(code=4001, reason="Unauthorized")
     ws.accept.assert_not_awaited()
 
 
-async def test_query_token_valid_accepts_without_subprotocol():
-    """无子协议但 query token 有效：accept 不传 subprotocol。"""
+async def test_query_token_rejected_closes_with_4001():
+    """弃用 query token：无子协议时即使 validate 通过也以 4001 拒绝，不 accept。"""
     ws = _mock_ws()
-    with patch("web.routers.auth._validate_token", return_value=True), \
-            patch("web.ws_hub.manager.register", side_effect=ValueError):
-        await websocket_endpoint(ws, token="valid-token")
-    ws.accept.assert_awaited_once_with()
+    with patch("web.routers.auth._validate_token", return_value=True):
+        await websocket_endpoint(ws)
+    ws.close.assert_awaited_once_with(code=4001, reason="Unauthorized")
+    ws.accept.assert_not_awaited()
 
 
 async def test_no_token_without_subprotocol_closes_with_4001():
     """既无子协议也无 query token：以 4001 关闭。"""
     ws = _mock_ws()
-    await websocket_endpoint(ws, token="")
+    await websocket_endpoint(ws)
     ws.close.assert_awaited_once_with(code=4001, reason="Unauthorized")
     ws.accept.assert_not_awaited()
 

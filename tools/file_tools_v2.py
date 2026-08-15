@@ -30,9 +30,21 @@ ALLOWED_BASE_DIRS = [
 SENSITIVE_PATHS = [
     "/etc/shadow",
     "/etc/passwd",
+    "/root",
+    # 凭证与私密目录
+    os.path.expanduser("~/.ai-agent/credentials"),
     os.path.expanduser("~/.ssh"),
     os.path.expanduser("~/.gnupg"),
-    "/root",
+    os.path.expanduser("~/.docker"),
+    # 家目录敏感配置文件
+    os.path.expanduser("~/.bashrc"),
+    os.path.expanduser("~/.profile"),
+    os.path.expanduser("~/.gitconfig"),
+    # crontab 相关
+    os.path.expanduser("~/.config/crontab"),
+    "/etc/crontab",
+    "/etc/cron.d",
+    "/var/spool/cron",
 ]
 
 # 规范化白名单和黑名单（realpath）
@@ -198,6 +210,16 @@ _DANGEROUS_PATTERNS = [
     r'(nc|ncat)\s+.*(-e|--sh-exec)\s+',
     # curl/wget 管道到 shell
     r'(curl|wget)\s+.*\|\s*(ba)?sh',
+    # 解释器执行任意代码（-c / -m / -e）
+    r'python(?:3)?\s+(-c|-m)',
+    r'perl\s+-e',
+    r'ruby\s+-e',
+    r'node\s+-e',
+    # 解码器管道（解码后内容可能被注入执行）
+    r'base64\s+-d',
+    r'xxd\s+-r',
+    # awk system() 调用
+    r'awk\s+.*system\s*\(',
     # 危险重定向覆盖
     r'>\s*/dev/sd[a-z]',
     r'>\s*/dev/nand',

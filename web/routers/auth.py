@@ -46,6 +46,10 @@ _RATE_LIMIT_MAX_SIZE = 1000
 
 _SECRET: str = ""
 
+# VULN-11: WebUI 实际监听地址。无密码免密模式必须结合 socket 绑定地址判定，
+# 不能只看 client_ip（反代配置不当/直连场景下可被伪造）。缺省按非回环处理（fail-closed）。
+_WEBUI_BIND_HOST: str = os.getenv("WEBUI_HOST", "") or os.getenv("WEBUI_BIND", "")
+
 _secret_lock = Lock()
 _revoked_lock = Lock()
 _tokens_lock = Lock()
@@ -79,6 +83,9 @@ def _load_or_create_secret() -> str:
         secret_path = _get_secret_path()
         if secret_path.exists():
             _SECRET = secret_path.read_text(encoding="utf-8").strip()
+            # VULN-10: 已存在的旧文件也要强制校正为 0600（旧版只在新建时 chmod）。
+            with contextlib.suppress(OSError):
+                secret_path.chmod(0o600)
         else:
             _SECRET = secrets.token_hex(32)
             secret_path.parent.mkdir(parents=True, exist_ok=True)
@@ -299,6 +306,24 @@ def _is_private_ip(ip: str) -> bool:
         return False
 
 
+def _is_loopback_bind() -> bool:
+    """判断 WebUI 实际监听地址是否为回环地址。
+
+    VULN-11 修复：无密码免密模式不能只看客户端 IP（反代/直连场景下可被伪造），
+    还需结合实际 socket 绑定地址。仅当 WebUI 只监听回环地址（127.0.0.1 /
+    localhost / ::1）时才允许免密，否则 fail-closed。
+    """
+    host = (_WEBUI_BIND_HOST or "").strip()
+    if host in ("", "0.0.0.0", "::"):
+        return False
+    if host in ("127.0.0.1", "::1", "localhost"):
+        return True
+    try:
+        return ipaddress.ip_address(host).is_loopback
+    except ValueError:
+        return False
+
+
 def _get_client_ip(request: Request) -> str:
     """提取客户端真实 IP。
 
@@ -381,7 +406,7 @@ async def login(req: LoginRequest, request: Request) -> Any:
                 raise HTTPException(429, f"登录尝试过多，请 {remaining} 秒后重试")
 
     if not password:
-        if not _is_private_ip(client_ip):
+        if not _is_private_ip(client_ip) or not _is_loopback_bind():
             raise HTTPException(403, "Public access denied without password. Set WEBUI_PASSWORD in .env")
         token, expiry = _issue_token()
         return Envelope(data=LoginResponse(token=token, expires_at=expiry))

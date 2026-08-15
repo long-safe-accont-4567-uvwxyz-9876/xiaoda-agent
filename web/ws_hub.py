@@ -563,11 +563,11 @@ async def process_and_serialize(core: Any, text: str, session_id: str,
 
 
 @router.websocket("/ws")
-async def websocket_endpoint(ws: WebSocket, token: str = "") -> None:
+async def websocket_endpoint(ws: WebSocket) -> None:
     # 先验证 token 再 accept，防止无 token 连接耗尽资源
     from web.routers.auth import _validate_token
 
-    # 优先从 Sec-WebSocket-Protocol 子协议读取 token，向后兼容 query token
+    # 仅从 Sec-WebSocket-Protocol 子协议读取 token（VULN-07：弃用 URL query 传 token）
     subprotocol_token = None
     headers = getattr(ws, "headers", None)
     if headers is not None:
@@ -576,7 +576,7 @@ async def websocket_endpoint(ws: WebSocket, token: str = "") -> None:
             subprotocol_token = str(raw).split(",")[0].strip()
     subprotocol_token = subprotocol_token or None
 
-    token = subprotocol_token or token
+    token = subprotocol_token
 
     if not token or not _validate_token(token):
         # 未授权统一用 4001 关闭（4000-4999 为应用私有段），前端 onclose 据此停止重连
