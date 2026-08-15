@@ -13,6 +13,7 @@ from loguru import logger
 
 from .error_classifier import ClassifiedError, FailoverReason
 from utils.common import mask_api_key as _mask_api_key
+from config import get_base_url_for_provider
 
 
 class CredentialState(Enum):
@@ -276,7 +277,7 @@ class CredentialPool:
         # 加载 MiMo API Key
         mimo_key = os.getenv("MIMO_API_KEY", "")
         if mimo_key:
-            mimo_url = os.getenv("MIMO_BASE_URL", "https://api.xiaomimimo.com/v1")
+            mimo_url = get_base_url_for_provider("mimo")
             self.add_credential(Credential(
                 api_key=mimo_key,
                 provider="mimo",
@@ -290,7 +291,7 @@ class CredentialPool:
                 self.add_credential(Credential(
                     api_key=extra_key,
                     provider="mimo",
-                    base_url=os.getenv("MIMO_BASE_URL", "https://api.xiaomimimo.com/v1"),
+                    base_url=get_base_url_for_provider("mimo"),
                 ))
 
         # 加载 Agnes API Key

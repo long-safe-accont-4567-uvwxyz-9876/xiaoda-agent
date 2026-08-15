@@ -14,6 +14,7 @@ from loguru import logger
 
 from web.routers.auth import get_current_user, _get_client_ip, _is_private_ip
 from web.schemas import Envelope
+from config import get_base_url_for_provider, get_default_model_for_provider
 
 # test-key 速率限制：每 IP 最多 10 次/分钟
 _test_key_timestamps: list[float] = []
@@ -315,10 +316,10 @@ async def _test_mimo(key_value: str) -> tuple[bool, str]:
     try:
         async with httpx.AsyncClient(timeout=_TIMEOUT) as client:
             resp = await client.post(
-                "https://api.xiaomimimo.com/v1/chat/completions",
+                f"{get_base_url_for_provider('mimo').rstrip('/')}/chat/completions",
                 headers={"Authorization": f"Bearer {key_value}"},
                 json={
-                    "model": "mimo-v2.5",
+                    "model": get_default_model_for_provider("mimo"),
                     "messages": [{"role": "user", "content": "hi"}],
                     "max_tokens": 5,
                 },
@@ -849,7 +850,7 @@ def _reset_credential_pool(updates: Any) -> None:
         _PROVIDER_KEY_MAP = {
             "SILICONFLOW_API_KEY": ("siliconflow", "https://api.siliconflow.cn/v1"),
             "OPENROUTER_API_KEY": ("openrouter", "https://openrouter.ai/api/v1"),
-            "MIMO_API_KEY": ("mimo", "https://api.xiaomimimo.com/v1"),
+            "MIMO_API_KEY": ("mimo", get_base_url_for_provider("mimo")),
             "DEEPSEEK_API_KEY": ("deepseek", "https://api.deepseek.com/v1"),
             "AGNES_API_KEY": ("agnes", ""),
         }
@@ -986,7 +987,7 @@ async def _reinit_and_maybe_restart_qq(qq_changed: bool) -> None:
 _KNOWN_PROVIDERS = {
     "MIMO_API_KEY": {
         "id": "mimo", "label": "小米 MiMo", "format": "openai",
-        "base_url": "https://api.xiaomimimo.com/v1", "builtin": True,
+        "base_url": get_base_url_for_provider("mimo"), "builtin": True,
     },
     "SILICONFLOW_API_KEY": {
         "id": "siliconflow", "label": "SiliconFlow 硅基流动", "format": "openai",

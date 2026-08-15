@@ -3,6 +3,7 @@ import os
 import asyncio
 from openai import AsyncOpenAI
 from transports.base import ProviderTransport, TransportResponse, DEFAULT_MAX_TOKENS
+from config import get_base_url_for_provider
 
 
 class MiMoTransport(ProviderTransport):
@@ -10,9 +11,10 @@ class MiMoTransport(ProviderTransport):
 
     def __init__(self) -> None:
         """初始化 MiMo 传输适配器。"""
-        # 从 os.getenv() 实时读取，避免使用 config 模块级冻结变量
+        # 从 get_base_url_for_provider 实时读取（环境变量 > provider_metadata.json），
+        # 消除硬编码 fallback，也不依赖 config 模块级冻结变量
         _key = os.getenv("MIMO_API_KEY", "")
-        _url = os.getenv("MIMO_BASE_URL", "https://api.xiaomimimo.com/v1")
+        _url = get_base_url_for_provider("mimo")
         self._client = AsyncOpenAI(api_key=_key, base_url=_url) if _key else None
 
     @property

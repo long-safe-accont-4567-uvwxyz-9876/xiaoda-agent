@@ -915,11 +915,12 @@ class AgentCoreBootstrapper:
         from task_orchestrator import build_task_graph
         import os as _os
         from model_router import _resolve_provider_key
+        from config import get_base_url_for_provider
 
         core = self.core
         # 统一凭证读取口径：enc:v1: 密文自动解密，避免把密文当 Key → 401
         _key = _resolve_provider_key("MIMO_API_KEY")
-        _url = _os.getenv("MIMO_BASE_URL", "https://api.xiaomimimo.com/v1")
+        _url = get_base_url_for_provider("mimo")
         route_client = _AOI(
             api_key=_key,
             base_url=_url,

@@ -322,7 +322,8 @@ async def speech_to_text(file: UploadFile = File(...)) -> Any:
             # MIMO 降级路径 — sync OpenAI SDK 调用放到线程池
             def _mimo_asr() -> str:
                 from openai import OpenAI
-                client = OpenAI(api_key=mimo_key, base_url=os.getenv("MIMO_BASE_URL", "https://api.xiaomimimo.com/v1"))
+                from config import get_base_url_for_provider
+                client = OpenAI(api_key=mimo_key, base_url=get_base_url_for_provider("mimo"))
                 tmp_path = None
                 try:
                     with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as tmp:

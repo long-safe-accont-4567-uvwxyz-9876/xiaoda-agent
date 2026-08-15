@@ -11,10 +11,10 @@ from pathlib import Path
 from openai import AsyncOpenAI
 from loguru import logger
 from .emotion_enum import resolve_emotion, TTS_STYLE_MAP, is_unified
-from config import get_agent_display_name
+from config import get_agent_display_name, get_base_url_for_provider
 
 MIMO_API_KEY = os.getenv("MIMO_API_KEY", "")
-MIMO_BASE_URL = os.getenv("MIMO_BASE_URL", "https://api.xiaomimimo.com/v1")
+MIMO_BASE_URL = get_base_url_for_provider("mimo")
 MIMO_TTS_MODEL = os.getenv("MIMO_TTS_MODEL", "mimo-v2.5-tts-voiceclone")
 
 

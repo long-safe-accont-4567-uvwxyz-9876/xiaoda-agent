@@ -519,11 +519,9 @@ AGENTS_CONFIG_DIR.mkdir(parents=True, exist_ok=True)
 _ensure_workspace()
 
 DEEPSEEK_API_KEY = get_secret("DEEPSEEK_API_KEY")
-DEEPSEEK_BASE_URL = os.getenv("DEEPSEEK_BASE_URL", "https://api.deepseek.com/v1")
 
 # MIMO_API_KEY：先用 get_secret 解密 enc:v1: 密文，再交给 protect_credential 做内存态保护
 MIMO_API_KEY = protect_credential(get_secret("MIMO_API_KEY", ""))
-MIMO_BASE_URL = os.getenv("MIMO_BASE_URL", "https://api.xiaomimimo.com/v1")
 
 # ── 默认模型解析（从 provider_metadata.json 读，无硬编码）──
 # 用户约束：默认用 MiMo，但模型 ID 不在代码里硬编码
@@ -615,6 +613,35 @@ def get_default_model_for_provider(provider: str) -> str:
         return ""
 
 
+def get_base_url_for_provider(provider: str) -> str:
+    """返回指定 provider 的 base_url。
+
+    优先级：
+      1. 环境变量 {PROVIDER}_BASE_URL（最高）
+      2. provider_metadata.json 中 providers.{provider}.base_url_default
+      3. 空串（调用方负责兜底）
+
+    Args:
+        provider: provider 名称（如 "mimo", "agnes", "deepseek"）
+
+    Returns:
+        base_url 字符串，未知 provider 返回空串
+    """
+    provider_lower = provider.strip().lower()
+    env_val = os.getenv(f"{provider_lower.upper()}_BASE_URL", "").strip()
+    if env_val:
+        return env_val
+    try:
+        return get_provider_catalog().get(provider_lower).endpoint.base_url or ""
+    except KeyError:
+        return ""
+
+
+# Provider base_url 统一从 provider_metadata.json 派生（环境变量优先），消除硬编码 fallback
+DEEPSEEK_BASE_URL = get_base_url_for_provider("deepseek")
+MIMO_BASE_URL = get_base_url_for_provider("mimo")
+
+
 # ── 内置 Provider 集合（从 provider_metadata.json 派生，无硬编码）──
 # N-2 修复：原代码多处硬编码 ("mimo", "agnes") 判断是否为内置 provider，
 # 新增第三个内置 provider 时需改多处代码。改为从 metadata 的 builtin: true 字段派生。
@@ -678,7 +705,7 @@ FLASH_MODEL_NAME = os.getenv("FLASH_MODEL_NAME", "")
 
 # Agnes AI 配置（在 get_provider_config 之前定义，避免前向引用）
 AGNES_API_KEY = get_secret("AGNES_API_KEY", "")
-AGNES_BASE_URL = os.getenv("AGNES_BASE_URL", "https://apihub.agnes-ai.cn/v1")
+AGNES_BASE_URL = get_base_url_for_provider("agnes")
 AGNES_TEXT_MODEL = get_default_model_for_provider("agnes")
 AGNES_IMAGE_MODEL = os.getenv("AGNES_IMAGE_MODEL", "agnes-image-2.1-flash")
 AGNES_VIDEO_MODEL = os.getenv("AGNES_VIDEO_MODEL", "agnes-video-v2.0")

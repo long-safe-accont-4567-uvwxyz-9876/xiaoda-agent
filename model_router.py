@@ -597,9 +597,9 @@ class ModelRouter:
     def __init__(self, api_key: str | None = None, base_url: str | None = None,
                  api_key_2: str | None = None, db: Any=None) -> None:
         self.TASK_TIMEOUTS: dict[str, int] = dict(self._DEFAULT_TIMEOUTS)
-        # 从 os.getenv() 实时读取，避免使用模块级冻结变量
+        # 从 os.getenv() 实时读取，避免使用模块级冻结变量；fallback 到 provider_metadata.json 派生的 MIMO_BASE_URL
         _mimo_key = api_key or _resolve_provider_key("MIMO_API_KEY")
-        _mimo_url = base_url or os.getenv("MIMO_BASE_URL", "https://api.xiaomimimo.com/v1")
+        _mimo_url = base_url or os.getenv("MIMO_BASE_URL") or MIMO_BASE_URL
         _ssrf_check(_mimo_url)  # SSRF 防护：校验 base_url
         self._client = AsyncOpenAI(api_key=_mimo_key, base_url=_mimo_url) if _mimo_key else None
         self._db = db
