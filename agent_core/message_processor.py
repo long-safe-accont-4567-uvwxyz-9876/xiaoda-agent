@@ -68,6 +68,44 @@ def _get_temperature(model_cfg: dict | None = None) -> float:
 #   - 不适合语音：代码块/URL/文件路径/标签/DSML 残留/极短/超长
 
 
+# 语音适宜性守卫的特征常量：命中即视为技术内容（不适合语音朗读）
+_CODE_KEYWORD_SIGS = ('def ', 'class ', 'import ', 'from ',
+                      'function ', 'const ', 'return ')
+_PATH_SIGS = ('/home/', '/usr/', '/var/', '/etc/', '/tmp/',
+              '.py', '.js', '.json', '.md', '.txt', '.sh')
+_TOOL_TAG_SIGS = ('<tool_result', '<tool_call', '[sticker:', '[emotion:')
+
+
+def _looks_like_code_or_url(cleaned: str) -> bool:
+    """判断是否含代码块/代码关键字/JSON/URL 等技术内容。"""
+    if '```' in cleaned:
+        return True
+    if any(sig in cleaned for sig in _CODE_KEYWORD_SIGS):
+        return True
+    # 大括号出现 ≥2 次（JSON/代码块特征）
+    if cleaned.count('{') >= 2 or cleaned.count('}') >= 2:
+        return True
+    # 单层 JSON 对象特征（如 {"key": "value"}，仅 1 对大括号但明显是结构化数据）
+    if '{"' in cleaned or '": "' in cleaned:
+        return True
+    # 任何 URL 都不朗读（原阈值 url_count>=2 太宽松，含 1 个 URL 即视为技术内容）
+    if 'http://' in cleaned or 'https://' in cleaned:
+        return True
+    return False
+
+
+def _looks_like_path_or_tag(cleaned: str) -> bool:
+    """判断是否含文件路径/标签/DSML 残留等技术内容。"""
+    if any(p in cleaned for p in _PATH_SIGS):
+        return True
+    # 纯标签内容（如 [emotion:xxx] [sticker:xxx]）
+    if cleaned.startswith('[') and cleaned.endswith(']') and ':' in cleaned:
+        return True
+    if any(tag in cleaned for tag in _TOOL_TAG_SIGS):
+        return True
+    return False
+
+
 def _is_suitable_for_voice(reply: str) -> bool:
     """判断回复内容是否适合语音朗读（替代原 _should_auto_tts 守卫）。
 
@@ -82,32 +120,9 @@ def _is_suitable_for_voice(reply: str) -> bool:
         return False  # 极短回复不朗读（原阈值 5 太低）
     if len(cleaned) > 400:
         return False  # 超长回复（>400字）不朗读，语音太长体验差
-    # 代码块
-    if '```' in cleaned:
+    if _looks_like_code_or_url(cleaned):
         return False
-    # 代码特征关键字（def/class/import/from/function/const/return）
-    if any(sig in cleaned for sig in ('def ', 'class ', 'import ', 'from ',
-                                       'function ', 'const ', 'return ')):
-        return False
-    # 大括号出现 ≥2 次（JSON/代码块特征）
-    if cleaned.count('{') >= 2 or cleaned.count('}') >= 2:
-        return False
-    # 单层 JSON 对象特征（如 {"key": "value"}，仅 1 对大括号但明显是结构化数据）
-    if '{"' in cleaned or '": "' in cleaned:
-        return False
-    # 任何 URL 都不朗读（原阈值 url_count>=2 太宽松，含 1 个 URL 即视为技术内容）
-    if 'http://' in cleaned or 'https://' in cleaned:
-        return False
-    # 文件路径特征
-    if any(p in cleaned for p in ('/home/', '/usr/', '/var/', '/etc/', '/tmp/',
-                                   '.py', '.js', '.json', '.md', '.txt', '.sh')):
-        return False
-    # 纯标签内容（如 [emotion:xxx] [sticker:xxx]）
-    if cleaned.startswith('[') and cleaned.endswith(']') and ':' in cleaned:
-        return False
-    # 工具结果 / DSML 残留
-    if any(tag in cleaned for tag in ('<tool_result', '<tool_call',
-                                       '[sticker:', '[emotion:')):
+    if _looks_like_path_or_tag(cleaned):
         return False
     # 纯数字/纯符号（字母与中文字符占比 < 40% 视为非自然语言）
     letters = [c for c in cleaned if c.isalpha() or '\u4e00' <= c <= '\u9fff']
@@ -165,6 +180,7 @@ _GREETING_PATTERN = re.compile(
 )
 
 _THANK_REPLIES = ["不客气～", "不用谢啦～", "举手之劳～"]
+_THANK_KEYWORDS = ("谢谢", "感谢", "thanks", "thx", "多谢")
 
 # reunion_reflection: 用户"回来了"类关键词（用于生成个性化重聚欢迎）
 _REUNION_PATTERN = re.compile(
@@ -182,6 +198,14 @@ _TIME_GREETINGS = [
     (18, 22, "晚上好～今天辛苦啦，有什么想聊的吗？"),
     (22, 30, "夜深啦～记得早点休息哦，有什么事明天再说？"),
 ]
+
+
+def _time_greeting_for_hour(now_hour: int) -> str:
+    """按 Asia/Shanghai 时段返回问候语；未命中回退到最后一项（覆盖 0-5 点）。"""
+    for start_h, end_h, msg in _TIME_GREETINGS:
+        if start_h <= now_hour < end_h:
+            return msg
+    return _TIME_GREETINGS[-1][2]
 
 
 def _is_greeting_enabled() -> bool:
@@ -870,24 +894,21 @@ class MessageProcessorMixin:
         if not match:
             return None
         keyword = match.group(1).lower()
-        # 时段问候（5-12 早上好 / 12-18 下午好 / 18-22 晚上好 / 22-5 夜深）
         # G1: 使用 Asia/Shanghai 时区，避免受系统时区影响
-        now_hour = datetime.now(_SH_TZ).hour
-        reply = None
-        for start_h, end_h, msg in _TIME_GREETINGS:
-            if start_h <= now_hour < end_h:
-                reply = msg
-                break
-        if reply is None:
-            reply = msg  # fallback 到最后一个（覆盖 0-5 点）
+        reply = _time_greeting_for_hour(datetime.now(_SH_TZ).hour)
         # 感谢类覆盖时段问候
-        if keyword in ("谢谢", "感谢", "thanks", "thx", "多谢"):
+        if keyword in _THANK_KEYWORDS:
             reply = random.choice(_THANK_REPLIES)
-        # P1-6 + CodeRabbit F4: 语音模式下问候也要走 TTS 路径，但必须与
-        # _build_voice_result 的 5 条件对齐：voice_mode + tts.available +
-        # TTS_ASYNC_MODE + is_feature_available("tts") + len(reply) > 2
-        # 避免在 TTS 不可用/降级模式/同步模式下无效设 tts_pending
-        # TTS 时机控制 v2：统一过 _decide_tts_trigger（移除冷却，改为内容适宜性守卫）
+        return self._build_greeting_result(reply)
+
+    def _build_greeting_result(self, reply: str) -> ProcessResult:
+        """构造问候短路结果，语音模式下按 TTS 触发时机决定是否设 tts_pending。
+
+        P1-6 + CodeRabbit F4: 语音模式下问候也要走 TTS 路径，但必须与
+        _build_voice_result 的条件对齐：voice_mode + tts.available +
+        TTS_ASYNC_MODE + is_feature_available("tts")。
+        TTS 时机控制 v2：统一过 _decide_tts_trigger（移除冷却，改为内容适宜性守卫）。
+        """
         if (TTS_ASYNC_MODE
                 and _decide_tts_trigger(
                     reply, force_voice=False, voice_mode=self._voice_mode,
