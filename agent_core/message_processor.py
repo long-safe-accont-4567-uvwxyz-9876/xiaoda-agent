@@ -14,7 +14,7 @@ import time
 import tempfile
 from collections import OrderedDict
 from datetime import datetime
-from typing import Any, TYPE_CHECKING
+from typing import Any, TYPE_CHECKING, NamedTuple
 from zoneinfo import ZoneInfo
 
 import openai as _openai_mod  # P0 Task 1.8：用于捕获 BadRequestError/APIError
@@ -230,6 +230,14 @@ def _force_close_incomplete_reply(reply: str) -> tuple[str, str]:
     if not ends_with_valid_ending(final):
         return final + "。", "force_closed"
     return final, "unchanged"
+
+
+class InitRestoreResult(NamedTuple):
+    """初始化 + 上下文恢复阶段的结果（原裸 4 元组改为命名结构）。"""
+    trace: Any
+    session_id: str
+    allowed: bool
+    reason: str
 
 
 class MessageProcessorMixin:
@@ -824,10 +832,10 @@ class MessageProcessorMixin:
         return None
 
     async def _init_and_restore_context(self, ctx: Any, user_input: Any, user_id: Any, source: Any,
-                                         status_callback: Any, user_openid: Any, session_id: Any) -> tuple:
+                                         status_callback: Any, user_openid: Any, session_id: Any) -> InitRestoreResult:
         """初始化 trace、发送状态提示、安全检查、恢复用户上下文。
 
-        返回 (trace, session_id, allowed, reason)。
+        返回 InitRestoreResult(trace, session_id, allowed, reason)。
         """
         if self._tool_call_handler:
             self._tool_call_handler._tool_repair.clear_storm_window()
@@ -857,7 +865,7 @@ class MessageProcessorMixin:
 
         logger.info("pipeline.restore.done proc_id={} elapsed_ms={}",
                     _proc_id, int((time.time() - _restore_t0) * 1000))
-        return trace, session_id, allowed, reason
+        return InitRestoreResult(trace, session_id, allowed, reason)
 
     async def _restore_user_context(self, _restore_id: str) -> None:
         """按当前用户恢复历史摘要（群聊多用户上下文隔离），带超时降级。

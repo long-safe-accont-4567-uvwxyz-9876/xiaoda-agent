@@ -1,4 +1,4 @@
-from typing import Any
+from typing import Any, NamedTuple
 import os
 import sys
 import asyncio
@@ -337,6 +337,15 @@ async def run_qq_bot(agent: "AgentCore", *, sandbox: bool = False) -> None:
             logger.error("qq_bot.crashed_retrying error={} delay={}", str(e)[:200], delay)
             await asyncio.sleep(delay)
             delay = min(delay * 2, 120)
+
+
+class ParsedC2CMessage(NamedTuple):
+    """C2C 消息解析结果（原 5 元组改为命名结构，提升可读性）。"""
+    content: str
+    image_data: list
+    user_input: str
+    user_openid: str
+    user_id: str
 
 
 class AIQQBot(botpy.Client):
@@ -703,10 +712,10 @@ class AIQQBot(botpy.Client):
             self._last_c2c_openid = user_openid
         return user_openid, user_id
 
-    async def _parse_c2c_message(self, message: C2CMessage) -> tuple[str, list, str, str, str] | None:
+    async def _parse_c2c_message(self, message: C2CMessage) -> ParsedC2CMessage | None:
         """解析 C2C 消息内容和发送者信息。
 
-        返回 (content, image_data, user_input, user_openid, user_id)，
+        返回 ParsedC2CMessage(content, image_data, user_input, user_openid, user_id)，
         若消息为空（无文本且无附件）返回 None。
         """
         content = (getattr(message, 'content', None) or "").strip()
@@ -718,7 +727,7 @@ class AIQQBot(botpy.Client):
 
         user_openid, user_id = self._extract_c2c_sender(message)
         logger.info("qq_bot.c2c_message", user_id=user_id, openid=user_openid, content=user_input[:80])
-        return content, image_data, user_input, user_openid, user_id
+        return ParsedC2CMessage(content, image_data, user_input, user_openid, user_id)
 
     def _identify_c2c_master(self, user_openid: str) -> bool:
         """识别发送者是否为主人。
