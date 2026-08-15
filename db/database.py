@@ -114,24 +114,17 @@ class DatabaseManager:
         self.kg_v2: KnowledgeDBV2 | None = None
         self.local_ai: LocalAIDB | None = None
 
-    async def init(self) -> None:
-        # 幂等性：如果已有活跃连接，先关闭旧连接再创建新连接
-        if self._profile_conn is not None:
-            try:
-                await self._profile_conn.close()
-            except (OSError, RuntimeError):
-                logger.debug("database.init_close_old_profile_connection_error", exc_info=True)
-            self._profile_conn = None
-            self.profiles = None
-        if self._conn is not None:
-            try:
-                await self._conn.close()
-            except (OSError, RuntimeError):
-                logger.debug("database.init_close_old_connection_error: {}", exc_info=True)
-            self._conn = None
+    async def _close_if_present(self, conn: Any, event: str) -> None:
+        """幂等关闭旧连接；关闭失败只记 debug，不阻断 init 重连。"""
+        if conn is None:
+            return
+        try:
+            await conn.close()
+        except (OSError, RuntimeError):
+            logger.debug(event, exc_info=True)
 
-        # 只读文件系统检测：提前检测，避免在只读文件系统上打开连接导致静默失败
-        # SQLite 在只读文件系统上打开连接不会报错，但后续写入会失败
+    def _ensure_writable_dir(self) -> None:
+        """只读文件系统检测：SQLite 在只读目录上打开不报错，但后续写入失败，提前探测。"""
         try:
             _db_dir = self.db_path.parent
             _probe_file = _db_dir / ".db_write_probe"
@@ -143,6 +136,32 @@ class DatabaseManager:
                 f"数据库目录不可写: {self.db_path.parent}. "
                 f"请检查文件系统权限或卸载/重新挂载外置存储。"
             ) from e
+
+    async def _init_readonly_conn(self) -> None:
+        """初始化独立只读连接（供 restore_from_db 使用）；失败回退主连接，不阻断启动。"""
+        try:
+            self._readonly_conn = await aiosqlite.connect(
+                self._db_ro_uri(), uri=True)
+            self._readonly_conn.row_factory = aiosqlite.Row
+            await self._readonly_conn.execute("PRAGMA query_only=1")
+            await self._readonly_conn.execute("PRAGMA busy_timeout=2000")
+            logger.info("database.readonly_conn_ready")
+        except Exception as e:
+            # 只读连接初始化失败不阻塞启动，restore 回退到主连接(保留原行为)
+            logger.warning("database.readonly_conn_init_failed", error=str(e))
+            self._readonly_conn = None
+
+    async def init(self) -> None:
+        # 幂等性：如果已有活跃连接，先关闭旧连接再创建新连接
+        await self._close_if_present(self._profile_conn, "database.init_close_old_profile_connection_error")
+        self._profile_conn = None
+        self.profiles = None
+        await self._close_if_present(self._conn, "database.init_close_old_connection_error")
+        self._conn = None
+
+        # 只读文件系统检测：提前检测，避免在只读文件系统上打开连接导致静默失败
+        # SQLite 在只读文件系统上打开连接不会报错，但后续写入会失败
+        self._ensure_writable_dir()
 
         self._conn = await aiosqlite.connect(str(self.db_path))
         self._conn.row_factory = aiosqlite.Row
@@ -175,23 +194,9 @@ class DatabaseManager:
         # 初始化独立只读连接(供 restore_from_db 使用)
         # WAL 模式下只读连接可与主连接并发读，永不被写事务阻塞
         # CodeRabbit 修复：init() 可能被重复调用，先关闭旧 _readonly_conn 防止连接泄漏
-        if self._readonly_conn is not None:
-            try:
-                await self._readonly_conn.close()
-            except (OSError, RuntimeError):
-                logger.debug("database.init_close_old_readonly_error", exc_info=True)
-            self._readonly_conn = None
-        try:
-            self._readonly_conn = await aiosqlite.connect(
-                self._db_ro_uri(), uri=True)
-            self._readonly_conn.row_factory = aiosqlite.Row
-            await self._readonly_conn.execute("PRAGMA query_only=1")
-            await self._readonly_conn.execute("PRAGMA busy_timeout=2000")
-            logger.info("database.readonly_conn_ready")
-        except Exception as e:
-            # 只读连接初始化失败不阻塞启动，restore 回退到主连接(保留原行为)
-            logger.warning("database.readonly_conn_init_failed", error=str(e))
-            self._readonly_conn = None
+        await self._close_if_present(self._readonly_conn, "database.init_close_old_readonly_error")
+        self._readonly_conn = None
+        await self._init_readonly_conn()
         # 只读连接池（检索并发分流）：WAL 下多连接可并发读
         # 幂等：重复 init() 先关闭旧池
         await self._setup_read_pool()
