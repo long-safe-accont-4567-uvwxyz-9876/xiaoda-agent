@@ -348,6 +348,12 @@ class ParsedC2CMessage(NamedTuple):
     user_id: str
 
 
+class AttachmentResult(NamedTuple):
+    """附件处理结果（原 2 元组改为命名结构）。"""
+    image_data: list
+    attachment_info: str
+
+
 class AIQQBot(botpy.Client):
     """QQ 机器人适配器，处理消息接收、去重与 AgentCore 调用。"""
     def __init__(self, *args: Any, agent: "AgentCore | None" = None, **kwargs: Any) -> None:
@@ -625,7 +631,7 @@ class AIQQBot(botpy.Client):
             return f"[视频: {fn or 'video'}]"
         return f"[附件: {fn or 'unknown'}]"
 
-    async def _process_message_attachments(self, message: Any) -> tuple[list[dict], str]:
+    async def _process_message_attachments(self, message: Any) -> AttachmentResult:
         """处理消息中的附件，返回图片数据和附件描述文本。
 
         遍历消息附件，接收文件、编码图片为 base64，生成附件描述文本。
@@ -635,7 +641,7 @@ class AIQQBot(botpy.Client):
             message: QQ Bot 消息对象（C2CMessage 或 GroupMessage）
 
         Returns:
-            tuple[list[dict], str]: (image_data, attachment_info)
+            AttachmentResult(image_data, attachment_info)
                 image_data: 图片的 mimeType+base64 列表，供视觉识别使用
                 attachment_info: 附件描述文本，拼接到用户输入中
         """
@@ -655,7 +661,7 @@ class AIQQBot(botpy.Client):
                 else:
                     parts.append(self._attachment_failed_part(ct, fn))
             attachment_info = " ".join(str(p) for p in parts)
-        return image_data, attachment_info
+        return AttachmentResult(image_data, attachment_info)
 
     async def on_group_add_robot(self, event: Any) -> None:
         """机器人被拉入群时，自动将拉入者绑定为主人。"""
