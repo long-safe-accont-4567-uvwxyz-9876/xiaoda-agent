@@ -102,6 +102,25 @@ _CN_DATE_PATTERN = re.compile(
     r"([一二三四五六七八九十两\d]{1,3})\s*月\s*([一二三四五六七八九十两\d]{1,3})\s*[号日]"
 )
 
+# 时段词 → (起始小时, 结束小时)；字典顺序即优先级，先命中先返回
+_TIME_OF_DAY = {
+    "凌晨": (0, 6),
+    "早上": (6, 9),
+    "早晨": (6, 9),
+    "上午": (8, 12),
+    "中午": (11, 14),
+    "下午": (12, 18),
+    "傍晚": (17, 20),
+    "晚上": (18, 24),
+    "夜间": (18, 24),
+    "夜里": (18, 24),
+    "深夜": (21, 24),
+}
+
+# "N点到N点" 小时范围 / "N点"/"N点N分" 具体时刻（时段解析时复用）
+_HOUR_RANGE_PATTERN = re.compile(r"(\d{1,2})\s*[点时:：]\s*(?:到|~|-|—)\s*(\d{1,2})\s*[点时:：]?")
+_SINGLE_HOUR_PATTERN = re.compile(r"(\d{1,2})\s*[点时:：]\s*(\d{1,2})?\s*分?")
+
 
 def _parse_temporal_query(query: str) -> tuple[float, float] | None:
     """从用户查询中解析时间词，返回 [start_ts, end_ts] 时间戳区间（秒）。
@@ -116,7 +135,7 @@ def _parse_temporal_query(query: str) -> tuple[float, float] | None:
     """
     now = _datetime.datetime.now(_datetime.UTC).astimezone()
 
-    # ── 1. 相对时间：N小时前 / N分钟前 ──
+    # ── 1. 相对时间：N小时前 / N分钟前 / 刚才刚刚 ──
     m = re.search(r"(\d+)\s*小时前", query)
     if m:
         hours = int(m.group(1))
@@ -133,28 +152,65 @@ def _parse_temporal_query(query: str) -> tuple[float, float] | None:
         start = now - _datetime.timedelta(minutes=30)
         return start.timestamp(), now.timestamp()
 
-    # ── 2. 绝对日期解析：N月N号/N月N日 ──
-    # 支持时段：早上(N-N点)/上午/中午/下午/晚上/凌晨
-    _TIME_OF_DAY = {
-        "凌晨": (0, 6),
-        "早上": (6, 9),
-        "早晨": (6, 9),
-        "上午": (8, 12),
-        "中午": (11, 14),
-        "下午": (12, 18),
-        "傍晚": (17, 20),
-        "晚上": (18, 24),
-        "夜间": (18, 24),
-        "夜里": (18, 24),
-        "深夜": (21, 24),
-    }
+    # ── 2. 绝对日期解析 ──
+    parsed_dates = _collect_parsed_dates(query, now)
+    if parsed_dates:
+        if len(parsed_dates) == 1:
+            return _resolve_single_date(parsed_dates[0], query)
+        # 多日期：返回最早日期 0:00 到最晚日期 23:59 的合并范围
+        # 这样能覆盖用户提到的所有日期（如"7月18号到22号"或"7月18号、19号、20号"）
+        parsed_dates.sort()
+        start = parsed_dates[0].replace(hour=0, minute=0, second=0, microsecond=0)
+        end = parsed_dates[-1].replace(hour=23, minute=59, second=59, microsecond=0)
+        logger.info("memory.temporal_multi_date",
+                    count=len(parsed_dates),
+                    start=start.strftime("%Y-%m-%d"),
+                    end=end.strftime("%Y-%m-%d"))
+        return start.timestamp(), end.timestamp()
 
+    # ── 3. 相对日期 + 时段："今天早上" / "昨天晚上" ──
+    _REL_DATE_MAP = {
+        "今天": 0, "今日": 0,
+        "昨天": 1, "昨日": 1,
+        "前天": 2,
+        "大前天": 3,
+    }
+    for rel_word, offset_days in _REL_DATE_MAP.items():
+        if rel_word in query:
+            base_date = (now - _datetime.timedelta(days=offset_days)).replace(
+                hour=0, minute=0, second=0, microsecond=0)
+            # 优先检查具体小时范围（"7点到8点"比"早上"更精确），其次时段词
+            resolved = _hour_range_timespan(base_date, query) or _time_of_day_timespan(base_date, query)
+            if resolved is not None:
+                return resolved
+            # 纯相对日期（无时段）：整天（今天 end=now，历史 end=23:59）
+            start = base_date
+            end = (now if offset_days == 0
+                   else base_date.replace(hour=23, minute=59, second=59, microsecond=0))
+            return start.timestamp(), end.timestamp()
+
+    # ── 4. 纯相对时间词（原有逻辑）──
+    for pattern, offset_days, span_days in _TEMPORAL_PATTERNS:
+        if pattern.search(query):
+            start_date = (now - _datetime.timedelta(days=offset_days + span_days - 1)).replace(
+                hour=0, minute=0, second=0, microsecond=0
+            )
+            end_date = (now - _datetime.timedelta(days=offset_days - 1)).replace(
+                hour=0, minute=0, second=0, microsecond=0
+            ) if offset_days > 0 else now
+            return start_date.timestamp(), end_date.timestamp()
+    return None
+
+
+def _collect_parsed_dates(query: str, now: _datetime.datetime) -> list[_datetime.datetime]:
+    """收集查询中的绝对日期（X月Y号 / 纯日号，支持中文数字与多日期补全）。
+
+    修复要点：
+    - 多日期解析：原 re.search 只匹配第一个日期，现用 finditer 收集全部。
+    - 中文数字：原正则只匹配阿拉伯数字，"七月十八号"完全匹配不到。
+    - 省略月份：中文表达"七月十八号、十九号、二十号"后续日期省略月份，需补全。
+    """
     # 匹配 "N月N号"/"N月N日"（支持中文数字和阿拉伯数字）/ "N.N日"/"N.N号"
-    # 修复多日期解析 bug：原 re.search 只匹配第一个日期，
-    # 导致"7月18号、19号、20号、21号、22号"只查7月18号一天 → 小妲"想不起来"
-    # 修复中文数字 bug：原正则只匹配阿拉伯数字，"七月十八号"完全匹配不到 → 不走时间检索
-    # 修复省略月份 bug：中文表达"七月十八号、十九号、二十号"后续日期省略月份，需补全
-    # 现在用 finditer 收集所有日期，多日期时返回最早到最晚的合并范围
     all_date_matches = list(_CN_DATE_PATTERN.finditer(query))
     # 兼容 "7.16号" 格式
     _DATE_PATTERN_DOT = re.compile(r"(\d{1,2})\.(\d{1,2})\s*[号日]")
@@ -187,7 +243,6 @@ def _parse_temporal_query(query: str) -> tuple[float, float] | None:
 
     # 扫描省略月份的纯日："十九号" / "20号" / "二十一号"
     # 仅当已出现过完整日期（last_month 不为 None）时才扫描
-    # 用分隔符 [、,，到~—-] 分隔，取每个分段中的 "X号/X日"
     if last_month is not None:
         # 匹配纯日号：十九号 / 20号 / 二十一号（不带"月"或"."前缀）
         # CodeRabbit 复审修复：加强 _DAY_ONLY_PATTERN，拒绝完整月日表达式中的纯日匹配
@@ -213,93 +268,55 @@ def _parse_temporal_query(query: str) -> tuple[float, float] | None:
             except ValueError:
                 continue
 
-    if parsed_dates:
-        # 单日期：保持原有精确逻辑（小时范围/时段/整天）
-        if len(parsed_dates) == 1:
-            base_date = parsed_dates[0]
-            # 检查是否有具体小时范围："N点到N点"
-            hour_range = re.search(r"(\d{1,2})\s*[点时:：]\s*(?:到|~|-|—)\s*(\d{1,2})\s*[点时:：]?", query)
-            if hour_range:
-                h_start = int(hour_range.group(1))
-                h_end = int(hour_range.group(2))
-                start = base_date.replace(hour=h_start, minute=0, second=0, microsecond=0)
-                end = base_date.replace(hour=h_end, minute=59, second=59, microsecond=0)
-                return start.timestamp(), end.timestamp()
+    return parsed_dates
 
-            # 检查是否有具体小时："N点" / "N点N分"
-            single_hour = re.search(r"(\d{1,2})\s*[点时:：]\s*(\d{1,2})?\s*分?", query)
-            if single_hour and single_hour.group(1):
-                h = int(single_hour.group(1))
-                minute = int(single_hour.group(2)) if single_hour.group(2) else 0
-                start = base_date.replace(hour=h, minute=minute, second=0, microsecond=0)
-                end = start + _datetime.timedelta(hours=1)
-                return start.timestamp(), end.timestamp()
 
-            # 检查时段词
-            for tod_name, (tod_start, tod_end) in _TIME_OF_DAY.items():
-                if tod_name in query:
-                    start = base_date.replace(hour=tod_start, minute=0, second=0, microsecond=0)
-                    end = base_date.replace(hour=tod_end, minute=0, second=0, microsecond=0) if tod_end < 24 else base_date.replace(hour=23, minute=59, second=59, microsecond=0)
-                    return start.timestamp(), end.timestamp()
+def _resolve_single_date(base_date: _datetime.datetime, query: str) -> tuple[float, float]:
+    """解析单个绝对日期：小时范围 → 具体小时 → 时段词 → 整天。"""
+    resolved = (_hour_range_timespan(base_date, query)
+                or _single_hour_timespan(base_date, query)
+                or _time_of_day_timespan(base_date, query))
+    if resolved is not None:
+        return resolved
+    # 纯日期：整天
+    start = base_date.replace(hour=0, minute=0, second=0, microsecond=0)
+    end = base_date.replace(hour=23, minute=59, second=59, microsecond=0)
+    return start.timestamp(), end.timestamp()
 
-            # 纯日期：整天
-            start = base_date.replace(hour=0, minute=0, second=0, microsecond=0)
-            end = base_date.replace(hour=23, minute=59, second=59, microsecond=0)
+
+def _hour_range_timespan(base_date: _datetime.datetime, query: str) -> tuple[float, float] | None:
+    """解析 "N点到N点" 小时范围；无匹配返回 None。"""
+    m = _HOUR_RANGE_PATTERN.search(query)
+    if not m:
+        return None
+    h_start = int(m.group(1))
+    h_end = int(m.group(2))
+    start = base_date.replace(hour=h_start, minute=0, second=0, microsecond=0)
+    end = base_date.replace(hour=h_end, minute=59, second=59, microsecond=0)
+    return start.timestamp(), end.timestamp()
+
+
+def _single_hour_timespan(base_date: _datetime.datetime, query: str) -> tuple[float, float] | None:
+    """解析 "N点"/"N点N分" 具体时刻；无匹配返回 None。"""
+    m = _SINGLE_HOUR_PATTERN.search(query)
+    if not (m and m.group(1)):
+        return None
+    h = int(m.group(1))
+    minute = int(m.group(2)) if m.group(2) else 0
+    start = base_date.replace(hour=h, minute=minute, second=0, microsecond=0)
+    end = start + _datetime.timedelta(hours=1)
+    return start.timestamp(), end.timestamp()
+
+
+def _time_of_day_timespan(base_date: _datetime.datetime, query: str) -> tuple[float, float] | None:
+    """解析时段词（早上/下午/晚上等）；无匹配返回 None。"""
+    for tod_name, (tod_start, tod_end) in _TIME_OF_DAY.items():
+        if tod_name in query:
+            start = base_date.replace(hour=tod_start, minute=0, second=0, microsecond=0)
+            end = (base_date.replace(hour=tod_end, minute=0, second=0, microsecond=0)
+                   if tod_end < 24
+                   else base_date.replace(hour=23, minute=59, second=59, microsecond=0))
             return start.timestamp(), end.timestamp()
-
-        # 多日期：返回最早日期 0:00 到最晚日期 23:59 的合并范围
-        # 这样能覆盖用户提到的所有日期（如"7月18号到22号"或"7月18号、19号、20号"）
-        parsed_dates.sort()
-        start = parsed_dates[0].replace(hour=0, minute=0, second=0, microsecond=0)
-        end = parsed_dates[-1].replace(hour=23, minute=59, second=59, microsecond=0)
-        logger.info("memory.temporal_multi_date",
-                    count=len(parsed_dates),
-                    start=start.strftime("%Y-%m-%d"),
-                    end=end.strftime("%Y-%m-%d"))
-        return start.timestamp(), end.timestamp()
-
-    # 没有匹配到绝对日期，继续走相对日期逻辑（昨天/今天/上周等）
-
-    # ── 3. 相对日期 + 时段："今天早上" / "昨天晚上" ──
-    _REL_DATE_MAP = {
-        "今天": 0, "今日": 0,
-        "昨天": 1, "昨日": 1,
-        "前天": 2,
-        "大前天": 3,
-    }
-    for rel_word, offset_days in _REL_DATE_MAP.items():
-        if rel_word in query:
-            base_date = (now - _datetime.timedelta(days=offset_days)).replace(
-                hour=0, minute=0, second=0, microsecond=0)
-            # 优先检查具体小时范围（"7点到8点"比"早上"更精确）
-            hour_range = re.search(r"(\d{1,2})\s*[点时:：]\s*(?:到|~|-|—)\s*(\d{1,2})\s*[点时:：]?", query)
-            if hour_range:
-                h_start = int(hour_range.group(1))
-                h_end = int(hour_range.group(2))
-                start = base_date.replace(hour=h_start, minute=0, second=0, microsecond=0)
-                end = base_date.replace(hour=h_end, minute=59, second=59, microsecond=0)
-                return start.timestamp(), end.timestamp()
-            # 其次检查时段词（"早上"→6-9点）
-            for tod_name, (tod_start, tod_end) in _TIME_OF_DAY.items():
-                if tod_name in query:
-                    start = base_date.replace(hour=tod_start, minute=0, second=0, microsecond=0)
-                    end = base_date.replace(hour=tod_end, minute=0, second=0, microsecond=0) if tod_end < 24 else base_date.replace(hour=23, minute=59, second=59, microsecond=0)
-                    return start.timestamp(), end.timestamp()
-            # 纯相对日期（无时段）：整天
-            start = base_date
-            end = (now if offset_days == 0 else base_date.replace(hour=23, minute=59, second=59, microsecond=0))
-            return start.timestamp(), end.timestamp()
-
-    # ── 4. 纯相对时间词（原有逻辑）──
-    for pattern, offset_days, span_days in _TEMPORAL_PATTERNS:
-        if pattern.search(query):
-            start_date = (now - _datetime.timedelta(days=offset_days + span_days - 1)).replace(
-                hour=0, minute=0, second=0, microsecond=0
-            )
-            end_date = (now - _datetime.timedelta(days=offset_days - 1)).replace(
-                hour=0, minute=0, second=0, microsecond=0
-            ) if offset_days > 0 else now
-            return start_date.timestamp(), end_date.timestamp()
     return None
 
 
@@ -456,6 +473,35 @@ def _char_bigrams(text: str) -> set[str]:
     return {text[i:i + 2] for i in range(len(text) - 1)}
 
 
+def _period_for_hour(hour: int) -> str:
+    """把 24 小时制小时映射为自然中文时段。"""
+    if 5 <= hour < 8:
+        return "清晨"
+    if 8 <= hour < 11:
+        return "上午"
+    if 11 <= hour < 13:
+        return "中午"
+    if 13 <= hour < 17:
+        return "下午"
+    if 17 <= hour < 19:
+        return "傍晚"
+    if 19 <= hour < 23:
+        return "晚上"
+    return "深夜"
+
+
+def _format_clock(hour: int, minute: int) -> str:
+    """把小时/分钟格式化为口语化 12 小时制（如 3点半 / 5点过8分）。"""
+    h12 = hour if hour <= 12 else hour - 12
+    if minute == 0:
+        return f"{h12}点"
+    if minute == 30:
+        return f"{h12}点半"
+    if minute < 10:
+        return f"{h12}点过{minute}分"
+    return f"{h12}点{minute}分"
+
+
 def _natural_time_desc(ts: float) -> str:
     """把时间戳转成自然中文时段描述，供 conversation_log 摘要使用。
 
@@ -466,25 +512,4 @@ def _natural_time_desc(ts: float) -> str:
     import time as _t
     lt = _t.localtime(ts)
     hour, minute = lt.tm_hour, lt.tm_min
-    if 5 <= hour < 8:
-        period = "清晨"
-    elif 8 <= hour < 11:
-        period = "上午"
-    elif 11 <= hour < 13:
-        period = "中午"
-    elif 13 <= hour < 17:
-        period = "下午"
-    elif 17 <= hour < 19:
-        period = "傍晚"
-    elif 19 <= hour < 23:
-        period = "晚上"
-    else:
-        period = "深夜"
-    h12 = hour if hour <= 12 else hour - 12
-    if minute == 0:
-        return f"{period}{h12}点"
-    if minute == 30:
-        return f"{period}{h12}点半"
-    if minute < 10:
-        return f"{period}{h12}点过{minute}分"
-    return f"{period}{h12}点{minute}分"
+    return _period_for_hour(hour) + _format_clock(hour, minute)
