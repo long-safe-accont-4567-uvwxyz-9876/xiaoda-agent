@@ -66,6 +66,35 @@ def _rows_to_entity_results(rows: list) -> list[dict]:
     return results
 
 
+def _scope_where(scope: Any, *, is_raw: int | None = None,
+                 table: str = "", include_archived_filter: bool = True) -> tuple[str, list]:
+    """构建 scope 过滤 WHERE 片段（user_id/agent_id + 可选 is_raw + 可选 archived 过滤）。
+
+    记录 debug 日志便于排查 scope 过滤是否正确。
+
+    Args:
+        scope: Scope 对象
+        is_raw: None=不限, 0=只查提炼知识, 1=只查原始记录
+        table: 表别名前缀（如 "em"），空串不加前缀
+        include_archived_filter: 是否追加 session_id != 'archived'（默认 True）
+
+    Returns:
+        (where_sql, params)：where_sql 含前导空格，可直接拼接在 WHERE 后。
+    """
+    p = f"{table}." if table else ""
+    where = f" AND {p}user_id = ? AND {p}agent_id = ?"
+    params: list = [scope.user_id, scope.agent_id]
+    if include_archived_filter:
+        where += f" AND {p}session_id != 'archived'"
+    if is_raw is not None:
+        where += f" AND {p}is_raw = ?"
+        params.append(is_raw)
+    logger.debug("db_memory.scope_where_built",
+                 user_id=scope.user_id, agent_id=scope.agent_id,
+                 is_raw=is_raw, table=table, where=where)
+    return where, params
+
+
 class MemoryDB:
     """管理情景记忆、画像等记忆数据的读写。"""
 
@@ -391,19 +420,14 @@ class MemoryDB:
         if not fts_query:
             return []
         try:
-            where_extra = ""
-            params: list = [fts_query, scope.user_id, scope.agent_id]
-            if is_raw is not None:
-                where_extra = " AND em.is_raw = ?"
-                params.append(is_raw)
-            params.append(limit)
+            scope_where, scope_params = _scope_where(scope, is_raw=is_raw, table="em")
+            params: list = [fts_query, *scope_params, limit]
             cursor = await self._read_conn().execute(
                 f"""SELECT em.*, bm25(episodic_memory_fts) AS score
                    FROM episodic_memory_fts
                    JOIN episodic_memories em ON em.id = episodic_memory_fts.id
                    WHERE episodic_memory_fts MATCH ?
-                     AND em.user_id = ? AND em.agent_id = ?
-                     AND em.session_id != 'archived'{where_extra}
+                     {scope_where}
                    ORDER BY score ASC, em.importance DESC, em.timestamp DESC
                    LIMIT ?""",
                 params,
@@ -429,19 +453,14 @@ class MemoryDB:
             is_raw: None=不限, 0=只查提炼知识, 1=只查原始记录
         """
         try:
-            where_extra = ""
-            params: list = [start_ts, end_ts, scope.user_id, scope.agent_id]
-            if is_raw is not None:
-                where_extra = " AND is_raw = ?"
-                params.append(is_raw)
-            params.append(limit)
+            scope_where, scope_params = _scope_where(scope, is_raw=is_raw)
+            params: list = [start_ts, end_ts, *scope_params, limit]
             # 2026-08-08 阻塞根因修复：原用写连接 _conn，后台写事务占用时
             # 时间检索排队数秒 → 首条消息 8s 全空白超时。改读连接池，与 FTS/实体一致。
             cursor = await self._read_conn().execute(
                 f"""SELECT * FROM episodic_memories
                    WHERE timestamp >= ? AND timestamp < ?
-                     AND user_id = ? AND agent_id = ?
-                     AND session_id != 'archived'{where_extra}
+                     {scope_where}
                    ORDER BY timestamp DESC LIMIT ?""",
                 params,
             )
@@ -465,17 +484,12 @@ class MemoryDB:
             return []
         try:
             placeholders = _sql_placeholders(memory_ids)
-            where_extra = ""
-            params: list = list(memory_ids) + [scope.user_id, scope.agent_id]
-            if is_raw is not None:
-                where_extra = " AND is_raw = ?"
-                params.append(is_raw)
-            params.append(limit)
+            scope_where, scope_params = _scope_where(scope, is_raw=is_raw)
+            params: list = [*memory_ids, *scope_params, limit]
             cursor = await self._read_conn().execute(
                 f"""SELECT * FROM episodic_memories
                    WHERE id IN ({placeholders})
-                     AND user_id = ? AND agent_id = ?
-                     AND session_id != 'archived'{where_extra}
+                     {scope_where}
                    LIMIT ?""",
                 params,
             )
@@ -488,16 +502,11 @@ class MemoryDB:
     async def get_episodic_count_scoped(self, scope: Any, is_raw: int | None = None) -> int:
         """获取 scope 内的记忆总数（用于冷启动档位判断）"""
         try:
-            where_extra = ""
-            params: list = [scope.user_id, scope.agent_id]
-            if is_raw is not None:
-                where_extra = " AND is_raw = ?"
-                params.append(is_raw)
+            scope_where, scope_params = _scope_where(scope, is_raw=is_raw)
             cursor = await self._read_conn().execute(
                 f"SELECT COUNT(*) as cnt FROM episodic_memories "
-                f"WHERE user_id = ? AND agent_id = ? "
-                f"AND session_id != 'archived'{where_extra}",
-                params,
+                f"WHERE 1=1{scope_where}",
+                scope_params,
             )
             row = await cursor.fetchone()
             return row["cnt"] if row else 0
@@ -716,18 +725,15 @@ class MemoryDB:
             return []
         try:
             placeholders = _sql_placeholders(entity_names)
-            where_raw = ""
-            params: list = list(entity_names) + [scope.user_id, scope.agent_id]
-            if is_raw is not None:
-                where_raw = " AND em.is_raw = ?"
-                params.append(is_raw)
-            params.append(limit)
+            scope_where, scope_params = _scope_where(
+                scope, is_raw=is_raw, table="em", include_archived_filter=False)
+            params: list = [*entity_names, *scope_params, limit]
             cursor = await self._conn.execute(
                 f"""SELECT DISTINCT em.* FROM entity_memory_links eml
                    JOIN memory_entities me ON me.id = eml.entity_id
                    JOIN episodic_memories em ON em.id = eml.memory_id
                    WHERE me.name IN ({placeholders})
-                     AND em.user_id = ? AND em.agent_id = ?{where_raw}
+                     {scope_where}
                    ORDER BY em.importance DESC, em.timestamp DESC LIMIT ?""",
                 params,
             )
