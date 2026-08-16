@@ -438,9 +438,10 @@ def get_all_tool_dicts() -> dict[str, dict]:
 
 
 def clear_tools() -> None:
-    """清空所有已注册工具并重置 schema 缓存."""
-    global _schema_cache, _schema_version
+    """清空所有已注册工具并重置 schema 缓存与 webui overrides。"""
+    global _schema_cache, _schema_version, _webui_tool_overrides
     _tools.clear()
+    _webui_tool_overrides = {}
     with _schema_lock:
         _schema_version += 1
         _schema_cache = None
