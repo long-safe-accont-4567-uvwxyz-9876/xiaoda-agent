@@ -1272,6 +1272,35 @@ class AIQQBot(ChannelAdapterBase, botpy.Client):
             return "".join(segments[index + 1:])
         return "".join(segments[index:])
 
+    async def _send_stream_segment(self, message: Any, text: str, *,
+                                   passive: bool, is_group: bool, log_key: str) -> bool:
+        """发送单个流式分片。True=发送成功，False=群聊被动配额耗尽被静默拒绝。
+
+        纯文本流式与 sticker 流式共用：群聊无主动消息权限，被动超限时返回
+        False 让外层合并剩余内容为最终片，避免后续段全部丢失（修复同类 bug）。
+        """
+        group_no_proactive = ("被动回复", "超过限制", "无权限", "40034105")
+        try:
+            if is_group or passive or not getattr(self, "api", None):
+                await message.reply(content=text, msg_seq=_next_msg_seq())
+            else:
+                response = await self.api.post_c2c_message(
+                    openid=message.author.user_openid,
+                    content=text,
+                    msg_type=0,
+                    msg_seq=_next_msg_seq(),
+                )
+                if response is None:
+                    raise RuntimeError("C2C主动消息接口返回None")
+            return True
+        except (TimeoutError, OSError, RuntimeError, ValueError) as e:
+            err_str = str(e)
+            if is_group and any(k in err_str for k in group_no_proactive):
+                logger.info(f"{log_key}_passive_limited_no_proactive",
+                            error=err_str, remaining_to_merge=True)
+                return False
+            raise
+
     async def _send_streaming_reply(self, message: Any, full_text: str) -> None:
         """流式分片发送回复，模拟打字效果。
 
@@ -1304,42 +1333,12 @@ class AIQQBot(ChannelAdapterBase, botpy.Client):
             segments, is_group,
             "qq_bot.stream_capped_resplit", "qq_bot.stream_capped")
 
-        _group_no_proactive = ("被动回复", "超过限制", "无权限", "40034105")
-
-        async def _send_segment(text: str, *, passive: bool) -> bool:
-            """发送单个分片。返回 True 表示真发送成功，False 表示配额耗尽被静默拒绝。
-
-            群聊无主动消息权限，被动超限时不再抛异常而是返回 False，
-            让外层循环能合并剩余内容为单条最终消息发送，避免后续段全部丢失。
-            """
-            try:
-                if is_group or passive or not getattr(self, "api", None):
-                    await message.reply(content=text, msg_seq=_next_msg_seq())
-                else:
-                    response = await self.api.post_c2c_message(
-                        openid=message.author.user_openid,
-                        content=text,
-                        msg_type=0,
-                        msg_seq=_next_msg_seq(),
-                    )
-                    if response is None:
-                        raise RuntimeError("C2C主动消息接口返回None")
-                return True
-            except (TimeoutError, OSError, RuntimeError, ValueError) as e:
-                err_str = str(e)
-                if is_group and any(k in err_str for k in _group_no_proactive):
-                    # 群聊被动回复配额超限——静默记录，返回 False 让外层合并剩余
-                    logger.info("qq_bot.stream_passive_limited_no_proactive",
-                                error=err_str, remaining_to_merge=True)
-                    return False
-                raise  # 其他异常仍然抛出，由外层异常恢复逻辑处理
-
         # 短回复：直接发送单片
         if len(segments) <= 1:
             try:
                 single = segments[0] if segments else full_text
                 t0 = time.monotonic()
-                ok = await _send_segment(single, passive=True)
+                ok = await self._send_stream_segment(message, single, passive=True, is_group=is_group, log_key="qq_bot.stream")
                 elapsed = (time.monotonic() - t0) * 1000
                 if ok:
                     logger.info("qq_bot.stream_single",
@@ -1368,7 +1367,7 @@ class AIQQBot(ChannelAdapterBase, botpy.Client):
                 if i > 0:
                     await asyncio.sleep(random.uniform(0.8, 1.2))
                 t0 = time.monotonic()
-                ok = await _send_segment(seg, passive=i == 0)
+                ok = await self._send_stream_segment(message, seg, passive=i == 0, is_group=is_group, log_key="qq_bot.stream")
                 seg_ms = (time.monotonic() - t0) * 1000
                 if ok:
                     sent_count += 1
@@ -1385,7 +1384,7 @@ class AIQQBot(ChannelAdapterBase, botpy.Client):
                     recovery_pieces = self._split_text_by_bytes(remaining, 7800)
                     for piece in recovery_pieces:
                         try:
-                            ok2 = await _send_segment(piece, passive=False)
+                            ok2 = await self._send_stream_segment(message, piece, passive=False, is_group=is_group, log_key="qq_bot.stream")
                             if ok2:
                                 sent_count += 1
                             else:
@@ -1417,7 +1416,7 @@ class AIQQBot(ChannelAdapterBase, botpy.Client):
                 recovery_sent = 0
                 for piece in recovery_pieces:
                     try:
-                        await _send_segment(piece, passive=False)
+                        await self._send_stream_segment(message, piece, passive=False, is_group=is_group, log_key="qq_bot.stream")
                         recovery_sent += 1
                     except (TimeoutError, OSError, RuntimeError) as e2:
                         logger.error("qq_bot.stream_final_failed", error=str(e2))
@@ -1489,34 +1488,13 @@ class AIQQBot(ChannelAdapterBase, botpy.Client):
         # 长回复：前 N-1 片流式发送，最后一片与表情包合并发送
         _group_openid2 = getattr(message, "group_openid", "") if is_group else ""
 
-        _group_no_proactive_sticker = ("被动回复", "超过限制", "无权限", "40034105")
-
-        async def _send_segment(text: str) -> bool:
-            """发送单个分片。返回 True 表示真发送成功，False 表示配额耗尽被静默拒绝。
-
-            与 _send_streaming_reply._send_segment 同构（修复同类 bug）：
-            群聊无主动消息权限，被动超限时不再静默吞异常，而是返回 False
-            让外层循环能合并剩余内容（含最后一片与 sticker 的合并片），
-            避免后续段全部丢失。
-            """
-            try:
-                await message.reply(content=text, msg_seq=_next_msg_seq())
-                return True
-            except (TimeoutError, OSError, RuntimeError, ValueError) as e:
-                err_str = str(e)
-                if is_group and any(k in err_str for k in _group_no_proactive_sticker):
-                    logger.info("qq_bot.stream_sticker_passive_limited_no_proactive",
-                                error=err_str, remaining_to_merge=True)
-                    return False
-                raise  # 其他异常仍然抛出，由外层异常恢复逻辑处理
-
         # 发送前 N-1 片
         for i, seg in enumerate(segments[:-1]):
             try:
                 if i > 0:
                     await asyncio.sleep(random.uniform(0.8, 1.2))
                 t0 = time.monotonic()
-                ok = await _send_segment(seg)
+                ok = await self._send_stream_segment(message, seg, passive=True, is_group=is_group, log_key="qq_bot.stream_sticker")
                 seg_ms = (time.monotonic() - t0) * 1000
                 if ok:
                     logger.debug("qq_bot.stream_sticker_segment",
@@ -1551,7 +1529,7 @@ class AIQQBot(ChannelAdapterBase, botpy.Client):
                 try:
                     pieces = self._split_text_by_bytes(remaining, 7800)
                     for piece in pieces[:-1]:
-                        await _send_segment(piece)
+                        await self._send_stream_segment(message, piece, passive=True, is_group=is_group, log_key="qq_bot.stream_sticker")
                     await self._send_reply_with_media(
                         message, pieces[-1], image_path=result.sticker_path)
                     logger.info("qq_bot.stream_sticker_recovery_done_with_merge")
@@ -1560,7 +1538,7 @@ class AIQQBot(ChannelAdapterBase, botpy.Client):
                     # 兜底：放弃 sticker，仅发送合并文本
                     try:
                         for piece in self._split_text_by_bytes(remaining, 7800):
-                            await _send_segment(piece)
+                            await self._send_stream_segment(message, piece, passive=True, is_group=is_group, log_key="qq_bot.stream_sticker")
                     except (TimeoutError, OSError, RuntimeError) as e3:
                         logger.error("qq_bot.stream_sticker_recovery_final_failed",
                                      error=str(e3))
@@ -1574,7 +1552,7 @@ class AIQQBot(ChannelAdapterBase, botpy.Client):
             logger.warning("qq_bot.sticker_with_last_segment_failed", error=str(e))
             try:
                 # 兜底：放弃 sticker，仅发送最后一片文本
-                ok = await _send_segment(last_seg)
+                ok = await self._send_stream_segment(message, last_seg, passive=True, is_group=is_group, log_key="qq_bot.stream_sticker")
                 if not ok:
                     logger.error("qq_bot.sticker_last_segment_quota_exhausted_no_recovery")
             except (OSError, RuntimeError) as e2:
