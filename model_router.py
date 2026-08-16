@@ -61,6 +61,7 @@ from model_router_config import (  # noqa: F401,E402
     _ollama_model_map_from_env,
     _ollama_model_map_from_file,
     _resolve_provider_key,
+    translate_model_for_provider,
 )
 
 # ── Phase 2 拆分：ModelRouteRegistry 抽为 model_router_registry（逐字节搬移） ──
