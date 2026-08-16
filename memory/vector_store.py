@@ -436,8 +436,6 @@ class VectorStore:
             logger.warning("vector_store.sqlite_vec_missing")
             return
 
-        import sqlite3
-
         if (
             not self._dimensions_explicit
             and self._embed_mode == "local"
@@ -449,114 +447,7 @@ class VectorStore:
                 if resolved_dimensions > 0:
                     self._dimensions = resolved_dimensions
 
-        def _init_db() -> tuple[Any, bool]:
-            """在后台线程中初始化 SQLite 数据库，加载 sqlite_vec 扩展并创建向量虚拟表。"""
-            with self._lock:
-                conn = sqlite3.connect(self._db_path, check_same_thread=False)
-                try:
-                    conn.enable_load_extension(True)
-                    sqlite_vec.load(conn)
-                    conn.enable_load_extension(False)
-
-                    # 检测文件系统类型，vfat/exfat 不支持 WAL
-                    from pathlib import Path
-                    from db.database import _detect_fs_type
-                    fs_type = _detect_fs_type(Path(self._db_path))
-                    is_fat = fs_type in ("vfat", "fat", "msdos", "exfat", "fat32")
-                    if is_fat:
-                        conn.execute("PRAGMA journal_mode=DELETE")
-                    else:
-                        conn.execute("PRAGMA journal_mode=WAL")
-                    conn.execute("PRAGMA synchronous=NORMAL")
-                    conn.execute("PRAGMA cache_size=-20000")
-                    if not is_fat:
-                        conn.execute("PRAGMA mmap_size=67108864")
-                        # WAL checkpoint 阈值 1000→10000 页（4MB→40MB）：
-                        # 与 database.py 主连接一致，避免 agent_vec.db 每 4MB
-                        # checkpoint 写回外置盘（U 盘）造成 vec 检索/写入偶发阻塞。
-                        conn.execute("PRAGMA wal_autocheckpoint=10000")
-
-                    # 维度策略：
-                    # - 显式配置（dimensions > 0）时直接使用
-                    # - 本地推理模式：用本地模型输出维度（BGE-small-zh-v1.5 = 512）
-                    # - 未配置时查表已有维度；表不存在则用 1024 兜底
-                    # 修复 P0：原代码硬编码 1024 且首次 INSERT 时 _dimensions 竞态写入，
-                    # 维度不匹配时 INSERT 永久失败。
-                    if self._dimensions > 0:
-                        dims = self._dimensions
-                    elif self._embed_mode == "local" and self._local_provider is not None:
-                        # 懒加载时此处同步加载（首次使用），拿到真实维度
-                        self._local_provider.load()
-                        dims = self._local_provider.dimensions or 512
-                        self._dimensions = dims
-                    else:
-                        try:
-                            row = conn.execute(
-                                "SELECT embedding FROM memories_vec LIMIT 1"
-                            ).fetchone()
-                            if row is not None and row[0] is not None:
-                                raw = row[0]
-                                if isinstance(raw, (bytes, bytearray)):
-                                    dims = len(raw) // 4
-                                else:
-                                    dims = 1024
-                            else:
-                                dims = 1024
-                        except sqlite3.OperationalError:
-                            # 表不存在（首次初始化），用 1024 兜底
-                            dims = 1024
-                        # 固化检测到的维度，避免并发首 INSERT 竞态
-                        self._dimensions = dims
-
-                    # local 模式：表已存在但维度与本地模型不一致（如 1024→512）时，
-                    # 不能原地改表结构，INSERT 会静默失败。检测到不匹配直接报错，
-                    # 由迁移脚本（scripts/rebuild_vec_local.py）重建表并重新向量化。
-                    if self._embed_mode == "local" and self._local_provider is not None and not self._dimensions_explicit:
-                        try:
-                            row = conn.execute(
-                                "SELECT embedding FROM memories_vec LIMIT 1"
-                            ).fetchone()
-                            if row is not None and row[0] is not None:
-                                raw = row[0]
-                                if isinstance(raw, (bytes, bytearray)):
-                                    existing_dims = len(raw) // 4
-                                else:
-                                    existing_dims = dims
-                                if existing_dims != dims:
-                                    raise RuntimeError(
-                                        f"memories_vec dims={existing_dims} != local embed dims={dims}；"
-                                        "请先运行 scripts/rebuild_vec_local.py 重建向量库"
-                                    )
-                        except sqlite3.OperationalError:
-                            logger.debug("vector_store.memories_vec_table_missing_create", exc_info=True)  # 表不存在（首次初始化），正常创建
-
-                    conn.execute(f"""
-                        CREATE VIRTUAL TABLE IF NOT EXISTS memories_vec
-                        USING vec0(embedding float[{dims}])
-                    """)
-                    conn.execute(f"""
-                        CREATE VIRTUAL TABLE IF NOT EXISTS memories_child_vec
-                        USING vec0(embedding float[{dims}])
-                    """)
-                    conn.execute(f"""
-                        CREATE VIRTUAL TABLE IF NOT EXISTS kg_entities_vec
-                        USING vec0(embedding float[{dims}])
-                    """)
-                    conn.execute(f"""
-                        CREATE VIRTUAL TABLE IF NOT EXISTS kg_relations_vec
-                        USING vec0(embedding float[{dims}])
-                    """)
-                    conn.commit()
-                    return conn, is_fat
-                except Exception:
-                    # 修复资源泄漏：sqlite_vec.load 失败时必须 close 连接
-                    try:
-                        conn.close()
-                    except Exception:
-                        logger.warning("vector_store.conn_close_failed_during_load", exc_info=True)
-                    raise
-
-        self._vec_conn, is_fat = await asyncio.to_thread(_init_db)
+        self._vec_conn, is_fat = await asyncio.to_thread(self._init_db_sync)
 
         self._initialized = True
         pragma_desc = "DELETE+cache" if is_fat else "WAL+cache+mmap"
@@ -571,14 +462,9 @@ class VectorStore:
             self._brute_base_dir = str(base_dir)
             self._brute = NumpyBruteIndex(dim=self._dimensions, base_dir=base_dir)
 
-            def _load_brute() -> None:
-                with self._lock:
-                    if self._closed:
-                        return
-                    self._brute.load_from_db(self._vec_conn)
 
             try:
-                await asyncio.to_thread(_load_brute)
+                await asyncio.to_thread(self._load_brute_sync)
                 if self._brute.ready:
                     logger.info("vector_store.brute_ready", base_dir=self._brute_base_dir)
                 else:
@@ -588,6 +474,124 @@ class VectorStore:
             except Exception as e:  # noqa: BLE001
                 logger.warning("vector_store.brute_init_failed error={}", str(e))
                 self._brute = None
+
+    def _init_db_sync(self) -> tuple[Any, bool]:
+        """在后台线程中初始化 SQLite 数据库，加载 sqlite_vec 扩展并创建向量虚拟表。"""
+        import sqlite3
+
+        with self._lock:
+            conn = sqlite3.connect(self._db_path, check_same_thread=False)
+            try:
+                conn.enable_load_extension(True)
+                sqlite_vec.load(conn)
+                conn.enable_load_extension(False)
+
+                # 检测文件系统类型，vfat/exfat 不支持 WAL
+                from pathlib import Path
+                from db.database import _detect_fs_type
+                fs_type = _detect_fs_type(Path(self._db_path))
+                is_fat = fs_type in ("vfat", "fat", "msdos", "exfat", "fat32")
+                if is_fat:
+                    conn.execute("PRAGMA journal_mode=DELETE")
+                else:
+                    conn.execute("PRAGMA journal_mode=WAL")
+                conn.execute("PRAGMA synchronous=NORMAL")
+                conn.execute("PRAGMA cache_size=-20000")
+                if not is_fat:
+                    conn.execute("PRAGMA mmap_size=67108864")
+                    # WAL checkpoint 阈值 1000→10000 页（4MB→40MB）：
+                    # 与 database.py 主连接一致，避免 agent_vec.db 每 4MB
+                    # checkpoint 写回外置盘（U 盘）造成 vec 检索/写入偶发阻塞。
+                    conn.execute("PRAGMA wal_autocheckpoint=10000")
+
+                # 维度策略：
+                # - 显式配置（dimensions > 0）时直接使用
+                # - 本地推理模式：用本地模型输出维度（BGE-small-zh-v1.5 = 512）
+                # - 未配置时查表已有维度；表不存在则用 1024 兜底
+                # 修复 P0：原代码硬编码 1024 且首次 INSERT 时 _dimensions 竞态写入，
+                # 维度不匹配时 INSERT 永久失败。
+                if self._dimensions > 0:
+                    dims = self._dimensions
+                elif self._embed_mode == "local" and self._local_provider is not None:
+                    # 懒加载时此处同步加载（首次使用），拿到真实维度
+                    self._local_provider.load()
+                    dims = self._local_provider.dimensions or 512
+                    self._dimensions = dims
+                else:
+                    try:
+                        row = conn.execute(
+                            "SELECT embedding FROM memories_vec LIMIT 1"
+                        ).fetchone()
+                        if row is not None and row[0] is not None:
+                            raw = row[0]
+                            if isinstance(raw, (bytes, bytearray)):
+                                dims = len(raw) // 4
+                            else:
+                                dims = 1024
+                        else:
+                            dims = 1024
+                    except sqlite3.OperationalError:
+                        # 表不存在（首次初始化），用 1024 兜底
+                        dims = 1024
+                    # 固化检测到的维度，避免并发首 INSERT 竞态
+                    self._dimensions = dims
+
+                # local 模式：表已存在但维度与本地模型不一致（如 1024→512）时，
+                # 不能原地改表结构，INSERT 会静默失败。检测到不匹配直接报错，
+                # 由迁移脚本（scripts/rebuild_vec_local.py）重建表并重新向量化。
+                if self._embed_mode == "local" and self._local_provider is not None and not self._dimensions_explicit:
+                    try:
+                        row = conn.execute(
+                            "SELECT embedding FROM memories_vec LIMIT 1"
+                        ).fetchone()
+                        if row is not None and row[0] is not None:
+                            raw = row[0]
+                            if isinstance(raw, (bytes, bytearray)):
+                                existing_dims = len(raw) // 4
+                            else:
+                                existing_dims = dims
+                            if existing_dims != dims:
+                                raise RuntimeError(
+                                    f"memories_vec dims={existing_dims} != local embed dims={dims}；"
+                                    "请先运行 scripts/rebuild_vec_local.py 重建向量库"
+                                )
+                    except sqlite3.OperationalError:
+                        logger.debug("vector_store.memories_vec_table_missing_create", exc_info=True)  # 表不存在（首次初始化），正常创建
+
+                conn.execute(f"""
+                    CREATE VIRTUAL TABLE IF NOT EXISTS memories_vec
+                    USING vec0(embedding float[{dims}])
+                """)
+                conn.execute(f"""
+                    CREATE VIRTUAL TABLE IF NOT EXISTS memories_child_vec
+                    USING vec0(embedding float[{dims}])
+                """)
+                conn.execute(f"""
+                    CREATE VIRTUAL TABLE IF NOT EXISTS kg_entities_vec
+                    USING vec0(embedding float[{dims}])
+                """)
+                conn.execute(f"""
+                    CREATE VIRTUAL TABLE IF NOT EXISTS kg_relations_vec
+                    USING vec0(embedding float[{dims}])
+                """)
+                conn.commit()
+                return conn, is_fat
+            except Exception:
+                # 修复资源泄漏：sqlite_vec.load 失败时必须 close 连接
+                try:
+                    conn.close()
+                except Exception:
+                    logger.warning("vector_store.conn_close_failed_during_load", exc_info=True)
+                raise
+
+
+
+    def _load_brute_sync(self) -> None:
+            with self._lock:
+                if self._closed:
+                    return
+                self._brute.load_from_db(self._vec_conn)
+
 
     async def close(self) -> None:
         def _do_close() -> None:
