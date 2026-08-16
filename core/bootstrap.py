@@ -113,6 +113,13 @@ class AgentCoreBootstrapper:
             _ensure_workspace_template()
             await self._init_cognitive()
 
+        await self._bootstrap_optional_components()
+
+        self.core._initialized = True
+        logger.info("agent_core.initialized" + (" (reinit)" if reinit else ""))
+
+    async def _bootstrap_optional_components(self) -> None:
+        """初始化可选组件（各自独立容错，失败不阻止核心聊天）。"""
         # J-Space 架构优化初始化（非阻塞，失败不影响主流程）
         try:
             from core.j_space_bootstrap import init_j_space
@@ -190,9 +197,6 @@ class AgentCoreBootstrapper:
             await self._auto_enable_plugins()
         except Exception as e:
             logger.warning("agent_core.reinit_plugins_failed error={}", str(e))
-
-        self.core._initialized = True
-        logger.info("agent_core.initialized" + (" (reinit)" if reinit else ""))
 
     # ── 基础设施 ──────────────────────────────────────────
 
