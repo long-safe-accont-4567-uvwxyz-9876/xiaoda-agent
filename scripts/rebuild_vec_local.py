@@ -101,7 +101,8 @@ def _resolve_args() -> argparse.Namespace:
         from config import DATA_DIR
         default_db = DATA_DIR / "agent.db"
     except Exception:  # noqa: BLE001
-        default_db = Path("/media/orangepi/KIOXIA/nahida-data/db/agent.db")
+        _data_dir = os.getenv("KIOXIA_DATA_DIR", "") or str(Path.home() / ".ai-agent" / "data")
+        default_db = Path(_data_dir) / "db" / "agent.db"
 
     args.db = Path(args.db) if args.db else default_db
     args.vec_db = Path(args.vec_db) if args.vec_db else args.db.with_name(args.db.stem + "_vec.db")

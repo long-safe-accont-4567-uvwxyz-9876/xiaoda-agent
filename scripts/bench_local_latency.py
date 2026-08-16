@@ -24,9 +24,10 @@ import numpy as np
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
-MODEL = Path("/media/orangepi/KIOXIA/nahida-data/models/bge-small-zh-v1.5")
-ADB = "/media/orangepi/KIOXIA/nahida-data/db/agent.db"
-VDB = "/media/orangepi/KIOXIA/nahida-data/db/agent_vec.db"
+_DATA_DIR = os.getenv("KIOXIA_DATA_DIR", "") or str(Path.home() / ".ai-agent" / "data")
+MODEL = Path(os.getenv("LOCAL_EMBED_MODEL_DIR", "") or str(Path(_DATA_DIR) / "models" / "bge-small-zh-v1.5"))
+ADB = str(Path(_DATA_DIR) / "db" / "agent.db")
+VDB = str(Path(_DATA_DIR) / "db" / "agent_vec.db")
 API_BASELINE_MS = 5000.0  # 之前远程 API embedding 的典型端到端延迟（用户实测）
 
 

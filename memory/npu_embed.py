@@ -54,11 +54,27 @@ def _default_runner() -> str:
 
 def _default_nbg() -> str:
     """NBG 默认路径（bge-large-zh w8a16 1024 维固化版；bge-small 512 维旧版
-    仍可用 NPU_NBG env 指回 bge_small_zh.nb）。"""
-    return os.getenv(
-        "NPU_NBG",
-        "/media/orangepi/KIOXIA/nahida-data/npu/bge_npu_kit/npu_input/"
-        "bge_large_zh_sigmoid_pcq.w8a16/network_binary.nb",
+    仍可用 NPU_NBG env 指回 bge_small_zh.nb）。
+
+    路径动态解析（规则：本地模型路径不硬编码挂载点）：
+    1. NPU_NBG env 显式指定
+    2. KIOXIA_DATA_DIR（外置盘数据目录，如 /mnt/usb2/nahida-data）下
+       npu/bge_npu_kit/... 动态拼接
+    3. 兜底：项目根相对路径（可能不存在，调用方降级 CPU）
+    """
+    nbg_env = os.getenv("NPU_NBG", "").strip()
+    if nbg_env:
+        return nbg_env
+    data_dir = os.getenv("KIOXIA_DATA_DIR", "").strip()
+    if data_dir:
+        return str(
+            Path(data_dir) / "npu" / "bge_npu_kit" / "npu_input"
+            / "bge_large_zh_sigmoid_pcq.w8a16" / "network_binary.nb"
+        )
+    root = Path(__file__).resolve().parent.parent
+    return str(
+        root / "npu" / "bge_npu_kit" / "npu_input"
+        / "bge_large_zh_sigmoid_pcq.w8a16" / "network_binary.nb"
     )
 
 

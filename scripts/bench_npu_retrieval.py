@@ -28,9 +28,10 @@ sys.path.insert(0, str(ROOT))
 
 from memory.local_embed import LocalEmbeddingProvider  # noqa: E402
 
-MODEL = Path("/media/orangepi/KIOXIA/nahida-data/models/bge-small-zh-v1.5")
-ADB = "/media/orangepi/KIOXIA/nahida-data/db/agent.db"
-NPU_DIR = Path("/media/orangepi/KIOXIA/nahida-data/npu/bge_npu_kit/npu_input")
+_DATA_DIR = os.getenv("KIOXIA_DATA_DIR", "") or str(Path.home() / ".ai-agent" / "data")
+MODEL = Path(os.getenv("LOCAL_EMBED_MODEL_DIR", "") or str(Path(_DATA_DIR) / "models" / "bge-small-zh-v1.5"))
+ADB = str(Path(_DATA_DIR) / "db" / "agent.db")
+NPU_DIR = Path(_DATA_DIR) / "npu" / "bge_npu_kit" / "npu_input"
 VPM = "/opt/vpm_run/vpm_run"
 SEQ = 512
 SCALE, ZP = 0.031434, 181  # INT16 输出量化参数（vpm_run 打印）
