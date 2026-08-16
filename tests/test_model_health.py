@@ -24,10 +24,9 @@ from web.model_health import (
 class TestCollectConfiguredModels:
     """测试收集配置中的所有模型ID"""
 
-    def test_collects_provider_default_models(self):
-        """应收集 config.py 中 _PROVIDER_DEFAULT_MODELS 的模型ID"""
+    def test_collects_siliconflow_models(self):
+        """应收集 siliconflow 的模型ID（来自 custom provider defaults / route table）"""
         models = collect_configured_models()
-        # 应包含 siliconflow 的默认模型
         sf_models = [m for m in models if m.provider == "siliconflow"]
         assert len(sf_models) > 0
         assert all(m.model_id for m in sf_models)

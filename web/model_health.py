@@ -21,7 +21,7 @@ class ConfiguredModel:
 
     provider: str
     model_id: str
-    source: str  # 来源标识，如 "config._PROVIDER_DEFAULT_MODELS"
+    source: str  # 来源标识，如 "model_router._CUSTOM_PROVIDER_DEFAULT_MODELS"
 
 
 @dataclass
@@ -49,9 +49,8 @@ def collect_configured_models() -> list[ConfiguredModel]:
     """收集配置中所有硬编码的模型ID。
 
     扫描以下来源：
-    1. config.py 的 _PROVIDER_DEFAULT_MODELS
-    2. model_router.py 的 _CUSTOM_PROVIDER_DEFAULT_MODELS
-    3. model_router.py 的 ROUTE_TABLE
+    1. model_router.py 的 _CUSTOM_PROVIDER_DEFAULT_MODELS
+    2. model_router.py 的 ROUTE_TABLE
 
     Returns:
         ConfiguredModel 列表，每项包含 provider/model_id/source
@@ -68,15 +67,7 @@ def collect_configured_models() -> list[ConfiguredModel]:
         seen.add(key)
         models.append(ConfiguredModel(provider=provider, model_id=model_id, source=source))
 
-    # 1. config.py 的 _PROVIDER_DEFAULT_MODELS
-    try:
-        from config import _PROVIDER_DEFAULT_MODELS
-        for provider, model_id in _PROVIDER_DEFAULT_MODELS.items():
-            _add(provider, model_id, "config._PROVIDER_DEFAULT_MODELS")
-    except (ImportError, AttributeError) as e:
-        logger.debug("model_health.import_provider_defaults_failed error={}", str(e))
-
-    # 2. model_router.py 的 _CUSTOM_PROVIDER_DEFAULT_MODELS
+    # 1. model_router.py 的 _CUSTOM_PROVIDER_DEFAULT_MODELS
     try:
         from model_router import ModelRouter
         custom_defaults = getattr(ModelRouter, "_CUSTOM_PROVIDER_DEFAULT_MODELS", {})
@@ -85,7 +76,7 @@ def collect_configured_models() -> list[ConfiguredModel]:
     except (ImportError, AttributeError) as e:
         logger.debug("model_health.import_custom_defaults_failed error={}", str(e))
 
-    # 3. model_router.py 的 ROUTE_TABLE
+    # 2. model_router.py 的 ROUTE_TABLE
     try:
         from model_router import ROUTE_TABLE
         for task, entry in ROUTE_TABLE.items():
