@@ -1060,7 +1060,7 @@ async def test_message_context_propagates_structured_local_unavailable(monkeypat
     )
     processor._load_notebook_context = AsyncMock()
     monkeypatch.setattr(
-        "agent_core.message_processor.get_degradation_strategy",
+        "agent_core.mixins.main_path.get_degradation_strategy",
         lambda: SimpleNamespace(is_feature_available=lambda _feature: True),
     )
     monkeypatch.setattr(
