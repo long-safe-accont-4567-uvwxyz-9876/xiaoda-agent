@@ -610,58 +610,7 @@ async def websocket_endpoint(ws: WebSocket) -> None:
             except json.JSONDecodeError:
                 continue
             mtype = msg.get("type", "")
-
-            if mtype == "ping":
-                await manager.send_to(conn_id, {"type": "pong"})
-
-            elif mtype == "pong":
-                # G5: 客户端响应心跳 pong —— 唤醒心跳协程的 wait_for
-                evt = manager._pong_events.get(conn_id)
-                if evt:
-                    evt.set()
-
-            elif mtype == "set_agent":
-                agent = str(msg.get("agent") or "xiaoda")
-                manager._agent_map[conn_id] = agent
-                await manager.send_to(conn_id, {"type": "agent_changed", "agent": agent})
-
-            elif mtype == "set_session":
-                sid = str(msg.get("session_id") or "")
-                if sid:
-                    manager._session_map[conn_id] = sid
-                    await manager.send_to(conn_id, {"type": "session_changed", "session_id": sid})
-
-            elif mtype == "chat":
-                msg_id = str(msg.get("msg_id") or uuid.uuid4().hex[:8])
-                task = asyncio.create_task(_handle_chat(conn_id, msg, msg_id, ws))
-                manager.track_message_task(conn_id, msg_id, task)
-
-            elif mtype == "terminal_start":
-                term_sid = str(msg.get("term_sid") or uuid.uuid4().hex[:8])
-                _t = asyncio.create_task(_handle_terminal_start(conn_id, msg, term_sid))
-
-                def _on_term_start_done(t):
-                    if t.cancelled():
-                        return
-                    exc = t.exception()
-                    if exc:
-                        logger.warning("ws.terminal_start_task_error: {}", exc)
-
-                _t.add_done_callback(_on_term_start_done)
-
-            elif mtype == "terminal_input":
-                _handle_terminal_input(conn_id, msg)
-
-            elif mtype == "terminal_resize":
-                _handle_terminal_resize(conn_id, msg)
-
-            elif mtype == "terminal_kill":
-                _handle_terminal_kill(conn_id, msg)
-
-            elif mtype == "abort":
-                await manager.cancel_message_task(
-                    conn_id, str(msg.get("msg_id") or "")
-                )
+            await _dispatch_message(conn_id, msg, mtype, ws)
 
     except WebSocketDisconnect:
         logger.info("ws.disconnected conn_id={}", conn_id)
@@ -677,6 +626,61 @@ async def websocket_endpoint(ws: WebSocket) -> None:
             if sid_session and sid_session.get("conn_id") == conn_id:
                 _cleanup_pty(sid)
         await manager.unregister(conn_id)
+
+
+async def _dispatch_message(conn_id: str, msg: dict, mtype: str, ws: WebSocket) -> None:
+    """按消息类型分发处理（ping/pong/set_agent/set_session/chat/terminal_*/abort）。"""
+    if mtype == "ping":
+        await manager.send_to(conn_id, {"type": "pong"})
+
+    elif mtype == "pong":
+        # G5: 客户端响应心跳 pong —— 唤醒心跳协程的 wait_for
+        evt = manager._pong_events.get(conn_id)
+        if evt:
+            evt.set()
+
+    elif mtype == "set_agent":
+        agent = str(msg.get("agent") or "xiaoda")
+        manager._agent_map[conn_id] = agent
+        await manager.send_to(conn_id, {"type": "agent_changed", "agent": agent})
+
+    elif mtype == "set_session":
+        sid = str(msg.get("session_id") or "")
+        if sid:
+            manager._session_map[conn_id] = sid
+            await manager.send_to(conn_id, {"type": "session_changed", "session_id": sid})
+
+    elif mtype == "chat":
+        msg_id = str(msg.get("msg_id") or uuid.uuid4().hex[:8])
+        task = asyncio.create_task(_handle_chat(conn_id, msg, msg_id, ws))
+        manager.track_message_task(conn_id, msg_id, task)
+
+    elif mtype == "terminal_start":
+        term_sid = str(msg.get("term_sid") or uuid.uuid4().hex[:8])
+        _t = asyncio.create_task(_handle_terminal_start(conn_id, msg, term_sid))
+
+        def _on_term_start_done(t):
+            if t.cancelled():
+                return
+            exc = t.exception()
+            if exc:
+                logger.warning("ws.terminal_start_task_error: {}", exc)
+
+        _t.add_done_callback(_on_term_start_done)
+
+    elif mtype == "terminal_input":
+        _handle_terminal_input(conn_id, msg)
+
+    elif mtype == "terminal_resize":
+        _handle_terminal_resize(conn_id, msg)
+
+    elif mtype == "terminal_kill":
+        _handle_terminal_kill(conn_id, msg)
+
+    elif mtype == "abort":
+        await manager.cancel_message_task(
+            conn_id, str(msg.get("msg_id") or "")
+        )
 
 
 def _verify_response(data: dict, msg_id: str, agent: str) -> None:
@@ -787,88 +791,14 @@ async def _handle_chat(conn_id: str, msg: dict, msg_id: str, ws: WebSocket) -> N
     request_context_token = set_current_request_context(request_context)
 
     # P0 修复（Task 2.1）：提取结构化字段（按钮状态走独立字段，不再从 text 解析 marker）
-    # 新客户端发送 search_mode / think_mode / image_url / doc_path 作为独立字段
-    # 旧客户端仍发送 [Search:]/[Think:]/[Image:]/[Doc:] marker，保留向后兼容
     search_mode = bool(msg.get("search_mode"))
     think_mode = bool(msg.get("think_mode"))
 
-    # 构建 image_data：优先使用结构化 image_url 字段，兜底解析 [Image:] marker
-    image_data = None
-    image_urls: list[str] = []
-    if image_url_field:
-        image_urls.append(image_url_field)
-    else:
-        # 向后兼容：旧客户端在 text 中嵌入 [Image: URL] marker
-        import re as _re
-        _marker_urls = _re.findall(r'\[Image:\s*([^\]]+)\]', text)
-        if _marker_urls:
-            image_urls.extend(_marker_urls)
-            # 从 text 中剥离 [Image:] marker（保持 text 纯净）
-            text = _re.sub(r'\n?\[Image:\s*[^\]]+\]\s*', '', text).strip()
-            if not text:
-                text = "📷 图片"  # 仅发图片时给一个占位符
+    image_data, text = _build_image_data(image_url_field, text)
 
-    if image_urls:
-        from pathlib import Path as _Path
-        from utils.text_utils import encode_image_to_base64
-        image_data = []
-        for url in image_urls:
-            try:
-                # URL 格式: /media/upload/xxx.png → 映射到本地文件
-                local_path = MEDIA_ROOT / "upload" / _Path(url).name
-                if local_path.exists():
-                    mime, img_b64 = encode_image_to_base64(str(local_path))
-                    if not img_b64 or not img_b64.strip() or len(img_b64) < 100:
-                        logger.warning("ws_hub_image_skip: url={}, reason=invalid_base64 len={}", url, len(img_b64) if img_b64 else 0)
-                        continue
-                    image_data.append({"mimeType": mime, "data": img_b64})
-                    logger.info("ws.image_loaded url={} size={}KB", url, len(img_b64) // 1024)
-                else:
-                    logger.warning("ws.image_not_found url={} path={}", url, local_path)
-            except (OSError, ValueError, AttributeError) as e:
-                logger.warning("ws.image_load_failed url={} error={}", url, str(e))
+    _structured_system_context = _build_structured_hints(search_mode, think_mode, doc_path_field)
 
-    # 构建模式上下文（search_mode / think_mode / doc_path 走 system_context，不污染 text）
-    # 向后兼容：旧客户端的 [Search:]/[Think:]/[Doc:] marker 仍由 message_processor 解析
-    # 新客户端的结构化字段在这里转换为 system_context 传入
-    _structured_mode_hints: list[str] = []
-    if search_mode:
-        _structured_mode_hints.append("本次回复请优先使用 web_search 工具搜索最新信息后回答。")
-    if think_mode:
-        _structured_mode_hints.append("本次回复请进行更深入的思考，可以分步骤推理。")
-    if doc_path_field:
-        _structured_mode_hints.append(
-            f"用户上传了文档：{doc_path_field}。请使用 document_reader 工具读取该文档内容后回答用户的问题。"
-        )
-    _structured_system_context = "\n".join(_structured_mode_hints) if _structured_mode_hints else ""
-
-    # Task 7: 流式状态推送回调 —— 受 STREAM_STATUS_PUSH 开关控制
-    async def on_status(message: Any) -> None:
-        # P0: 流式文本推送 —— 独立于 STREAM_STATUS_PUSH，由 STREAM_TEXT_PUSH 控制
-        if STREAM_TEXT_PUSH and isinstance(message, dict) and message.get("type") == "stream_text":
-            await manager.send_to(conn_id, {
-                "type": "stream_text",
-                "msg_id": msg_id,
-                "delta": message.get("delta", ""),
-                "accumulated": message.get("accumulated", ""),
-            })
-            return
-        # P0: 工具调用中间状态推送 —— 由 STREAM_TOOL_STATUS 控制
-        if STREAM_TOOL_STATUS and isinstance(message, dict) and message.get("type") == "tool_status":
-            await manager.send_to(conn_id, {
-                "type": "tool_status",
-                "msg_id": msg_id,
-                "tool": message.get("tool", ""),
-                "stage": message.get("stage", ""),
-                "label": message.get("label", ""),
-                "detail": message.get("detail", ""),
-            })
-            return
-        if STREAM_STATUS_PUSH:
-            await manager.send_to(conn_id, {
-                "type": "status", "msg_id": msg_id,
-                "stage": "thinking", "text": str(message)[:200],
-            })
+    on_status = _make_status_callback(conn_id, msg_id)
 
     try:
         # ── S2: PLAN 阶段 ──
@@ -914,6 +844,94 @@ async def _handle_chat(conn_id: str, msg: dict, msg_id: str, ws: WebSocket) -> N
         reset_current_request_context(request_context_token)
         current_msg_id.reset(token)
 
+
+def _build_image_data(image_url_field: str, text: str) -> tuple[list | None, str]:
+    """构建 image_data（优先结构化字段，兜底解析 [Image:] marker），返回 (image_data, 清理后的 text)。"""
+    image_data = None
+    image_urls: list[str] = []
+    if image_url_field:
+        image_urls.append(image_url_field)
+    else:
+        # 向后兼容：旧客户端在 text 中嵌入 [Image: URL] marker
+        import re as _re
+        _marker_urls = _re.findall(r'\[Image:\s*([^\]]+)\]', text)
+        if _marker_urls:
+            image_urls.extend(_marker_urls)
+            # 从 text 中剥离 [Image:] marker（保持 text 纯净）
+            text = _re.sub(r'\n?\[Image:\s*[^\]]+\]\s*', '', text).strip()
+            if not text:
+                text = "📷 图片"  # 仅发图片时给一个占位符
+
+    if image_urls:
+        from pathlib import Path as _Path
+        from utils.text_utils import encode_image_to_base64
+        image_data = []
+        for url in image_urls:
+            try:
+                # URL 格式: /media/upload/xxx.png → 映射到本地文件
+                local_path = MEDIA_ROOT / "upload" / _Path(url).name
+                if local_path.exists():
+                    mime, img_b64 = encode_image_to_base64(str(local_path))
+                    if not img_b64 or not img_b64.strip() or len(img_b64) < 100:
+                        logger.warning("ws_hub_image_skip: url={}, reason=invalid_base64 len={}", url, len(img_b64) if img_b64 else 0)
+                        continue
+                    image_data.append({"mimeType": mime, "data": img_b64})
+                    logger.info("ws.image_loaded url={} size={}KB", url, len(img_b64) // 1024)
+                else:
+                    logger.warning("ws.image_not_found url={} path={}", url, local_path)
+            except (OSError, ValueError, AttributeError) as e:
+                logger.warning("ws.image_load_failed url={} error={}", url, str(e))
+
+    return image_data, text
+
+
+def _build_structured_hints(search_mode: bool, think_mode: bool, doc_path_field: str) -> str:
+    """构建模式上下文（search/think/doc 走 system_context，不污染 text）。
+
+    新客户端的结构化字段在这里转换为 system_context 传入；
+    旧客户端的 [Search:]/[Think:]/[Doc:] marker 仍由 message_processor 解析。
+    """
+    _structured_mode_hints: list[str] = []
+    if search_mode:
+        _structured_mode_hints.append("本次回复请优先使用 web_search 工具搜索最新信息后回答。")
+    if think_mode:
+        _structured_mode_hints.append("本次回复请进行更深入的思考，可以分步骤推理。")
+    if doc_path_field:
+        _structured_mode_hints.append(
+            f"用户上传了文档：{doc_path_field}。请使用 document_reader 工具读取该文档内容后回答用户的问题。"
+        )
+    return "\n".join(_structured_mode_hints) if _structured_mode_hints else ""
+
+
+def _make_status_callback(conn_id: str, msg_id: str):
+    """构造流式状态推送回调（受 STREAM_STATUS_PUSH / STREAM_TEXT_PUSH / STREAM_TOOL_STATUS 控制）。"""
+    async def on_status(message: Any) -> None:
+        # P0: 流式文本推送 —— 独立于 STREAM_STATUS_PUSH，由 STREAM_TEXT_PUSH 控制
+        if STREAM_TEXT_PUSH and isinstance(message, dict) and message.get("type") == "stream_text":
+            await manager.send_to(conn_id, {
+                "type": "stream_text",
+                "msg_id": msg_id,
+                "delta": message.get("delta", ""),
+                "accumulated": message.get("accumulated", ""),
+            })
+            return
+        # P0: 工具调用中间状态推送 —— 由 STREAM_TOOL_STATUS 控制
+        if STREAM_TOOL_STATUS and isinstance(message, dict) and message.get("type") == "tool_status":
+            await manager.send_to(conn_id, {
+                "type": "tool_status",
+                "msg_id": msg_id,
+                "tool": message.get("tool", ""),
+                "stage": message.get("stage", ""),
+                "label": message.get("label", ""),
+                "detail": message.get("detail", ""),
+            })
+            return
+        if STREAM_STATUS_PUSH:
+            await manager.send_to(conn_id, {
+                "type": "status", "msg_id": msg_id,
+                "stage": "thinking", "text": str(message)[:200],
+            })
+    return on_status
 
 async def _handle_terminal_start(conn_id: str, msg: dict, term_sid: str) -> None:
     """启动一个终端会话：Linux 用 PTY，Windows 用 subprocess 管道。
