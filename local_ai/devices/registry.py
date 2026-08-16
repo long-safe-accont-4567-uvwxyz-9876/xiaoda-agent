@@ -196,6 +196,37 @@ class DeviceRegistry:
             return list(self._devices)
         previous_devices = self._devices or ()
         previous_backends = self._backends
+        system_devices, available_providers, cpu = self._probe()
+        current_providers = set(available_providers)
+
+        verified = self._verify_backends(available_providers, system_devices)
+        disappeared = [
+            replace(
+                backend,
+                healthy=False,
+                evidence={**backend.evidence, "reason": "provider_disappeared"},
+            )
+            for backend in previous_backends.values()
+            if backend.provider not in current_providers
+        ]
+        verified.extend(disappeared)
+        self._backends = {}
+        for backend in verified:
+            self._backends[_binding_key(backend)] = backend
+        disappeared_providers = {backend.provider for backend in disappeared}
+        current_backends = [
+            backend
+            for backend in verified
+            if backend.provider not in disappeared_providers
+        ]
+        devices = self._attach_backends(system_devices, cpu, current_backends)
+        self._preserve_disappeared_provider_backends(devices, previous_devices, disappeared_providers)
+        self._preserve_disappeared_device_backends(devices, previous_devices, system_devices, current_providers)
+        self._devices = tuple(devices)
+        return list(self._devices)
+
+    def _probe(self) -> tuple[list[ComputeDevice], tuple[str, ...], ComputeDevice | None]:
+        """探测系统设备与可用 provider，补 CPU 兜底设备。"""
         system_devices = list(self._system_probe())
         available_providers = self._provider_probe.list_available()
         available_providers = tuple(
@@ -203,9 +234,8 @@ class DeviceRegistry:
             for provider in available_providers
             if provider not in _NON_LOCAL_PROVIDERS
         )
-        current_providers = set(available_providers)
         cpu = next((device for device in system_devices if device.kind == "cpu"), None)
-        if cpu is None and "CPUExecutionProvider" in current_providers:
+        if cpu is None and "CPUExecutionProvider" in set(available_providers):
             cpu = ComputeDevice(
                 id="cpu:0",
                 name="CPU",
@@ -218,6 +248,12 @@ class DeviceRegistry:
                 evidence={"source": "onnxruntime"},
             )
             system_devices.append(cpu)
+        return system_devices, available_providers, cpu
+
+    def _verify_backends(
+        self, available_providers: tuple[str, ...], system_devices: list[ComputeDevice],
+    ) -> list[ExecutionBackend]:
+        """验证每个 provider 的执行 backend（CPU/Dml/普通 provider 分别处理）。"""
         verified: list[ExecutionBackend] = []
         for provider in available_providers:
             prototype = ExecutionBackend(
@@ -242,26 +278,13 @@ class DeviceRegistry:
                     verified.append(self._provider_probe.verify(provider))
                 continue
             verified.append(self._provider_probe.verify(provider))
-        disappeared = [
-            replace(
-                backend,
-                healthy=False,
-                evidence={**backend.evidence, "reason": "provider_disappeared"},
-            )
-            for backend in previous_backends.values()
-            if backend.provider not in current_providers
-        ]
-        verified.extend(disappeared)
-        self._backends = {}
-        for backend in verified:
-            self._backends[_binding_key(backend)] = backend
-        disappeared_providers = {backend.provider for backend in disappeared}
-        current_backends = [
-            backend
-            for backend in verified
-            if backend.provider not in disappeared_providers
-        ]
-        devices = self._attach_backends(system_devices, cpu, current_backends)
+        return verified
+
+    def _preserve_disappeared_provider_backends(
+        self, devices: list[ComputeDevice], previous_devices: tuple,
+        disappeared_providers: set[str],
+    ) -> None:
+        """保留消失 provider 的 GPU backend（标记 unhealthy 并合并/追加）。in-place 修改 devices。"""
         retained_ids = {device.id for device in devices}
         for device in previous_devices:
             if not _is_real_gpu(device):
@@ -302,6 +325,12 @@ class DeviceRegistry:
                         )
                     )
                     retained_ids.add(device.id)
+
+    def _preserve_disappeared_device_backends(
+        self, devices: list[ComputeDevice], previous_devices: tuple,
+        system_devices: list[ComputeDevice], current_providers: set[str],
+    ) -> None:
+        """保留消失设备的 GPU backend（标记 unhealthy 并合并/追加）。in-place 修改 devices。"""
         current_hardware_ids = {device.id for device in system_devices}
         for device in previous_devices:
             if not _is_real_gpu(device) or device.id in current_hardware_ids:
@@ -349,8 +378,6 @@ class DeviceRegistry:
                 state=DeviceState.UNAVAILABLE,
                 backends=merged_backends,
             )
-        self._devices = tuple(devices)
-        return list(self._devices)
 
     def _attach_backends(
         self,
