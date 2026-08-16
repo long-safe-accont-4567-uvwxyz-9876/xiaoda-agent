@@ -1130,7 +1130,7 @@ export default {
     masterSwitchDesc: '开启后助手将轮询邮箱并按规则处理收到的邮件',
     processMode: '处理模式',
     ownerEmail: '主人邮箱',
-    ownerEmailDesc: '指定一个邮箱作为主人邮箱；未设置时邮件功能不生效，设置后仅该邮箱的邮件会被处理（以主人身份）',
+    ownerEmailDesc: '指定一个邮箱作为主人邮箱：该邮箱的邮件以主人身份处理（完整权限）；未设置或其他发件人按访客身份处理（仅只读工具）',
     ownerEmailPh: '输入主人邮箱地址',
     modeOff: '关闭',
     modeAllowlist: '白名单',

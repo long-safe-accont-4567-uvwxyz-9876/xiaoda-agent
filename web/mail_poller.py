@@ -112,13 +112,11 @@ class MailPoller:
     async def _poll_inbox(self, mode: str) -> None:
         from tools.mail_tools import _run_agently
 
-        # 主人邮箱门控：未设置主人邮箱时邮件功能整体不生效（fail-closed），
-        # 设置后仅主人邮箱发来的邮件被处理，其他发件人一律忽略。
+        # 主人邮箱：设置后匹配的发件人以主人身份处理（完整工具权限）；
+        # 未设置或非匹配发件人按访客身份处理（VULN-27 非主人只读工具白名单）。
+        # 邮件功能本身不因未设置主人邮箱而关闭——只是权限不同。
         owner_email = (self.cfg.get("mail.owner_email") or "").strip().lower()
-        if not owner_email:
-            logger.info("mail.poller.owner_email_not_set — 邮件功能不生效（未配置主人邮箱）")
-            return
-        self._ensure_owner_identity(owner_email)
+        self._sync_owner_identity(owner_email)
 
         # 查未读邮件
         args = [
@@ -149,15 +147,8 @@ class MailPoller:
             from_email = from_info.get("email", "") if isinstance(from_info, dict) else ""
             from_name = from_info.get("name", "") if isinstance(from_info, dict) else ""
 
-            # 主人邮箱门控：非主人发件人不生效（标记已处理，避免重复拉取）
-            if from_email.strip().lower() != owner_email:
-                logger.info("mail.poller.skip_non_owner from={}", from_email)
-                self._processed_ids[msg_id] = None
-                continue
-
-            # 白名单过滤（主人邮箱天然放行）
-            if (mode == "allowlist" and from_email not in allowed_senders
-                    and from_email.strip().lower() != owner_email):
+            # 白名单过滤
+            if mode == "allowlist" and from_email not in allowed_senders:
                 logger.debug("mail.poller.skip_not_allowed from={}", from_email)
                 self._processed_ids[msg_id] = None
                 continue
@@ -211,7 +202,8 @@ class MailPoller:
 
         logger.info("mail.poller.processing id={} from={} subject={}", msg_id, from_email, subject[:50])
 
-        # 2. 构造用户输入，注入 Agent（用主人身份，让小妲以完整人设回复）
+        # 2. 构造用户输入，注入 Agent（身份由主人邮箱匹配决定：
+        #    匹配 → 主人身份完整权限；不匹配/未设置 → 访客身份只读白名单）
         user_input = _format_email_as_input(from_name, from_email, subject, body)
         session_id = f"mail_{from_email}"
         user_id = f"mail_{from_email}"
@@ -255,22 +247,29 @@ class MailPoller:
                 logger.debug("mail.qq_notify_error", exc_info=True)
 
     # ── 辅助 ──────────────────────────────────────────────────
-    def _ensure_owner_identity(self, owner_email: str) -> None:
-        """把主人邮箱注册进 SecurityFilter.owner_ids。
+    def _sync_owner_identity(self, owner_email: str) -> None:
+        """把主人邮箱同步进 SecurityFilter.owner_ids（只增删本模块注册的项）。
 
-        core.process() 的运行时身份解析（PrincipalResolver）对 mail 来源
-        走严格 owner registry 判定；把主人邮箱加入 owner_ids 后，来自该
-        邮箱的邮件即以主人身份处理（完整人设 + 完整工具权限），其余发件人
-        已被上层门控拦截，不会进入此路径。
+        core.process() 的运行时身份解析（PrincipalResolver）对 mail 来源走
+        严格 owner registry 判定：匹配主人邮箱的邮件以主人身份处理（完整
+        人设 + 完整工具权限）；未设置或不匹配的邮件按访客身份处理（VULN-27
+        非主人只读工具白名单）——功能照常，只是权限不同。
+
+        更换或清空主人邮箱时，移除本模块此前注册的旧邮箱，避免旧邮箱
+        继续持有主人权限；OWNER_IDS 等环境变量配置的 owner 不受影响。
         """
         sec = getattr(self.core, "security", None)
         owner_ids = getattr(sec, "owner_ids", None)
         if owner_ids is None:
             return
-        if owner_email in owner_ids:
-            return
-        owner_ids.add(owner_email)
-        logger.info("mail.poller.owner_email_registered email={}", owner_email)
+        registered = getattr(self, "_registered_owner_email", None)
+        if registered and registered != owner_email:
+            owner_ids.discard(registered)
+            logger.info("mail.poller.owner_email_unregistered email={}", registered)
+        if owner_email and owner_email not in owner_ids:
+            owner_ids.add(owner_email)
+            logger.info("mail.poller.owner_email_registered email={}", owner_email)
+        self._registered_owner_email = owner_email
 
     def _is_dnd(self) -> bool:
         """免打扰时段检查（从配置读取，默认 0:00-0:00 即不启用 DND）。"""

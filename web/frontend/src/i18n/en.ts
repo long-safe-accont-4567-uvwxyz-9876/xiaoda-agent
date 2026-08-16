@@ -1129,7 +1129,7 @@ export default {
     masterSwitchDesc: 'When enabled, the assistant polls the inbox and processes incoming mail',
     processMode: 'Process Mode',
     ownerEmail: 'Owner Email',
-    ownerEmailDesc: 'Set one email as the owner email. Without it the mail feature is disabled; with it, only mail from this address is processed (as owner)',
+    ownerEmailDesc: 'Set one email as the owner email: mail from it is handled as owner (full permissions); without it or from other senders, handled as guest (read-only tools)',
     ownerEmailPh: 'Enter owner email address',
     modeOff: 'Off',
     modeAllowlist: 'Allowlist',
