@@ -195,26 +195,10 @@ class ExecutionMixin:
                         if delta:
                             _content_yielded = True
                             yield delta
-                # P0 修复：流结束后检测是否收到 finish_reason
-                # 如果未收到，说明 provider 可能中途关闭连接（死流），content 可能被截断
-                if not _stream_finish_reason:
-                    logger.warning("llm.stream_no_finish_reason",
-                                   model=model, task=task_type,
-                                   provider=provider, chunk_count=_chunk_count,
-                                   hint="provider 可能中途关闭连接，content 可能被截断")
-                # P0 修复：流结束后写入 ContextVar，供 verification loop 检测截断
-                if _stream_finish_reason:
-                    try:
-                        from agent_core._shared import _stream_finish_reason_var
-                        _stream_finish_reason_var.set(_stream_finish_reason)
-                    except (ImportError, AttributeError):
-                        logger.debug("router.stream_finish_reason_var_set_failed", exc_info=True)
-                    # 截断诊断日志：finish_reason="length" 时记录 mt 和内容长度
-                    if _stream_finish_reason == "length":
-                        logger.warning("llm.stream_truncated_by_max_tokens",
-                                       model=model, task=task_type,
-                                       max_tokens=mt, provider=provider,
-                                       finish_reason=_stream_finish_reason)
+                await self._finalize_stream(
+                    task_type, model, provider, _stream_finish_reason, _stream_usage,
+                    _chunk_count, user_openid, session_id, mt, _start)
+
                 # CR-Major-1：流式 usage 记录费用（include_usage=True 时 _stream_usage 非空）
                 if _stream_usage is not None:
                     try:
@@ -235,31 +219,14 @@ class ExecutionMixin:
                 return
             except (RuntimeError, OSError, KeyError, ValueError, _openai_mod.APIError,
                     asyncio.TimeoutError, LLMError) as e:
-                # CR-Major-1：补 LLMError 捕获，_select_client_for_provider 抛 LLMError 时
-                # 也走重试/降级，而非直接传播给上层流式消费者（与 route() 的 except 集合对齐）。
-                # P0 修复：捕获 stall timeout（asyncio.TimeoutError）
-                # 根因：stream stall timeout 触发时抛出 asyncio.TimeoutError，
-                # 原异常处理器不捕获此类型，导致流未被正确关闭 + 异常直接传播。
-                # 修复：将 asyncio.TimeoutError 纳入捕获范围，正确关闭流并走重试逻辑。
-                last_error = e
-                if stream:
-                    with contextlib.suppress(AttributeError, OSError):
-                        await stream.close()
-                    stream = None
-                if _content_yielded:
-                    raise
-                # stall timeout 特殊处理：记录诊断日志
-                if isinstance(e, asyncio.TimeoutError):
-                    logger.warning("llm.stream_stall_timeout",
-                                   model=model, task=task_type,
-                                   provider=provider, stall_timeout=_stall_timeout,
-                                   chunk_count=_chunk_count,
-                                   hint="流式响应中途停滞，可能 provider 故障")
-                should_retry = await self._handle_route_exception(
-                    e, provider, task_type, model, attempt,
-                )
+                # CR-Major-1：补 LLMError 捕获（与 route() 对齐）
+                # P0 修复：捕获 stall timeout（asyncio.TimeoutError），正确关闭流并走重试
+                stream, last_error, should_retry = await self._handle_stream_error(
+                    e, provider, task_type, model, attempt, stream,
+                    _content_yielded, _stall_timeout, _chunk_count)
                 if not should_retry:
                     break
+
 
         # CR-Major-1 修复：重试耗尽后调用 fallback 链，而非直接 raise。
         # 流式调用是用户主要交互方式，主 provider 故障时应降级到 Agnes/自定义 provider。
@@ -316,6 +283,73 @@ class ExecutionMixin:
             error_code=ErrorCodeEnum.E_LLM001,
             cause=last_error,
         ) from last_error
+
+    async def _finalize_stream(self, task_type: str, model: str, provider: str,
+                               _stream_finish_reason: str | None, _stream_usage: Any,
+                               _chunk_count: int, user_openid: str, session_id: str,
+                               mt: int, _start: float) -> None:
+        """流结束后的后处理：finish_reason 检查 + ContextVar + usage 记录 + metrics。"""
+        # P0 修复：流结束后检测是否收到 finish_reason
+        # 如果未收到，说明 provider 可能中途关闭连接（死流），content 可能被截断
+        if not _stream_finish_reason:
+            logger.warning("llm.stream_no_finish_reason",
+                           model=model, task=task_type,
+                           provider=provider, chunk_count=_chunk_count,
+                           hint="provider 可能中途关闭连接，content 可能被截断")
+        # P0 修复：流结束后写入 ContextVar，供 verification loop 检测截断
+        if _stream_finish_reason:
+            try:
+                from agent_core._shared import _stream_finish_reason_var
+                _stream_finish_reason_var.set(_stream_finish_reason)
+            except (ImportError, AttributeError):
+                logger.debug("router.stream_finish_reason_var_set_failed", exc_info=True)
+            # 截断诊断日志：finish_reason="length" 时记录 mt 和内容长度
+            if _stream_finish_reason == "length":
+                logger.warning("llm.stream_truncated_by_max_tokens",
+                               model=model, task=task_type,
+                               max_tokens=mt, provider=provider,
+                               finish_reason=_stream_finish_reason)
+        # CR-Major-1：流式 usage 记录费用（include_usage=True 时 _stream_usage 非空）
+        if _stream_usage is not None:
+            try:
+                await self._record_stream_usage(
+                    task_type, model, type("R", (), {"usage": _stream_usage})(),
+                    user_openid=user_openid, session_id=session_id,
+                    provider=provider,
+                )
+            except (AttributeError, TypeError, OSError) as _ue:
+                logger.debug("router.stream_usage_record_skip: {}", _ue)
+        metrics.inc(f"model_route.{task_type}.success")
+        metrics.observe(f"model_route.{task_type}.duration", time.time() - _start)
+        metrics.maybe_report()
+        logger.info("llm.call", event="llm_call", model=model,
+                    task=task_type, duration_ms=int((time.time() - _start) * 1000),
+                    user_id=user_openid, session_id=session_id, stream=True,
+                    finish_reason=_stream_finish_reason)
+
+    async def _handle_stream_error(self, e: Exception, provider: str, task_type: str,
+                                   model: str, attempt: int, stream: Any,
+                                   _content_yielded: bool, _stall_timeout: float,
+                                   _chunk_count: int) -> tuple[Any | None, Exception | None, bool]:
+        """流式异常处理：关闭流 + stall 诊断 + 重试判断。返回 (stream, last_error, should_retry)。"""
+        last_error = e
+        if stream:
+            with contextlib.suppress(AttributeError, OSError):
+                await stream.close()
+            stream = None
+        if _content_yielded:
+            raise
+        # stall timeout 特殊处理：记录诊断日志
+        if isinstance(e, asyncio.TimeoutError):
+            logger.warning("llm.stream_stall_timeout",
+                           model=model, task=task_type,
+                           provider=provider, stall_timeout=_stall_timeout,
+                           chunk_count=_chunk_count,
+                           hint="流式响应中途停滞，可能 provider 故障")
+        should_retry = await self._handle_route_exception(
+            e, provider, task_type, model, attempt,
+        )
+        return stream, last_error, should_retry
 
     async def _stream_local_chat(
         self,
