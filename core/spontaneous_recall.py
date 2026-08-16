@@ -54,9 +54,7 @@ class SpontaneousRecall:
 
     def set_backend(self, backend: str, local_model: str | None = None) -> None:
         """热更新后端：local=走本地模型；api/auto=走硅基流动免费模型。"""
-        self._free.set_backend(backend)
-        if local_model is not None:
-            self._free.set_local_model(local_model)
+        self._free.set_backend(backend, local_model)
 
     def start(self) -> None:
         if self._task is None:

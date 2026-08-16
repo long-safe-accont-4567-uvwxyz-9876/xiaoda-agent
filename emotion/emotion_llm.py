@@ -31,9 +31,7 @@ _free = FreeModelBackend()
 
 def set_backend(backend: str, local_model: str | None = None) -> None:
     """热更新后端：local=走本地模型；api/auto=走硅基流动免费模型。"""
-    _free.set_backend(backend)
-    if local_model is not None:
-        _free.set_local_model(local_model)
+    _free.set_backend(backend, local_model)
 
 
 async def detect_emotion_llm(

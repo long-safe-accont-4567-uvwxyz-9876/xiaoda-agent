@@ -2,13 +2,11 @@ import os
 import time
 import asyncio
 from utils.similarity import ratio as text_ratio
-import httpx
 from loguru import logger
 
 from db.database import DatabaseManager
 from model_router import ModelRouter
-from utils.http_pool import get_shared_client
-from utils.free_model_backend import call_local_model
+from utils.free_model_backend import FreeModelBackend
 
 # LLM 思考过程特征词 — 包含这些词的行不是有效的本能
 _LLM_THINKING_KEYWORDS = {
@@ -67,73 +65,23 @@ class InstinctManager:
         self.db = db
         self.router = router
         self._available = db is not None
-        self._free_api_key = os.getenv("SILICONFLOW_API_KEY", "") or os.getenv("EMBED_API_KEY", "")
-        self._free_base_url = "https://api.siliconflow.cn/v1"
-        self._free_model = "THUDM/GLM-4-9B-0414"  # 非思考模型，避免 Z1 思考碎片污染本能提取
-        self._disabled = False          # backend=off：完全禁用提取
-        self._backend = "auto"          # auto/local/api/off（local=走本地模型）
-        self._backup_free_api_key = ""  # backend=local 时的 key 备份
-        self._local_model = None        # 功能节点独立选择的本地模型（None=全局共享）
+        # 后端切换统一委托给 FreeModelBackend（local/off 的 key 备份与恢复逻辑复用共享实现）
+        self._free = FreeModelBackend()
+        self._free.set_router(router)
 
     def set_free_model_client(self, api_key: str, base_url: str, model: str) -> None:
         """配置硅基流动免费模型客户端"""
-        self._free_api_key = api_key
-        self._free_base_url = base_url
-        self._free_model = model
+        self._free.set_free_model_client(api_key, base_url, model)
 
     def set_backend(self, backend: str, local_model: str | None = None) -> None:
         """热更新后端选择：off=禁用；local=走本地模型；api/auto=走免费模型。"""
-        if backend not in ("auto", "local", "api", "off"):
-            return
-        self._backend = backend
-        if local_model is not None:
-            self._local_model = local_model
-        if backend == "off":
-            self._disabled = True
-            return
-        self._disabled = False
-        if backend == "local":
-            self._backup_free_api_key = self._free_api_key
-            self._free_api_key = ""
-        else:
-            if self._backup_free_api_key:
-                self._free_api_key = self._backup_free_api_key
-        logger.info("instinct.backend_set backend={} disabled={}", backend, self._disabled)
+        self._free.set_backend(backend, local_model)
+        logger.info("instinct.backend_set backend={} disabled={}", backend, self._free.disabled)
 
     async def _call_free_model(self, messages: list, temperature: float = 0.6,
                                 max_tokens: int = 800) -> str | None:
         """按后端调用：local=本地模型；api/auto=免费模型。失败返回 None。"""
-        if self._backend == "local":
-            return await call_local_model(
-                self.router, messages, temperature, max_tokens, model_id=self._local_model
-            )
-        if not self._free_api_key:
-            return None
-        try:
-            # G4: 共享 httpx.AsyncClient（连接池复用 + HTTP/2），单次请求级别覆盖 timeout
-            client = get_shared_client()
-            response = await client.post(
-                f"{self._free_base_url}/chat/completions",
-                json={
-                    "model": self._free_model,
-                    "messages": messages,
-                    "temperature": temperature,
-                    "max_tokens": max_tokens,
-                },
-                headers={
-                    "Authorization": f"Bearer {self._free_api_key}",
-                    "Content-Type": "application/json",
-                },
-                timeout=httpx.Timeout(15.0),
-            )
-            response.raise_for_status()
-            data = response.json()
-            return data.get("choices", [{}])[0].get("message", {}).get("content", "")
-        except Exception as e:
-            # 修复 P2 Bug 8: free_model_failed 频繁告警（免费模型限流/网络抖动是常态）
-            # 已有降级到 router 的兜底，降级为 debug 避免告警风暴
-            logger.debug("instinct.free_model_failed", error=str(e)[:200], error_type=type(e).__name__)
-            return None
+        return await self._free.call(messages, temperature=temperature, max_tokens=max_tokens)
 
     async def init(self) -> None:
         """创建 instincts 表"""
@@ -160,7 +108,7 @@ class InstinctManager:
 
     async def extract_instincts(self, user_input: str, reply: str, session_id: str) -> None:
         """对话结束后异步提取 Instinct，使用 LLM 分析对话提取可复用模式"""
-        if not self._available or self._disabled:
+        if not self._available or self._free.disabled:
             return
         # 防御性加固：用 str.replace 替代 str.format
         # 根因：user_input/reply 可能含 {} / {0} 等字符（JSON/Python 代码/正则），

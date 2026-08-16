@@ -26,7 +26,8 @@ class TestInstinctManager(unittest.TestCase):
         self.mock_router = MagicMock()
         self.manager = InstinctManager(db=self.mock_db, router=self.mock_router)
         # 禁用免费模型，强制走 router.route 降级路径
-        self.manager._free_api_key = ""
+        # （后端 key 由 FreeModelBackend 组合对象持有，清空其 key 使 api_available=False）
+        self.manager._free._api_key = ""
 
     def test_build_instinct_prompt_empty(self):
         """无 Instinct 时返回空字符串"""

@@ -33,7 +33,8 @@ class FreeModelBackend:
                  base_url: str = DEFAULT_BASE_URL,
                  backend: str = "auto") -> None:
         self._model = model
-        self._base_url = base_url
+        # distiller 历史行为：允许 SILICONFLOW_BASE_URL env 覆盖默认端点
+        self._base_url = os.getenv("SILICONFLOW_BASE_URL", base_url)
         self._api_key = os.getenv("SILICONFLOW_API_KEY", "") or os.getenv("EMBED_API_KEY", "")
         self._backup_key = ""
         self._router = None
@@ -44,11 +45,16 @@ class FreeModelBackend:
             self._backup_key = self._api_key
             self._api_key = ""
 
-    def set_backend(self, backend: str) -> None:
-        """热切换后端。local=本地模型；api/auto=免费模型；off=关闭。"""
+    def set_backend(self, backend: str, local_model: str | None = None) -> None:
+        """热切换后端。local=本地模型；api/auto=免费模型；off=关闭。
+
+        local_model 指定该功能节点独立选择的本地模型（None=全局共享）。
+        """
         if backend not in _VALID_BACKENDS:
             return
         self._backend = backend
+        if local_model is not None:
+            self.set_local_model(local_model)
         if backend in ("local", "off"):
             if self._api_key:
                 self._backup_key = self._api_key
@@ -56,6 +62,12 @@ class FreeModelBackend:
         else:
             if self._backup_key and not self._api_key:
                 self._api_key = self._backup_key
+
+    def set_free_model_client(self, api_key: str, base_url: str, model: str) -> None:
+        """配置硅基流动免费模型客户端（WebUI 节点配置热更新时调用）。"""
+        self._api_key = api_key
+        self._base_url = base_url
+        self._model = model
 
     def set_router(self, router: Any) -> None:
         """注入 ModelRouter，供 local 后端通过 local-ort transport 走本地模型。"""
@@ -68,6 +80,11 @@ class FreeModelBackend:
     @property
     def backend(self) -> str:
         return self._backend
+
+    @property
+    def disabled(self) -> bool:
+        """backend=off：完全禁用（不调用任何后端）。"""
+        return self._backend == "off"
 
     @property
     def api_available(self) -> bool:

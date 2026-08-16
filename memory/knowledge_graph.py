@@ -6,7 +6,7 @@ import time
 from loguru import logger
 
 from db.db_knowledge import KnowledgeDB
-from utils.free_model_backend import call_local_model
+from utils.free_model_backend import FreeModelBackend
 
 
 ENTITY_EXTRACT_PROMPT = """从以下对话摘要中提取关键实体和关系，只提取最显著的3-5个。
@@ -102,13 +102,9 @@ class KnowledgeGraph:
         # 规则提取器（jieba，<10ms）用于实体前置短路，避免对无实体查询调用 LLM
         self._rule_extractor: Any = None
         # 节点后端选择：auto/local/api/off（local=走本地模型；off=禁用提取）
-        self._free_api_key = ""
-        self._free_base_url = ""
-        self._free_model = ""
-        self._disabled = False
-        self._backend = "auto"
-        self._backup_free_api_key = ""
-        self._local_model = None  # 功能节点独立选择的本地模型（None=全局共享）
+        # 后端切换统一委托给 FreeModelBackend（local/off 的 key 备份与恢复逻辑复用共享实现）
+        self._free = FreeModelBackend()
+        self._free.set_router(router)
 
     def set_db(self, db: Any) -> None:
         self._db = db
@@ -118,73 +114,30 @@ class KnowledgeGraph:
 
     def set_router(self, router: Any) -> None:
         self._router = router
+        self._free.set_router(router)
 
     def set_free_model_client(self, api_key: str, base_url: str, model: str) -> None:
         """配置硅基流动免费模型客户端，用于知识提取（不占用主模型配额）"""
-        self._free_api_key = api_key
-        self._free_base_url = base_url
-        self._free_model = model
+        self._free.set_free_model_client(api_key, base_url, model)
 
     def set_backend(self, backend: str, local_model: str | None = None) -> None:
         """热更新后端选择：off=禁用提取；local=走本地模型；api/auto=走免费模型。"""
-        if backend not in ("auto", "local", "api", "off"):
-            return
-        self._backend = backend
-        if local_model is not None:
-            self._local_model = local_model
-        if backend == "off":
-            self._disabled = True
-            return
-        self._disabled = False
-        if backend == "local":
-            self._backup_free_api_key = self._free_api_key
-            self._free_api_key = ""
-        else:
-            if self._backup_free_api_key:
-                self._free_api_key = self._backup_free_api_key
-        logger.info("kg.backend_set backend={} disabled={}", backend, self._disabled)
+        self._free.set_backend(backend, local_model)
+        logger.info("kg.backend_set backend={} disabled={}", backend, self._free.disabled)
 
     async def _call_free_model(self, messages: list, temperature: float = 0.1,
                                 max_tokens: int = 800) -> str | None:
-        """按后端调用：local=本地模型；api/auto=免费模型。失败返回 None。"""
-        if self._backend == "local":
-            return await call_local_model(
-                self._router, messages, temperature, max_tokens, model_id=self._local_model
-            )
-        if not getattr(self, '_free_api_key', ''):
-            return None
-        import httpx
-        from utils.http_pool import get_shared_client
-        try:
-            # 修复 P0-2：timeout 从 30s → 10s
-            # 根因：实体提取是检索路径的阻塞点，30s 超时会让单次检索最坏阻塞 30s。
-            # 10s 足够 GLM-4-9B-0414 完成实体提取（正常 1-3s），超时则降级到 router 或返回空。
-            # G4: 共享 httpx.AsyncClient（连接池复用 + HTTP/2），单次请求级别覆盖 timeout
-            client = get_shared_client()
-            response = await client.post(
-                f"{self._free_base_url}/chat/completions",
-                json={
-                    "model": self._free_model,
-                    "messages": messages,
-                    "temperature": temperature,
-                    "max_tokens": max_tokens,
-                },
-                headers={
-                    "Authorization": f"Bearer {self._free_api_key}",
-                    "Content-Type": "application/json",
-                },
-                timeout=httpx.Timeout(10.0),
-            )
-            response.raise_for_status()
-            data = response.json()
-            return data.get("choices", [{}])[0].get("message", {}).get("content", "")
-        except Exception as e:
-            # 修复 P2 Bug 8: 已有降级到 router 兜底，降级为 debug
-            logger.debug("kg.free_model_failed", error=str(e)[:200], error_type=type(e).__name__)
-            return None
+        """按后端调用：local=本地模型；api/auto=免费模型。失败返回 None。
+
+        timeout=10：实体提取是检索路径的阻塞点，10s 足够 GLM-4-9B-0414
+        完成提取（正常 1-3s），超时则降级到 router 或返回空（P0-2 修复）。
+        """
+        return await self._free.call(
+            messages, temperature=temperature, max_tokens=max_tokens, timeout=10.0
+        )
 
     async def extract_from_summary(self, summary: str) -> dict:
-        if not summary or self._disabled:
+        if not summary or self._free.disabled:
             return {"entities": [], "relations": []}
 
         try:

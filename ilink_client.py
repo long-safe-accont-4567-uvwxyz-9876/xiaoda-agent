@@ -1054,7 +1054,6 @@ async def login_via_qrcode(client: ILinkClient, *, poll_interval: float = 2.0, m
     qrcode_id = qr["qrcode_id"]
     qrcode_url = qr["qrcode_url"]
     logger.info("ilink.login.qrcode url={}", qrcode_url)
-    print(f"\n请用微信扫描二维码登录:\n  {qrcode_url}\n")
 
     deadline = time.monotonic() + max_wait
     while time.monotonic() < deadline:
