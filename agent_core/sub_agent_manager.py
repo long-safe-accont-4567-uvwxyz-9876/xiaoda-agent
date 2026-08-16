@@ -85,6 +85,54 @@ class SubAgentManagerMixin:
         ))
         trace.info("agent.chat_target_sub", target=target, input_preview=clean_input[:50])
         context_str = self._build_sub_agent_context()
+        sub_reply = await self._dispatch_sub_agent_with_events(
+            target, clean_input, display_name, context_str, _ctx, task_id)
+
+        emotion = detect_emotion(clean_input)
+        if _ctx:
+            _ctx.last_user_emotion = emotion.get("primary", "")
+        # 子代理对话也写入主体历史：切回小妲或追问时上下文不断档
+        # 降级/错误回复不入 history 也不入记忆库（与主对话路径一致），
+        # 同时跳过 user 消息避免未配对断档
+        if is_degraded_reply(sub_reply):
+            logger.info("sub_agent.skip_degraded_reply_not_in_history", reply_preview=sub_reply[:60])
+        else:
+            await self.context.add_message("user", clean_input)
+            await self.context.add_message("assistant", sub_reply, agent=target)
+            self._bg_task_manager.run_background_tasks(
+                clean_input, sub_reply, user_id, source, emotion, [],
+                session_id=session_id,
+                model_used=self.router.get_current_chat_model().get("model_id", ""),
+            )
+
+        emotion_label = emotion.get("primary", "")
+        sticker_path = self._detect_sub_sticker(target, sub_reply)
+
+        # 剥离情绪标签（检测完成后才剥离，避免标签泄露给用户）
+        clean_sub_reply = self._finalize_reply(sub_reply, style=target)
+
+        # 子代理回复隐私扫描（与主 Agent 路径一致）
+        is_master = self.security.is_owner(user_id) if user_id else False
+        if not is_master and clean_sub_reply:
+            safe, alt_reply, _ = self.security.check_output_privacy(clean_sub_reply)
+            if not safe:
+                logger.warning("agent.sub_agent_privacy_leak_blocked",
+                               target=target, user_id=user_id,
+                               reply_preview=clean_sub_reply[:100])
+                clean_sub_reply = alt_reply or f"{display_name}不方便回答这个问题呢～"
+
+        sub_audio_path, sub_tts_pending, sub_tts_text = await self._synthesize_sub_tts(
+            target, sub_agent, clean_sub_reply, emotion_label, force_voice)
+
+        if sub_audio_path:
+            clean_sub_reply = clean_sub_reply + "\n\n🎙️ 语音消息已发送～"
+
+        return ProcessResult(reply=clean_sub_reply, emotion=emotion_label, sticker_path=sticker_path, audio_path=sub_audio_path, tts_pending=sub_tts_pending, tts_text=sub_tts_text)
+
+    async def _dispatch_sub_agent_with_events(self, target: str, clean_input: str,
+                                              display_name: str, context_str: str,
+                                              _ctx: Any, task_id: str) -> str:
+        """dispatch 子代理 + 事件 emit + BeliefRouter 反馈 + 异常降级。"""
         # 注入情绪标签规则：@ 直接对话模式下，子 Agent 回复需带 [emotion:xxx] 标签
         # 以触发专属表情包系统（delegate_task 工具调用不注入，保持"不加标签"）
         # CancelToken 仅用于主动取消（timeout=None 不创建后台 timer task），
@@ -149,64 +197,41 @@ class SubAgentManagerMixin:
             token.cleanup()
         if sub_reply is None:
             sub_reply = f"{display_name}现在有点累了...等会儿再来吧！💤"
+        return sub_reply
 
-        emotion = detect_emotion(clean_input)
-        if _ctx:
-            _ctx.last_user_emotion = emotion.get("primary", "")
-        # 子代理对话也写入主体历史：切回小妲或追问时上下文不断档
-        # 根本修复：不带 [display_name] 文本前缀，用 agent 元数据标记身份
-        # 旧的 [小可] 前缀会被 LLM 模仿，导致 @小妲 时回复 "[小可] ..." 身份混淆
-        # 降级/错误回复不入 history 也不入记忆库（与主对话路径一致），
-        # 同时跳过 user 消息避免未配对断档
-        if is_degraded_reply(sub_reply):
-            logger.info("sub_agent.skip_degraded_reply_not_in_history", reply_preview=sub_reply[:60])
-        else:
-            await self.context.add_message("user", clean_input)
-            await self.context.add_message("assistant", sub_reply, agent=target)
-            self._bg_task_manager.run_background_tasks(
-                clean_input, sub_reply, user_id, source, emotion, [],
-                session_id=session_id,
-                model_used=self.router.get_current_chat_model().get("model_id", ""),
-            )
+    def _detect_sub_sticker(self, target: str, sub_reply: str) -> str | None:
+        """子 Agent 表情包：用原始回复检测情绪（含 [emotion:xxx] 标签），再选择表情包。
 
-        emotion_label = emotion.get("primary", "")
-        sticker_path = None
-
-        # 子 Agent 表情包：在 _finalize_reply 剥离标签前，先用原始回复检测情绪
-        # （剥离后 [emotion:xxx] 标签已消失，detect_emotion 只能靠关键词，不可靠）
+        剥离后 [emotion:xxx] 标签已消失，detect_emotion 只能靠关键词，不可靠，
+        所以必须在 _finalize_reply 剥离标签前检测。
+        """
         sub_sticker_mgr = self.get_sticker_manager(target)
-        if sub_sticker_mgr.available:
-            # 1. 使用 sticker_manager 对子Agent的原始回复进行情绪检测（含 [emotion:xxx] 标签）
-            detected = sub_sticker_mgr.detect_emotion(sub_reply)
-            # 2. 如果 sticker_manager 未检测到，使用 emotion_simple 对原始回复进行情绪检测
-            if not detected:
-                sub_reply_emotion = detect_emotion(sub_reply)
-                sub_reply_emotion_label = sub_reply_emotion.get("primary", "")
-                if sub_reply_emotion_label:
-                    detected = CN_TO_EN.get(sub_reply_emotion_label, "")
-            # 3. 检测到情绪且 should_send() 返回 True，则 pick() 选择表情包
-            #    strict 模式：专属表情包目录无对应情绪分类就不发送（不 fallback 到全部随机）
-            if detected and sub_sticker_mgr.should_send(sub_reply, detected_emotion=detected):
-                sticker_path = sub_sticker_mgr.pick(detected, strict=True)
+        if not sub_sticker_mgr.available:
+            return None
+        # 1. 使用 sticker_manager 对子Agent的原始回复进行情绪检测（含 [emotion:xxx] 标签）
+        detected = sub_sticker_mgr.detect_emotion(sub_reply)
+        # 2. 如果 sticker_manager 未检测到，使用 emotion_simple 对原始回复进行情绪检测
+        if not detected:
+            sub_reply_emotion = detect_emotion(sub_reply)
+            sub_reply_emotion_label = sub_reply_emotion.get("primary", "")
+            if sub_reply_emotion_label:
+                detected = CN_TO_EN.get(sub_reply_emotion_label, "")
+        # 3. 检测到情绪且 should_send() 返回 True，则 pick() 选择表情包
+        #    strict 模式：专属表情包目录无对应情绪分类就不发送（不 fallback 到全部随机）
+        if detected and sub_sticker_mgr.should_send(sub_reply, detected_emotion=detected):
+            return sub_sticker_mgr.pick(detected, strict=True)
+        return None
 
-        # 剥离情绪标签（检测完成后才剥离，避免标签泄露给用户）
-        clean_sub_reply = self._finalize_reply(sub_reply, style=target)
+    async def _synthesize_sub_tts(self, target: str, sub_agent: Any, clean_sub_reply: str,
+                                  emotion_label: str, force_voice: bool) -> tuple[Any, bool, str]:
+        """子代理 TTS（异步/同步双路径）。返回 (audio_path, tts_pending, tts_text)。
 
-        # 子代理回复隐私扫描（与主 Agent 路径一致）
-        is_master = self.security.is_owner(user_id) if user_id else False
-        if not is_master and clean_sub_reply:
-            safe, alt_reply, _ = self.security.check_output_privacy(clean_sub_reply)
-            if not safe:
-                logger.warning("agent.sub_agent_privacy_leak_blocked",
-                               target=target, user_id=user_id,
-                               reply_preview=clean_sub_reply[:100])
-                clean_sub_reply = alt_reply or f"{display_name}不方便回答这个问题呢～"
-
+        TTS 时机控制 v2：统一过 _decide_tts_trigger（原串行路径完全无守卫，是子 agent
+        回复代码/URL 也发语音的根因）。补齐内容守卫 + 降级守卫，与主路径一致。
+        """
         sub_audio_path = None
         sub_tts_pending = False
         sub_tts_text = ""
-        # TTS 时机控制 v2：统一过 _decide_tts_trigger（原串行路径完全无守卫，是子 agent
-        # 回复代码/URL 也发语音的根因）。补齐内容守卫 + 降级守卫，与主路径一致。
         if _decide_tts_trigger(
                 clean_sub_reply, force_voice=force_voice, voice_mode=self._voice_mode,
                 tts_available=self.tts.available,
@@ -226,11 +251,7 @@ class SubAgentManagerMixin:
                                    action=classified.action.value,
                                    retryable=classified.is_retryable,
                                    error=str(e))
-
-        if sub_audio_path:
-            clean_sub_reply = clean_sub_reply + "\n\n🎙️ 语音消息已发送～"
-
-        return ProcessResult(reply=clean_sub_reply, emotion=emotion_label, sticker_path=sticker_path, audio_path=sub_audio_path, tts_pending=sub_tts_pending, tts_text=sub_tts_text)
+        return sub_audio_path, sub_tts_pending, sub_tts_text
 
     async def parallel_dispatch(
         self,
