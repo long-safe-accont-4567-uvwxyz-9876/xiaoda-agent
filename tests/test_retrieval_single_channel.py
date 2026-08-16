@@ -31,8 +31,9 @@ def _make_engine():
 async def _call_single_channel(channel_key, items, kg_v2_items=None, k=5):
     """调用 _resolve_fallback_or_single_channel，只让 channel_key 这一路有结果。"""
     eng = _make_engine()
+    from memory._retrieval_engine import RecallChannels
     empty: list = []
-    channels = {
+    d = {
         "fts": items if channel_key == "fts" else list(empty),
         "vec": items if channel_key == "vec" else list(empty),
         "kg": items if channel_key == "kg" else list(empty),
@@ -40,11 +41,12 @@ async def _call_single_channel(channel_key, items, kg_v2_items=None, k=5):
         "spread": items if channel_key == "spread" else list(empty),
         "entity": items if channel_key == "entity" else list(empty),
     }
-    kg_v2 = kg_v2_items or []
+    channels = RecallChannels(
+        d["fts"], d["vec"], d["kg"], d["child"],
+        d["spread"], d["entity"], kg_v2_items or [],
+    )
     return await eng._resolve_fallback_or_single_channel(
-        channels["fts"], channels["vec"], channels["kg"],
-        channels["child"], channels["spread"], channels["entity"],
-        kg_v2, query="test", k=k, tier="warm", _start=0,
+        channels, query="test", k=k, tier="warm", _start=0,
         candidate_ids=None, recall_limit=50, scope=None, query_vec=None,
     )
 
@@ -101,10 +103,11 @@ async def test_single_channel_no_append_kg_v2_when_full():
 async def test_all_empty_returns_empty_list():
     """七路全空（且无 fallback 命中）时返回 []，不是 None。"""
     eng = _make_engine()
+    from memory._retrieval_engine import RecallChannels
     eng._mm._hybrid_fts_search_scoped = AsyncMock(return_value=[])
     eng._mm._hybrid_vec_search = AsyncMock(return_value=[])
     result = await eng._resolve_fallback_or_single_channel(
-        [], [], [], [], [], [], [],
+        RecallChannels([], [], [], [], [], [], []),
         query="test", k=5, tier="warm", _start=0,
         candidate_ids=None, recall_limit=50, scope=None, query_vec=None,
     )
@@ -115,10 +118,11 @@ async def test_all_empty_returns_empty_list():
 async def test_multi_channel_returns_none():
     """多路有结果时返回 None（交给 RRF 融合）。"""
     eng = _make_engine()
+    from memory._retrieval_engine import RecallChannels
     fts = [{"id": 1, "score": 0.9, "summary": "fts"}]
     vec = [{"id": 2, "similarity": 0.8, "summary": "vec"}]
     result = await eng._resolve_fallback_or_single_channel(
-        fts, vec, [], [], [], [], [],
+        RecallChannels(fts, vec, [], [], [], [], []),
         query="test", k=5, tier="warm", _start=0,
         candidate_ids=None, recall_limit=50, scope=None, query_vec=None,
     )
@@ -129,10 +133,11 @@ async def test_multi_channel_returns_none():
 async def test_kg_v2_only_returns_directly():
     """仅 KG v2 有结果时直接返回（不补 rrf_score）。"""
     eng = _make_engine()
+    from memory._retrieval_engine import RecallChannels
     kg_v2 = [{"summary": "fact1", "rrf_score": 0.5, "source": "kg_v2"},
              {"summary": "fact2", "rrf_score": 0.3, "source": "kg_v2"}]
     result = await eng._resolve_fallback_or_single_channel(
-        [], [], [], [], [], [], kg_v2,
+        RecallChannels([], [], [], [], [], [], kg_v2),
         query="test", k=5, tier="warm", _start=0,
         candidate_ids=None, recall_limit=50, scope=None, query_vec=None,
     )

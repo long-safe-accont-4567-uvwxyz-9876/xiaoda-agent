@@ -4,7 +4,7 @@
 所有检索逻辑通过 self._mm 访问依赖与状态，保证与重构前行为完全一致，
 同时避免 `memory_manager` 的反向 import（循环依赖）。
 """
-from typing import Any
+from typing import Any, NamedTuple
 import asyncio
 import time
 import datetime as _datetime
@@ -25,6 +25,22 @@ from memory._memory_utils import (
     reciprocal_rank_fusion,
 )
 from .fsrs_model import MemoryState, MemoryPhase, ReinforcementSignal, S_INIT
+
+
+class RecallChannels(NamedTuple):
+    """七路召回结果打包（温/热用户并行召回的一次性产物）。
+
+    原先 `_run_multi_recall` 返回裸 7 元组，`_resolve_fallback_or_single_channel`
+    与 `_fuse_and_rank` 各自接收 7 个通道位置参数（总参数 16 个）。
+    打包为 NamedTuple 后签名降至 8/9 参数，字段名自文档化。
+    """
+    fts_items: list
+    vec_items: list
+    kg_items: list
+    child_items: list
+    spread_items: list
+    entity_items: list
+    kg_v2_items: list
 
 
 class RetrievalEngine:
@@ -197,19 +213,17 @@ class RetrievalEngine:
                          selector_keys=[sk for sk in selectors if sk != "has_selectors"],
                          candidate_count=len(candidate_ids))
 
-        fts_items, vec_items, kg_items, child_items, spread_items, entity_items, kg_v2_items = await self._run_multi_recall(
+        channels = await self._run_multi_recall(
             query, recall_limit, scope, is_raw_filter, query_vec, candidate_ids, use_kg)
 
         routed = await self._resolve_fallback_or_single_channel(
-            fts_items, vec_items, kg_items, child_items, spread_items, entity_items, kg_v2_items,
-            query, k, tier, _start, candidate_ids, recall_limit, scope, query_vec)
+            channels, query, k, tier, _start, candidate_ids, recall_limit, scope, query_vec)
         if routed is not None:
             return routed
 
         return await self._fuse_and_rank(
             query, k, use_reranker, tier, is_warm, rerank_limit,
-            fts_items, vec_items, kg_items, child_items, spread_items, entity_items, kg_v2_items,
-            scope, _start)
+            channels, scope, _start)
 
     async def _recall_kg_v2(self, query: str, recall_limit: int) -> list[dict]:
         """KG v2: 直接返回 KG 事实/实体作为上下文候选。"""
@@ -422,7 +436,7 @@ class RetrievalEngine:
 
     async def _run_multi_recall(self, query: str, recall_limit: int, scope: Any,
                                 is_raw_filter: Any, query_vec: list[float] | None,
-                                candidate_ids: Any, use_kg: bool) -> tuple:
+                                candidate_ids: Any, use_kg: bool) -> RecallChannels:
         """温/热用户: 并行执行 FTS、向量、KG、子chunk、扩散、实体、KG v2 七路召回。"""
         logger.info("memory.gather_start", query=query[:30])
 
@@ -435,11 +449,13 @@ class RetrievalEngine:
             self._timed("entity", self._mm._entity_recall(query, scope, recall_limit), query),
             self._timed("kg_v2", self._recall_kg_v2(query, recall_limit), query),
         )
-        return fts_items, vec_items, kg_items, child_items, spread_items, entity_items, kg_v2_items
+        return RecallChannels(
+            fts_items, vec_items, kg_items, child_items,
+            spread_items, entity_items, kg_v2_items,
+        )
 
     async def _resolve_fallback_or_single_channel(
-            self, fts_items: list, vec_items: list, kg_items: list, child_items: list,
-            spread_items: list, entity_items: list, kg_v2_items: list,
+            self, channels: RecallChannels,
             query: str, k: int, tier: str, _start: float, candidate_ids: Any,
             recall_limit: int, scope: Any,
             query_vec: list[float] | None) -> list[dict] | None:
@@ -448,6 +464,7 @@ class RetrievalEngine:
         七路都空则 fallback 查原始记忆（蒸馏失败时兜底）；仅一路（或仅 KG v2）
         有结果时直接返回；否则返回 None 交给 RRF 融合。
         """
+        fts_items, vec_items, kg_items, child_items, spread_items, entity_items, kg_v2_items = channels
         # 空通道自动剔除: 七路都空则 fallback 查原始记忆（蒸馏失败时兜底）
         if not fts_items and not vec_items and not kg_items and not child_items and not spread_items and not entity_items and not kg_v2_items:
             # Fallback: 用相同 FTS+Vec 检索，但 include_raw（is_raw=0 和 is_raw=1 都返回）
@@ -536,11 +553,10 @@ class RetrievalEngine:
 
     async def _fuse_and_rank(self, query: str, k: int, use_reranker: bool, tier: str,
                              is_warm: bool, rerank_limit: int,
-                             fts_items: list, vec_items: list, kg_items: list,
-                             child_items: list, spread_items: list, entity_items: list,
-                             kg_v2_items: list, scope: Any,
+                             channels: RecallChannels, scope: Any,
                              _start: float) -> list[dict]:
         """加权 RRF 融合（多路，空通道自动剔除）+ Entity Boost + Reranker 精排。"""
+        fts_items, vec_items, kg_items, child_items, spread_items, entity_items, kg_v2_items = channels
         try:
             import config as _cfg
             warm_vec_weight = getattr(_cfg, "MEMORY_WARM_VEC_WEIGHT", 0.2)

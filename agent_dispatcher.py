@@ -1,24 +1,11 @@
 import asyncio
-import json
-from dataclasses import dataclass, field
-from pathlib import Path
-from types import SimpleNamespace
-from typing import Any, Protocol, runtime_checkable
+from typing import Any
 
 from loguru import logger
 
-from config import get_agent_display_name
-from core.message import AgentMessage
-from emotion.emoji_config import get_status_msg
 from emotion.tts_engine import TTSEngine
-from tool_engine.tool_call_handler import _extract_path_from_args
-from tool_engine.tool_executor import ToolExecutor, ToolResult
-from tool_engine.tool_guardrails import get_tool_guardrails
-from tool_engine.tool_registry import to_openai_tools
+from tool_engine.tool_executor import ToolExecutor
 from tool_engine.tool_repair import ToolCallRepair
-from utils.credential_pool import CredentialPool
-from utils.llm_cleanup import deduplicate_multi_reply
-from utils.text_utils import has_dsml_tool_calls, humanize, parse_dsml_tool_calls, strip_dsml, strip_reasoning
 
 # ── 拆分：tool_call_extractors + sub_agent 抽出（逐字节搬移）──
 # 同名 re-export 保持兼容（契约见 tests/test_dispatcher_split.py）。
