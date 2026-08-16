@@ -5,13 +5,12 @@
 """
 from typing import Any
 import os
-import sys
 from pathlib import Path
 
-# 将项目根目录加入 sys.path
+# 项目根目录（仅用于定位 .env，不再注入 sys.path——
+# `import agent_core` 能成功本身就说明项目根目录已在 sys.path，
+# 包内 insert 是冗余副作用，会污染全局导入顺序）
 _PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-if _PROJECT_ROOT not in sys.path:
-    sys.path.insert(0, _PROJECT_ROOT)
 
 # 加载 .env
 import sys as _sys
