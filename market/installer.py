@@ -5,16 +5,18 @@ import asyncio
 import hashlib
 import json
 import shutil
+import tarfile
 import tempfile
 import time
 import zipfile
-import tarfile
 from pathlib import Path
 from typing import Any
 
 from loguru import logger
 
 from market.manifest import MarketItem
+from market.url_policy import require_sha256
+from security.mcp_command_policy import validate_mcp_command, validate_mcp_env
 
 
 class InstallError(Exception):
@@ -117,9 +119,12 @@ class MarketInstaller:
         try:
             archive_path = await self._download(item.download_url, tmp_dir)
 
-            # SHA256 校验
-            if item.sha256:
-                self._verify_sha256(archive_path, item.sha256)
+            # SHA256 校验（VULN-22：强制要求，缺失即拒绝）
+            try:
+                require_sha256(item.sha256)
+            except ValueError as e:
+                raise InstallError(str(e)) from None
+            self._verify_sha256(archive_path, item.sha256)
 
             # 安全扫描下载内容
             self._security_scan(archive_path.read_bytes(), item.id)
@@ -215,9 +220,12 @@ class MarketInstaller:
         try:
             file_path = await self._download(item.download_url, tmp_dir)
 
-            # SHA256 校验
-            if item.sha256:
-                self._verify_sha256(file_path, item.sha256)
+            # SHA256 校验（VULN-22：强制要求，缺失即拒绝）
+            try:
+                require_sha256(item.sha256)
+            except ValueError as e:
+                raise InstallError(str(e)) from None
+            self._verify_sha256(file_path, item.sha256)
 
             # 安全扫描下载内容
             self._security_scan(file_path.read_bytes(), item.id)
@@ -282,9 +290,12 @@ class MarketInstaller:
             if item.download_url:
                 file_path = await self._download(item.download_url, tmp_dir)
 
-                # SHA256 校验
-                if item.sha256:
-                    self._verify_sha256(file_path, item.sha256)
+                # SHA256 校验（VULN-22：强制要求，缺失即拒绝）
+                try:
+                    require_sha256(item.sha256)
+                except ValueError as e:
+                    raise InstallError(str(e)) from None
+                self._verify_sha256(file_path, item.sha256)
 
                 # 安全扫描下载内容
                 content_bytes = file_path.read_bytes()
@@ -309,6 +320,21 @@ class MarketInstaller:
                 config_data,
                 env,
             )
+
+            # 安全校验：远端 manifest 的 connections 不经白名单校验即写入配置，
+            # 投毒 manifest 可注入任意命令（RCE）。MCP 必须有 command 才能运行，
+            # 缺失直接拒绝；command/env 走与 WebUI 相同的策略模块校验。
+            command = connections.get("command")
+            if not command:
+                raise InstallError("MCP 工具缺少 command，无法运行")
+            try:
+                validate_mcp_command(command)
+            except ValueError as e:
+                raise InstallError(f"MCP 工具 command 校验失败: {e}") from None
+            try:
+                validate_mcp_env(connections.get("env"))
+            except ValueError as e:
+                raise InstallError(f"MCP 工具 env 校验失败: {e}") from None
 
             # 写入配置文件
             config_entry = {
@@ -390,64 +416,78 @@ class MarketInstaller:
     # ── 通用工具 ──────────────────────────────────────────────
 
     def _security_scan(self, content: bytes, item_id: str) -> None:
-        """对下载内容进行安全扫描，发现高危模式时阻断安装。
+        """对下载内容做 AST 级安全扫描，高危模式直接阻断安装。
 
-        P2 修复：原代码只 log warning 不 block，且字符串匹配可被拼接绕过。
-        现在改为：高危模式直接 raise InstallError 阻断；同时检测常见混淆手法
-        (字符串拼接、getattr 动态调用)。
+        VULN-22 修复：升级为 AST 解析，堵住子串匹配的拼接绕过
+        (如 getattr(os,'system')、__import__('os') 等)。
         """
-        suspicious = []
+        import ast as _ast
+        suspicious: list[str] = []
+
         try:
             text = content.decode("utf-8", errors="ignore")
-
-            # ── 高危模式：直接阻断 ──────────────────────────────
-            high_risk_patterns = [
-                ("eval(", "eval() 任意代码执行"),
-                ("exec(", "exec() 任意代码执行"),
-                ("__import__(", "__import__() 动态导入"),
-                ("os.system", "os.system 命令执行"),
-                ("os.popen", "os.popen 命令执行"),
-                ("subprocess.Popen", "subprocess.Popen 命令执行"),
-                ("subprocess.call", "subprocess.call 命令执行"),
-                ("subprocess.run", "subprocess.run 命令执行"),
-                ("subprocess.check_output", "subprocess.check_output 命令执行"),
-            ]
-            for pattern, label in high_risk_patterns:
-                if pattern in text:
-                    suspicious.append(label)
-
-            # ── 混淆检测：字符串拼接绕过 ────────────────────────
-            # 检测 "ev"+"al" 或 'ev'+'al' 等拼接手法
-            import re as _re
-            concat_patterns = [
-                (r'''["']ev["']\s*\+\s*["']al["']''', "eval 拼接混淆"),
-                (r'''["']ex["']\s*\+\s*["']ec["']''', "exec 拼接混淆"),
-                (r'''getattr\s*\([^,]+,\s*["']ev["']\s*\+\s*["']al["']''', "getattr+eval 混淆"),
-                (r'''getattr\s*\([^,]+,\s*["']__import__["']''', "getattr+__import__ 混淆"),
-            ]
-            for pattern, label in concat_patterns:
-                if _re.search(pattern, text):
-                    suspicious.append(label)
-
-            # 敏感路径
-            for sp in ["/etc/passwd", "/etc/shadow", "~/.ssh/"]:
-                if sp in text:
-                    suspicious.append(f"敏感路径: {sp}")
-
+            tree = _ast.parse(text, filename=f"<{item_id}>")
+        except SyntaxError:
+            # 非 Python 源码（如 markdown/zip 二进制），回退到子串扫描
+            tree = None
         except Exception:
             logger.debug("installer.security_scan_error", exc_info=True)
+            tree = None
+
+        if tree is not None:
+            # AST 级高危检测
+            for node in _ast.walk(tree):
+                if isinstance(node, _ast.Call):
+                    func = node.func
+                    if isinstance(func, _ast.Name) and func.id in ("eval", "exec", "__import__"):
+                        suspicious.append(f"AST: {func.id}() 调用")
+                    elif isinstance(func, _ast.Name) and func.id == "getattr":
+                        suspicious.append("AST: getattr 动态调用")
+                    elif (isinstance(func, _ast.Attribute) and
+                          isinstance(func.value, _ast.Name) and
+                          func.value.id == "subprocess"):
+                        suspicious.append(f"AST: subprocess.{func.attr}() 调用")
+                    elif (isinstance(func, _ast.Attribute) and
+                          isinstance(func.value, _ast.Name) and
+                          func.value.id == "os" and
+                          func.attr in ("system", "popen", "spawnle", "spawnve", "execle", "execve")):
+                        suspicious.append(f"AST: os.{func.attr}() 调用")
+
+            for node in _ast.walk(tree):
+                if isinstance(node, _ast.Constant) and isinstance(node.value, str):
+                    for sp in ("/etc/passwd", "/etc/shadow", "~/.ssh/"):
+                        if sp in node.value:
+                            suspicious.append(f"AST 敏感路径: {sp}")
+
+        # 非 Python 内容回退：保留基础危险模式子串扫描
+        if not suspicious:
+            low_risk_patterns = [
+                ("os.system", "os.system"),
+                ("os.popen", "os.popen"),
+                ("subprocess.Popen", "subprocess.Popen"),
+                ("subprocess.run", "subprocess.run"),
+                ("subprocess.call", "subprocess.call"),
+                ("subprocess.check_output", "subprocess.check_output"),
+            ]
+            for pattern, label in low_risk_patterns:
+                if pattern in text:
+                    suspicious.append(f"子串匹配: {label}")
+                    break
 
         if suspicious:
             logger.warning("market.security_scan_warnings", id=item_id,
                            warnings=suspicious)
-            # P2 修复：高危模式直接阻断安装，而非仅 log
             raise InstallError(
                 f"插件 '{item_id}' 安全扫描未通过，检测到高危模式: {'; '.join(suspicious)}"
             )
 
     async def _download(self, url: str, dest_dir: Path) -> Path:
-        """下载文件到目标目录"""
+        """下载文件到目标目录（VULN-22：前置域名白名单校验）"""
         import httpx
+
+        from market.url_policy import is_allowed_download_url
+        if not is_allowed_download_url(url):
+            raise InstallError(f"下载 URL 不在受信域名白名单内: {url}")
         filename = url.split("/")[-1].split("?")[0] or "download"
         dest_path = dest_dir / filename
 
@@ -486,10 +526,18 @@ class MarketInstaller:
                 zf.extractall(dest_dir)  # nosec B202
         elif tarfile.is_tarfile(archive_path):
             with tarfile.open(archive_path) as tf:
-                safe_members = [
-                    m for m in tf.getmembers()
-                    if str((dest_dir / m.name).resolve()).startswith(str(dest_dir.resolve()))
-                ]
+                safe_members = []
+                for m in tf.getmembers():
+                    # VULN-23：拒绝 symlink / hardlink / 设备类成员
+                    if m.issym() or m.islnk() or m.ischr() or m.isblk() or m.isfifo() or m.isdev():
+                        raise InstallError(
+                            f"不安全的 tar 成员类型: {m.name} "
+                            f"(symlink={m.issym()}, hardlink={m.islnk()}, dev={m.isdev()})"
+                        )
+                    member_path = (dest_dir / m.name).resolve()
+                    if not str(member_path).startswith(str(dest_dir.resolve())):
+                        raise InstallError(f"不安全的压缩包路径: {m.name}")
+                    safe_members.append(m)
                 tf.extractall(dest_dir, members=safe_members)  # nosec B202
         else:
             raise InstallError(f"不支持的压缩格式: {archive_path.name}")

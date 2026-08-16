@@ -6,13 +6,14 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Request
-from pydantic import BaseModel, Field
 from loguru import logger
+from pydantic import BaseModel, Field
 
-from market.manifest import MarketItem, get_plugins_fetcher, get_skills_fetcher, get_mcp_fetcher
-from market.installer import MarketInstaller, InstallError
-from web.schemas import Envelope
+from market.installer import InstallError, MarketInstaller
+from market.manifest import MarketItem, get_mcp_fetcher, get_plugins_fetcher, get_skills_fetcher
+from market.url_policy import is_allowed_download_url, require_sha256
 from web.routers.auth import get_current_user
+from web.schemas import Envelope
 
 router = APIRouter(prefix="/market", tags=["market"],
                    dependencies=[Depends(get_current_user)])
@@ -35,6 +36,7 @@ class UninstallRequest(BaseModel):
 def _get_installer(request: Request) -> MarketInstaller:
     """获取 MarketInstaller 实例"""
     from pathlib import Path
+
     from config import WORKSPACE_DIR
 
     plugins_dir = Path(__file__).resolve().parent.parent.parent / "plugins"
@@ -116,6 +118,22 @@ def _security_check(item: MarketItem, content: bytes = b"") -> SecurityCheckResu
     return result
 
 
+def _validate_user_download(item: MarketItem) -> None:
+    """校验用户提交的下载条目：域名白名单 + 强制 SHA256（VULN-22）。
+
+    官方 manifest 条目（item 来自清单）不受此限制；仅当用户通过
+    ``download_url`` 提交任意 URL 时强制校验。
+    """
+    if not item.download_url:
+        return
+    if not is_allowed_download_url(item.download_url):
+        raise HTTPException(400, f"下载 URL 不在受信域名白名单内: {item.download_url}")
+    try:
+        require_sha256(item.sha256)
+    except ValueError as e:
+        raise HTTPException(400, str(e)) from None
+
+
 # ── MCP 工具市场（在线数据源：mcp-cn.com）──────────────────
 
 @router.get("/plugins", response_model=Envelope[dict])
@@ -165,6 +183,7 @@ async def install_plugin(req: InstallRequest, request: Request) -> Any:
             download_url=req.download_url, version=req.version or "0.0.0",
             sha256=req.sha256,
         )
+        _validate_user_download(item)
 
     if item is None:
         raise HTTPException(404, f"市场中未找到 '{req.item_id}'")
@@ -261,6 +280,7 @@ async def install_skill(req: InstallRequest, request: Request) -> Any:
             download_url=req.download_url, version=req.version or "0.0.0",
             sha256=req.sha256,
         )
+        _validate_user_download(item)
 
     if item is None:
         raise HTTPException(404, f"技能市场中未找到 '{req.item_id}'")
@@ -346,6 +366,7 @@ async def install_mcp(req: InstallRequest, request: Request) -> Any:
             download_url=req.download_url, version=req.version or "0.0.0",
             sha256=req.sha256,
         )
+        _validate_user_download(item)
 
     if item is None:
         raise HTTPException(404, f"MCP 市场中未找到 '{req.item_id}'")

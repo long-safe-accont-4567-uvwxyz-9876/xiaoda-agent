@@ -20,7 +20,11 @@ from security.instruction_hierarchy import (
     format_instruction,
     sanitize_external_content,
 )
-from agent_core._shared import is_degraded_reply
+from agent_core._shared import (
+    is_degraded_reply,
+    ALLOWED_NON_MASTER_TOOLS as _ALLOWED_NON_MASTER_TOOLS,
+    _current_request_ctx,
+)
 
 
 # 写操作工具集合：这些工具会修改文件系统/配置，需进行路径白名单校验
@@ -351,6 +355,26 @@ class ToolCallHandler:
                 blocked = await self._check_error_rules(t_name, t_args, tc, trace, display_name)
                 if blocked is not None:
                     return blocked
+
+            # VULN-27：非主人执行层门禁。主路径的工具列表过滤
+            # （message_processor._prepare_sticker_and_tools）不覆盖子代理/委托
+            # 路径，非主人 @子代理 可拿到全量工具列表。这里在执行前按
+            # _current_request_ctx.is_master 强制校验：非主人仅允许白名单工具。
+            # 无请求上下文（内部调度/主动任务）不拦截，fail-open 仅限系统自身发起的调用。
+            _ctx = _current_request_ctx.get()
+            if (_ctx is not None and getattr(_ctx, "is_master", True) is False
+                    and t_name not in _ALLOWED_NON_MASTER_TOOLS):
+                err_code = ErrorCodeEnum.E_TOOL007
+                logger.warning(
+                    "tool.non_master_forbidden",
+                    tool=t_name, user_id=getattr(_ctx, "user_id", ""),
+                    session_id=getattr(_ctx, "session_id", ""),
+                    error_code=err_code.code,
+                )
+                if trace is not None:
+                    trace.warning("tool.non_master_forbidden", tool=t_name)
+                err_msg = f"[{err_code.code}] {err_code.message}: {t_name}"
+                return (tc["id"], ToolResult.fail(err_msg), f"错误: {err_msg}", display_name)
 
             # 子代理路径白名单校验：写操作工具执行前检查目标路径
             if t_name in _WRITE_TOOLS and self._agent_config is not None:

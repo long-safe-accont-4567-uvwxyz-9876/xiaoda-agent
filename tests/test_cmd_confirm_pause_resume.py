@@ -165,12 +165,12 @@ class TestPermissionModePersistence:
         import security.permission_manager as m
         persist_file = tmp_path / "perm.json"
         monkeypatch.setattr(m, "_PERMISSION_FILE", str(persist_file))
-        # 触发持久化
-        m._persist_mode(m.PermissionMode.GOAT)
+        # 触发持久化（普通档位仍持久化，重启恢复）
+        m._persist_mode(m.PermissionMode.STRICT)
         assert persist_file.exists()
         # 模拟重启：新实例从磁盘加载持久化模式
         loaded = m._load_persisted_mode()
-        assert loaded == m.PermissionMode.GOAT
+        assert loaded == m.PermissionMode.STRICT
 
     def test_load_missing_file_returns_none(self, monkeypatch, tmp_path):
         import security.permission_manager as m
@@ -182,9 +182,23 @@ class TestPermissionModePersistence:
         persist_file = tmp_path / "perm.json"
         monkeypatch.setattr(m, "_PERMISSION_FILE", str(persist_file))
         pm = PermissionManager()
-        pm.set_mode("goat")
+        pm.set_mode("strict")
         assert persist_file.exists()
-        assert m._load_persisted_mode() == m.PermissionMode.GOAT
+        assert m._load_persisted_mode() == m.PermissionMode.STRICT
+
+    def test_goat_mode_not_persisted(self, monkeypatch, tmp_path):
+        """P2 安全修复：GOAT（跳过全部安全检查）不落盘，重启回到 DEFAULT。
+
+        一次误操作或被盗 session 不应导致重启后仍全局无防护。
+        （旧测试断言 goat 持久化，与新安全设计冲突，已更新。）
+        """
+        import security.permission_manager as m
+        persist_file = tmp_path / "perm.json"
+        monkeypatch.setattr(m, "_PERMISSION_FILE", str(persist_file))
+        pm = PermissionManager()
+        pm.set_mode("goat")
+        assert not persist_file.exists()
+        assert m._load_persisted_mode() is None
 
 
 # ── ⑤ 随心模式跳过"未授权工作目录"墙 ────────────────────────

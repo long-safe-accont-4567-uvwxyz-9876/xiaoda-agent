@@ -969,6 +969,48 @@ class AgentCoreBootstrapper:
 
     # ── MCP ───────────────────────────────────────────────
 
+    @staticmethod
+    def _sanitize_mcp_configs(
+        all_servers: dict[str, Any],
+    ) -> tuple[dict[str, Any], list[tuple[str, str]]]:
+        """MCP server 启动前的 command/env 纵深防御校验（纯函数，可单测）。
+
+        存量 mcp_configs/*.json 可能在被投毒后残留于磁盘，若不经校验直接
+        start_all 会在每次启动时执行任意命令（RCE）。本函数对每个 stdio
+        server 复用 security.mcp_command_policy 的二进制白名单 + env 键黑名单
+        校验，校验失败的 server 剔除（fail-closed，跳过不启动）。
+
+        非 stdio 传输（sse/streamable-http）不启动本地二进制，不做 command/env
+        校验，原样保留。
+
+        Returns:
+            (通过校验的 {name: cfg}, [(name, reason), ...]) —— 后者为被拒绝的
+            server 名与原因，供调用方记 warning 与审计日志。
+        """
+        from security.mcp_command_policy import (
+            validate_mcp_command,
+            validate_mcp_env,
+        )
+
+        clean: dict[str, Any] = {}
+        rejected: list[tuple[str, str]] = []
+        for name, cfg in (all_servers or {}).items():
+            if not isinstance(cfg, dict):
+                rejected.append((str(name), "配置不是 JSON 对象"))
+                continue
+            if cfg.get("transport", "stdio") != "stdio":
+                # 远程传输（sse/streamable-http）不执行本地二进制
+                clean[name] = cfg
+                continue
+            try:
+                validate_mcp_command(cfg.get("command"))
+                validate_mcp_env(cfg.get("env"))
+            except (ValueError, TypeError) as exc:
+                rejected.append((str(name), str(exc)))
+                continue
+            clean[name] = cfg
+        return clean, rejected
+
     async def _init_mcp(self) -> None:
         import json as _json
         from config import MCP_SERVERS, WORKSPACE_DIR
@@ -1012,11 +1054,26 @@ class AgentCoreBootstrapper:
                     logger.debug("mcp.load_installed_failed", file=fp.name, error=str(e))
 
         if all_servers:
-            try:
-                await core._mcp_manager.start_all(all_servers)
-                logger.info("mcp.servers_started", count=len(core._mcp_manager._clients))
-            except Exception as e:
-                logger.warning("mcp.start_failed", error=str(e))
+            # 纵深防御：存量配置投毒防护 —— 校验失败的 server 跳过不启动
+            clean_servers, rejected = self._sanitize_mcp_configs(all_servers)
+            for name, reason in rejected:
+                logger.warning("mcp.config_rejected", server=name, reason=reason)
+                try:
+                    await core.db.insert_audit_log(
+                        "bootstrap.mcp_config_rejected",
+                        "bootstrap",
+                        _json.dumps({"server": name, "reason": reason},
+                                    ensure_ascii=False),
+                    )
+                except Exception:
+                    # 审计失败（db 不可用等）不阻断启动
+                    logger.debug("bootstrap.mcp_audit_failed: {}", exc_info=True)
+            if clean_servers:
+                try:
+                    await core._mcp_manager.start_all(clean_servers)
+                    logger.info("mcp.servers_started", count=len(core._mcp_manager._clients))
+                except Exception as e:
+                    logger.warning("mcp.start_failed", error=str(e))
 
     # ── 插件自动启用 ──────────────────────────────────────
 

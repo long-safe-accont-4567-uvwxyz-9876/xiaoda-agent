@@ -138,6 +138,7 @@ class ErrorCodeEnum(Enum):
     E_TOOL004 = ("E_TOOL004", 500, "工具执行失败", True)
     E_TOOL005 = ("E_TOOL005", 403, "工具未启用", False)
     E_TOOL006 = ("E_TOOL006", 403, "Path forbidden by sub-agent whitelist", False)
+    E_TOOL007 = ("E_TOOL007", 403, "Tool forbidden for non-master principal", False)
 
     # ---- LLM 调用 (3xx) ----
     E_LLM001 = ("E_LLM001", 502, "LLM API 错误", True)

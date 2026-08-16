@@ -1,19 +1,55 @@
 """MCP 服务路由（R6）：server CRUD、生命周期控制、工具发现。"""
 from __future__ import annotations
-from typing import Any
 
 import os
 import shutil
 from pathlib import Path
+from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 from loguru import logger
 from pydantic import BaseModel
 
-from web.schemas import Envelope
 from web.routers.auth import get_current_user
+from web.schemas import Envelope
 
 router = APIRouter(tags=["mcp"], dependencies=[Depends(get_current_user)])
+
+
+# VULN-24：MCP command 二进制白名单 + env 键名黑名单
+# 校验逻辑下沉到中性模块 security.mcp_command_policy（market 安装层同样复用），
+# 本层仅把 ValueError 包装为 HTTPException(400)，对外行为与错误文案保持一致。
+from security.mcp_command_policy import (  # noqa: E402
+    _ALLOWED_MCP_BINARIES,
+    _ENV_BLOCKED_PREFIXES,
+    validate_mcp_command as _validate_mcp_command_policy,
+    validate_mcp_env as _validate_mcp_env_policy,
+)
+
+
+def _basename(command: str) -> str:
+    """提取命令的 basename（兼容完整路径）"""
+    import os as _os
+    return _os.path.basename(command)
+
+
+def _validate_mcp_command(command: str) -> None:
+    """校验 MCP server command 是否为允许的二进制。
+
+    fail-closed：不在白名单或含 shell 元字符即拒绝。
+    """
+    try:
+        _validate_mcp_command_policy(command)
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from None
+
+
+def _validate_mcp_env(env: dict[str, str] | None) -> None:
+    """校验 MCP server env 键名，拒绝危险前缀注入。"""
+    try:
+        _validate_mcp_env_policy(env)
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from None
 
 
 def _cfg() -> Any:
@@ -149,9 +185,9 @@ async def create_server(body: dict, request: Request) -> Any:
         raise HTTPException(400, "name 必须是合法标识符")
     if not command:
         raise HTTPException(400, "command 不能为空")
-    # 基础安全检查: 拒绝包含 shell 元字符的命令
-    if any(c in command for c in ("|", "&", ";", "`", "$(", "${")):
-        raise HTTPException(400, "command 包含非法字符")
+    # VULN-24：command 二进制白名单 + env 键名黑名单
+    _validate_mcp_command(command)
+    _validate_mcp_env(body.get("env"))
     cfg = _cfg()
     mgr = _manager(request)
     if name in mgr._clients or cfg.get(f"mcp.{name}"):
@@ -184,6 +220,11 @@ async def update_server(name: str, body: dict, request: Request) -> Any:
     for f in ("command", "args", "env", "enabled"):
         if f in body and body[f] is not None:
             record[f] = body[f]
+    # VULN-24：更新也校验 command + env
+    if "command" in body and body["command"] is not None:
+        _validate_mcp_command(body["command"])
+    if "env" in body and body["env"] is not None:
+        _validate_mcp_env(body["env"])
     cfg.set(f"mcp.{name}", record)
     mgr = _manager(request)
     client = mgr._clients.get(name)

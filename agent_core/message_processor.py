@@ -47,6 +47,7 @@ from agent_core._shared import (
     _pending_tts_audio,
     _current_request_ctx,
     _stream_finish_reason_var,
+    ALLOWED_NON_MASTER_TOOLS as _ALLOWED_NON_MASTER_TOOLS,
 )
 
 
@@ -299,13 +300,8 @@ class MessageProcessorMixin:
     _recent_replies: "OrderedDict[str, list[str]]" = OrderedDict()  # session_id -> [reply1, ...]
 
     # ── 非主人工具白名单（信息查询 + 基础交互） ─────────────────
-    ALLOWED_NON_MASTER_TOOLS: frozenset[str] = frozenset({
-        # 搜索 / 信息
-        "web_search", "get_weather", "search_cn", "wolfram_query",
-        # 基础交互
-        "get_current_time", "calculator", "nudge_greeting",
-        "call_xiaoda",
-    })
+    # VULN-27：唯一定义在 agent_core._shared（执行层门禁共用），此处仅引用
+    ALLOWED_NON_MASTER_TOOLS: frozenset[str] = _ALLOWED_NON_MASTER_TOOLS
 
     async def _retry_continuation(
         self,

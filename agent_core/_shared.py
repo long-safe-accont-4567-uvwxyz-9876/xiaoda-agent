@@ -109,6 +109,19 @@ _pending_tts_audio: ContextVar[Path | None] = ContextVar(
     "_pending_tts_audio", default=None
 )
 
+# ── 非主人工具白名单（信息查询 + 基础交互）─────────────────────
+# VULN-27：白名单从 message_processor 的工具列表过滤（单层防御，子代理/
+# 委托路径不经过该过滤）下沉为执行层强制 —— ToolCallHandler._execute_single_tool
+# 读取本常量 + _current_request_ctx.is_master 做门禁。
+# 唯一定义处：MessageProcessorMixin.ALLOWED_NON_MASTER_TOOLS 引用本对象，防两处漂移。
+ALLOWED_NON_MASTER_TOOLS: frozenset[str] = frozenset({
+    # 搜索 / 信息
+    "web_search", "get_weather", "search_cn", "wolfram_query",
+    # 基础交互
+    "get_current_time", "calculator", "nudge_greeting",
+    "call_xiaoda",
+})
+
 # 流式调用最后一次的 finish_reason（chat_stream 设置，message_processor 读取用于截断检测）
 # CodeRabbit 复审修复：原 self._last_stream_finish_reason 是实例属性，并发流式调用会互相覆盖
 # 改为 ContextVar 实现请求级隔离，每个 asyncio.Task 有独立的 context copy

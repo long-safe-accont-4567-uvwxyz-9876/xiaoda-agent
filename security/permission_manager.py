@@ -9,9 +9,9 @@ import os
 import re
 import threading
 from collections import deque
-from dataclasses import dataclass, asdict
-from datetime import datetime
+from dataclasses import asdict, dataclass
 from enum import Enum
+
 from loguru import logger
 
 
@@ -208,7 +208,13 @@ class PermissionManager:
             # 落盘：切换到哪档就持久化哪档，重启后仍生效（尽力而为，失败不阻断）。
             # 放在锁内：内存态更新与磁盘写入串行化，避免并发 set_mode 时
             # 磁盘残留旧的高权限档位（如内存已回 DEFAULT 而磁盘仍是 GOAT，重启恢复高权限）。
-            _persist_mode(mode)
+            # P2 修复：GOAT/BYPASS（跳过全部安全检查的高权限档）不落盘——
+            # 一次误操作或被盗 session 不应导致重启后仍处于全局无防护状态，
+            # 高权限档每次重启回到 DEFAULT，需再次显式开启。
+            if mode in (PermissionMode.GOAT, PermissionMode.BYPASS):
+                _clear_persisted_mode()
+            else:
+                _persist_mode(mode)
 
     def is_dev_mode(self) -> bool:
         """是否开发模式"""
@@ -276,7 +282,7 @@ class PermissionManager:
         # ── 新增模式：DISCUSS/PLAN 只读门控（借鉴 OpenWorker）──
         if self._mode in READ_ONLY_MODES:
             # 获取工具权限级别
-            from tool_engine.tool_registry import get_tool, ToolPermission
+            from tool_engine.tool_registry import ToolPermission, get_tool
             tool = get_tool(tool_name)
             if tool:
                 perm = tool.get("permission", ToolPermission.READ_ONLY)
@@ -321,7 +327,7 @@ class PermissionManager:
             if tool_name in self._auto_allow_tools:
                 return True, "auto-allowed by config"
             # 非 auto_allow 的工具：READ_ONLY 放行，READ_WRITE/EXECUTE 需确认
-            from tool_engine.tool_registry import get_tool, ToolPermission
+            from tool_engine.tool_registry import ToolPermission, get_tool
             tool = get_tool(tool_name)
             if tool:
                 perm = tool.get("permission", ToolPermission.READ_ONLY)
@@ -341,7 +347,7 @@ class PermissionManager:
         # ── 新增模式：INTERACTIVE 交互式确认 ──
         if self._mode == PermissionMode.INTERACTIVE:
             # 只读工具直接放行
-            from tool_engine.tool_registry import get_tool, ToolPermission
+            from tool_engine.tool_registry import ToolPermission, get_tool
             tool = get_tool(tool_name)
             if tool:
                 perm = tool.get("permission", ToolPermission.READ_ONLY)
@@ -471,6 +477,9 @@ class PermissionManager:
     # 命令分隔符（用于拆分复合命令）
     _CMD_SEPARATORS = ("&&", "||", ";", "|")
 
+    # VULN-25：白名单拒绝含 shell 元字符的命令，防止提示注入武器化
+    _SHELL_METACHARS = frozenset("|&;`$()<>{}[]!?*~\n\r")
+
     def _split_compound_command(self, command: str) -> list[str]:
         """拆分复合命令为子命令列表
 
@@ -485,6 +494,17 @@ class PermissionManager:
         """提取命令名（首个 token，如 'npm install' → 'npm'）"""
         tokens = sub_cmd.split()
         return tokens[0] if tokens else ""
+
+    def _check_shell_metachar(self, command: str) -> None:
+        """检查命令是否含 shell 元字符，含则抛 ValueError 拒绝入白名单。"""
+        if not command or not isinstance(command, str):
+            return
+        for ch in command:
+            if ch in self._SHELL_METACHARS:
+                raise ValueError(
+                    f"命令含 shell 元字符 '{ch}'，禁止加入白名单"
+                    "（防止提示注入武器化，如 'ls; rm -rf /'）"
+                )
 
     def is_command_allowed(self, command: str) -> tuple[bool, str, bool]:
         """检查命令是否允许执行
@@ -530,6 +550,7 @@ class PermissionManager:
 
     def add_to_whitelist(self, command: str) -> None:
         """添加命令名到白名单（自动提取首个 token）"""
+        self._check_shell_metachar(command)
         cmd_name = self._extract_cmd_name(command)
         if cmd_name:
             with self._lock:
@@ -603,7 +624,11 @@ def _permission_file_path() -> str:
 
 
 def _load_persisted_mode() -> PermissionMode | None:
-    """从磁盘读取持久化的权限模式；无文件/解析失败返回 None（不阻塞）。"""
+    """从磁盘读取持久化的权限模式；无文件/解析失败返回 None（不阻塞）。
+
+    P2 修复：历史残留的 GOAT/BYPASS 持久化文件降级为 None（回 DEFAULT），
+    防止旧版本落盘的高权限档在升级后继续生效。
+    """
     path = _permission_file_path()
     if not path:
         return None
@@ -613,12 +638,33 @@ def _load_persisted_mode() -> PermissionMode | None:
             data = json.load(f)
         mode = (data or {}).get("mode", "").strip().lower()
         if mode:
-            return PermissionMode(mode)
+            parsed = PermissionMode(mode)
+            if parsed in (PermissionMode.GOAT, PermissionMode.BYPASS):
+                logger.warning(
+                    "permission_manager.stale_high_privilege_persisted mode=%s "
+                    "downgraded_to_default（高权限档不再持久化，重启即失效）", mode,
+                )
+                return None
+            return parsed
     except FileNotFoundError:
         return None
     except Exception as e:
         logger.debug("permission_manager.load_persisted_failed path=%s err=%s", path, e)
     return None
+
+
+def _clear_persisted_mode() -> None:
+    """删除持久化的权限模式文件（尽力而为，失败仅记 debug）。"""
+    path = _permission_file_path()
+    if not path:
+        return
+    try:
+        import os as _os
+        _os.remove(path)
+    except FileNotFoundError:
+        pass
+    except Exception as e:
+        logger.debug("permission_manager.persist_clear_failed path=%s err=%s", path, e)
 
 
 def _persist_mode(mode: PermissionMode) -> None:
