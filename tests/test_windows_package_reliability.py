@@ -338,7 +338,8 @@ def test_update_writes_version_only_after_install_validation():
 
 
 def test_frozen_config_writes_use_resolved_writable_directory():
-    config_source = read_project_file("config.py")
+    # config.py Phase 1 拆分：路径常量已抽到 config_paths.py（config 同名 re-export）
+    config_source = read_project_file("config_paths.py")
 
     # CONFIG_DIR 固定系统盘用户目录（不随 KIOXIA_DATA_DIR 走）：
     # agent.json5/人格 MD 等配置文件避免 U 盘 IO 拖慢请求，只有数据库 DATA_DIR 保留 U 盘
