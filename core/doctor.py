@@ -138,179 +138,182 @@ def _register_process_checks(doc: DoctorCheck) -> None:
     doc.add_check("Port Available", "L2-Network", _check_port)
 
 
-def _register_config_checks(doc: DoctorCheck) -> None:
-    """注册数据库、配置、记忆、安全检查（Layer 3-6）。"""
+def _check_db() -> tuple:
+    try:
+        import importlib.util as _ilu
+        if _ilu.find_spec("aiosqlite") is None:
+            raise ImportError
+        return True, "aiosqlite importable"
+    except ImportError:
+        return False, "aiosqlite not installed"
 
-    def _check_db() -> tuple:
-        try:
-            import importlib.util as _ilu
-            if _ilu.find_spec("aiosqlite") is None:
-                raise ImportError
-            return True, "aiosqlite importable"
-        except ImportError:
-            return False, "aiosqlite not installed"
-
-    doc.add_check("Database Driver", "L3-Database", _check_db)
-
-    def _check_db_integrity() -> tuple:
-        try:
-            from config import DATA_DIR
-            db_path = DATA_DIR / "xiaoda_memory.db"
-            if not db_path.exists():
-                return True, "DB file not yet created (will create on first use)"
-            import sqlite3
-            conn = sqlite3.connect(str(db_path))
-            result = conn.execute("PRAGMA integrity_check").fetchone()
-            conn.close()
-            if result[0] == "ok":
-                return True, "DB integrity OK"
-            return False, f"DB integrity check failed: {result[0]}"
-        except Exception as e:
-            return False, f"DB integrity check error: {e}"
-
-    def _fix_db_integrity() -> None:
+def _check_db_integrity() -> tuple:
+    try:
         from config import DATA_DIR
         db_path = DATA_DIR / "xiaoda_memory.db"
         if not db_path.exists():
-            return
+            return True, "DB file not yet created (will create on first use)"
         import sqlite3
-        backup_path = db_path.with_suffix(".db.bak")
-        shutil.copy2(db_path, backup_path)
         conn = sqlite3.connect(str(db_path))
-        # VACUUM 失败时也要保证连接关闭，避免句柄泄漏
+        result = conn.execute("PRAGMA integrity_check").fetchone()
+        conn.close()
+        if result[0] == "ok":
+            return True, "DB integrity OK"
+        return False, f"DB integrity check failed: {result[0]}"
+    except Exception as e:
+        return False, f"DB integrity check error: {e}"
+
+def _fix_db_integrity() -> None:
+    from config import DATA_DIR
+    db_path = DATA_DIR / "xiaoda_memory.db"
+    if not db_path.exists():
+        return
+    import sqlite3
+    backup_path = db_path.with_suffix(".db.bak")
+    shutil.copy2(db_path, backup_path)
+    conn = sqlite3.connect(str(db_path))
+    # VACUUM 失败时也要保证连接关闭，避免句柄泄漏
+    try:
+        conn.execute("VACUUM")
+    finally:
+        conn.close()
+    logger.info("doctor.db_integrity_fixed", backup=str(backup_path))
+
+def _check_config() -> tuple:
+    from config import MIMO_API_KEY
+    if not MIMO_API_KEY:
+        return False, "MIMO_API_KEY not set"
+    return True, "MIMO_API_KEY configured"
+
+def _check_env_file() -> tuple:
+    from config import _KIOXIA_BASE
+    env_candidates = [
+        Path(__file__).resolve().parent.parent / ".env",
+        _KIOXIA_BASE / ".env",
+        Path.home() / ".ai-agent" / ".env",
+    ]
+    if getattr(sys, 'frozen', False):
+        env_candidates.insert(0, Path(sys.executable).parent / ".env")
+    for p in env_candidates:
+        if p.exists():
+            return True, f".env found at {p}"
+    return False, ".env not found"
+
+def _check_memory() -> tuple:
+    try:
+        import importlib.util as _ilu
+        if _ilu.find_spec("memory.memory_manager") is None:
+            raise ImportError
+        return True, "Memory module importable"
+    except ImportError as e:
+        return False, f"Memory import failed: {e}"
+
+def _check_security() -> tuple:
+    try:
+        import importlib.util as _ilu
+        if _ilu.find_spec("security.security") is None:
+            raise ImportError
+        return True, "Security module importable"
+    except ImportError as e:
+        return False, f"Security import failed: {e}"
+
+
+
+_CONFIG_CHECKS: list[tuple[str, str, Any, Any]] = [
+    ("Database Driver", "L3-Database", _check_db, None),
+    ("Database Integrity", "L3-Database", _check_db_integrity, _fix_db_integrity),
+    ("Config Loaded", "L4-Config", _check_config, None),
+    ("Env File", "L4-Config", _check_env_file, None),
+    ("Memory Module", "L5-Memory", _check_memory, None),
+    ("Security Module", "L6-Security", _check_security, None),
+]
+
+
+def _register_config_checks(doc: DoctorCheck) -> None:
+    """注册数据库、配置、记忆、安全检查（Layer 3-6）。"""
+    for name, layer, check, fix in _CONFIG_CHECKS:
+        doc.add_check(name, layer, check, fix)
+
+def _check_data_dirs() -> tuple:
+    from config import (DATA_DIR, LOG_DIR, STICKER_DIR, XIAOLI_STICKER_DIR,
+                        AGENT_STICKER_BASE, FILE_DIR, MEDIA_DIR, VOICE_REF_DIR,
+                        MEMORY_STATE_DIR, PLUGINS_CONFIG_DIR)
+    missing = []
+    checked = [DATA_DIR, LOG_DIR, STICKER_DIR, XIAOLI_STICKER_DIR,
+               AGENT_STICKER_BASE, FILE_DIR, MEDIA_DIR, VOICE_REF_DIR,
+               MEMORY_STATE_DIR, PLUGINS_CONFIG_DIR]
+    for d in checked:
+        if not d.exists():
+            missing.append(str(d))
+    if missing:
+        return False, f"Missing dirs: {', '.join(missing[:3])}{'...' if len(missing) > 3 else ''}"
+    return True, f"All {len(checked)} data dirs exist"
+
+def _fix_data_dirs() -> None:
+    from config import (DATA_DIR, LOG_DIR, STICKER_DIR, XIAOLI_STICKER_DIR,
+                        AGENT_STICKER_BASE, FILE_DIR, MEDIA_DIR, VOICE_REF_DIR,
+                        MEMORY_STATE_DIR, PLUGINS_CONFIG_DIR)
+    for d in [DATA_DIR, LOG_DIR, STICKER_DIR, XIAOLI_STICKER_DIR,
+              AGENT_STICKER_BASE, FILE_DIR, MEDIA_DIR, VOICE_REF_DIR,
+              MEMORY_STATE_DIR, PLUGINS_CONFIG_DIR]:
+        d.mkdir(parents=True, exist_ok=True)
+
+def _check_disk_space() -> tuple:
+    from config import DATA_DIR
+    try:
+        usage = os.statvfs(str(DATA_DIR))
+        free_gb = (usage.f_bavail * usage.f_frsize) / (1024 ** 3)
+    except (AttributeError, OSError):
         try:
-            conn.execute("VACUUM")
-        finally:
-            conn.close()
-        logger.info("doctor.db_integrity_fixed", backup=str(backup_path))
+            usage = shutil.disk_usage(str(DATA_DIR))
+            free_gb = usage.free / (1024 ** 3)
+        except Exception:
+            return True, "Disk space check skipped (unsupported)"
+    if free_gb < 0.5:
+        return False, f"Low disk space: {free_gb:.1f} GB free"
+    return True, f"Disk space OK: {free_gb:.1f} GB free"
 
-    doc.add_check("Database Integrity", "L3-Database", _check_db_integrity, _fix_db_integrity)
-
-    def _check_config() -> tuple:
-        from config import MIMO_API_KEY
-        if not MIMO_API_KEY:
-            return False, "MIMO_API_KEY not set"
-        return True, "MIMO_API_KEY configured"
-
-    doc.add_check("Config Loaded", "L4-Config", _check_config)
-
-    def _check_env_file() -> tuple:
-        from config import _KIOXIA_BASE
-        env_candidates = [
-            Path(__file__).resolve().parent.parent / ".env",
-            _KIOXIA_BASE / ".env",
-            Path.home() / ".ai-agent" / ".env",
-        ]
+def _check_web_dist() -> tuple:
+    try:
         if getattr(sys, 'frozen', False):
-            env_candidates.insert(0, Path(sys.executable).parent / ".env")
-        for p in env_candidates:
-            if p.exists():
-                return True, f".env found at {p}"
-        return False, ".env not found"
+            base = Path(sys._MEIPASS)
+            dist_dir = base / "web" / "dist"
+        else:
+            dist_dir = Path(__file__).resolve().parent.parent / "web" / "dist"
+    except Exception:
+        dist_dir = Path(__file__).resolve().parent.parent / "web" / "dist"
+    if not dist_dir.exists():
+        return False, f"web/dist not found at {dist_dir}"
+    index = dist_dir / "index.html"
+    if not index.exists():
+        return False, "index.html missing in web/dist"
+    return True, f"web/dist OK ({dist_dir})"
 
-    doc.add_check("Env File", "L4-Config", _check_env_file)
+def _check_writable() -> tuple:
+    from config import DATA_DIR
+    test_file = DATA_DIR / ".doctor_write_test"
+    try:
+        DATA_DIR.mkdir(parents=True, exist_ok=True)
+        test_file.write_text("ok")
+        test_file.unlink()
+        return True, f"DATA_DIR writable ({DATA_DIR})"
+    except Exception as e:
+        return False, f"DATA_DIR not writable: {e}"
 
-    def _check_memory() -> tuple:
-        try:
-            import importlib.util as _ilu
-            if _ilu.find_spec("memory.memory_manager") is None:
-                raise ImportError
-            return True, "Memory module importable"
-        except ImportError as e:
-            return False, f"Memory import failed: {e}"
 
-    doc.add_check("Memory Module", "L5-Memory", _check_memory)
 
-    def _check_security() -> tuple:
-        try:
-            import importlib.util as _ilu
-            if _ilu.find_spec("security.security") is None:
-                raise ImportError
-            return True, "Security module importable"
-        except ImportError as e:
-            return False, f"Security import failed: {e}"
-
-    doc.add_check("Security Module", "L6-Security", _check_security)
+_DATA_DIR_CHECKS: list[tuple[str, str, Any, Any]] = [
+    ("Data Directories", "L7-DataDirs", _check_data_dirs, _fix_data_dirs),
+    ("Disk Space", "L7-DataDirs", _check_disk_space, None),
+    ("Frontend Assets", "L7-DataDirs", _check_web_dist, None),
+    ("Data Writable", "L7-DataDirs", _check_writable, None),
+]
 
 
 def _register_data_dir_checks(doc: DoctorCheck) -> None:
     """注册数据目录、磁盘空间、前端文件检查（Layer 7）。"""
-
-    def _check_data_dirs() -> tuple:
-        from config import (DATA_DIR, LOG_DIR, STICKER_DIR, XIAOLI_STICKER_DIR,
-                            AGENT_STICKER_BASE, FILE_DIR, MEDIA_DIR, VOICE_REF_DIR,
-                            MEMORY_STATE_DIR, PLUGINS_CONFIG_DIR)
-        missing = []
-        checked = [DATA_DIR, LOG_DIR, STICKER_DIR, XIAOLI_STICKER_DIR,
-                   AGENT_STICKER_BASE, FILE_DIR, MEDIA_DIR, VOICE_REF_DIR,
-                   MEMORY_STATE_DIR, PLUGINS_CONFIG_DIR]
-        for d in checked:
-            if not d.exists():
-                missing.append(str(d))
-        if missing:
-            return False, f"Missing dirs: {', '.join(missing[:3])}{'...' if len(missing) > 3 else ''}"
-        return True, f"All {len(checked)} data dirs exist"
-
-    def _fix_data_dirs() -> None:
-        from config import (DATA_DIR, LOG_DIR, STICKER_DIR, XIAOLI_STICKER_DIR,
-                            AGENT_STICKER_BASE, FILE_DIR, MEDIA_DIR, VOICE_REF_DIR,
-                            MEMORY_STATE_DIR, PLUGINS_CONFIG_DIR)
-        for d in [DATA_DIR, LOG_DIR, STICKER_DIR, XIAOLI_STICKER_DIR,
-                  AGENT_STICKER_BASE, FILE_DIR, MEDIA_DIR, VOICE_REF_DIR,
-                  MEMORY_STATE_DIR, PLUGINS_CONFIG_DIR]:
-            d.mkdir(parents=True, exist_ok=True)
-
-    doc.add_check("Data Directories", "L7-DataDirs", _check_data_dirs, _fix_data_dirs)
-
-    def _check_disk_space() -> tuple:
-        from config import DATA_DIR
-        try:
-            usage = os.statvfs(str(DATA_DIR))
-            free_gb = (usage.f_bavail * usage.f_frsize) / (1024 ** 3)
-        except (AttributeError, OSError):
-            try:
-                usage = shutil.disk_usage(str(DATA_DIR))
-                free_gb = usage.free / (1024 ** 3)
-            except Exception:
-                return True, "Disk space check skipped (unsupported)"
-        if free_gb < 0.5:
-            return False, f"Low disk space: {free_gb:.1f} GB free"
-        return True, f"Disk space OK: {free_gb:.1f} GB free"
-
-    doc.add_check("Disk Space", "L7-DataDirs", _check_disk_space)
-
-    def _check_web_dist() -> tuple:
-        try:
-            if getattr(sys, 'frozen', False):
-                base = Path(sys._MEIPASS)
-                dist_dir = base / "web" / "dist"
-            else:
-                dist_dir = Path(__file__).resolve().parent.parent / "web" / "dist"
-        except Exception:
-            dist_dir = Path(__file__).resolve().parent.parent / "web" / "dist"
-        if not dist_dir.exists():
-            return False, f"web/dist not found at {dist_dir}"
-        index = dist_dir / "index.html"
-        if not index.exists():
-            return False, "index.html missing in web/dist"
-        return True, f"web/dist OK ({dist_dir})"
-
-    doc.add_check("Frontend Assets", "L7-DataDirs", _check_web_dist)
-
-    def _check_writable() -> tuple:
-        from config import DATA_DIR
-        test_file = DATA_DIR / ".doctor_write_test"
-        try:
-            DATA_DIR.mkdir(parents=True, exist_ok=True)
-            test_file.write_text("ok")
-            test_file.unlink()
-            return True, f"DATA_DIR writable ({DATA_DIR})"
-        except Exception as e:
-            return False, f"DATA_DIR not writable: {e}"
-
-    doc.add_check("Data Writable", "L7-DataDirs", _check_writable)
-
-"""注册智能自修复检查（Layer 8）— 跨平台适配 Docker/Windows/Linux。"""
+    for name, layer, check, fix in _DATA_DIR_CHECKS:
+        doc.add_check(name, layer, check, fix)
 
 def _check_stale_locks() -> tuple:
     from config import DATA_DIR
@@ -490,43 +493,48 @@ def _register_self_heal_checks(doc: DoctorCheck) -> None:
     for name, check, fix in _SELF_HEAL_CHECKS:
         doc.add_check(name, "L8-SelfHeal", check, fix)
 
+def _check_behavioral_health() -> tuple:
+    try:
+        from core.behavioral_health import get_behavioral_health_scorer, HealthLevel
+        scorer = get_behavioral_health_scorer()
+        metrics = scorer._collect_runtime_metrics()
+        if not metrics:
+            return True, "BHS: no metrics available, default pass"
+        score = scorer.calculate(metrics)
+        if score.level.value >= HealthLevel.FAIR:
+            return True, (f"BHS: level={score.level.name} score={score.score}/5 "
+                          f"(factors={len(score.factors)})")
+        return False, (f"BHS: level={score.level.name} score={score.score}/5 "
+                      f"recommendations={len(score.recommendations)}")
+    except Exception as e:
+        return False, f"BHS check failed: {e}"
+
+def _check_zombie_processes() -> tuple:
+    try:
+        from core.zombie_detector import get_zombie_detector
+        det = get_zombie_detector()
+        det.register_process(os.getpid(), "xiaoda-self", timeout=300)
+        det.check_heartbeat(os.getpid())
+        zombies = det.detect_zombies()
+        if not zombies:
+            return True, f"No zombie processes (monitored={det.get_status()['monitored_count']})"
+        names = ", ".join(f"{z.name}(pid={z.pid})" for z in zombies[:3])
+        return False, f"Detected {len(zombies)} zombie(s): {names}"
+    except Exception as e:
+        return False, f"Zombie check failed: {e}"
+
+
+
+_BEHAVIOR_CHECKS: list[tuple[str, str, Any, Any]] = [
+    ("Behavioral Health", "L9-Behavior", _check_behavioral_health, None),
+    ("Zombie Processes", "L10-Zombie", _check_zombie_processes, None),
+]
+
+
 def _register_behavior_checks(doc: DoctorCheck) -> None:
     """注册行为健康和 zombie 进程检查（Layer 9-10）。"""
-
-    def _check_behavioral_health() -> tuple:
-        try:
-            from core.behavioral_health import get_behavioral_health_scorer, HealthLevel
-            scorer = get_behavioral_health_scorer()
-            metrics = scorer._collect_runtime_metrics()
-            if not metrics:
-                return True, "BHS: no metrics available, default pass"
-            score = scorer.calculate(metrics)
-            if score.level.value >= HealthLevel.FAIR:
-                return True, (f"BHS: level={score.level.name} score={score.score}/5 "
-                              f"(factors={len(score.factors)})")
-            return False, (f"BHS: level={score.level.name} score={score.score}/5 "
-                          f"recommendations={len(score.recommendations)}")
-        except Exception as e:
-            return False, f"BHS check failed: {e}"
-
-    doc.add_check("Behavioral Health", "L9-Behavior", _check_behavioral_health)
-
-    def _check_zombie_processes() -> tuple:
-        try:
-            from core.zombie_detector import get_zombie_detector
-            det = get_zombie_detector()
-            det.register_process(os.getpid(), "xiaoda-self", timeout=300)
-            det.check_heartbeat(os.getpid())
-            zombies = det.detect_zombies()
-            if not zombies:
-                return True, f"No zombie processes (monitored={det.get_status()['monitored_count']})"
-            names = ", ".join(f"{z.name}(pid={z.pid})" for z in zombies[:3])
-            return False, f"Detected {len(zombies)} zombie(s): {names}"
-        except Exception as e:
-            return False, f"Zombie check failed: {e}"
-
-    doc.add_check("Zombie Processes", "L10-Zombie", _check_zombie_processes)
-
+    for name, layer, check, fix in _BEHAVIOR_CHECKS:
+        doc.add_check(name, layer, check, fix)
 
 def run_doctor(json_output: bool = False, auto_fix: bool = False) -> int:
     """运行 Doctor 自检, 返回退出码"""
