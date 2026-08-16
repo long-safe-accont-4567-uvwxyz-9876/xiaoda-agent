@@ -13,13 +13,14 @@ class TestC1EpisodicMemoriesDDL:
     """C-1: episodic_memories DDL 应包含 content_hash 和 version 列"""
 
     def test_ddl_has_content_hash(self):
-        from db import database
-        source = inspect.getsource(database)
+        # DDL 已拆分到 db/ddl_schema.py（上帝文件 Phase 2），断言对象随之迁移
+        from db import ddl_schema
+        source = inspect.getsource(ddl_schema)
         assert "content_hash" in source, "episodic_memories DDL应包含content_hash列"
 
     def test_ddl_has_version(self):
-        from db import database
-        source = inspect.getsource(database)
+        from db import ddl_schema
+        source = inspect.getsource(ddl_schema)
         assert "version INTEGER DEFAULT 1" in source, "episodic_memories DDL应包含version列"
 
     def test_schema_sql_has_content_hash(self):
@@ -33,8 +34,8 @@ class TestC2KnowledgeRelationsCreated:
     """C-2: knowledge_relations DDL 应包含 created_at 字段"""
 
     def test_ddl_has_created_at(self):
-        from db import database
-        source = inspect.getsource(database)
+        from db import ddl_schema
+        source = inspect.getsource(ddl_schema)
         # 检查 knowledge_relations 表定义中包含 created_at
         assert "created_at REAL DEFAULT 0" in source, "knowledge_relations DDL应包含created_at"
 
