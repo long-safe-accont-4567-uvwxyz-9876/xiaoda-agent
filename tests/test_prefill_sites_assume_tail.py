@@ -38,7 +38,9 @@ PREFILL_CONTEXTS = {
 AFTER_TOOLS_CONTEXTS = {"after_tools_retry"}
 
 # 所有可能包含 _retry_continuation 调用的源文件
-SOURCE_FILES = ["agent_core/message_processor.py"]
+# Phase 2 拆分：_retry_continuation 定义及全部调用站点随验收循环迁至
+# agent_core/mixins/verification.py，此处跟随迁移（message_processor.py 已无调用）。
+SOURCE_FILES = ["agent_core/mixins/verification.py"]
 
 
 def _extract_retry_continuation_calls(source: str) -> list[dict]:
@@ -91,7 +93,7 @@ class TestPrefillSitesPassAssumeTail:
     """验证 prefill 站点传 assume_tail=True。"""
 
     def test_message_processor_prefill_sites_pass_assume_tail(self):
-        """message_processor.py 的 2 个 prefill 站点必须传 assume_tail=True。
+        """verification.py（原 message_processor.py，Phase 2 拆分）的 2 个 prefill 站点必须传 assume_tail=True。
 
         覆盖：
         - verification_length_retry：finish_reason="length" 截断续写
@@ -99,7 +101,7 @@ class TestPrefillSitesPassAssumeTail:
           （CodeRabbit #3 修复激活，原 is_reply_likely_complete 无条件信任
            导致此路径为死代码，现已通过分档判定激活）
         """
-        source = _load_source("agent_core/message_processor.py")
+        source = _load_source(SOURCE_FILES[0])
         calls = _extract_retry_continuation_calls(source)
         for ctx in PREFILL_CONTEXTS:
             site_calls = [c for c in calls if c["context"] == ctx]
@@ -121,7 +123,7 @@ class TestAfterToolsSiteKeepsDefault:
         - LLM 重新生成完整回复（非 prefill 尾巴）
         - 需要走"重生成"判定（discarded/replaced），而非 appended
         """
-        source = _load_source("agent_core/message_processor.py")
+        source = _load_source(SOURCE_FILES[0])
         calls = _extract_retry_continuation_calls(source)
         after_tools_calls = [c for c in calls if c["context"] == "after_tools_retry"]
         assert len(after_tools_calls) == 1, \
@@ -141,7 +143,9 @@ class TestNoUnexpectedMergeContinuationCalls:
         PREFILL_CONTEXTS 或 AFTER_TOOLS_CONTEXTS 中注册。
 
         CodeRabbit #3 更新：原测试同时检查 model_router.py，但该文件
-        重构后已无 merge_continuation 调用，故仅检查 message_processor.py。
+        重构后已无 merge_continuation 调用。Phase 2 拆分后，_retry_continuation
+        调用站点随验收循环迁至 agent_core/mixins/verification.py，
+        故仅检查该文件（见 SOURCE_FILES）。
         """
         known_contexts = PREFILL_CONTEXTS | AFTER_TOOLS_CONTEXTS
         for rel_path in SOURCE_FILES:
