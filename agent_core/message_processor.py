@@ -14,6 +14,8 @@ Phase 5 拆分：人格/心智状态（PersonaMixin）逻辑已迁至
 agent_core/mixins/persona.py，本模块经 MRO 组合使用。
 Phase 6 拆分：聊天目标路由（ChatTargetMixin）与图片描述（VisionMixin）逻辑已分别迁至
 agent_core/mixins/chat_target.py 与 agent_core/mixins/vision.py，本模块经 MRO 组合使用。
+Phase 7 拆分：流式响应（StreamingMixin）已迁至 agent_core/mixins/streaming.py；
+本模块保留编排骨架（_process_impl/_init_and_restore_context 等）。
 """
 from __future__ import annotations
 
@@ -30,14 +32,8 @@ from agent_core._shared import (
 
 # 从 _shared 导入共享常量, 避免重复定义 (该模块极轻量, 无循环导入风险)
 from agent_core._shared import (
-    _stream_finish_reason_var,
+    _stream_finish_reason_var as _stream_finish_reason_var,  # re-export（白盒测试依赖）
 )
-
-# ── Phase 1/2/3/6 拆分：问候/语音/验收循环/主处理路径/聊天目标/图片描述逻辑迁至
-# agent_core/mixins/，此处 re-export 保持外部兼容 ──
-# 叶子模块依赖约定：mixin 只依赖 agent_core._shared 及 config/core 叶子模块，
-# 不得 import agent_core.message_processor（避免循环导入）。
-# `as` 冗余别名是 ruff 认可的显式 re-export 标记（避免 F401）。
 from agent_core.mixins.chat_target import (
     ChatTargetMixin,
 )
@@ -59,6 +55,15 @@ from agent_core.mixins.greeting import (
 from agent_core.mixins.main_path import MainPathMixin
 from agent_core.mixins.persona import PersonaMixin
 from agent_core.mixins.reply_dedup import ReplyDedupMixin
+
+# ── Phase 1/2/3/6 拆分：问候/语音/验收循环/主处理路径/聊天目标/图片描述逻辑迁至
+# agent_core/mixins/，此处 re-export 保持外部兼容 ──
+# 叶子模块依赖约定：mixin 只依赖 agent_core._shared 及 config/core 叶子模块，
+# 不得 import agent_core.message_processor（避免循环导入）。
+# `as` 冗余别名是 ruff 认可的显式 re-export 标记（避免 F401）。
+from agent_core.mixins.streaming import (
+    StreamingMixin,
+)
 from agent_core.mixins.verification import (
     VerificationMixin,
 )
@@ -80,7 +85,7 @@ from agent_core.mixins.voice import (
 from agent_core.mixins.voice import (
     _should_auto_tts as _should_auto_tts,  # re-export（向后兼容别名）
 )
-from config import STREAM_TEXT_PUSH, get_agent_display_name
+from config import get_agent_display_name
 from core.background_tasks import _spawn
 from core.chat_processor import ChatProcessor
 
@@ -97,7 +102,7 @@ class InitRestoreResult(NamedTuple):
     reason: str
 
 
-class MessageProcessorMixin(ChatTargetMixin, VisionMixin, PersonaMixin, ReplyDedupMixin, MainPathMixin, VerificationMixin, GreetingMixin, VoiceMixin):
+class MessageProcessorMixin(StreamingMixin, ChatTargetMixin, VisionMixin, PersonaMixin, ReplyDedupMixin, MainPathMixin, VerificationMixin, GreetingMixin, VoiceMixin):
     """消息处理相关方法的 Mixin，由 AgentCore 组合使用。"""
 
     # ── Harness 验收循环常量 ──────────────────────────────────
@@ -379,60 +384,3 @@ class MessageProcessorMixin(ChatTargetMixin, VisionMixin, PersonaMixin, ReplyDed
     # _dedup_buf / _dedup_reply_against_recent（跨对话回复去重）已随 Phase 4 拆分迁至
     # agent_core/mixins/reply_dedup.py（ReplyDedupMixin），经 MRO 组合使用。
 
-    async def _stream_llm_response(self, messages: list, status_callback: Any=None,
-                                    task_type: str = "chat", **kwargs: Any) -> str:
-        """流式调用 LLM，逐 token 推送给前端。
-
-        当 STREAM_TEXT_PUSH=true 时使用此方法。
-        失败时降级到原有同步调用。
-        """
-        if not STREAM_TEXT_PUSH:
-            return await self.router.route(task_type, messages, **kwargs)
-
-        # 重置流式 finish_reason，避免上次调用的残留值干扰截断检测
-        # CodeRabbit 复审修复 #6：改为 ContextVar 重置（每个 Task 有独立 context）
-        _stream_finish_reason_var.set(None)
-        full_response = []
-        try:
-            async for delta in self.router.chat_stream(messages, task_type=task_type, **kwargs):
-                if delta:
-                    full_response.append(delta)
-                    if status_callback:
-                        try:
-                            await status_callback({
-                                "type": "stream_text",
-                                "delta": delta,
-                                "accumulated": "".join(full_response),
-                            })
-                        except Exception as cb_err:
-                            logger.debug("agent.stream_callback_failed: {}", str(cb_err)[:100])
-        except Exception as e:
-            logger.warning("message_processor.stream_llm_failed: {}", str(e)[:200])
-            accumulated = "".join(full_response)
-            # 根因：流式失败时原实现直接回落到 route()，route() 虽内部也走 fallback 链，
-            # 但走的是「重新选主 provider 再失败再 fallback」的完整路径，多一次主调用开销；
-            # 且 stream 路径的 e 已经是真实失败原因，直接喂给 _try_fallback_chain 跳过主重试更高效。
-            # 保留 accumulated 非空时返回部分内容的现有行为，避免重复内容（已推送的 delta 不能撤回）。
-            if accumulated:
-                logger.info("message_processor.stream_partial_return len={}", len(accumulated))
-                return accumulated + "\n\n[⚠️ 内容生成中断，以上为已生成的部分]"
-            # 取舍：降级时 stream=False，把流式退化为一次性返回。
-            # 原因：此处再消费一个 fallback provider 的流对象需要重复 stall timeout/finish_reason
-            # 检测逻辑，复杂且易错；非流式返回用户感知仅是「这次没有逐字效果」，可靠性优先。
-            fb_result = await self.router.fallback_chat(
-                e, task_type, messages,
-                kwargs.get("temperature", 0.7),
-                False,
-                kwargs.get("tools"),
-                kwargs.get("tool_choice"),
-                kwargs.get("timeout", 60),
-                kwargs.get("user_openid", ""),
-                kwargs.get("session_id", ""),
-                kwargs.get("extra_headers"),
-                original_max_tokens=kwargs.get("max_tokens"),
-            )
-            # 降级返回 str 直接用；返回 None（所有降级目标不可用）才回落到 route() 兜底。
-            if isinstance(fb_result, str) and fb_result:
-                return fb_result
-            return await self.router.route(task_type, messages, **kwargs)
-        return "".join(full_response)

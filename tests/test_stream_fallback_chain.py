@@ -50,7 +50,7 @@ async def test_no_partial_returns_fallback_text():
     router.route = AsyncMock(return_value="route text")
     processor = _build_processor(router)
 
-    with patch("agent_core.message_processor.STREAM_TEXT_PUSH", True):
+    with patch("agent_core.mixins.streaming.STREAM_TEXT_PUSH", True):
         result = await processor._stream_llm_response(
             [{"role": "user", "content": "hi"}],
             task_type="chat",
@@ -74,7 +74,7 @@ async def test_fallback_returns_none_falls_back_to_route():
     router.route = AsyncMock(return_value="route text")
     processor = _build_processor(router)
 
-    with patch("agent_core.message_processor.STREAM_TEXT_PUSH", True):
+    with patch("agent_core.mixins.streaming.STREAM_TEXT_PUSH", True):
         result = await processor._stream_llm_response(
             [{"role": "user", "content": "hi"}],
             task_type="chat",
@@ -94,7 +94,7 @@ async def test_partial_content_skips_fallback_chain():
     router.route = AsyncMock(return_value="route text")
     processor = _build_processor(router)
 
-    with patch("agent_core.message_processor.STREAM_TEXT_PUSH", True):
+    with patch("agent_core.mixins.streaming.STREAM_TEXT_PUSH", True):
         result = await processor._stream_llm_response(
             [{"role": "user", "content": "hi"}],
             task_type="chat",
