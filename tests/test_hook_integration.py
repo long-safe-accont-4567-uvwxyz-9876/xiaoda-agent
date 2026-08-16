@@ -174,7 +174,7 @@ async def test_bootstrap_wires_hooks():
     from core.j_space_bootstrap import init_j_space, get_signal_stream, get_intervention_loop
     import core.agent_introspection as _ai
     import core.behavioral_health as _bh
-    import agent_dispatcher as _ad
+    import agent_core.sub_agent as _ad
     import core.degradation_strategy as _ds
     import memory.cognitive_memory as _cm
     import belief_router as _br

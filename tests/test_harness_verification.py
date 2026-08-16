@@ -214,9 +214,9 @@ class TestRound3E2ESmoke:
         assert "asyncio.wait_for" in content
 
     def test_subagent_has_storm_detection(self):
-        """agent_dispatcher.py 含风暴检测调用。"""
-        dispatcher_path = Path(__file__).parent.parent / "agent_dispatcher.py"
-        content = dispatcher_path.read_text(encoding="utf-8")
+        """SubAgent 含风暴检测调用（已拆至 agent_core/sub_agent.py）。"""
+        sub_agent_path = Path(__file__).parent.parent / "agent_core" / "sub_agent.py"
+        content = sub_agent_path.read_text(encoding="utf-8")
         assert "detect_storm" in content
 
 

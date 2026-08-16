@@ -62,11 +62,14 @@ def _wire_hooks() -> None:
     except Exception as e:
         logger.warning(f"j_space.wire_failed behavioral_health: {e}")
     try:
-        import agent_dispatcher as _ad
-        _ad._signal_stream = _signal_stream
-        _ad._intervention_loop = _intervention_loop
+        # J-Space hook 全局态随 SubAgent.chat 一起搬至 agent_core.sub_agent，
+        # 注入目标必须同步（agent_dispatcher re-export 的只是 import 时的副本，
+        # 启动后重赋值不会传到 SubAgent.chat 的实际读取处）。
+        import agent_core.sub_agent as _sa
+        _sa._signal_stream = _signal_stream
+        _sa._intervention_loop = _intervention_loop
     except Exception as e:
-        logger.warning(f"j_space.wire_failed agent_dispatcher: {e}")
+        logger.warning(f"j_space.wire_failed sub_agent: {e}")
     try:
         import core.degradation_strategy as _ds
         _ds._signal_stream = _signal_stream
