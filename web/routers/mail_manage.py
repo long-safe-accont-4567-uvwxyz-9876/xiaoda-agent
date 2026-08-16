@@ -5,7 +5,9 @@
 """
 from __future__ import annotations
 
+import contextlib
 import json
+import re
 import threading
 from typing import Any
 
@@ -15,7 +17,6 @@ from pydantic import BaseModel
 
 from web.routers.auth import get_current_user
 from web.schemas import Envelope
-import contextlib
 
 router = APIRouter(tags=["mail"], dependencies=[Depends(get_current_user)])
 
@@ -39,6 +40,12 @@ class MailConfig(BaseModel):
     max_per_day: int = 50
     dnd_start: int = 0  # 免打扰开始小时（0-23），0+0=不启用
     dnd_end: int = 0    # 免打扰结束小时（0-23）
+    owner_email: str = ""  # 主人邮箱：未设置时邮件功能不生效；设置后仅该邮箱生效
+
+
+def _is_valid_email(email: str) -> bool:
+    """宽松邮箱格式校验（仅做基本 sanity，不做严格 RFC 校验）。"""
+    return bool(re.match(r"^[^@\s]+@[^@\s]+\.[^@\s]+$", email.strip()))
 
 
 # ── 配置读写 ──────────────────────────────────────────────────
@@ -54,6 +61,7 @@ async def get_mail_config(request: Request) -> Any:
         "max_per_day": int(cfg.get("mail.max_per_day", 50)),
         "dnd_start": int(cfg.get("mail.dnd_start", 0)),
         "dnd_end": int(cfg.get("mail.dnd_end", 0)),
+        "owner_email": cfg.get("mail.owner_email", ""),
     }
     return Envelope(data=data)
 
@@ -72,6 +80,9 @@ async def put_mail_config(request: Request, body: MailConfig) -> Any:
         raise HTTPException(status_code=400, detail="max_per_day 须在 1-200 之间")
     if not (0 <= body.dnd_start <= 23) or not (0 <= body.dnd_end <= 23):
         raise HTTPException(status_code=400, detail="dnd_start/dnd_end 须在 0-23 之间")
+    owner_email = (body.owner_email or "").strip()
+    if owner_email and not _is_valid_email(owner_email):
+        raise HTTPException(status_code=400, detail="owner_email 格式非法")
 
     cfg.set("mail.enabled", body.enabled)
     cfg.set("mail.mode", body.mode)
@@ -80,10 +91,11 @@ async def put_mail_config(request: Request, body: MailConfig) -> Any:
     cfg.set("mail.max_per_day", body.max_per_day)
     cfg.set("mail.dnd_start", body.dnd_start)
     cfg.set("mail.dnd_end", body.dnd_end)
+    cfg.set("mail.owner_email", owner_email)
 
-    logger.info("mail.config_updated enabled={} mode={} senders={} dnd={}~{}",
+    logger.info("mail.config_updated enabled={} mode={} senders={} dnd={}~{} owner_set={}",
                 body.enabled, body.mode, len(body.allowed_senders),
-                body.dnd_start, body.dnd_end)
+                body.dnd_start, body.dnd_end, bool(owner_email))
 
     return Envelope(data={
         "enabled": body.enabled,
@@ -93,6 +105,7 @@ async def put_mail_config(request: Request, body: MailConfig) -> Any:
         "max_per_day": body.max_per_day,
         "dnd_start": body.dnd_start,
         "dnd_end": body.dnd_end,
+        "owner_email": owner_email,
     })
 
 
@@ -327,8 +340,9 @@ async def trigger_mail_auth_login(request: Request) -> Any:
       - message: 提示信息
       - cli_path: agently-cli 路径
     """
-    from tools.mail_tools import _resolve_agently_cli
     import asyncio
+
+    from tools.mail_tools import _resolve_agently_cli
 
     cli_path = _resolve_agently_cli()
     if not cli_path:

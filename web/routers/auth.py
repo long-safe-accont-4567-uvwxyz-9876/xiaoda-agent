@@ -617,20 +617,24 @@ async def change_password(req: ChangePasswordRequest, user_id: str = Depends(get
     if req.new_password == current_password:
         raise HTTPException(400, "新密码不能与当前密码相同")
 
-    # 可选：轮换找回问答（两者都非空才轮换）
+    # 可选：轮换找回问答（两者都非空才轮换）。
+    # 顺序约束：必须等密码写入成功后再轮换问答，否则 .env 写入失败时会出现
+    # "问答已轮换但密码未改"的不一致状态。
     new_question = (req.new_question or "").strip()
     new_answer = (req.new_answer or "").strip()
-    if new_question and new_answer:
-        try:
-            set_recovery(new_question, new_answer)
-        except ValueError as exc:
-            raise HTTPException(400, str(exc)) from None
 
     try:
         _update_env_password(req.new_password)
     except Exception as exc:
         logger.error("auth.change_password_env_update_failed error={}", str(exc))
         raise HTTPException(500, "更新密码配置失败") from None
+
+    # 密码写入成功后轮换问答（若请求携带新问答）
+    if new_question and new_answer:
+        try:
+            set_recovery(new_question, new_answer)
+        except ValueError as exc:
+            raise HTTPException(400, str(exc)) from None
 
     _increment_token_epoch()  # 吊销全部旧 token
     new_token, expiry = _issue_token()

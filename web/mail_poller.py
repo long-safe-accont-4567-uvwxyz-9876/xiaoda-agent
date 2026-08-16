@@ -18,9 +18,9 @@ import json
 import os
 import re
 from collections import OrderedDict
-from datetime import datetime, UTC
-from zoneinfo import ZoneInfo
+from datetime import UTC, datetime
 from typing import Any
+from zoneinfo import ZoneInfo
 
 from loguru import logger
 
@@ -112,6 +112,14 @@ class MailPoller:
     async def _poll_inbox(self, mode: str) -> None:
         from tools.mail_tools import _run_agently
 
+        # 主人邮箱门控：未设置主人邮箱时邮件功能整体不生效（fail-closed），
+        # 设置后仅主人邮箱发来的邮件被处理，其他发件人一律忽略。
+        owner_email = (self.cfg.get("mail.owner_email") or "").strip().lower()
+        if not owner_email:
+            logger.info("mail.poller.owner_email_not_set — 邮件功能不生效（未配置主人邮箱）")
+            return
+        self._ensure_owner_identity(owner_email)
+
         # 查未读邮件
         args = [
             "message", "+list", "--dir", "inbox",
@@ -141,8 +149,15 @@ class MailPoller:
             from_email = from_info.get("email", "") if isinstance(from_info, dict) else ""
             from_name = from_info.get("name", "") if isinstance(from_info, dict) else ""
 
-            # 白名单过滤
-            if mode == "allowlist" and from_email not in allowed_senders:
+            # 主人邮箱门控：非主人发件人不生效（标记已处理，避免重复拉取）
+            if from_email.strip().lower() != owner_email:
+                logger.info("mail.poller.skip_non_owner from={}", from_email)
+                self._processed_ids[msg_id] = None
+                continue
+
+            # 白名单过滤（主人邮箱天然放行）
+            if (mode == "allowlist" and from_email not in allowed_senders
+                    and from_email.strip().lower() != owner_email):
                 logger.debug("mail.poller.skip_not_allowed from={}", from_email)
                 self._processed_ids[msg_id] = None
                 continue
@@ -240,6 +255,23 @@ class MailPoller:
                 logger.debug("mail.qq_notify_error", exc_info=True)
 
     # ── 辅助 ──────────────────────────────────────────────────
+    def _ensure_owner_identity(self, owner_email: str) -> None:
+        """把主人邮箱注册进 SecurityFilter.owner_ids。
+
+        core.process() 的运行时身份解析（PrincipalResolver）对 mail 来源
+        走严格 owner registry 判定；把主人邮箱加入 owner_ids 后，来自该
+        邮箱的邮件即以主人身份处理（完整人设 + 完整工具权限），其余发件人
+        已被上层门控拦截，不会进入此路径。
+        """
+        sec = getattr(self.core, "security", None)
+        owner_ids = getattr(sec, "owner_ids", None)
+        if owner_ids is None:
+            return
+        if owner_email in owner_ids:
+            return
+        owner_ids.add(owner_email)
+        logger.info("mail.poller.owner_email_registered email={}", owner_email)
+
     def _is_dnd(self) -> bool:
         """免打扰时段检查（从配置读取，默认 0:00-0:00 即不启用 DND）。"""
         start = int(self.cfg.get("mail.dnd_start", 0))
@@ -257,6 +289,7 @@ class MailPoller:
         return {
             "enabled": self.cfg.get("mail.enabled", False),
             "mode": self.cfg.get("mail.mode", "off"),
+            "owner_email": self.cfg.get("mail.owner_email", ""),
             "daily_count": self._daily_count,
             "max_per_day": int(self.cfg.get("mail.max_per_day", 50)),
             "processed_total": len(self._processed_ids),
@@ -320,8 +353,8 @@ def _clean_reply_text(reply: str) -> str:
     """
     if not reply:
         return reply
-    import re
     import json
+    import re
     text = reply.strip()
 
     # 1. 如果回复是 JSON，提取其中的文本字段

@@ -16,6 +16,7 @@ interface MailConfig {
   enabled: boolean
   mode: 'off' | 'allowlist' | 'all'
   allowed_senders: string[]
+  owner_email: string
   reply_channel: 'mail' | 'mail_and_qq'
   max_per_day: number
   dnd_start: number  // 免打扰开始小时（0-23），0+0=不启用
@@ -51,6 +52,7 @@ const config = ref<MailConfig>({
   enabled: false,
   mode: 'off',
   allowed_senders: [],
+  owner_email: '',
   reply_channel: 'mail',
   max_per_day: 50,
   dnd_start: 0,
@@ -216,6 +218,7 @@ async function loadConfig() {
       enabled: !!data.enabled,
       mode: data.mode || 'off',
       allowed_senders: Array.isArray(data.allowed_senders) ? data.allowed_senders : [],
+      owner_email: data.owner_email || '',
       reply_channel: data.reply_channel || 'mail',
       max_per_day: typeof data.max_per_day === 'number' ? data.max_per_day : 50,
       dnd_start: typeof data.dnd_start === 'number' ? data.dnd_start : 0,
@@ -262,6 +265,7 @@ async function saveConfig() {
       enabled: config.value.enabled,
       mode: config.value.mode,
       allowed_senders: config.value.allowed_senders,
+      owner_email: config.value.owner_email,
       reply_channel: config.value.reply_channel,
       max_per_day: config.value.max_per_day,
       dnd_start: config.value.dnd_start,
@@ -422,6 +426,18 @@ onBeforeUnmount(() => {
                 <span class="row-desc">{{ t('mailView.masterSwitchDesc') }}</span>
               </div>
               <n-switch v-model:value="config.enabled" />
+            </div>
+
+            <div class="setting-row">
+              <div class="row-label">
+                <span class="s-label">{{ t('mailView.ownerEmail') }}</span>
+                <span class="perm-desc">{{ t('mailView.ownerEmailDesc') }}</span>
+              </div>
+              <n-input
+                v-model:value="config.owner_email"
+                class="owner-email-input"
+                :placeholder="t('mailView.ownerEmailPh')"
+              />
             </div>
 
             <div class="setting-row">

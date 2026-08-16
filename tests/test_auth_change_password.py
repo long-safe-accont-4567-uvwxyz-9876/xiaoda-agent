@@ -152,3 +152,24 @@ def test_change_password_without_old_password_when_unset(client):
     })
     assert r.status_code == 200, r.text
     assert auth._validate_token(r.json()["data"]["token"])
+
+
+def test_env_update_failure_does_not_rotate_recovery(client, monkeypatch):
+    """.env 写入失败时不轮换问答（顺序约束：密码先成功、问答后轮换）。"""
+    monkeypatch.setenv("WEBUI_PASSWORD", "oldpass123")
+    rqa.set_recovery("旧问题", "miaomiao")
+    token, _ = auth._issue_token()
+
+    def _boom(new_password: str) -> None:
+        raise RuntimeError("disk full")
+
+    monkeypatch.setattr(auth, "_update_env_password", _boom)
+
+    r = client.post("/auth/change-password", headers=_token_headers(token), json={
+        "old_password": "oldpass123", "new_password": "newpass123", "answer": "miaomiao",
+        "new_question": "新问题", "new_answer": "new-answer",
+    })
+    assert r.status_code == 500
+    # 问答未被轮换，旧答案仍有效
+    assert rqa.get_question() == "旧问题"
+    assert rqa.verify_answer("miaomiao") is True
