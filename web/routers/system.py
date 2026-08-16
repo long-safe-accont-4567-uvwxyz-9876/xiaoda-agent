@@ -20,6 +20,8 @@ router = APIRouter(tags=["system"], dependencies=[Depends(get_current_user)])
 public_router = APIRouter(tags=["system"])
 
 _start_time = time.time()
+# 重启延迟任务保持强引用，防止 asyncio 只持弱引用导致任务被 GC 而重启失效
+_pending_exit_tasks: list[asyncio.Task] = []
 
 
 @public_router.get("/ping")
@@ -328,7 +330,7 @@ async def restart_service(request: Request) -> Any:
             logger.warning("webui.restart.exiting (systemd 将自动拉起)")
         os._exit(0)
 
-    _exit_task = asyncio.create_task(_exit())
+    _pending_exit_tasks.append(asyncio.create_task(_exit()))
     return Envelope(data={"restarting": True, "platform": "windows" if is_windows else "linux"})
 
 
