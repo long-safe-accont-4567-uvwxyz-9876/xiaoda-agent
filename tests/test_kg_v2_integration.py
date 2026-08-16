@@ -11,14 +11,27 @@ from memory.knowledge_graph import KnowledgeGraph
 from memory.knowledge_graph_v2 import KnowledgeGraphV2
 
 
+def _reload_config():
+    """重载 config 与其常量来源 config_constants。
+
+    Phase 4 拆分后，KG_V2_ENABLED 等 env 常量在 config_constants import 期
+    求值；只 reload(config) 不会重新读取环境变量，须先 reload config_constants。
+    """
+    import importlib
+
+    import config
+    import config_constants
+    importlib.reload(config_constants)
+    importlib.reload(config)
+
+
 @pytest.mark.asyncio
 async def test_kg_v2_enabled_flag_defaults_false():
     """KG_V2_ENABLED 默认为 False（保守策略，需显式开启）。"""
     # Remove env var to test default
     os.environ.pop("KG_V2_ENABLED", None)
-    import importlib
     import config
-    importlib.reload(config)
+    _reload_config()
     assert config.KG_V2_ENABLED is False
 
 
@@ -26,24 +39,22 @@ async def test_kg_v2_enabled_flag_defaults_false():
 async def test_kg_v2_flag_can_be_enabled():
     """KG_V2_ENABLED=true 显式开启 v2。"""
     os.environ["KG_V2_ENABLED"] = "true"
-    import importlib
     import config
-    importlib.reload(config)
+    _reload_config()
     assert config.KG_V2_ENABLED is True
     os.environ.pop("KG_V2_ENABLED", None)
-    importlib.reload(config)
+    _reload_config()
 
 
 @pytest.mark.asyncio
 async def test_kg_v2_flag_can_be_disabled():
     """KG_V2_ENABLED=false 关闭 v2。"""
     os.environ["KG_V2_ENABLED"] = "false"
-    import importlib
     import config
-    importlib.reload(config)
+    _reload_config()
     assert config.KG_V2_ENABLED is False
     os.environ.pop("KG_V2_ENABLED", None)
-    importlib.reload(config)
+    _reload_config()
 
 
 @pytest.mark.asyncio
