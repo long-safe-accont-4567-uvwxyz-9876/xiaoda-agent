@@ -159,7 +159,7 @@ async def recall(query: str, top_k: int = 8) -> ToolResult:
                     if isinstance(ents, list) and ents:
                         line += f" | 实体: {', '.join(str(e) for e in ents[:5])}"
                 except (ValueError, TypeError):
-                    pass
+                    logger.warning("memory_tool.entities_json_parse_failed", exc_info=True)
             # 补充事件类型和决策元数据
             event_type = r.get("event_type", "")
             if event_type:
@@ -177,7 +177,7 @@ async def recall(query: str, top_k: int = 8) -> ToolResult:
                         if topic:
                             line += f" | 话题: {topic}"
                 except (ValueError, TypeError):
-                    pass
+                    logger.warning("memory_tool.metadata_json_parse_failed", exc_info=True)
             # KG 上下文增强（如果检索阶段附加了相关知识）
             kg_context = r.get("kg_context", "")
             if kg_context:

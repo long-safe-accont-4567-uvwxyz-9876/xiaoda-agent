@@ -121,7 +121,7 @@ def _kill_proc_tree(pid: int, log: logging.Logger) -> None:
             else:
                 os.kill(pid, signal.SIGKILL)
         except OSError:
-            pass
+            log.debug("watchdog.kill_proc_tree_fallback_failed pid=%d", pid, exc_info=True)
         return
 
     try:
@@ -188,7 +188,7 @@ def _save_crash_snapshot(crash_dir: str, reason: str, restart_count: int,
         snap_path = Path(crash_dir) / f"snapshot_{ts}.json"
         snap_path.write_text(json.dumps(snap, indent=2, ensure_ascii=False), encoding="utf-8")
     except OSError:
-        pass
+        log.debug("watchdog.crash_snapshot_save_failed reason=%s pid=%s", reason, pid, exc_info=True)
 
 
 class Watchdog:
@@ -275,7 +275,7 @@ class Watchdog:
                 _kill_proc_tree(self._proc.pid, self.log)
                 self._proc.wait(timeout=5)
         except OSError:
-            pass
+            self.log.debug("watchdog.stop_terminate_failed pid=%d", self._proc.pid, exc_info=True)
 
     def _restart(self, reason: str) -> bool:
         """重启主进程，返回是否成功（超限则 False）。"""
@@ -306,7 +306,7 @@ class Watchdog:
             try:
                 self._proc.wait(timeout=5)
             except Exception:
-                pass
+                self.log.warning("watchdog.kill_wait_failed pid=%d", self._proc.pid, exc_info=True)
 
         # W3: 等待端口释放
         host = self.cfg.get("host", "127.0.0.1")

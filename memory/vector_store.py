@@ -174,7 +174,7 @@ class EmbedCache:
                 try:
                     Path(self._persist_path).unlink(missing_ok=True)
                 except OSError:
-                    pass
+                    logger.debug("embed_cache.clear_unlink_failed", path=self._persist_path, exc_info=True)
 
     @property
     def stats(self) -> dict:
@@ -528,7 +528,7 @@ class VectorStore:
                                         "请先运行 scripts/rebuild_vec_local.py 重建向量库"
                                     )
                         except sqlite3.OperationalError:
-                            pass  # 表不存在（首次初始化），正常创建
+                            logger.debug("vector_store.memories_vec_table_missing_create", exc_info=True)  # 表不存在（首次初始化），正常创建
 
                     conn.execute(f"""
                         CREATE VIRTUAL TABLE IF NOT EXISTS memories_vec
@@ -553,7 +553,7 @@ class VectorStore:
                     try:
                         conn.close()
                     except Exception:
-                        pass
+                        logger.warning("vector_store.conn_close_failed_during_load", exc_info=True)
                     raise
 
         self._vec_conn, is_fat = await asyncio.to_thread(_init_db)

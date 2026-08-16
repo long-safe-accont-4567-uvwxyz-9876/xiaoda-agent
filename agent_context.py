@@ -701,7 +701,7 @@ class AgentContext:
                         _d_max = _dt_cls.fromtimestamp(_t_max).strftime("%Y年%m月%d日 %H:%M")
                         _range_attr = f' time_range="{_d_min} ~ {_d_max}"'
                     except (ValueError, OSError):
-                        pass
+                        logger.debug("agent_context.conv_log_time_range_skip", exc_info=True)
                 parts.append(f"<conversation_logs{_range_attr}>\n" + "\n---\n".join(conv_lines) + "\n</conversation_logs>")
 
         # 蒸馏记忆：正常格式化
@@ -874,7 +874,8 @@ class AgentContext:
                 if profile_content:
                     messages.append({"role": "user", "content": profile_content})
             except RuntimeError:
-                pass
+                # 无当前 scope 等运行时状态缺失，跳过 profile 上下文（正常降级）
+                logger.debug("agent_context.profile_context_scope_unavailable", exc_info=True)
             except Exception as e:
                 logger.warning("agent_context.profile_context_failed", error=str(e))
 

@@ -78,7 +78,7 @@ def _cpu_stats() -> dict:
     try:
         stats["cores"] = os.cpu_count() or 0
     except Exception:  # noqa: BLE001
-        pass
+        logger.warning("local_deploy.cpu_count_failed", exc_info=True)
 
     if platform.system() != "Linux":
         # Windows/macOS：psutil.cpu_freq() / cpu_percent() 跨平台可用
@@ -91,12 +91,12 @@ def _cpu_stats() -> dict:
             if freq is not None and freq.current:
                 stats["freq_mhz"] = round(freq.current)
         except Exception:  # noqa: BLE001
-            pass
+            logger.warning("local_deploy.cpu_freq_failed", exc_info=True)
         try:
             # interval=None：非阻塞，首次调用返回 0.0，后续轮询（5s）取到真实值
             stats["usage_pct"] = round(_ps.cpu_percent(interval=None), 1)
         except Exception:  # noqa: BLE001
-            pass
+            logger.warning("local_deploy.cpu_percent_failed", exc_info=True)
         return stats
 
     # 频率：/proc/cpuinfo "cpu MHz" → cpufreq sysfs（kHz）→ 未知
@@ -107,7 +107,7 @@ def _cpu_stats() -> dict:
                     stats["freq_mhz"] = round(float(line.split(":")[1].strip()))
                     break
     except (OSError, ValueError):  # noqa: BLE001
-        pass
+        logger.debug("local_deploy.cpuinfo_read_failed", exc_info=True)
     if not stats["freq_mhz"]:
         # 额定频率：cpuinfo_max_freq（性能规格）优先，回退当前频率
         try:
@@ -121,7 +121,7 @@ def _cpu_stats() -> dict:
                 if stats["freq_mhz"]:
                     break
         except (OSError, ValueError):  # noqa: BLE001
-            pass
+            logger.debug("local_deploy.cpufreq_sysfs_read_failed", exc_info=True)
     # 占用百分比：两次采样间 (1 - idle/total) × 100
     try:
         with open("/proc/stat", "r", encoding="utf-8", errors="ignore") as f:
@@ -138,7 +138,7 @@ def _cpu_stats() -> dict:
                 stats["usage_pct"] = round((1 - di / dt) * 100, 1)
         _CPU_SAMPLE.update(ts=now, total=total, idle=idle)
     except (OSError, ValueError):  # noqa: BLE001
-        pass
+        logger.debug("local_deploy.proc_stat_read_failed", exc_info=True)
     return stats
 
 
@@ -176,9 +176,9 @@ def _detect_cpu_model() -> str:
                     if val:
                         return val
                 except OSError:
-                    pass
+                    logger.debug("local_deploy.device_tree_model_read_failed", exc_info=True)
         except OSError:
-            pass
+            logger.debug("local_deploy.cpu_model_proc_read_failed", exc_info=True)
     if platform.system() == "Windows":
         # 零开销兜底：PROCESSOR_IDENTIFIER（"Intel64 Family 6 ..."）
         pid = os.environ.get("PROCESSOR_IDENTIFIER", "")
@@ -191,7 +191,7 @@ def _detect_cpu_model() -> str:
             if name:
                 return name
         except (OSError, subprocess.SubprocessError):  # noqa: BLE001
-            pass
+            logger.debug("local_deploy.windows_cpu_model_query_failed", exc_info=True)
         return pid or platform.processor() or "CPU"
     return platform.processor() or "CPU"
 

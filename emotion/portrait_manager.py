@@ -47,14 +47,14 @@ def _repair_and_extract_json(raw: str) -> dict | None:
     try:
         return json.loads(text)
     except json.JSONDecodeError:
-        pass
+        logger.debug("portrait.json_repair_attempt1_failed", exc_info=True)
 
     text = re.sub(r'[\x00-\x1f]', ' ', text)
     text = text.replace('\n', '\\n').replace('\r', '')
     try:
         return json.loads(text)
     except json.JSONDecodeError:
-        pass
+        logger.debug("portrait.json_repair_attempt2_failed", exc_info=True)
 
     return None
 

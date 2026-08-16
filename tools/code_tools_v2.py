@@ -358,7 +358,7 @@ def python_executor(code: str) -> ToolResult:
             try:
                 os.close(result_r)
             except OSError:
-                pass
+                logger.debug("pyexec.close_result_pipe_failed", exc_info=True)
 
         stdout = stdout_bytes.decode("utf-8", errors="replace") if stdout_bytes else ""
         stderr = stderr_bytes.decode("utf-8", errors="replace") if stderr_bytes else ""
@@ -398,13 +398,13 @@ def _kill_process_group(proc: subprocess.Popen) -> None:
     try:
         proc.kill()
     except ProcessLookupError:
-        pass
+        logger.debug("pyexec.kill_skipped_process_gone", exc_info=True)
     except Exception:
         logger.debug("pyexec.kill_error", exc_info=True)
     try:
         proc.wait(timeout=5)
     except subprocess.TimeoutExpired:
-        pass
+        logger.debug("pyexec.wait_after_kill_timeout", exc_info=True)
 
 
 def _safe_eval(expr_tree, allowed_names):

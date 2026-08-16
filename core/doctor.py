@@ -325,7 +325,7 @@ def _register_self_heal_checks(doc: DoctorCheck) -> None:
                     if age > 3600:
                         stale.append(f"{f.name} ({age:.0f}s old)")
                 except OSError:
-                    pass
+                    logger.debug("doctor.stale_lock_stat_failed: {}", f, exc_info=True)
         if stale:
             return False, f"Stale lock files: {', '.join(stale[:3])}"
         return True, "No stale lock files"
@@ -341,7 +341,7 @@ def _register_self_heal_checks(doc: DoctorCheck) -> None:
                         f.unlink()
                         logger.info("doctor.stale_lock_removed", file=str(f))
                 except OSError:
-                    pass
+                    logger.debug("doctor.stale_lock_unlink_failed: {}", f, exc_info=True)
 
     doc.add_check("Stale Lock Files", "L8-SelfHeal", _check_stale_locks, _fix_stale_locks)
 
@@ -430,7 +430,7 @@ def _register_self_heal_checks(doc: DoctorCheck) -> None:
                     f.unlink()
                     logger.info("doctor.temp_file_removed", file=str(f))
                 except OSError:
-                    pass
+                    logger.debug("doctor.temp_file_unlink_failed: {}", f, exc_info=True)
 
     doc.add_check("Temp Files", "L8-SelfHeal", _check_temp_files, _fix_temp_files)
 

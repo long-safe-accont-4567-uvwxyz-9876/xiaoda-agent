@@ -149,7 +149,7 @@ def check_domain_allowed(url: str, sandbox: SandboxSettings | None = None) -> tu
                     return False, f"域名 {hostname} 解析到内网 IP {resolved}（SSRF 防护）"
             except (socket.gaierror, ValueError):
                 # DNS 解析失败，交给后续逻辑处理
-                pass
+                logger.debug("sandbox.dns_resolve_failed_proceed", exc_info=True)
 
     # 如果有白名单，检查是否匹配
     if net_config.allowed_domains:
@@ -201,7 +201,7 @@ def check_path_allowed(path: str, sandbox: SandboxSettings | None = None) -> tup
             p.relative_to(sp)
             return False, f"路径 {path} 在敏感目录 {sensitive} 中"
         except ValueError:
-            pass
+            logger.debug("sandbox.path_not_in_sensitive_dir", exc_info=True)
 
     # 检查白名单（非空时路径必须在允许的目录下）
     if sandbox.allowed_base_dirs:
@@ -213,7 +213,7 @@ def check_path_allowed(path: str, sandbox: SandboxSettings | None = None) -> tup
                 in_allowed = True
                 break
             except ValueError:
-                pass
+                logger.debug("sandbox.path_not_in_allowed_base", exc_info=True)
         if not in_allowed:
             return False, f"路径 {path} 不在允许的目录中"
 

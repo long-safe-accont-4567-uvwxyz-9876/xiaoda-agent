@@ -103,7 +103,7 @@ def load_provider_key(provider_id: str) -> str:
             if not is_encrypted(raw):
                 fp.write_text(_encode_key(decoded) + "\n", encoding="utf-8")
         except OSError:
-            pass
+            logger.debug("provider_keys.encrypt_migration_write_failed provider={}", provider_id, exc_info=True)
         return decoded
     # 明文 key 未加密：自动加密存储，后续走解密流程
     if raw and not raw.startswith("enc:"):
@@ -111,7 +111,7 @@ def load_provider_key(provider_id: str) -> str:
             fp.write_text(_encode_key(raw) + "\n", encoding="utf-8")
             return raw
         except OSError:
-            pass
+            logger.debug("provider_keys.plain_migration_write_failed provider={}", provider_id, exc_info=True)
     from loguru import logger
     logger.warning("provider_key.unrecognized_format provider={} raw_len={}", provider_id, len(raw))
     return ""

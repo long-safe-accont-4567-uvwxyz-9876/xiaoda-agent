@@ -545,11 +545,11 @@ class SlashCommandHandler:
                 try:
                     result.kill()
                 except ProcessLookupError:
-                    pass
+                    logger.debug("slash.sys_systemctl_kill_skipped", exc_info=True)
                 try:
                     await asyncio.wait_for(result.wait(), timeout=2)
                 except (asyncio.TimeoutError, ProcessLookupError):
-                    pass
+                    logger.debug("slash.sys_systemctl_wait_skipped", exc_info=True)
                 lines.append("🔘 xiaoda-agent: 状态未知（超时）")
         except (OSError, RuntimeError):
             lines.append("🔘 xiaoda-agent: 状态未知")

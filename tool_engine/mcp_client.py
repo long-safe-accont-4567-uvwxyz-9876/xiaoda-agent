@@ -583,6 +583,7 @@ class MCPClient:
                                  server=self.server_name, method=msg.get("method"))
 
         except asyncio.CancelledError:
+            # 协程取消属正常关闭路径：finally 中已完成清理，静默吞掉
             pass
         except Exception as e:
             logger.error("mcp_client.read_loop_error", server=self.server_name, error=str(e))
@@ -617,6 +618,7 @@ class MCPClient:
                 logger.warning("mcp_client.server_stderr",
                                server=self.server_name, line=line[:500])
         except asyncio.CancelledError:
+            # 协程取消属正常关闭路径，静默吞掉
             pass
         except Exception as e:
             logger.debug("mcp_client.stderr_read_error",

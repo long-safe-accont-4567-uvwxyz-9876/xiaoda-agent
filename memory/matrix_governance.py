@@ -989,7 +989,7 @@ class ABTestRunner:
                 if 1.0 <= score <= 5.0:
                     return score
         except (json.JSONDecodeError, ValueError):
-            pass
+            logger.debug("matrix_governance.judge_score_json_parse_fallback", exc_info=True)
         # 容错: 找第一个 1-5 的整数
         m = re.search(r'\b([1-5])\b', text)
         return float(m.group(1)) if m else 0.0
@@ -1144,7 +1144,7 @@ def evaluate_matrix_health(baseline: dict | None = None) -> MatrixHealthReport:
         stats = prompt_builder.get_scene_cache_stats()
         report.cache_hit_rate = stats.get("hit_rate", 0.0)
     except (ImportError, AttributeError):
-        pass
+        logger.debug("matrix_governance.prompt_builder_cache_stats_unavailable", exc_info=True)
 
     # 回滚判断 (对比 baseline)
     if baseline:

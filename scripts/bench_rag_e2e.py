@@ -15,12 +15,14 @@ import statistics
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
+from loguru import logger
+
 # 加载 .env（与生产一致的真实 API key / 配置）
 try:
     from dotenv import load_dotenv
     load_dotenv()
 except Exception:
-    pass
+    logger.warning("bench_rag.env_load_failed", exc_info=True)
 
 # 保留 INFO 级 retrieve_stage 日志，用于定位阻塞阶段
 try:
@@ -28,7 +30,7 @@ try:
     _lg.remove()
     _lg.add(sys.stderr, level="INFO", format="<level>{level}</level> {message}")
 except Exception:
-    pass
+    logger.warning("bench_rag.loguru_setup_failed", exc_info=True)
 
 
 async def heartbeat_monitor(stop_event):

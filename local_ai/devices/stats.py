@@ -13,6 +13,8 @@ import subprocess
 import time
 from typing import Any
 
+from loguru import logger
+
 from local_ai.contracts import ComputeDevice
 
 # CPU 占用采样（/proc/stat 差值法，跨调用计算）
@@ -63,17 +65,17 @@ def cpu_stats() -> dict:
             if freq is not None and freq.current:
                 stats["freq_mhz"] = round(freq.current)
         except Exception:  # noqa: BLE001
-            pass
+            logger.warning("device_stats.cpu_freq_failed", exc_info=True)
         try:
             stats["usage_pct"] = round(_ps.cpu_percent(interval=None), 1)
         except Exception:  # noqa: BLE001
-            pass
+            logger.warning("device_stats.cpu_percent_failed", exc_info=True)
         try:
             vm = _ps.virtual_memory()
             stats["memory_total"] = vm.total
             stats["memory_available"] = vm.available
         except Exception:  # noqa: BLE001
-            pass
+            logger.warning("device_stats.virtual_memory_failed", exc_info=True)
         return stats
     # Linux：/proc/meminfo + /proc/cpuinfo + /proc/stat 差值法
     try:
@@ -91,13 +93,13 @@ def cpu_stats() -> dict:
             stats["memory_total"] = total
             stats["memory_available"] = available
     except Exception:  # noqa: BLE001
-        pass
+        logger.warning("device_stats.meminfo_parse_failed", exc_info=True)
     for line in _read_text("/proc/cpuinfo").splitlines():
         if line.startswith("cpu MHz"):
             try:
                 stats["freq_mhz"] = round(float(line.split(":", 1)[1].strip()))
             except ValueError:  # noqa: BLE001
-                pass
+                logger.debug("device_stats.cpu_mhz_parse_failed", exc_info=True)
             break
     try:
         parts = _read_text("/proc/stat").splitlines()[0].split()
@@ -113,7 +115,7 @@ def cpu_stats() -> dict:
                 stats["usage_pct"] = round((1 - di / dt) * 100, 1)
         _CPU_SAMPLE.update(ts=now, total=total, idle=idle)
     except Exception:  # noqa: BLE001
-        pass
+        logger.warning("device_stats.proc_stat_parse_failed", exc_info=True)
     return stats
 
 

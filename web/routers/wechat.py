@@ -437,7 +437,7 @@ async def get_wechat_status() -> Any:
                 connected = bool(getattr(bot, "_connected", False))
             init_failed = bool(getattr(bot, "_init_failed", False))
     except Exception:
-        pass
+        logger.warning("wechat.status.active_bot_probe_failed", exc_info=True)
     # 无活跃实例（轮询未启动或服务重启后）：凭证存在即视为已登录（可一键启动），
     # 避免刷新后状态丢失；仅当没有任何 bot 实例时才 fallback。
     if bot is None and not connected and not expired:
@@ -445,7 +445,7 @@ async def get_wechat_status() -> Any:
             if load_credentials():
                 connected = True
         except Exception:
-            pass
+            logger.warning("wechat.status.credential_fallback_failed", exc_info=True)
     return Envelope(data={
         "connected": connected,
         "expired": expired,

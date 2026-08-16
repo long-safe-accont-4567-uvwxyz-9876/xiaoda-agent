@@ -230,7 +230,8 @@ class ConnectionManager:
             try:
                 q.get_nowait()  # 丢最旧，保最新
             except asyncio.QueueEmpty:
-                pass
+                # 队列已被消费完，无可丢弃事件（正常路径）
+                logger.debug("ws.send_queue_drain_empty conn_id={}", conn_id)
             try:
                 q.put_nowait(event)
             except asyncio.QueueFull:
@@ -366,7 +367,7 @@ def _cleanup_old_media() -> int:
                     f.unlink()
                     removed += 1
             except OSError:
-                pass
+                logger.debug("ws.media_cleanup_unlink_failed: {}", f, exc_info=True)
     if removed:
         logger.info("ws.media_cleanup", removed=removed,
                     max_age_hours=_MEDIA_MAX_AGE_SECONDS // 3600)
@@ -508,7 +509,7 @@ async def process_and_serialize(core: Any, text: str, session_id: str,
                 try:
                     await status_callback(f"⚠️ {_original_agent} 暂不可用，已切换到小妲回复")
                 except Exception:
-                    pass
+                    logger.warning("ws.agent_fallback_status_callback_failed", exc_info=True)
         else:
             # 走与 QQ 通道相同的完整子代理流程：表情包/情绪/TTS/落库都不缺
             from loguru import logger as _logger
@@ -1161,7 +1162,7 @@ def _handle_terminal_input(conn_id: str, msg: dict) -> None:
         else:
             os.write(fd, data.encode("utf-8", errors="replace"))
     except (OSError, BrokenPipeError):
-        pass
+        logger.debug("ws.terminal_input_write_failed conn_id={}", conn_id, exc_info=True)
 
 
 def _handle_terminal_resize(conn_id: str, msg: dict) -> None:
@@ -1183,7 +1184,7 @@ def _handle_terminal_resize(conn_id: str, msg: dict) -> None:
         winsize = struct.pack("HHHH", rows, cols, 0, 0)
         fcntl.ioctl(fd, termios.TIOCSWINSZ, winsize)
     except OSError:
-        pass
+        logger.debug("ws.terminal_resize_failed conn_id={}", conn_id, exc_info=True)
 
 
 def _handle_terminal_kill(conn_id: str, msg: dict) -> None:

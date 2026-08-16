@@ -416,7 +416,7 @@ class IMApprovalChannel:
                 try:
                     user_reqs.remove(req.id)
                 except ValueError:
-                    pass
+                    logger.debug("approval.pending_index_remove_missing", exc_info=True)
                 if not user_reqs:
                     self._pending_by_user.pop(req.user_id, None)
 
@@ -466,7 +466,7 @@ class IMApprovalChannel:
                 try:
                     user_reqs.remove(req.id)
                 except ValueError:
-                    pass
+                    logger.debug("approval.pending_index_remove_missing", exc_info=True)
                 if not user_reqs:
                     self._pending_by_user.pop(user_id, None)
             return True

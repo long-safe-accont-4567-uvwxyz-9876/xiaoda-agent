@@ -1,16 +1,16 @@
-from typing import Any
-import os
-import sys
-import asyncio
-import socket
 import argparse
+import asyncio
+import contextlib
+import os
+import socket
+import sys
 from pathlib import Path
+from typing import Any
 
 from loguru import logger
-import contextlib
 
-from utils.common import DEFAULT_WEBUI_PORT, safe_int as _safe_int
-
+from utils.common import DEFAULT_WEBUI_PORT
+from utils.common import safe_int as _safe_int
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
@@ -27,8 +27,8 @@ try:
     load_dotenv(_env_path, override=True)
 except Exception:
     # dotenv 加载失败时写日志，防止 exe 静默崩溃
-    import traceback
     import pathlib
+    import traceback
     try:
         log_dir = pathlib.Path(os.environ.get("APPDATA", ".")) / "xiaoda-agent"
         log_dir.mkdir(parents=True, exist_ok=True)
@@ -72,7 +72,8 @@ def _handle_first_run_mode(mode: str) -> None:
         print("      请在浏览器中完成 API Key 配置\n")
     else:
         print("\n  [!] 检测到首次运行，启动配置向导...\n")
-        from setup_wizard import main as wizard_main, ENV_PATH
+        from setup_wizard import ENV_PATH
+        from setup_wizard import main as wizard_main
         wizard_main()
         # 向导完成后重新加载 .env
         load_dotenv(ENV_PATH, override=True)
@@ -128,7 +129,7 @@ def _notify_already_running() -> None:
                 0x40,  # MB_ICONINFORMATION
             )
         except (OSError, AttributeError):
-            pass
+            logger.debug("agent.already_running_notify_failed", exc_info=True)
 
 
 def _webview2_installed() -> bool:
@@ -153,7 +154,7 @@ def _webview2_installed() -> bool:
                 except OSError:
                     continue
     except Exception:
-        pass
+        logger.warning("agent.webview2_detection_failed", exc_info=True)
     return False
 
 
@@ -208,10 +209,38 @@ def _open_browser_in_background(host: str, port: int) -> None:
     threading.Thread(target=_open, daemon=True).start()
 
 
+def _correct_sensitive_file_permissions() -> None:
+    """VULN-27：启动时统一校正存量敏感文件权限为 0600。
+
+    防止旧文件残留 0644 权限被同机其他用户读取。
+    """
+    import stat
+    sensitive_files = [
+        # 项目内遗留副本（应在后续清理，此处先校正权限）
+        Path(__file__).parent / "credentials" / "webui_secret",
+        # 运行时凭据
+        Path.home() / ".ai-agent" / "wechat_credentials.json",
+        # 环境变量文件
+        Path(__file__).parent / ".env",
+    ]
+    for fp in sensitive_files:
+        try:
+            if fp.exists() and fp.is_file():
+                current = fp.stat().st_mode
+                if stat.S_IMODE(current) != 0o600:
+                    fp.chmod(0o600)
+                    logger.info("agent.sensitive_file_permission_corrected", path=str(fp))
+        except (OSError, PermissionError) as exc:
+            logger.debug("agent.sensitive_file_permission_failed", path=str(fp), error=str(exc))
+
+
 def main() -> None:
     # Windows: 使用 SelectorEventLoop 加速 aiosqlite 线程切换（ProactorEventLoop 慢 3-5 倍）
     # 必须早于任何 asyncio/uvicorn 调用，确保 _run_web/_run_desktop/_run_cli 三路径均生效
     _setup_windows_event_loop()
+
+    # VULN-27：启动时校正存量敏感文件权限
+    _correct_sensitive_file_permissions()
 
     parser = argparse.ArgumentParser(description="Nahida AI Agent")
     subparsers = parser.add_subparsers(dest="command")
@@ -296,7 +325,7 @@ def main() -> None:
     # 首次运行检测：只有 4 个必填 API Key 未配置时才进 setup 向导。
     # 其他异常（可选功能报错、网络问题等）是正常的，不强制跳 setup——
     # 有些功能不需要，报错是正常的，不能一刀切把用户踢进配置界面。
-    from setup_wizard import is_first_run, ENV_PATH, ENV_EXAMPLE_PATH
+    from setup_wizard import ENV_EXAMPLE_PATH, ENV_PATH, is_first_run
     if is_first_run():
         # 确保 .env 文件存在（从 .env.example 复制），这样 WebUI Setup 页面能读取默认值
         if not os.path.exists(ENV_PATH):
@@ -392,6 +421,7 @@ def _get_lan_addresses() -> list:
 
 def _run_web(host: str, port: int) -> None:
     import uvicorn
+
     from utils.logging_config import setup_logging
     setup_logging()
 
@@ -484,8 +514,8 @@ def _import_web_server_safe() -> Any:
         from web.server import app
         return app
     except (ImportError, SyntaxError, ModuleNotFoundError):
-        import traceback
         import pathlib
+        import traceback
         log_path = pathlib.Path(os.environ.get("APPDATA", ".")) / "xiaoda-agent" / "crash.log"
         log_path.parent.mkdir(parents=True, exist_ok=True)
         log_path.write_text(f"Failed to import web.server:\n{traceback.format_exc()}", encoding="utf-8")
@@ -497,9 +527,10 @@ def _start_splash_server(port: int) -> str:
 
     端口被占用时回退到 file:// 协议。
     """
-    import threading
-    import http.server
     import functools
+    import http.server
+    import threading
+
     from loguru import logger
 
     def _splash_dir() -> Any:
@@ -526,6 +557,7 @@ def _wait_for_server_ready(window: Any, port: int) -> None:
     """后台线程：等待 WebUI 就绪后调用 splash.js 的 onServerReady。"""
     import time
     import urllib.request
+
     from loguru import logger
 
     for _ in range(120):
@@ -600,9 +632,10 @@ def _run_desktop(host: str, port: int) -> None:
             if hwnd:
                 ctypes.windll.user32.ShowWindow(hwnd, 0)  # SW_HIDE
         except (OSError, AttributeError):
-            pass
+            logger.debug("agent.console_hide_failed", exc_info=True)
 
     import threading
+
     from utils.logging_config import setup_logging
     setup_logging()
 
@@ -679,8 +712,8 @@ if __name__ == "__main__":
         main()
     except Exception:
         # 顶层异常兜底：写日志文件，防止 exe 静默崩溃
-        import traceback
         import pathlib
+        import traceback
         try:
             log_dir = pathlib.Path(os.environ.get("APPDATA", ".")) / "xiaoda-agent"
             log_dir.mkdir(parents=True, exist_ok=True)

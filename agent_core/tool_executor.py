@@ -324,7 +324,7 @@ class ToolExecutorMixin:
                 else:
                     text = "（回复格式异常，请稍后重试）"
             except json.JSONDecodeError:
-                pass  # 不是合法 JSON，继续后续清洗
+                logger.warning("agent.json_reply_not_valid_json_skip", exc_info=True)  # 不是合法 JSON，继续后续清洗
         # 清除 agent 前缀：支持多种格式（"小可："、"[小可] "、"【小可】"、"小可 "等）
         # 根因：LLM 模仿历史消息中的 agent 前缀格式，输出 "[小可] 父亲..." 等
         _agent_names = [get_agent_display_name(n) for n in ('xiaoda', 'xiaoli', 'xiaolang', 'xiaolian', 'xiaoke')]
@@ -516,7 +516,7 @@ class ToolExecutorMixin:
                 else:
                     text = "（回复格式异常，请稍后重试）"
             except json.JSONDecodeError:
-                pass  # 不是合法 JSON，继续后续清洗
+                logger.warning("finalize.json_reply_not_valid_json_skip", exc_info=True)  # 不是合法 JSON，继续后续清洗
         # 清理指令层级标签（LLM 可能原样输出上下文中的 <instruction> 标记）
         text = re.sub(r'<instruction\s+level="[A-Z]+"\s+priority="\d+"[^>]*>', '', text)
         text = re.sub(r'</instruction>', '', text)
@@ -534,7 +534,7 @@ class ToolExecutorMixin:
             else:
                 text = cleaned
         except ImportError:
-            pass
+            logger.debug("finalize.canary_detector_import_unavailable", exc_info=True)
         return text
 
     def get_sticker_info(self, reply: str, user_emotion: str = "", force_sticker: bool = False) -> tuple[str, Path | None]:

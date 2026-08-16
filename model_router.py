@@ -860,7 +860,8 @@ class ModelRouter:
                 from core.background_tasks import _spawn
                 _spawn(_close_old())
             except RuntimeError:
-                pass
+                # 同步调用路径无运行事件循环，跳过异步关闭旧客户端（正常降级）
+                logger.debug("router.close_old_clients_skipped_no_loop", exc_info=True)
 
         # 同步更新凭证池：确保 MiMo/Agnes 凭证与当前环境变量一致
         try:
@@ -1368,7 +1369,7 @@ class ModelRouter:
                                error=f"{type(e).__name__}: {e}")
                 return None
         except Exception:
-            pass
+            logger.warning("router.fallback_error_classify_failed", exc_info=True)
 
         # 1. 降级到更便宜的模型
         fallback_type = FALLBACK_ROUTE.get(task_type)
@@ -1383,7 +1384,7 @@ class ModelRouter:
             _orig_entry = self._registry.get_task(task_type) or {}
             _original_provider = _orig_entry.get("client", _CFG_DEFAULT_PROVIDER)
         except Exception:
-            pass
+            logger.warning("router.fallback_original_provider_lookup_failed", exc_info=True)
         # 用户硬约束（2026-08-04）：禁止自动切换模型/provider。
         # 用户在 WebUI 切换到哪个 provider，就一直用该 provider，失败也不跨 provider 兜底。
         # 同 provider 内的重试（_route_with_retry）保留，不算"切换"。
@@ -1744,7 +1745,7 @@ class ModelRouter:
             _main_provider = str(_chat_cfg.get("client", ""))
             _main_model = str(_chat_cfg.get("model", ""))
         except (KeyError, AttributeError):
-            pass
+            logger.debug("router.vision_chat_cfg_lookup_failed", exc_info=True)
 
         def _supports_vision(provider: str) -> bool:
             _meta = _PROVIDER_CAPS_FROM_FILE.get(provider, {}) if isinstance(_PROVIDER_CAPS_FROM_FILE, dict) else {}
@@ -1764,7 +1765,7 @@ class ModelRouter:
                             if _p in _get_builtin_providers() or self.has_custom_client(_p):
                                 return _p, _m
                         except Exception:
-                            pass
+                            logger.warning("router.vision_provider_check_failed", exc_info=True)
 
         # 3. 兜底：环境变量（不硬编码具体模型名）
         _fallback_model = os.getenv("MIMO_MODEL_NAME", "")
@@ -1910,7 +1911,7 @@ class ModelRouter:
                         from agent_core._shared import _stream_finish_reason_var
                         _stream_finish_reason_var.set(_stream_finish_reason)
                     except (ImportError, AttributeError):
-                        pass
+                        logger.debug("router.stream_finish_reason_var_set_failed", exc_info=True)
                     # 截断诊断日志：finish_reason="length" 时记录 mt 和内容长度
                     if _stream_finish_reason == "length":
                         logger.warning("llm.stream_truncated_by_max_tokens",
@@ -2098,7 +2099,7 @@ class ModelRouter:
             from config import get_frequency_penalty
             fp = get_frequency_penalty(default=fp)
         except Exception:
-            pass
+            logger.warning("router.frequency_penalty_config_load_failed", exc_info=True)
         if fp:
             kwargs["frequency_penalty"] = fp
         # 论文验证有效值为 1.2，对条件模式重复有效；对结构化重复效果有限但无副作用
@@ -2108,7 +2109,7 @@ class ModelRouter:
             from config import get_presence_penalty
             pp = get_presence_penalty(default=pp)
         except Exception:
-            pass
+            logger.warning("router.presence_penalty_config_load_failed", exc_info=True)
         if pp:
             kwargs["presence_penalty"] = pp
         # 退化兜底停止序列：当模型开始输出工具定义泄露时立即停止

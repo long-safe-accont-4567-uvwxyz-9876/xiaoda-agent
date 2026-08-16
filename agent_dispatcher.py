@@ -380,7 +380,7 @@ class SubAgent:
             try:
                 await status_callback(get_status_msg(self.config.name, "thinking", "", self.config.personality_file))
             except (AttributeError, RuntimeError, OSError):
-                pass  # status_callback 失败不影响任务执行
+                logger.debug("sub_agent.status_callback_failed", exc_info=True)  # status_callback 失败不影响任务执行
 
         system_prompt = self._personality
         if "{address_term}" in system_prompt:
@@ -1207,7 +1207,7 @@ class AgentDispatcher:
                     if best:
                         fallback = best
             except (ImportError, AttributeError, TypeError):
-                pass  # work_record 不可用时使用默认路由
+                logger.debug("agent.work_record_routing_unavailable", exc_info=True)  # work_record 不可用时使用默认路由
             if fallback != target:
                 logger.info("agent.task_route_fallback",
                             task_type=task_type,

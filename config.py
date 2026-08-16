@@ -76,7 +76,7 @@ try:
     os.environ.setdefault("SSL_CERT_FILE", certifi.where())
     os.environ.setdefault("REQUESTS_CA_BUNDLE", certifi.where())
 except ImportError:
-    pass
+    logger.debug("config.certifi_import_unavailable", exc_info=True)
 
 _KIOXIA_BASE = Path(os.getenv("KIOXIA_DATA_DIR", str(Path.home() / ".ai-agent" / "data")))
 
@@ -773,7 +773,7 @@ def clear_display_name_cache(name: str | None = None):
         from prompt_builder import clear_module_cache
         clear_module_cache()
     except ImportError:
-        pass
+        logger.debug("config.prompt_builder_import_unavailable", exc_info=True)
 
 
 def agent_names() -> list[str]:

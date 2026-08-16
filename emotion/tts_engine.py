@@ -171,7 +171,7 @@ def _ensure_builtin_voices():
         if _data_base.exists() and _data_base != KIOXIA_BASE:
             _src_dirs.append(_data_base)
     except ImportError:
-        pass
+        logger.debug("tts.voice_ref_dir_import_unavailable", exc_info=True)
     # PyInstaller 打包内置
     if getattr(sys, "_MEIPASS", None):
         _src_dirs.append(Path(sys._MEIPASS) / "assets" / "voice_refs")
@@ -490,7 +490,8 @@ class TTSEngine:
                 from core.background_tasks import _spawn
                 _spawn(old_client.close())
             except RuntimeError:
-                pass
+                # 同步调用路径无运行事件循环，跳过异步关闭旧客户端（正常降级）
+                logger.debug("tts.client_refresh_close_old_skipped", exc_info=True)
 
     async def synthesize(
         self,

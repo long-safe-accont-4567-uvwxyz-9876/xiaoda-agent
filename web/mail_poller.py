@@ -340,7 +340,7 @@ def _clean_reply_text(reply: str) -> str:
             else:
                 text = "（回复格式异常，请稍后重试）"
         except json.JSONDecodeError:
-            pass  # 不是合法 JSON，继续后续清洗
+            logger.warning("mail.poller.clean_reply_not_valid_json_skip", exc_info=True)  # 不是合法 JSON，继续后续清洗
 
     # 2. 去掉开头的元指令前缀（精确匹配）
     text = re.sub(r'^爸爸[，,][^。\n]*?回复[：:]\s*', '', text).strip()
@@ -404,7 +404,7 @@ async def _send_reply(to_email: str, subject: str, body: str) -> bool:
             if envelope1.get("ok"):
                 return True
         except json.JSONDecodeError:
-            pass
+            logger.debug("mail.poller.send_stage1_envelope_not_json", exc_info=True)
 
     logger.warning("mail.poller.send_failed to={} rc={} out={} err={}",
                    to_email, rc1, out1[:200], err1[:200])

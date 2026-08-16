@@ -79,7 +79,7 @@ class ProviderCredentialStore:
         try:
             os.chmod(path, 0o600)
         except OSError:
-            pass
+            logger.debug("provider_service.key_chmod_failed: {}", path, exc_info=True)
 
     def delete(self, provider_id: str) -> None:
         from web._provider_keys import _key_file
@@ -127,7 +127,8 @@ class ProviderService:
             try:
                 self.catalog.get(definition.id)
             except KeyError:
-                pass
+                # 正常路径：provider 尚未注册，允许创建
+                logger.debug("provider_service.create_dup_check_not_found provider_id={}", definition.id)
             else:
                 raise ValueError(f"provider already exists: {definition.id}")
             credential = self._credential(definition, credentials)
@@ -652,7 +653,7 @@ class ProviderService:
         try:
             self.catalog.unregister(provider_id)
         except KeyError:
-            pass
+            logger.debug("provider_service.unregister_not_found provider_id={}", provider_id)
 
     def _delete_rollback_actions(self, provider_id, definition, old_record,
                                  old_credential, old_report, old_client) -> list[Callable[[], None]]:

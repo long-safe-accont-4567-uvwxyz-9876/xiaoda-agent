@@ -152,7 +152,7 @@ def _open_validated(resolved: str, mode: str = "r", encoding: str | None = "utf-
         fd_real_path = os.readlink(f"/proc/self/fd/{fd}")
     except OSError:
         # /proc 不可用（如某些容器环境），跳过二次验证
-        pass
+        logger.debug("file_tools.fd_realpath_unavailable_skip_verify", exc_info=True)
     else:
         # 验证 fd 指向的真实路径是否仍在允许范围内
         for sensitive in SENSITIVE_PATHS:
@@ -388,7 +388,7 @@ async def shell_command(command: str) -> ToolResult:
         try:
             proc.kill()
         except ProcessLookupError:
-            pass
+            logger.debug("file_tools.proc_kill_skipped_process_gone", exc_info=True)
         except Exception:
             logger.debug("file_tools.subprocess_kill_error", exc_info=True)
         try:
@@ -402,7 +402,7 @@ async def shell_command(command: str) -> ToolResult:
         try:
             proc.kill()
         except ProcessLookupError:
-            pass
+            logger.debug("file_tools.proc_kill_skipped_process_gone", exc_info=True)
         except Exception:
             logger.debug("file_tools.subprocess_kill_error", exc_info=True)
         return ToolResult.fail(f"执行错误: {e!s}")

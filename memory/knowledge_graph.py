@@ -309,7 +309,7 @@ class KnowledgeGraph:
                     self._query_entity_lru.remove(query)
                     self._query_entity_lru.append(query)
                 except ValueError:
-                    pass
+                    logger.debug("kg.query_entity_lru_remove_missing", exc_info=True)
                 logger.debug("kg.query_entities_cache_hit", query=query[:50])
                 return entities_set
             else:
@@ -318,7 +318,7 @@ class KnowledgeGraph:
                 try:
                     self._query_entity_lru.remove(query)
                 except ValueError:
-                    pass
+                    logger.debug("kg.query_entity_lru_expire_remove_missing", exc_info=True)
 
         # 规则前置短路：jieba 规则提取（<10ms，且比 LLM 更激进）为空 → 查询无实体，
         # 直接返回空集并跳过 LLM 调用（规则为空时 LLM 提取必然也为空，结果完全一致）。

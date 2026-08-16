@@ -59,7 +59,7 @@ try:
     import atexit
     atexit.register(lambda: readline.write_history_file(_HIST_FILE))
 except ImportError:
-    pass  # readline 不可用时静默降级
+    logger.debug("cli.readline_import_unavailable", exc_info=True)  # readline 不可用时静默降级
 
 
 # ── 斜杠命令 TAB 补全（openclaw 风格：两级补全） ──────────────
@@ -73,7 +73,7 @@ def _all_command_names() -> list[str]:
         names.extend(COMMAND_DESCRIPTIONS.keys())
         names.extend(COMMAND_ALIASES.keys())
     except ImportError:
-        pass
+        logger.debug("cli.slash_commands_import_unavailable", exc_info=True)
     return sorted(set(names))
 
 
@@ -160,7 +160,7 @@ class _SlashCompleter(Completer):
                 from slash_commands import resolve_command
                 command = resolve_command(command)
             except ImportError:
-                pass
+                logger.debug("cli.resolve_command_import_unavailable", exc_info=True)
             for cand in self._arg_completions(command, partial):
                 yield Completion(cand, start_position=start)
 
@@ -187,14 +187,14 @@ try:
                 from slash_commands import resolve_command
                 command = resolve_command(command)
             except ImportError:
-                pass
+                logger.debug("cli.resolve_command_import_unavailable", exc_info=True)
             matches = _argument_completions(command, text)
         return matches[state] if state < len(matches) else None
 
     _rl.set_completer(_cli_completer)
     _rl.parse_and_bind("tab: complete")
 except ImportError:
-    pass  # 无 readline 时静默降级（Windows 原生终端）
+    logger.debug("cli.readline_import_unavailable", exc_info=True)  # 无 readline 时静默降级（Windows 原生终端）
 
 
 # ── 颜色支持（Windows 自动检测 + NO_COLOR / FORCE_COLOR） ─────
@@ -417,7 +417,7 @@ class CLIInterface:
             if term:
                 return term
         except ImportError:
-            pass
+            logger.debug("cli.address_term_import_unavailable", exc_info=True)
         return "朋友"
 
     def _init_prompt_session(self) -> None:
@@ -660,7 +660,7 @@ class CLIInterface:
             try:
                 self._run_coro(self._ws.close())
             except Exception:
-                pass
+                logger.warning("cli.ws_close_failed", exc_info=True)
             self._ws = None
         ok = self._connect_main_process()
         if ok:

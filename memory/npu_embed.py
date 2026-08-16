@@ -279,12 +279,12 @@ class NpuEmbeddingProvider:
                 self._proc.kill()
                 self._proc.wait(timeout=3)
         except Exception:  # noqa: BLE001
-            pass
+            logger.warning("npu_embed.restart_kill_failed", exc_info=True)
         try:
             if self._stderr_f:
                 self._stderr_f.close()
         except Exception:  # noqa: BLE001
-            pass
+            logger.warning("npu_embed.restart_stderr_close_failed", exc_info=True)
         self._proc = None
         self._pending = b""
         self.load()
@@ -303,12 +303,12 @@ class NpuEmbeddingProvider:
                 if self._proc:
                     self._proc.kill()
             except Exception:  # noqa: BLE001
-                pass
+                logger.warning("npu_embed.close_kill_failed", exc_info=True)
         try:
             if self._stderr_f:
                 self._stderr_f.close()
         except Exception:  # noqa: BLE001
-            pass
+            logger.warning("npu_embed.close_stderr_close_failed", exc_info=True)
         self._proc = None
         self._stderr_f = None
         self._loaded = False
