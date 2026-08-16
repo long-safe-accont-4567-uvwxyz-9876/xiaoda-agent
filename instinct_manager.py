@@ -173,18 +173,44 @@ class InstinctManager:
         )
         messages = [{"role": "user", "content": prompt}]
 
-        # 优先调用硅基流动免费模型，失败则降级到 router
+        result = await self._call_llm_for_instincts(messages)
+        if not result or not isinstance(result, str):
+            return
+
+        now = time.time()
+        _db_t0 = time.time()
+        # 查询已有 active instincts 的 content，用于插入前去重
+        # 根因修复：原代码不查重，LLM 每轮措辞略有不同但语义重复的本能被无限 INSERT
+        # （4714 条，99.7% use_count=0）。这里用 difflib 检查相似度，O(new*active) 很快。
+        existing_cursor = await self.db._conn.execute(
+            "SELECT content FROM instincts WHERE status='active'"
+        )
+        existing_rows = await existing_cursor.fetchall()
+        existing_contents = [r["content"] if isinstance(r, dict) else r[0] for r in existing_rows]
+
+        rows_to_insert, skipped_duplicates, corrections = self._parse_instinct_lines(
+            result, existing_contents, session_id, now)
+
+        await self._apply_corrections(corrections)
+
+        if skipped_duplicates > 0:
+            logger.info("instinct.dedup_skipped", count=skipped_duplicates, session=session_id)
+        await self._insert_instinct_rows(rows_to_insert, session_id, existing_contents, _db_t0)
+
+    async def _call_llm_for_instincts(self, messages: list[dict]) -> str | None:
+        """优先免费模型，失败降级 router（10s 超时）；失败返回 None。
+
+        降级路由加 10s 超时保护（P0-2 同类 bug）：原 router.route 无超时，
+        主模型卡住会让 extract_instincts 阻塞 30-53s（日志 bg.task_slow）。
+        instinct 提取是后台任务，超时则放弃本次提取。task_type 用
+        memory_encoding（后台任务），让 route() 的 _chat_idle 机制自动让路
+        于主 chat，避免和主对话并发竞争 agnes API（并发排队根因）。
+        """
         _llm_t0 = time.time()
         result = await self._call_free_model(messages, temperature=0.3, max_tokens=800)
         _free_ms = int((time.time() - _llm_t0) * 1000)
         if result is None:
             try:
-                # 修复 P0-2 同类 bug：降级路由加 10s 超时保护
-                # 根因：原代码 router.route 无超时，主模型卡住会让 extract_instincts
-                # 阻塞 30-53s（日志 bg.task_slow name=extract_instincts elapsed=30-53s）。
-                # instinct 提取是后台任务，不应阻塞这么久；超时则放弃本次提取。
-                # task_type 用 memory_encoding（后台任务），让 route() 的 _chat_idle 机制
-                # 使其自动让路于主 chat，避免和主对话并发竞争 agnes API（并发排队根因）。
                 _route_t0 = time.time()
                 result = await asyncio.wait_for(
                     self.router.route(
@@ -200,25 +226,22 @@ class InstinctManager:
                     logger.warning(f"instinct.route_slow elapsed_ms={_route_ms} free_ms={_free_ms}")
             except asyncio.TimeoutError:
                 logger.warning("instinct.extract_router_timeout, skip this round")
-                return
+                return None
             except Exception as e:
                 logger.warning("instinct.extract_llm_failed", error=str(e))
-                return
+                return None
+        return result
 
-        if not result or not isinstance(result, str):
-            return
+    @staticmethod
+    def _parse_instinct_lines(
+        result: str, existing_contents: list[str], session_id: str, now: float,
+    ) -> tuple[list[tuple], int, list[tuple[str, str]]]:
+        """解析 LLM 输出为 (待插入行, 去重跳过数, 用户否定修正)。
 
-        now = time.time()
-        # 查询已有 active instincts 的 content，用于插入前去重
-        # 根因修复：原代码不查重，LLM 每轮措辞略有不同但语义重复的本能被无限 INSERT
-        # （4714 条，99.7% use_count=0）。这里用 difflib 检查相似度，O(new*active) 很快。
-        _db_t0 = time.time()
-        existing_cursor = await self.db._conn.execute(
-            "SELECT content FROM instincts WHERE status='active'"
-        )
-        existing_rows = await existing_cursor.fetchall()
-        existing_contents = [r["content"] if isinstance(r, dict) else r[0] for r in existing_rows]
-
+        支持新格式（NEW | content | confidence 或 CORRECT | content | action）
+        与旧格式（content | confidence）。逐行过滤无效内容（长度/置信度/
+        思考词/prompt 示例/正则模式），插入前用 text_ratio 去重。
+        """
         rows_to_insert = []
         skipped_duplicates = 0
         corrections = []  # 用户否定的本能（复用本次 LLM 调用，零额外开销）
@@ -258,17 +281,7 @@ class InstinctManager:
                     continue
             confidence = max(0.0, min(1.0, confidence))
 
-            # 过滤无效内容
-            if not content or len(content) < 5 or confidence < 0.5:
-                continue
-            # 过滤 LLM 思考过程
-            if any(kw in content for kw in _LLM_THINKING_KEYWORDS):
-                continue
-            # 过滤 prompt 示例被复制
-            if any(frag in content for frag in _PROMPT_EXAMPLE_FRAGMENTS):
-                continue
-            # 过滤模板化/非偏好类内容（正则匹配）
-            if any(p.search(content) for p in _INVALID_INSTINCT_PATTERNS):
+            if InstinctManager._should_skip_content(content, confidence):
                 continue
             # 插入前去重：rapidfuzz text_ratio >= 75.0（0-100 刻度，等价旧 difflib 0.75）
             is_duplicate = any(
@@ -281,7 +294,27 @@ class InstinctManager:
 
             rows_to_insert.append((content, confidence, session_id, now, now))
 
-        # 处理用户否定的本能（复用本次 LLM 调用，零额外开销、零新工具）
+        return rows_to_insert, skipped_duplicates, corrections
+
+    @staticmethod
+    def _should_skip_content(content: str, confidence: float) -> bool:
+        """判断本能 content 是否应被过滤（无效/思考词/示例片段/正则模式）。"""
+        # 过滤无效内容
+        if not content or len(content) < 5 or confidence < 0.5:
+            return True
+        # 过滤 LLM 思考过程
+        if any(kw in content for kw in _LLM_THINKING_KEYWORDS):
+            return True
+        # 过滤 prompt 示例被复制
+        if any(frag in content for frag in _PROMPT_EXAMPLE_FRAGMENTS):
+            return True
+        # 过滤模板化/非偏好类内容（正则匹配）
+        if any(p.search(content) for p in _INVALID_INSTINCT_PATTERNS):
+            return True
+        return False
+
+    async def _apply_corrections(self, corrections: list[tuple[str, str]]) -> None:
+        """处理用户否定的本能（复用本次 LLM 调用，零额外开销、零新工具）。"""
         for hint, action in corrections:
             try:
                 correction = await self.correct_instinct(hint, action)
@@ -293,32 +326,31 @@ class InstinctManager:
             except Exception:
                 logger.debug("instinct.correct_via_extract_failed", exc_info=True)
 
-        if skipped_duplicates > 0:
-            logger.info("instinct.dedup_skipped", count=skipped_duplicates, session=session_id)
-        if rows_to_insert:
-            # 根治（2026-08-05 rework）：收敛到主连接 write_transaction，删除独立写连接。
-            # 根因复盘：历史"独立连接"方案用 separate aiosqlite 连接写 instincts，与主连接/
-            # curator 等并发写时争抢 SQLite 单写锁 → "database is locked"（14:37:45 实证）。
-            # 提高 busy_timeout（5s→20s）只是让写等待而非失败，锁竞争仍在（治标）。
-            # 根治：所有写统一走主连接 + write_transaction() 的 asyncio.Lock 串行化。
-            #   - 只剩一个写者（主连接），跨连接写锁无从谈起 → database is locked 消失。
-            #   - aiosqlite 主连接在独立后台线程执行，串行化写不冻结事件循环（只排队）。
-            #   - 关键读路径（restore_from_db）已走独立 readonly 连接，不被本写阻塞。
-            #   - write_transaction 正常退出 commit，异常/取消自动 rollback，无脏事务。
-            try:
-                async with self.db.write_transaction() as _conn:
-                    await _conn.executemany(
-                        """INSERT INTO instincts
-                           (content, confidence, source_session, status, created_at, last_used_at, use_count)
-                           VALUES (?, ?, ?, 'active', ?, ?, 0)""",
-                        rows_to_insert,
-                    )
-                _db_ms = int((time.time() - _db_t0) * 1000)
-                if _db_ms > 2000:
-                    logger.warning(f"instinct.db_slow elapsed_ms={_db_ms} active_count={len(existing_contents)}")
-                logger.info("instinct.extracted", count=len(rows_to_insert), session=session_id)
-            except Exception as e:
-                logger.debug("instinct.insert_failed", error=str(e))
+    async def _insert_instinct_rows(
+        self, rows_to_insert: list[tuple], session_id: str,
+        existing_contents: list[str], _db_t0: float,
+    ) -> None:
+        """批量插入本能（走主连接 write_transaction，串行化避免 database is locked）。"""
+        if not rows_to_insert:
+            return
+        # 根治（2026-08-05 rework）：收敛到主连接 write_transaction，删除独立写连接。
+        # 根因复盘：历史"独立连接"方案用 separate aiosqlite 连接写 instincts，与主连接/
+        # curator 等并发写时争抢 SQLite 单写锁 -> "database is locked"。
+        # 根治：所有写统一走主连接 + write_transaction() 的 asyncio.Lock 串行化。
+        try:
+            async with self.db.write_transaction() as _conn:
+                await _conn.executemany(
+                    """INSERT INTO instincts
+                       (content, confidence, source_session, status, created_at, last_used_at, use_count)
+                       VALUES (?, ?, ?, 'active', ?, ?, 0)""",
+                    rows_to_insert,
+                )
+            _db_ms = int((time.time() - _db_t0) * 1000)
+            if _db_ms > 2000:
+                logger.warning(f"instinct.db_slow elapsed_ms={_db_ms} active_count={len(existing_contents)}")
+            logger.info("instinct.extracted", count=len(rows_to_insert), session=session_id)
+        except Exception as e:
+            logger.debug("instinct.insert_failed", error=str(e))
 
     async def get_active_instincts(self, limit: int = 6, min_confidence: float = 0.7) -> list[dict]:
         """获取活跃的 Instinct，按置信度降序"""
