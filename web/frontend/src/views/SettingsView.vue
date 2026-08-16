@@ -4,7 +4,7 @@ import {
   NButton, NSwitch, NRadioGroup, NRadioButton, NInput, NModal,
   NSelect, NSlider, NCheckbox, NCheckboxGroup, NPopconfirm, NTag, NTabs, NTabPane, useMessage,
 } from 'naive-ui'
-import { get, put, post } from '../api'
+import { get, put, post, api } from '../api'
 import { useUiStore } from '../stores/ui'
 import { useAuthStore } from '../stores/auth'
 import { useWorkspaceStore } from '../stores/workspace'
@@ -32,6 +32,15 @@ const showRestart = ref(false)
 const restartConfirmText = ref('')
 const showGoatConfirm = ref(false)
 const goatConfirmChecked = ref(false)
+const goatPassword = ref('')
+// 修改登录密码弹窗
+const showChangePwd = ref(false)
+const changePwdOld = ref('')
+const changePwdAnswer = ref('')
+const changePwdNew = ref('')
+const changePwdNewQuestion = ref('')
+const changePwdNewAnswer = ref('')
+const changePwdSubmitting = ref(false)
 const lanInfo = ref<{ localhost: string; lan_urls: string[]; port: number } | null>(null)
 // 多平台共用上下文：可选平台列表（web/cli/qq/wechat）
 const sharedPlatforms = ref<string[]>([])
@@ -95,6 +104,7 @@ async function setPermMode(mode: string) {
   if (mode === 'goat') {
     showGoatConfirm.value = true
     goatConfirmChecked.value = false
+    goatPassword.value = ''
     return
   }
   try {
@@ -107,7 +117,8 @@ async function setPermMode(mode: string) {
 async function confirmGoatMode() {
   if (!goatConfirmChecked.value) return
   try {
-    await put('/system/permission-mode', { mode: 'goat', confirm: 'yes' })
+    // 后端在配置了 WEBUI_PASSWORD 时要求 password 二次确认（未配置时忽略该字段）
+    await put('/system/permission-mode', { mode: 'goat', confirm: 'yes', password: goatPassword.value })
     permissionMode.value = 'goat'
     showGoatConfirm.value = false
     message.success(t('settings.goatEnabled'))
@@ -137,6 +148,45 @@ async function doRestart() {
 function logout() {
   auth.logout()
   router.replace('/login')
+}
+
+// ── 修改登录密码 ───────────────────────────────────────────
+async function submitChangePassword() {
+  if (!changePwdAnswer.value.trim()) {
+    message.warning(t('settings.changePasswordAnswer') + '：' + t('login.recoverAnswerRequired'))
+    return
+  }
+  if ((changePwdNew.value || '').length < 8) {
+    message.warning(t('login.recoverPasswordTooShort'))
+    return
+  }
+  changePwdSubmitting.value = true
+  try {
+    const data = await api.changePassword({
+      old_password: changePwdOld.value,
+      new_password: changePwdNew.value,
+      answer: changePwdAnswer.value.trim(),
+      ...(changePwdNewQuestion.value.trim() ? { new_question: changePwdNewQuestion.value.trim() } : {}),
+      ...(changePwdNewAnswer.value.trim() ? { new_answer: changePwdNewAnswer.value.trim() } : {}),
+    })
+    // 用返回的新 token 替换本地存储（与登录时的存储方式保持一致）
+    localStorage.setItem('token', data.token)
+    localStorage.setItem('expires_at', String(data.expires_at))
+    window.dispatchEvent(new CustomEvent('xiaoda-auth-renewed', {
+      detail: { token: data.token, expiresAt: data.expires_at },
+    }))
+    showChangePwd.value = false
+    changePwdOld.value = ''
+    changePwdAnswer.value = ''
+    changePwdNew.value = ''
+    changePwdNewQuestion.value = ''
+    changePwdNewAnswer.value = ''
+    message.success(t('settings.changePasswordOk'))
+  } catch (e: any) {
+    message.error(e.message || t('settings.changePasswordSubmit'))
+  } finally {
+    changePwdSubmitting.value = false
+  }
 }
 
 // ── 工作目录授权管理 ──────────────────────────────────────
@@ -403,6 +453,15 @@ const permLabel = computed<Record<string, string>>(() => ({
             <n-button type="primary" secondary @click="router.push('/setup/profile')">{{ t('settings.editProfileBtn') }}</n-button>
           </div>
         </section></Tilt3D>
+
+        <Tilt3D :max-x="4" :max-y="6"><section class="glass-panel section">
+          <h3>{{ t('settings.security') }}</h3>
+          <p class="apikey-desc">{{ t('settings.changePasswordHint') }}</p>
+          <div class="setting-row">
+            <span class="s-label">{{ t('settings.changePassword') }}</span>
+            <n-button type="warning" secondary @click="showChangePwd = true">{{ t('settings.changePassword') }}</n-button>
+          </div>
+        </section></Tilt3D>
       </n-tab-pane>
 
       <!-- 系统与日志 -->
@@ -451,8 +510,7 @@ const permLabel = computed<Record<string, string>>(() => ({
     </n-modal>
 
     <n-modal v-model:show="showGoatConfirm" preset="card" :title="t('settings.goatConfirmTitle')"
-             style="width: min(420px, 94vw)">
-      <div style="margin-bottom: 16px; font-size: 13.5px">
+             style="width: min(420px, 94vw)">      <div style="margin-bottom: 16px; font-size: 13.5px">
         <p style="margin-bottom: 12px">
           <b>GOAT</b> {{ t('settings.goatConfirmDesc') }}
         </p>
@@ -468,11 +526,64 @@ const permLabel = computed<Record<string, string>>(() => ({
       <n-checkbox v-model:checked="goatConfirmChecked">
         {{ t('settings.goatConfirmCheckbox') }}
       </n-checkbox>
+      <n-input
+        v-model:value="goatPassword"
+        type="password"
+        show-password-on="click"
+        :placeholder="t('login.passwordPlaceholder')"
+        style="margin-top: 12px"
+      />
       <template #footer>
         <div style="display:flex; justify-content:flex-end; gap:10px">
           <n-button @click="showGoatConfirm = false">{{ t('cancel') }}</n-button>
           <n-button type="warning" :disabled="!goatConfirmChecked" @click="confirmGoatMode">
             {{ t('settings.goatConfirmBtn') }}
+          </n-button>
+        </div>
+      </template>
+    </n-modal>
+
+    <!-- 修改登录密码 -->
+    <n-modal v-model:show="showChangePwd" preset="card" :title="t('settings.changePassword')"
+             style="width: min(460px, 94vw)">
+      <div style="display:flex; flex-direction:column; gap:12px; margin-bottom:8px">
+        <p style="margin:0; font-size:12.5px; color:var(--wisdom); opacity:.85">
+          {{ t('settings.changePasswordHint') }}
+        </p>
+        <n-input
+          v-model:value="changePwdOld"
+          type="password"
+          show-password-on="click"
+          :placeholder="t('settings.changePasswordOldPlaceholder')"
+        />
+        <n-input
+          v-model:value="changePwdAnswer"
+          type="password"
+          show-password-on="click"
+          :placeholder="t('settings.changePasswordAnswerPlaceholder')"
+        />
+        <n-input
+          v-model:value="changePwdNew"
+          type="password"
+          show-password-on="click"
+          :placeholder="t('settings.changePasswordNewPlaceholder')"
+        />
+        <n-input
+          v-model:value="changePwdNewQuestion"
+          :placeholder="t('settings.changePasswordNewQuestion')"
+        />
+        <n-input
+          v-model:value="changePwdNewAnswer"
+          type="password"
+          show-password-on="click"
+          :placeholder="t('settings.changePasswordNewAnswer')"
+        />
+      </div>
+      <template #footer>
+        <div style="display:flex; justify-content:flex-end; gap:10px">
+          <n-button @click="showChangePwd = false">{{ t('cancel') }}</n-button>
+          <n-button type="warning" :loading="changePwdSubmitting" @click="submitChangePassword">
+            {{ changePwdSubmitting ? t('settings.changePasswordSubmitting') : t('settings.changePasswordSubmit') }}
           </n-button>
         </div>
       </template>

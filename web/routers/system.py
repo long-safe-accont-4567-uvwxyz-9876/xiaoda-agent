@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import hmac
 import json
 import os
 import time
@@ -280,6 +281,17 @@ async def set_permission_mode(body: dict, request: Request) -> Any:
     # GOAT 模式需要二次确认
     if mode == "goat" and confirm != "yes":
         raise HTTPException(400, "梭哈模式需要二次确认，请传入 confirm: yes")
+    # 「登录即主人」模型下 token 即主人，而 GOAT 会持久化到磁盘、重启后依然
+    # 全权。已配置 WEBUI_PASSWORD 时必须用登录密码做二次确认（恒时比较），
+    # 防止持有 token 的任何人/恶意脚本单凭 confirm 头就把权限永久拉满。
+    if mode == "goat":
+        webui_password = os.getenv("WEBUI_PASSWORD", "")
+        if webui_password:
+            req_password = body.get("password")
+            if (not isinstance(req_password, str)
+                    or not hmac.compare_digest(req_password, webui_password)):
+                logger.warning("system.permission_mode_goat_password_failed")
+                raise HTTPException(403, "切换到梭哈模式需要 WebUI 登录密码二次确认，请传入 password")
     get_permission_manager().set_mode(mode)
     core = request.app.state.core
     await core.db.insert_audit_log("webui.permission_mode.set", "webui", mode)

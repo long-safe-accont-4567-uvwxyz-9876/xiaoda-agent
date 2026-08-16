@@ -89,7 +89,8 @@ onMounted(async () => {
 })
 
 const requiredKeys = computed(() => keys.value.filter(k => k.required))
-const optionalKeys = computed(() => keys.value.filter(k => !k.required))
+// WEBUI_PASSWORD 单独抽出为下方"登录密码与找回问答"区块（必填，不与选填 Key 混排）
+const optionalKeys = computed(() => keys.value.filter(k => !k.required && k.key !== 'WEBUI_PASSWORD'))
 
 function handleUpdate(key: string, value: string) {
   updates.value[key] = value
@@ -178,7 +179,34 @@ const allRequiredTestedAndPassed = computed(() => {
   })
 })
 
-const hasUpdates = computed(() => modifiedKeys.size > 0)
+const hasUpdates = computed(() =>
+  modifiedKeys.size > 0 ||
+  (webuiPassword.value || '').length > 0 ||
+  recoveryQuestion.value.length > 0 ||
+  recoveryAnswer.value.length > 0)
+
+// ── 登录密码必填 + 找回问答（需求：问答和密码在同一设置里提交）──
+const webuiPassword = ref('')
+const recoveryQuestion = ref('')
+const recoveryAnswer = ref('')
+
+const webuiPasswordConfigured = computed(() =>
+  keys.value.some(k => k.key === 'WEBUI_PASSWORD' && k.configured))
+
+// 密码未配置过时必须填写；已配置且本次未修改时可跳过
+const needsPassword = computed(() =>
+  !webuiPasswordConfigured.value || modifiedKeys.has('WEBUI_PASSWORD'))
+
+const passwordComplete = computed(() =>
+  !needsPassword.value || (webuiPassword.value || '').trim().length >= 8)
+
+const recoveryComplete = computed(() => !needsPassword.value ||
+  (recoveryQuestion.value.trim().length > 0 && recoveryAnswer.value.trim().length >= 2))
+
+function handlePasswordInput(value: string) {
+  webuiPassword.value = value
+  handleUpdate('WEBUI_PASSWORD', value)
+}
 
 function handleDisclaimerScroll(e: Event) {
   const el = e.target as HTMLElement
@@ -213,6 +241,16 @@ async function handleSave() {
     return
   }
 
+  // 登录密码与找回问答校验（必填：密码 >= 8 位，问答两者齐全）
+  if (!passwordComplete.value) {
+    error.value = t('setupWizard.passwordTooShort')
+    return
+  }
+  if (!recoveryComplete.value) {
+    error.value = t('setupWizard.recoveryRequired')
+    return
+  }
+
   saving.value = true
   error.value = ''
   try {
@@ -221,11 +259,23 @@ async function handleSave() {
     for (const key of modifiedKeys) {
       keysToSave[key] = updates.value[key]
     }
-    await api.saveSetupKeys(keysToSave, true)
+    // 密码与找回问答作为独立字段提交（后端与 keys 合并写入 .env 并落盘问答）
+    const extraBody: Record<string, unknown> = {}
+    if ((webuiPassword.value || '').trim()) {
+      extraBody.webui_password = webuiPassword.value.trim()
+      extraBody.recovery_question = recoveryQuestion.value.trim()
+      extraBody.recovery_answer = recoveryAnswer.value.trim()
+    }
+    await api.saveSetupKeys(keysToSave, true, extraBody)
     const allRequired = requiredKeys.value.every(k =>
       k.configured || updates.value[k.key]
     )
     if (allRequired) {
+      if (extraBody.webui_password) {
+        // 本次设置了登录密码：跳转登录页，用新密码登录
+        router.replace('/login')
+        return
+      }
       // 自动登录以获取 token，避免跳转后被重定向到登录页
       try {
         await authStore.login('')
@@ -309,6 +359,32 @@ async function handleSave() {
             </div>
           </Transition>
 
+          <!-- 登录密码与找回问答（必填） -->
+          <div class="password-section">
+            <h3 class="password-section-title">── {{ t('setupWizard.passwordSection') }} ──</h3>
+            <p class="password-hint">{{ t('setupWizard.passwordSectionHint') }}</p>
+            <input
+              :value="webuiPassword"
+              type="password"
+              class="dendro-input password-input"
+              :placeholder="t('setupWizard.passwordPlaceholder')"
+              @input="handlePasswordInput(($event.target as HTMLInputElement).value)"
+            />
+            <input
+              v-model="recoveryQuestion"
+              type="text"
+              class="dendro-input password-input"
+              :placeholder="t('setupWizard.recoveryQuestionPlaceholder')"
+            />
+            <input
+              v-model="recoveryAnswer"
+              type="password"
+              class="dendro-input password-input"
+              :placeholder="t('setupWizard.recoveryAnswerPlaceholder')"
+            />
+            <p class="password-hint">{{ t('setupWizard.recoveryHint') }}</p>
+          </div>
+
           <p v-if="error" class="error-text">{{ error }}</p>
 
           <!-- 免责协议 -->
@@ -341,7 +417,7 @@ async function handleSave() {
 
           <button
             class="dendro-btn save-btn"
-            :disabled="saving || !hasUpdates || !allRequiredTestedAndPassed || (!disclaimerAgreed && !disclaimerChecked)"
+            :disabled="saving || !hasUpdates || !allRequiredTestedAndPassed || (!disclaimerAgreed && !disclaimerChecked) || !passwordComplete || !recoveryComplete"
             @click="handleSave"
           >
             {{ saving ? t('setupWizard.saving') : t('setupWizard.save') }}
@@ -518,6 +594,36 @@ async function handleSave() {
 .collapse-leave-from {
   max-height: 600px;
   opacity: 1;
+}
+
+.password-section {
+  border: 1px solid var(--glass-border);
+  border-radius: 10px;
+  padding: 12px 14px;
+  background: rgba(15, 31, 23, 0.35);
+  margin-top: 4px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.password-section-title {
+  font-size: 13px;
+  color: var(--wisdom);
+  font-family: 'Noto Serif SC', serif;
+  margin: 0;
+  text-align: center;
+}
+.password-hint {
+  font-size: 11.5px;
+  color: var(--moon-dim);
+  margin: 0;
+  opacity: 0.75;
+  line-height: 1.6;
+}
+.password-input {
+  width: 100%;
+  padding: 10px 14px;
+  font-size: 14px;
 }
 
 .error-text {

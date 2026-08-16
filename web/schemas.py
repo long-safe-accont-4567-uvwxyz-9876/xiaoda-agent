@@ -28,6 +28,21 @@ class LoginResponse(BaseModel):
     expires_at: float
 
 
+class RecoverRequest(BaseModel):
+    """密码找回请求（无鉴权）：验证找回答案后重置 WEBUI_PASSWORD。"""
+    answer: str
+    new_password: str
+
+
+class ChangePasswordRequest(BaseModel):
+    """修改登录密码请求（需鉴权）：必须通过找回答案验证。"""
+    old_password: str = ""
+    new_password: str
+    answer: str
+    new_question: str = ""
+    new_answer: str = ""
+
+
 class ChatRequest(BaseModel):
     session_id: str = ""
     agent: str = "xiaoda"

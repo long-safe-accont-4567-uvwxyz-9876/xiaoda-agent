@@ -578,6 +578,7 @@ async def _ensure_wechat_bot_task(app: FastAPI) -> None:
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncIterator[Any]:
     logger.info("webui.lifespan.start")
+    _warn_unresolvable_web_master()
     try:
         core, owns_core = await _init_lifespan_resources(app)
     except RecursionError:
@@ -962,6 +963,25 @@ async def _shutdown_lifespan(app: FastAPI, core: Any, owns_core: bool) -> None:
             logger.debug("server.core_shutdown_error", exc_info=True)
 
 
+def _warn_unresolvable_web_master() -> None:
+    """P2：web 主人身份不可解析时启动告警。
+
+    web 通道以 MASTER_QQ_OPENID（或 OWNER_IDS）作为主人身份解析依据
+    （ws_hub 传入 user_id）。两者均未配置时，web 登录用户会被判为非主人
+    ——按安全设计 fail-closed（非主人工具门禁会拒绝 EXECUTE 工具），
+    但对"纯 web 部署、不用 QQ"的场景是配置错误，需要显式引导而非静默降级。
+    """
+    import os as _os
+    if (_os.getenv("MASTER_QQ_OPENID", "").strip()
+            or _os.getenv("OWNER_IDS", "").strip()):
+        return
+    logger.warning(
+        "webui.master_identity_unresolved hint=设置 MASTER_QQ_OPENID 或 OWNER_IDS "
+        "（含 webui 本机标识）后 web 登录用户才会被识别为主人；"
+        "当前 web 用户将被按非主人处理（工具白名单受限）"
+    )
+
+
 def create_app() -> FastAPI:
     # 动态读取版本号，不再硬编码
     try:
@@ -1004,7 +1024,22 @@ def create_app() -> FastAPI:
         # splash HTTP 服务固定绑定 127.0.0.1:18089（agent.py:_start_splash_server），
         # 原 :* 通配允许任意本地端口 iframe，存在本地 clickjacking 风险。
         # 现仅允许 'self' + splash 源（127.0.0.1:18089 / localhost:18089）。
-        response.headers["Content-Security-Policy"] = "frame-ancestors 'self' http://127.0.0.1:18089 http://localhost:18089"
+        # P2：CSP 补全 —— 原来只有 frame-ancestors，XSS 一旦发生无 script-src
+        # 兜底。SPA 资源全部来自 self（Vite 构建产物，无内联 <script>）；
+        # style 允许 unsafe-inline（Vue 组件样式注入需要）；
+        # img/media 允许 data:/blob:（前端本地预览生成物）；
+        # connect 允许 ws/wss（/ws 主通道）。
+        response.headers["Content-Security-Policy"] = (
+            "default-src 'self'; "
+            "script-src 'self'; "
+            "style-src 'self' 'unsafe-inline'; "
+            "img-src 'self' data: blob:; "
+            "media-src 'self' data: blob:; "
+            "font-src 'self' data:; "
+            "connect-src 'self' ws: wss:; "
+            "frame-ancestors 'self' http://127.0.0.1:18089 http://localhost:18089; "
+            "object-src 'none'; base-uri 'self'"
+        )
         response.headers["X-Content-Type-Options"] = "nosniff"
         response.headers["X-XSS-Protection"] = "1; mode=block"
         response.headers["Strict-Transport-Security"] = "max-age=31536000; includeSubDomains"
@@ -1016,6 +1051,10 @@ def create_app() -> FastAPI:
             new_expiry = getattr(request.state, "new_expiry", 0)
             if new_expiry:
                 response.headers["X-New-Token-Expiry"] = str(int(new_expiry))
+            # VULN-29：续期同时刷新 media cookie，避免 7 天后 cookie 过期
+            # 而主 token 仍有效导致的媒体访问 401
+            from web.routers.auth import set_media_cookie
+            set_media_cookie(response, new_token, float(new_expiry or 0))
         return response
 
     # Q1: 注册统一异常处理器（AppException -> 结构化 error_code; 未捕获异常 -> E_SYS999）
@@ -1107,7 +1146,9 @@ def create_app() -> FastAPI:
     media_dir.mkdir(parents=True, exist_ok=True)
     # follow_symlink：表情包等媒体是指向外置盘的符号链接
     # 壁纸等媒体文件禁强缓存，确保换图后浏览器不使用旧缓存
-    app.mount("/media", NoCacheMediaStaticFiles(directory=str(media_dir), follow_symlink=True),
+    # VULN-29：/media 必须带 token 才能访问（TTS 语音/生成图片/用户上传属私密数据）
+    from web.media_auth import AuthStaticFiles
+    app.mount("/media", AuthStaticFiles(directory=str(media_dir), follow_symlink=True),
               name="media")
 
     dist_dir = Path(__file__).parent / "dist"
@@ -1115,19 +1156,6 @@ def create_app() -> FastAPI:
         app.mount("/", NoCacheHTMLStaticFiles(directory=str(dist_dir), html=True), name="spa")
 
     return app
-
-
-class NoCacheMediaStaticFiles(StaticFiles):
-    """媒体文件（壁纸/表情包等）禁强缓存。
-
-    设置 Cache-Control: no-cache，浏览器每次都会向服务器验证是否有新版本，
-    换壁纸后无需清浏览器缓存即可看到新图。
-    """
-
-    async def get_response(self, path: Any, scope: Any) -> Any:
-        resp = await super().get_response(path, scope)
-        resp.headers["Cache-Control"] = "no-cache, must-revalidate"
-        return resp
 
 
 class NoCacheHTMLStaticFiles(StaticFiles):

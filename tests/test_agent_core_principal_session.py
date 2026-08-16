@@ -16,12 +16,26 @@ def make_core(owner_ids: set[str]) -> AgentCore:
     return core
 
 
-def test_agent_core_does_not_promote_web_user_from_source():
+def test_agent_core_treats_web_user_as_owner_by_channel_trust():
+    """「登录即主人」模型：web 通道即使 owner registry 为空也解析为主人。
+
+    （旧断言 test_agent_core_does_not_promote_web_user_from_source 基于
+    "web 渠道严格判定"的旧假设，已按新设计更新。）
+    """
     core = make_core(set())
 
-    principal = core._resolve_principal("web-user", "web-user", "web")
+    principal = core._resolve_principal("webui", "webui", "web")
 
-    assert principal.principal_id == "web-user"
+    assert principal.principal_id == "webui"
+    assert principal.is_owner is True
+
+
+def test_agent_core_strict_for_external_qq_group_stranger():
+    """外部渠道（qq_group）陌生 subject 仍严格判定为非主人（回归保护）。"""
+    core = make_core({"owner-openid"})
+
+    principal = core._resolve_principal("qq_stranger", "stranger-openid", "qq_group")
+
     assert principal.is_owner is False
 
 

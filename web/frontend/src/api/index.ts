@@ -49,7 +49,13 @@ async function request<T>(path: string, options?: RequestInit, confirm = false):
     throw new Error(`HTTP ${res.status}`)
   }
   if (!res.ok || !body.ok) {
-    const msg = body?.error?.message || (body as any)?.detail || `HTTP ${res.status}`
+    let msg: any = body?.error?.message
+    if (!msg && (body as any)?.detail) {
+      const d = (body as any).detail
+      // 兼容结构化 detail（如 {code, message}）与纯字符串 detail
+      msg = typeof d === 'string' ? d : (d?.message || d?.code || JSON.stringify(d))
+    }
+    if (!msg) msg = `HTTP ${res.status}`
     throw new Error(typeof msg === 'string' ? msg : JSON.stringify(msg))
   }
   return body.data as T
@@ -98,6 +104,20 @@ export const api = {
   login: (password: string) =>
     post<{ token: string; expires_at: number }>('/auth/login', { password }),
 
+  getRecoverQuestion: () =>
+    get<{ question: string; has_question: boolean }>('/auth/recover-question'),
+
+  recoverPassword: (answer: string, newPassword: string) =>
+    post<{ ok: boolean }>('/auth/recover', { answer, new_password: newPassword }),
+
+  changePassword: (body: {
+    old_password: string
+    new_password: string
+    answer: string
+    new_question?: string
+    new_answer?: string
+  }) => post<{ token: string; expires_at: number }>('/auth/change-password', body),
+
   getStatus: () => get('/system/status'),
   getSessions: () => get<any[]>('/sessions'),
   createSession: () => post<{ session_id: string }>('/sessions'),
@@ -138,8 +158,8 @@ export const api = {
   testSetupKey: (keyName: string, keyValue: string, extra?: Record<string, string>) =>
     post<{ success: boolean; message: string }>('/setup/test-key', { key_name: keyName, key_value: keyValue, ...(extra ? { extra } : {}) }),
 
-  saveSetupKeys: (keys: Record<string, string>, testRequired = false) =>
-    post<unknown>('/setup/keys', { keys, test_required: testRequired }),
+  saveSetupKeys: (keys: Record<string, string>, testRequired = false, extra: Record<string, unknown> = {}) =>
+    post<unknown>('/setup/keys', { keys, test_required: testRequired, ...extra }),
 
   getSetupUserProfile: () => get<Record<string, string>>('/setup/user-profile'),
 

@@ -13,31 +13,15 @@ from pathlib import Path
 from threading import Lock
 from typing import Any
 
-from fastapi import APIRouter, HTTPException, Request, Depends
+from fastapi import APIRouter, HTTPException, Request, Depends, Response
 from loguru import logger
 
-from web.schemas import Envelope, LoginRequest, LoginResponse
+from web.schemas import Envelope, LoginRequest, LoginResponse, RecoverRequest, ChangePasswordRequest
+# VULN-28：XFF 信任判定统一从 rate_limit 导入（规则单源，避免两处漂移）
+from web.middleware.rate_limit import _peer_is_trusted_proxy, _trust_forwarded_for
 import contextlib
 
 router = APIRouter(tags=["auth"])
-
-
-def _trust_forwarded_for() -> bool:
-    """是否信任 X-Forwarded-For 头 (反代场景).
-
-    默认不信任 (兼容现状). 通过环境变量 ``TRUST_FORWARDED_FOR=1`` 或
-    config 字段 ``TRUST_FORWARDED_FOR`` 显式开启.
-    """
-    env_val = os.getenv("TRUST_FORWARDED_FOR", "").strip().lower()
-    if env_val in ("1", "true", "yes", "on"):
-        return True
-    try:
-        from config import TRUST_FORWARDED_FOR as _cfg_val  # type: ignore
-        if _cfg_val:
-            return True
-    except Exception:
-        pass
-    return False
 
 _tokens: OrderedDict[str, float] = OrderedDict()
 _TOKENS_MAX_SIZE = 1000
@@ -62,6 +46,35 @@ _revoked_cache_mtime: float = 0.0
 _RENEWAL_GRACE_SECONDS = 30.0
 # token -> 宽限期截止时间（epoch 秒）。仅内存态，用于续期撤销的短窗口豁免。
 _revoked_grace: dict[str, float] = {}
+
+# VULN-29：媒体访问 cookie。前端用裸 <audio :src>/<img src> 引用 /media
+# （无法携带 Authorization 头），登录成功时下发本 cookie（Path=/media，
+# HttpOnly + SameSite=Strict），/media 中间件校验之，前端零改动。
+MEDIA_COOKIE_NAME = "x_media_token"
+
+
+def set_media_cookie(response: Any, token: str, expires_at: float) -> None:
+    """在响应上下发 /media 访问 cookie（HttpOnly + SameSite=Strict + Path 限定）。
+
+    response 为 None 时（直调/测试场景无响应对象）跳过。
+    """
+    if response is None:
+        return
+    response.set_cookie(
+        MEDIA_COOKIE_NAME, token,
+        path="/media",
+        httponly=True,
+        samesite="strict",
+        max_age=int(max(0, expires_at - time.time())),
+    )
+
+
+def clear_media_cookie(response: Any) -> None:
+    """登出/撤销时清除 /media 访问 cookie。response 为 None 时跳过。"""
+    if response is None:
+        return
+    response.delete_cookie(MEDIA_COOKIE_NAME, path="/media")
+
 _token_epoch: int | None = None
 _token_epoch_lock = Lock()
 
@@ -332,8 +345,13 @@ def _get_client_ip(request: Request) -> str:
     取最右侧非可信代理 IP (覆盖多层反代场景, 跳过末尾的内网代理 IP).
     修复 P1：原代码用 request.client.host，反代后所有请求对端均为 127.0.0.1，
     导致无密码模式对公网开放、限流白名单失效。
+
+    VULN-28：仅当 socket 对端是可信代理（回环/显式可信网段）时才解析 XFF ——
+    攻击者直连时自己控制 XFF 头，无条件信任即可伪造来源 IP，绕过 per-IP 的
+    登录失败锁定（5 次锁 600s）。
     """
-    if _trust_forwarded_for():
+    peer = request.client.host if request.client else "unknown"
+    if _trust_forwarded_for() and _peer_is_trusted_proxy(peer):
         xff = request.headers.get("X-Forwarded-For", "") or request.headers.get("x-forwarded-for", "")
         if xff:
             # X-Forwarded-For: client, proxy1, proxy2
@@ -349,9 +367,7 @@ def _get_client_ip(request: Request) -> str:
             # 全部都是内网 (如纯内网部署), 取最左侧 (原始客户端)
             if candidates:
                 return candidates[0]
-    if request.client:
-        return request.client.host
-    return "unknown"
+    return peer
 
 
 async def get_current_user(request: Request) -> str:
@@ -384,15 +400,20 @@ _load_or_create_secret()
 
 
 def _cleanup_expired_rate_limits() -> None:
-    """清理已过期的 rate limit 条目，防止 _rate_limit 无限增长。"""
+    """清理已过期的 rate limit 条目，防止 _rate_limit 无限增长。
+
+    lock_until <= 0 表示"计数中、尚未锁定"（login/recover 失败计数的中间态），
+    不能当作过期清理，否则失败计数永远停在 1，5 次锁定永不触发。
+    """
     now = time.time()
-    expired = [ip for ip, (_, lock_until) in _rate_limit.items() if lock_until < now]
+    expired = [ip for ip, (_, lock_until) in _rate_limit.items()
+               if lock_until > 0 and lock_until < now]
     for ip in expired:
         _rate_limit.pop(ip, None)
 
 
 @router.post("/auth/login", response_model=Envelope[LoginResponse])
-async def login(req: LoginRequest, request: Request) -> Any:
+async def login(req: LoginRequest, request: Request, response: Response = None) -> Any:
     password = os.getenv("WEBUI_PASSWORD", "")
     client_ip = _get_client_ip(request)
 
@@ -409,9 +430,17 @@ async def login(req: LoginRequest, request: Request) -> Any:
         if not _is_private_ip(client_ip) or not _is_loopback_bind():
             raise HTTPException(403, "Public access denied without password. Set WEBUI_PASSWORD in .env")
         token, expiry = _issue_token()
+        set_media_cookie(response, token, expiry)
         return Envelope(data=LoginResponse(token=token, expires_at=expiry))
 
+    # VULN-28: 弱密码告警（登录即主人模型下 WEBUI_PASSWORD 是唯一信任边界，
+    # 首次登录尝试即告警，无论成败）
+    _warn_weak_password(password)
+
     if not hmac.compare_digest(req.password, password):
+        # VULN-28: 失败审计（含来源 IP，供异常检测/事后追溯）
+        logger.warning("auth.login_failed ip={} fails_next={}", client_ip,
+                       _rate_limit.get(client_ip, (0, 0))[0] + 1)
         with _rate_limit_lock:
             fails, lock_until = _rate_limit.get(client_ip, (0, 0))
             fails += 1
@@ -428,25 +457,224 @@ async def login(req: LoginRequest, request: Request) -> Any:
     with _rate_limit_lock:
         _rate_limit.pop(client_ip, None)
     token, expiry = _issue_token()
+    set_media_cookie(response, token, expiry)
     return Envelope(data=LoginResponse(token=token, expires_at=expiry))
 
 
+_MIN_PASSWORD_LEN = 8
+_warned_weak_password = False
+
+
+def _warn_weak_password(password: str) -> None:
+    """WEBUI_PASSWORD 过短时打 CRITICAL 告警（每个进程只告警一次）。"""
+    global _warned_weak_password
+    if _warned_weak_password or len(password) >= _MIN_PASSWORD_LEN:
+        return
+    _warned_weak_password = True
+    logger.critical(
+        "auth.weak_password len={} min_required={} "
+        "WEBUI_PASSWORD 是唯一登录边界，弱密码可被暴力破解，请立即更换为 "
+        "{} 位以上随机字符串",
+        len(password), _MIN_PASSWORD_LEN, _MIN_PASSWORD_LEN,
+    )
+
+
+# ── 密码找回 & 修改密码 ──────────────────────────────────────
+
+
+async def _audit_auth_event(request: Request, action: str, detail: str) -> None:
+    """写入审计日志（参照现有 insert_audit_log 用法）。
+
+    从 request.app.state.core 拿 core，拿不到（直调/测试场景）就跳过。
+    """
+    try:
+        if request is None:
+            return
+        core = getattr(request.app.state, "core", None)
+        if core is None or not hasattr(core, "db"):
+            return
+        await core.db.insert_audit_log(action, "webui", detail)
+        await core.db.commit()
+    except Exception as exc:
+        logger.debug("auth.audit_log_failed error={}", str(exc))
+
+
+def _update_env_password(new_password: str) -> None:
+    """更新 .env 中的 WEBUI_PASSWORD（复用 setup_wizard 的 .env 读写机制，保持行序）。
+
+    同时更新 os.environ，使进程内登录校验立即生效。失败时抛 RuntimeError 由调用方处理。
+    """
+    from setup_wizard import ENV_PATH, _parse_env_lines, _write_env, _load_env_values
+    existing_lines = _parse_env_lines(ENV_PATH)
+    current = _load_env_values()
+    merged = dict(current)
+    merged["WEBUI_PASSWORD"] = new_password
+    _write_env(existing_lines, merged)
+    os.environ["WEBUI_PASSWORD"] = new_password
+
+
+def _check_recover_rate_limit(client_ip: str) -> None:
+    """复用登录失败锁定桶：锁定期间一律 429。"""
+    with _rate_limit_lock:
+        _cleanup_expired_rate_limits()
+        if client_ip in _rate_limit:
+            _, lock_until = _rate_limit[client_ip]
+            if time.time() < lock_until:
+                remaining = int(lock_until - time.time())
+                raise HTTPException(429, f"尝试次数过多，请 {remaining} 秒后重试")
+
+
+def _record_recover_failure(client_ip: str) -> None:
+    """复用 login 失败计数机制：5 次失败锁 600 秒。"""
+    with _rate_limit_lock:
+        fails, lock_until = _rate_limit.get(client_ip, (0, 0))
+        fails += 1
+        if fails >= 5:
+            _rate_limit[client_ip] = (fails, time.time() + 600)
+        else:
+            _rate_limit[client_ip] = (fails, lock_until)
+        _rate_limit.move_to_end(client_ip)
+        while len(_rate_limit) > _RATE_LIMIT_MAX_SIZE:
+            _rate_limit.popitem(last=False)
+
+
+@router.get("/auth/recover-question", response_model=Envelope[dict])
+async def recover_question() -> Any:
+    """返回已配置的找回问题（无鉴权，与 login 同级别）。"""
+    from security.recovery_qa import get_question
+    question = get_question()
+    return Envelope(data={"question": question or "", "has_question": bool(question)})
+
+
+@router.post("/auth/recover", response_model=Envelope[dict])
+async def recover(req: RecoverRequest, request: Request, response: Response = None) -> Any:
+    """通过找回问答重置密码（无鉴权）。
+
+    成功后更新 .env、吊销全部 token（epoch 递增）、清除媒体 cookie，
+    不返回 token —— 要求用户用新密码重新登录。
+    """
+    from security.recovery_qa import get_question, verify_answer
+
+    client_ip = _get_client_ip(request)
+
+    if not get_question():
+        raise HTTPException(400, "未设置密码找回问题")
+
+    _check_recover_rate_limit(client_ip)
+
+    if len(req.new_password) < _MIN_PASSWORD_LEN:
+        raise HTTPException(400, f"新密码至少需要 {_MIN_PASSWORD_LEN} 位")
+
+    if not verify_answer(req.answer):
+        logger.warning("auth.recover_failed ip={}", client_ip)
+        _record_recover_failure(client_ip)
+        raise HTTPException(403, "找回答案错误")
+
+    try:
+        _update_env_password(req.new_password)
+    except Exception as exc:
+        logger.error("auth.recover_env_update_failed error={}", str(exc))
+        raise HTTPException(500, "更新密码配置失败") from None
+
+    # 成功：清除该 IP 的失败计数
+    with _rate_limit_lock:
+        _rate_limit.pop(client_ip, None)
+
+    _increment_token_epoch()  # 吊销全部 token
+    clear_media_cookie(response)
+
+    await _audit_auth_event(request, "webui.password.recovered", "password reset via recovery question")
+    _warn_weak_password(req.new_password)
+    logger.warning("auth.password_recovered ip={}", client_ip)
+    return Envelope(data={"ok": True})
+
+
+@router.post("/auth/change-password", response_model=Envelope[dict])
+async def change_password(req: ChangePasswordRequest, user_id: str = Depends(get_current_user),
+                          request: Request = None, response: Response = None) -> Any:
+    """修改登录密码（需鉴权；修改必须通过找回答案验证）。
+
+    成功后更新 .env、吊销全部 token 并签发新 token（旧 token 按滑动续期
+    方式带宽限期撤销），可同时轮换找回问答。返回新 token 供前端替换本地存储。
+    """
+    from security.recovery_qa import verify_answer, set_recovery
+
+    current_password = os.getenv("WEBUI_PASSWORD", "")
+    client_ip = _get_client_ip(request) if request is not None else "unknown"
+
+    # 当前密码校验：未设置过密码时允许空 old_password
+    if current_password and not hmac.compare_digest(req.old_password or "", current_password):
+        logger.warning("auth.change_password_old_mismatch ip={}", client_ip)
+        raise HTTPException(403, "旧密码错误")
+
+    # 需求硬约束：改密码必须通过验证问题
+    if not verify_answer(req.answer):
+        logger.warning("auth.change_password_answer_failed ip={}", client_ip)
+        raise HTTPException(403, "找回答案错误")
+
+    if len(req.new_password) < _MIN_PASSWORD_LEN:
+        raise HTTPException(400, f"新密码至少需要 {_MIN_PASSWORD_LEN} 位")
+    if req.new_password == current_password:
+        raise HTTPException(400, "新密码不能与当前密码相同")
+
+    # 可选：轮换找回问答（两者都非空才轮换）
+    new_question = (req.new_question or "").strip()
+    new_answer = (req.new_answer or "").strip()
+    if new_question and new_answer:
+        try:
+            set_recovery(new_question, new_answer)
+        except ValueError as exc:
+            raise HTTPException(400, str(exc)) from None
+
+    try:
+        _update_env_password(req.new_password)
+    except Exception as exc:
+        logger.error("auth.change_password_env_update_failed error={}", str(exc))
+        raise HTTPException(500, "更新密码配置失败") from None
+
+    _increment_token_epoch()  # 吊销全部旧 token
+    new_token, expiry = _issue_token()
+
+    # 旧 token 按滑动续期方式撤销（带宽限期），避免当前请求瞬间 401
+    if request is not None:
+        auth_header = request.headers.get("Authorization", "")
+        if auth_header.startswith("Bearer "):
+            old_token = auth_header[7:]
+            _revoke_token(old_token, grace_seconds=_RENEWAL_GRACE_SECONDS)
+            _tokens.pop(old_token, None)
+        # get_current_user 可能已触发滑动续期并放入 request.state，
+        # 清除之，避免中间件再下发一个已被 epoch 吊销的 token 头。
+        if hasattr(request.state, "new_token"):
+            delattr(request.state, "new_token")
+
+    set_media_cookie(response, new_token, expiry)
+
+    await _audit_auth_event(request, "webui.password.changed", "password changed")
+    _warn_weak_password(req.new_password)
+    logger.warning("auth.password_changed ip={}", client_ip)
+    return Envelope(data={"token": new_token, "expires_at": expiry})
+
+
 @router.post("/auth/logout", response_model=Envelope[None])
-async def logout(user_id: str = Depends(get_current_user), request: Request = None) -> Any:
+async def logout(user_id: str = Depends(get_current_user), request: Request = None,
+                 response: Response = None) -> Any:
     """撤销当前 token（真正加入黑名单）。"""
     auth = request.headers.get("Authorization", "")
     if auth.startswith("Bearer "):
         token = auth[7:]
         _revoke_token(token)
         _tokens.pop(token, None)
+    clear_media_cookie(response)
     return Envelope(data=None)
 
 
 @router.post("/auth/revoke-all", response_model=Envelope[None])
-async def revoke_all(user_id: str = Depends(get_current_user)) -> Any:
+async def revoke_all(user_id: str = Depends(get_current_user),
+                     response: Response = None) -> Any:
     """撤销所有 token（改密码后强制全量重新登录）。"""
     _increment_token_epoch()
     for token in list(_tokens.keys()):
         _revoke_token(token)
     _tokens.clear()
+    clear_media_cookie(response)
     return Envelope(data=None)

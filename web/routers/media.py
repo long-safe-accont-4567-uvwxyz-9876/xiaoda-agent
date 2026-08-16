@@ -35,6 +35,23 @@ def _queue(request: Request) -> Any:
     return q
 
 
+def _signed_media_url(request: Request, url: str) -> str:
+    """给 /media URL 附加当前请求的 token，供 <audio>/<img> 直连静态资源。
+
+    /media 静态目录已启用 token 鉴权（web/media_auth.AuthStaticFiles），
+    浏览器加载 <audio>/<img> 不会带 Authorization 头，因此由后端在返回
+    audio_url/url 字段时拼上 ?token=…。取不到 token 时保持原样（访问时 401，
+    fail-closed）。
+    """
+    auth = request.headers.get("Authorization", "")
+    if not auth.startswith("Bearer "):
+        return url
+    token = auth[7:].strip()
+    if not token:
+        return url
+    return f"{url}?token={token}"
+
+
 # ── TTS ──────────────────────────────────────────────────────────
 
 
@@ -58,7 +75,8 @@ async def synthesize_tts(body: dict, request: Request) -> Any:
     cached = next(iter(tts_dir.glob(f"{digest}.*")), None)
     if cached:
         logger.info("webui.tts.cache_hit digest={}", digest)
-        return Envelope(data={"audio_url": f"/media/tts/{cached.name}", "cached": True})
+        return Envelope(data={"audio_url": _signed_media_url(
+            request, f"/media/tts/{cached.name}"), "cached": True})
 
     t0 = time.time()
     path = await core.tts.synthesize(text, voice=voice, style=style)
@@ -68,7 +86,7 @@ async def synthesize_tts(body: dict, request: Request) -> Any:
     dest = tts_dir / f"{digest}{src.suffix or '.wav'}"
     shutil.copy2(str(src), str(dest))
     return Envelope(data={
-        "audio_url": f"/media/tts/{dest.name}",
+        "audio_url": _signed_media_url(request, f"/media/tts/{dest.name}"),
         "cached": False,
         "elapsed_ms": int((time.time() - t0) * 1000),
     })
@@ -220,7 +238,8 @@ _GALLERY_DIRS = {"image": "image", "video": "video", "audio": "tts"}
 
 
 @router.get("/media/gallery", response_model=Envelope[list[dict]])
-async def gallery(type: str = Query(default="image"),
+async def gallery(request: Request,
+                  type: str = Query(default="image"),
                   page: int = Query(default=0, ge=0),
                   limit: int = Query(default=24, le=100)) -> Any:
     if type not in _GALLERY_DIRS:
@@ -233,7 +252,8 @@ async def gallery(type: str = Query(default="image"),
     files.sort(key=lambda f: f.stat().st_mtime, reverse=True)
     window = files[page * limit:(page + 1) * limit]
     return Envelope(data=[
-        {"name": f.name, "url": f"/media/{_GALLERY_DIRS[type]}/{f.name}",
+        {"name": f.name, "url": _signed_media_url(
+            request, f"/media/{_GALLERY_DIRS[type]}/{f.name}"),
          "size": f.stat().st_size, "mtime": f.stat().st_mtime}
         for f in window])
 

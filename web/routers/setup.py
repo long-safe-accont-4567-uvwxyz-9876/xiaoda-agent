@@ -710,6 +710,38 @@ async def save_keys(body: dict) -> Any:
         if not updates or not isinstance(updates, dict):
             return Envelope(ok=False, error={"code": "INVALID_BODY", "message": "需要提供 keys 字段（dict）"})
 
+        # ── WebUI 密码必填 + 找回问答（需求：问答和密码在同一设置中提交）──
+        webui_password = str(body.get("webui_password") or "").strip()
+        recovery_question = str(body.get("recovery_question") or "").strip()
+        recovery_answer = str(body.get("recovery_answer") or "").strip()
+        if webui_password:
+            if len(webui_password) < 8:
+                raise HTTPException(400, detail={
+                    "code": "WEAK_PASSWORD",
+                    "message": "WebUI 密码至少需要 8 位",
+                })
+            if not recovery_question or not recovery_answer:
+                raise HTTPException(400, detail={
+                    "code": "RECOVERY_REQUIRED",
+                    "message": "密码与找回问题必须同时设置",
+                })
+            if len(recovery_question) > 200:
+                raise HTTPException(400, detail={
+                    "code": "RECOVERY_INVALID",
+                    "message": "找回问题长度需在 1~200 个字符之间",
+                })
+            if len(recovery_answer) < 2:
+                raise HTTPException(400, detail={
+                    "code": "RECOVERY_INVALID",
+                    "message": "找回答案至少需要 2 个字符",
+                })
+            # 并入 updates 走现有 .env 写入管线（保持现有逻辑不变）
+            updates = dict(updates)
+            updates["WEBUI_PASSWORD"] = webui_password
+        # 未提供 webui_password 时忽略三个新字段；已有找回问题且未提供新
+        # answer 时不会清掉旧问题（仅在 webui_password 提供时才会写问答）
+
+
         # 当 test_required=true 时，对必填 Key 逐一测试
         test_required = body.get("test_required", False)
         if test_required:
@@ -728,6 +760,17 @@ async def save_keys(body: dict) -> Any:
             await _rollback_auto_registered_providers(provider_snapshots)
             raise
         logger.info("setup.keys_saved count={}", len(updates))
+
+        # 保存找回问答（仅当本次设置了密码时；写入失败由 recovery_qa 内部降级）
+        if webui_password:
+            try:
+                from security.recovery_qa import set_recovery
+                set_recovery(recovery_question, recovery_answer)
+            except ValueError as exc:
+                raise HTTPException(400, detail={
+                    "code": "RECOVERY_INVALID", "message": str(exc),
+                }) from None
+
 
         # 重新加载环境变量 + 清除缓存 + 重置凭证池
         await _reload_env_and_cache(updates, ENV_PATH)
@@ -752,6 +795,8 @@ async def save_keys(body: dict) -> Any:
         _reinit_tasks.append(asyncio.create_task(_reinit_and_maybe_restart_qq(_qq_changed)))
 
         return Envelope(data={"saved": list(updates.keys()), "need_restart": False})
+    except HTTPException:
+        raise
     except Exception as e:
         import traceback
         logger.error("setup.keys_save_failed error={} traceback={}", str(e), traceback.format_exc())

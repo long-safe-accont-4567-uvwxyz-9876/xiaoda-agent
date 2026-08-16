@@ -52,6 +52,57 @@ _DEFAULT_EXEMPT_PATHS = frozenset({
 # ── localhost 主机名集合 ──
 _LOCALHOST_HOSTS = frozenset({"127.0.0.1", "::1", "localhost", "0:0:0:0:0:0:0:1"})
 
+# ── VULN-28：登录端点独立严格限流 ──
+# login 是"登录即主人"模型下唯一的信任边界，必须单独严格限速，
+# 且可信主机（回环/显式可信网段）不豁免 —— 反代场景所有客户端对端
+# 均为 127.0.0.1，若豁免则爆破完全绕过限流。
+_LOGIN_PATHS = frozenset({
+    "/api/v1/auth/login",
+    "/api/v1/auth/logout",
+    "/api/v1/auth/revoke-all",
+    # 找回答案爆破防护：与登录同等的独立严格桶
+    "/api/v1/auth/recover",
+})
+
+# ── VULN-28：默认可信范围仅为回环（原实现自动放行所有内网 IP，
+# 公网部署时同 VPS/容器网段的攻击者可无限速爆破）。内网段需通过
+# RATE_LIMIT_TRUSTED_NETWORKS（逗号分隔 IP/CIDR）显式配置。
+_DEFAULT_TRUSTED_NETWORKS = ("127.0.0.0/8", "::1/128")
+
+
+def _parse_trusted_networks(raw: str | None) -> list:
+    """解析逗号分隔的 IP/CIDR 列表为 ip_network 对象，非法项跳过并告警。"""
+    if raw is None:
+        return [ipaddress.ip_network(n) for n in _DEFAULT_TRUSTED_NETWORKS]
+    networks: list = []
+    for item in raw.split(","):
+        item = item.strip()
+        if not item:
+            continue
+        try:
+            networks.append(ipaddress.ip_network(item, strict=False))
+        except ValueError:
+            logger.warning("rate_limit.trusted_network_invalid item={}", item)
+    return networks
+
+
+def _peer_is_trusted_proxy(peer: str, trusted_networks: list | None = None) -> bool:
+    """判断 socket 对端是否为可信代理（回环或显式可信网段）。
+
+    VULN-28 补充：X-Forwarded-For 头**只能**在直接连接方是可信代理时才能
+    解析 —— 攻击者直连（无反代）时完全控制 XFF，若无条件信任即可伪造任意
+    来源 IP 轮换，绕过 per-IP 的 login 限流与失败锁定。
+    """
+    if not peer or peer in _LOCALHOST_HOSTS:
+        return True
+    try:
+        addr = ipaddress.ip_address(peer)
+    except ValueError:
+        return False
+    nets = trusted_networks if trusted_networks is not None else _parse_trusted_networks(
+        os.environ.get("RATE_LIMIT_TRUSTED_NETWORKS"))
+    return any(addr in net for net in nets)
+
 # F7 持久化与淘汰策略常量
 _MAX_BUCKETS = 5000          # 单层最大桶数 (用户桶+写端点桶各自上限)
 _SAVE_INTERVAL = 60.0        # 持久化保存间隔 (秒)
@@ -77,15 +128,12 @@ def _trust_forwarded_for() -> bool:
 
 
 def _is_private_ip(host: str) -> bool:
-    """判断 host 是否为回环/内网/链路本地/保留 IP (白名单放行)。
+    """判断 host 是否为回环/内网/链路本地/保留 IP。
 
-    覆盖:
-    - RFC1918 私有地址 (10/8、172.16/12、192.168/16)
-    - 回环 (127/8、::1)
-    - 链路本地 (169.254/16、fe80::/10)
-    - CGNAT (100.64/10, Python < 3.13 的 is_private 不覆盖, 显式判断)
-    - 保留地址、多播地址
-    - IPv6 ULA (fc00::/7)
+    VULN-28 注意：本函数**不再用于限流白名单放行**（原实现自动放行所有
+    内网 IP，公网部署时可被同网段攻击者利用无限速爆破）。限流白名单改用
+    ``_parse_trusted_networks``（默认仅回环，显式配置才放行内网段）。
+    保留本函数供其它需要"是否内网"判定的调用方使用。
     """
     if not host or host in _LOCALHOST_HOSTS:
         return True
@@ -209,8 +257,10 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
         global_limit: float | None = None,
         user_limit: float | None = None,
         write_limit: float | None = None,
+        login_limit: float | None = None,
         exempt_paths: Iterable[str] | None = None,
         whitelist: Iterable[str] | None = None,
+        trusted_networks: Iterable[str] | None = None,
         persist_path: str | None = None,
     ) -> None:
         super().__init__(app)
@@ -221,9 +271,20 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
                                  else os.environ.get("RATE_LIMIT_USER", "60"))
         self._write_limit = float(write_limit if write_limit is not None
                                   else os.environ.get("RATE_LIMIT_WRITE", "30"))
+        # VULN-28: login 端点独立严格限流（默认 10/min，可信主机不豁免）
+        self._login_limit = float(login_limit if login_limit is not None
+                                  else os.environ.get("RATE_LIMIT_LOGIN", "10"))
         self._exempt_paths = set(exempt_paths) if exempt_paths else set(_DEFAULT_EXEMPT_PATHS)
-        # 额外白名单 host (测试/运维可追加); 默认已含 localhost/内网 (见 _is_whitelisted)
+        # 额外白名单 host (测试/运维可追加, 精确匹配)
         self._whitelist = set(whitelist) if whitelist else set()
+        # VULN-28: 可信网段（默认仅回环；内网段需 RATE_LIMIT_TRUSTED_NETWORKS 显式配置）
+        if trusted_networks is not None:
+            self._trusted_networks = _parse_trusted_networks(",".join(trusted_networks))
+        else:
+            self._trusted_networks = _parse_trusted_networks(
+                os.environ.get("RATE_LIMIT_TRUSTED_NETWORKS"))
+        # login 独立桶: 按 client host 分桶
+        self._login_buckets: dict = defaultdict(lambda: TokenBucket(self._login_limit))
 
         # 三级桶: 全局单桶; 用户桶与写端点桶按 (ip:user_id) 分桶
         self._global_bucket = TokenBucket(self._global_limit)
@@ -357,8 +418,7 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
 
     # ── 辅助方法 ──
 
-    @staticmethod
-    def _client_host(request: Request) -> str:
+    def _client_host(self, request: Request) -> str:
         """提取客户端真实 IP。
 
         修复 P1：原代码用 request.client.host，反代后所有请求对端均为 127.0.0.1，
@@ -366,9 +426,14 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
         默认不信任 X-Forwarded-For (兼容现状); 显式设置环境变量
         ``TRUST_FORWARDED_FOR=1`` 或 config 字段后启用, 启用时取 XFF 中
         最右侧非可信代理 IP (覆盖多层反代场景)。
+
+        VULN-28 补充：仅当 socket 对端是可信代理（回环/显式可信网段）时才
+        解析 XFF —— 攻击者直连时自己控制 XFF 头，无条件信任即可伪造来源 IP
+        轮换，绕过 per-IP 限流。
         """
+        peer = request.client.host if request.client else "unknown"
         trust_xff = _trust_forwarded_for()
-        if trust_xff:
+        if trust_xff and _peer_is_trusted_proxy(peer, self._trusted_networks):
             xff = request.headers.get("X-Forwarded-For", "") or request.headers.get("x-forwarded-for", "")
             if xff:
                 # X-Forwarded-For: client, proxy1, proxy2
@@ -384,8 +449,7 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
                 # 全部都是内网 (如纯内网部署), 取最左侧 (原始客户端)
                 if candidates:
                     return candidates[0]
-        client = request.client
-        return client.host if client else "unknown"
+        return peer
 
     @staticmethod
     def _user_id(request: Request) -> str:
@@ -400,7 +464,18 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
         return f"{host}:{user_id}" if user_id else host
 
     def _is_whitelisted(self, host: str) -> bool:
-        return host in self._whitelist or _is_private_ip(host)
+        """VULN-28：仅精确白名单 + 显式可信网段（默认仅回环）放行。
+
+        原实现自动放行所有内网 IP（_is_private_ip），公网部署时同 VPS/容器
+        网段的攻击者可无限速爆破，已移除。
+        """
+        if host in self._whitelist or host in _LOCALHOST_HOSTS:
+            return True
+        try:
+            addr = ipaddress.ip_address(host)
+        except ValueError:
+            return False
+        return any(addr in net for net in self._trusted_networks)
 
     # ── 主分发逻辑 ──
 
@@ -411,7 +486,18 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
             return await call_next(request)
 
         host = self._client_host(request)
-        # 白名单放行 (localhost / 内网 / 显式配置)
+
+        # VULN-28：login 端点走独立严格桶，可信主机（回环/可信网段）不豁免。
+        # 反代场景所有客户端对端均为 127.0.0.1，若豁免 login 则爆破完全绕过限流。
+        # login 只消耗 login 桶（不重复计入普通三级桶，语义独立）。
+        if path in _LOGIN_PATHS and request.method.upper() == "POST":
+            login_bucket = self._login_buckets[host]
+            ok, retry = await login_bucket.acquire()
+            if not ok:
+                return self._too_many_requests(retry, scope="login", host=host, path=path)
+            return await call_next(request)
+
+        # 白名单放行 (localhost / 显式可信网段 / 精确白名单)
         if self._is_whitelisted(host):
             return await call_next(request)
 

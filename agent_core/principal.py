@@ -30,7 +30,13 @@ class PrincipalResolver:
     def resolve(self, identity: ChannelIdentity) -> Principal:
         subject_id = identity.subject_id.strip()
         principal_id = identity.user_id.strip() or subject_id
-        is_owner = bool(subject_id) and self._owner_registry.is_owner(subject_id)
+        # 「登录即主人」信任模型：web/cli 通道天然由 WebUI 登录（WEBUI_PASSWORD）
+        # 或本机进程隔离保护，无论 OWNER_IDS / MASTER_QQ_OPENID 是否配置都视为
+        # 主人。qq/wechat 等外部渠道保持严格 owner registry 判定（fail-closed）。
+        channel_trusted = (identity.source or "").strip().lower() in ("web", "cli")
+        is_owner = channel_trusted or (
+            bool(subject_id) and self._owner_registry.is_owner(subject_id)
+        )
         if is_owner:
             return Principal(
                 principal_id=principal_id,
