@@ -483,65 +483,56 @@ class RetrievalEngine:
                         query=query[:100], tier=tier, results=len(results),
                         duration_ms=int((time.time() - _start) * 1000))
             return results
-        # 单路有结果: 补充 rrf_score 后直接返回（与多路融合保持字段一致）
-        # 注意: KG v2 事实作为补充候选追加 (已带 rrf_score, 不参与 ID-based 去重)
-        if not fts_items and not vec_items and not kg_items and not spread_items and not entity_items:
-            for item in child_items:
-                item.setdefault("rrf_score", item.get("score", 0.0))
-            results = child_items[:k]
-            if kg_v2_items and len(results) < k:
-                results.extend(kg_v2_items[:k - len(results)])
-            logger.info("memory.search", event="memory_search",
-                        query=query[:100], tier=tier, results=len(results),
-                        duration_ms=int((time.time() - _start) * 1000))
-            return results
-        if not fts_items and not vec_items and not child_items and not spread_items and not entity_items:
-            for item in kg_items:
-                item.setdefault("rrf_score", item.get("score", 0.0))
-            results = kg_items[:k]
-            if kg_v2_items and len(results) < k:
-                results.extend(kg_v2_items[:k - len(results)])
-            logger.info("memory.search", event="memory_search",
-                        query=query[:100], tier=tier, results=len(results),
-                        duration_ms=int((time.time() - _start) * 1000))
-            return results
-        if not fts_items and not kg_items and not child_items and not spread_items and not entity_items:
-            for item in vec_items:
-                item.setdefault("rrf_score", item.get("similarity", item.get("score", 0.0)))
-            results = vec_items[:k]
-            if kg_v2_items and len(results) < k:
-                results.extend(kg_v2_items[:k - len(results)])
-            logger.info("memory.search", event="memory_search",
-                        query=query[:100], tier=tier, results=len(results),
-                        duration_ms=int((time.time() - _start) * 1000))
-            return results
-        if not vec_items and not kg_items and not child_items and not spread_items and not entity_items:
-            for item in fts_items:
-                item.setdefault("rrf_score", item.get("score", 0.0))
-            results = fts_items[:k]
-            if kg_v2_items and len(results) < k:
-                results.extend(kg_v2_items[:k - len(results)])
-            logger.info("memory.search", event="memory_search",
-                        query=query[:100], tier=tier, results=len(results),
-                        duration_ms=int((time.time() - _start) * 1000))
-            return results
-        if not fts_items and not vec_items and not kg_items and not child_items and not entity_items:
-            for item in spread_items:
-                item.setdefault("rrf_score", item.get("spreading_score", item.get("score", 0.0)))
-            results = spread_items[:k]
-            logger.info("memory.search", event="memory_search",
-                        query=query[:100], tier=tier, results=len(results),
-                        duration_ms=int((time.time() - _start) * 1000))
-            return results
-        if not fts_items and not vec_items and not kg_items and not child_items and not spread_items:
-            for item in entity_items:
-                item.setdefault("rrf_score", item.get("score", 0.0))
-            results = entity_items[:k]
-            logger.info("memory.search", event="memory_search",
-                        query=query[:100], tier=tier, results=len(results),
-                        duration_ms=int((time.time() - _start) * 1000))
-            return results
+
+        # 单路短路：7 个通道各自「只有这一路有结果」的判定 + 补 rrf_score。
+        # 原实现 7 个 if 块结构几乎一致，差异仅在：哪一路、score 取值字段、是否追加 kg_v2。
+        # 数据驱动表统一处理（契约见 tests/test_retrieval_single_channel.py）。
+        # 字段说明：channel_items=该路候选；empty_checks=其余必须为空的通道名；
+        # score_key=补 rrf_score 时取值的字段（带 fallback 链）；append_kg_v2=是否补 kg_v2。
+        single_channel_rules = [
+            ("child",   ("fts", "vec", "kg", "spread", "entity"),
+             ("score",),                          True),
+            ("kg",     ("fts", "vec", "child", "spread", "entity"),
+             ("score",),                          True),
+            ("vec",    ("fts", "kg", "child", "spread", "entity"),
+             ("similarity", "score"),             True),
+            ("fts",    ("vec", "kg", "child", "spread", "entity"),
+             ("score",),                          True),
+            ("spread", ("fts", "vec", "kg", "child", "entity"),
+             ("spreading_score", "score"),        False),
+            ("entity", ("fts", "vec", "kg", "child", "spread"),
+             ("score",),                          False),
+        ]
+        channels_map = {
+            "fts": fts_items, "vec": vec_items, "kg": kg_items,
+            "child": child_items, "spread": spread_items, "entity": entity_items,
+        }
+        for active, empties, score_keys, append_kg_v2 in single_channel_rules:
+            active_items = channels_map[active]
+            if not active_items:
+                continue
+            if all(not channels_map[other] for other in empties):
+                return self._return_single_channel(
+                    active_items, k, kg_v2_items if append_kg_v2 else [],
+                    query, tier, _start, score_keys)
         return None
+
+    @staticmethod
+    def _return_single_channel(items: list, k: int, kg_v2_items: list,
+                                query: str, tier: str, _start: float,
+                                score_keys: tuple[str, ...]) -> list[dict]:
+        """单路短路统一后处理：补 rrf_score → 切片 k → 可选补 kg_v2 → log → 返回。"""
+        for item in items:
+            # 按字段链取值：vec 走 (similarity, score)，其它走 (score,)
+            val = next((item.get(key) for key in score_keys if item.get(key) is not None), 0.0)
+            item.setdefault("rrf_score", val)
+        results = items[:k]
+        if kg_v2_items and len(results) < k:
+            results.extend(kg_v2_items[:k - len(results)])
+        logger.info("memory.search", event="memory_search",
+                    query=query[:100], tier=tier, results=len(results),
+                    duration_ms=int((time.time() - _start) * 1000))
+        return results
 
     async def _fuse_and_rank(self, query: str, k: int, use_reranker: bool, tier: str,
                              is_warm: bool, rerank_limit: int,
@@ -1154,6 +1145,58 @@ class RetrievalEngine:
 
         # A1: 智能短路 - 简单查询跳过查询变换，直接走混合检索
         if getattr(config, "RETRIEVAL_SMART_SKIP", True) and self._mm._is_retrieval_simple(query):
+            return await self._retrieve_simple_path(
+                query, k, intent, config, scope, _cache_key,
+                _retry_attempted, apply_min_score)
+
+        # 查询变换 + 多查询检索
+        results = await self._run_query_search(query, context, k, scope, config)
+
+        # 降级：纯向量检索
+        if not results:
+            __st = time.time()
+            results = await self._mm._vector_fallback_search(query, k, scope=scope)
+            _stage_log("vector_fallback", __st, query)
+
+        # 注：移除 importance fallback（同上，会注入"重要但无关"的记忆）
+        # 空结果如实返回空，由模型调 recall 工具或如实说"不记得"
+
+        # FSRS 打分 + 综合评分 + CRAG 评估重试 + 最终排序截断
+        results = await self._score_and_rank_results(
+            query, results, k, config, intent, _retry_attempted, scope)
+
+        # 话题触发器 + KG 增强 + 去重 + 统一截断 + 最低分过滤
+        results = await self._postprocess_results(
+            query, results, k, config, intent, apply_min_score, scope)
+
+        # 写入缓存（P0: 使用 user_id 隔离的 cache key）
+        # 治本修复（2026-08-05）：put 改 fire-and-forget。
+        # 根因：_query_cache.put 内部调 embed API（网络 1-2s），await 阻塞检索返回。
+        # 缓存写入不影响当前检索结果，无需让用户等待。
+        if getattr(config, 'QUERY_CACHE_ENABLED', True) and results:
+            _spawn(self._mm._query_cache.put(_cache_key, results))
+
+        # 检索命中后批量递增 access_count（passive_use）
+        # 修复：此前 increment_access_count 从未被调用，导致记忆永远无法进入 PERMANENT 状态
+        # 这里使用 fire-and-forget 方式，不阻塞检索返回
+        if results:
+            hit_ids = [r.get("id") for r in results if r.get("id")]
+            if hit_ids:
+                _spawn(self._mm._batch_touch_memories(hit_ids))
+        return results
+
+
+    async def _retrieve_simple_path(self, query: str, k: int, intent: str,
+                                     config, scope: Any, _cache_key: str,
+                                     _retry_attempted: bool,
+                                     apply_min_score: bool) -> list[dict]:
+        """A1 智能短路：简单查询跳过查询变换，直接走混合检索。
+
+        闲聊型查询跳过 KG 和 Reranker 节省检索成本；命中后与复杂路径
+        统一评分逻辑（FSRS + final_score + CRAG 重试 + 去重 + 最低分过滤）。
+        """
+        # A1: 智能短路 - 简单查询跳过查询变换，直接走混合检索
+        if getattr(config, "RETRIEVAL_SMART_SKIP", True) and self._mm._is_retrieval_simple(query):
             # 闲聊型查询跳过 KG 和 Reranker，节省检索成本
             use_reranker = intent != "chat"
             use_kg = intent != "chat"
@@ -1223,41 +1266,6 @@ class RetrievalEngine:
                 await self._mm._query_cache.put(_cache_key, results)
             return results
 
-        # 查询变换 + 多查询检索
-        results = await self._run_query_search(query, context, k, scope, config)
-
-        # 降级：纯向量检索
-        if not results:
-            __st = time.time()
-            results = await self._mm._vector_fallback_search(query, k, scope=scope)
-            _stage_log("vector_fallback", __st, query)
-
-        # 注：移除 importance fallback（同上，会注入"重要但无关"的记忆）
-        # 空结果如实返回空，由模型调 recall 工具或如实说"不记得"
-
-        # FSRS 打分 + 综合评分 + CRAG 评估重试 + 最终排序截断
-        results = await self._score_and_rank_results(
-            query, results, k, config, intent, _retry_attempted, scope)
-
-        # 话题触发器 + KG 增强 + 去重 + 统一截断 + 最低分过滤
-        results = await self._postprocess_results(
-            query, results, k, config, intent, apply_min_score, scope)
-
-        # 写入缓存（P0: 使用 user_id 隔离的 cache key）
-        # 治本修复（2026-08-05）：put 改 fire-and-forget。
-        # 根因：_query_cache.put 内部调 embed API（网络 1-2s），await 阻塞检索返回。
-        # 缓存写入不影响当前检索结果，无需让用户等待。
-        if getattr(config, 'QUERY_CACHE_ENABLED', True) and results:
-            _spawn(self._mm._query_cache.put(_cache_key, results))
-
-        # 检索命中后批量递增 access_count（passive_use）
-        # 修复：此前 increment_access_count 从未被调用，导致记忆永远无法进入 PERMANENT 状态
-        # 这里使用 fire-and-forget 方式，不阻塞检索返回
-        if results:
-            hit_ids = [r.get("id") for r in results if r.get("id")]
-            if hit_ids:
-                _spawn(self._mm._batch_touch_memories(hit_ids))
-        return results
 
     async def _run_query_search(self, query: str, context: str, k: int,
                                 scope: Any | None, config) -> list[dict]:
