@@ -1512,66 +1512,79 @@ class RetrievalEngine(EntityKgBoostMixin, MemoryMetadataMixin):
         _diffusion_enabled = getattr(config, "MEMORY_RETRIEVAL_DIFFUSION", False)
         try:
             if parallel_transform:
-                # A2: 并行执行 rewrite + expand（各自独立的 LLM 调用）
-                expand_count = getattr(config, "QUERY_EXPAND_COUNT", 2) if _diffusion_enabled else 0
-                rewrite_task = asyncio.create_task(
-                    self._mm._query_transformer.rewrite_query(query, context)
-                )
-                if expand_count > 0:
-                    expand_task = asyncio.create_task(
-                        self._mm._query_transformer.expand_query(query, n=expand_count)
-                    )
-                    rewritten, expanded = await asyncio.gather(
-                        rewrite_task, expand_task, return_exceptions=True
-                    )
-                    # 异常降级：rewrite 失败用原查询，expand 失败用 [query]
-                    if isinstance(rewritten, Exception):
-                        logger.warning("memory.rewrite_failed", error=str(rewritten))
-                        rewritten = query
-                    if isinstance(expanded, Exception):
-                        logger.warning("memory.expand_failed", error=str(expanded))
-                        expanded = [query]
-                    if not rewritten:
-                        rewritten = query
-                    if not expanded:
-                        expanded = [query]
-                    if rewritten != query:
-                        logger.debug("memory.query_rewritten",
-                                     original=query[:50], rewritten=rewritten[:50])
-                    # 合并：[rewritten] + [q for q in expanded if q != rewritten]
-                    merged = [rewritten]
-                    for q in expanded:
-                        if q != rewritten:
-                            merged.append(q)
-                    queries = merged
-                    if len(queries) > 1:
-                        logger.debug("memory.query_expanded", count=len(queries))
-                else:
-                    # 精准检索：只执行 rewrite，不扩散
-                    rewritten = await rewrite_task
-                    if isinstance(rewritten, Exception):
-                        logger.warning("memory.rewrite_failed", error=str(rewritten))
-                        rewritten = query
-                    if not rewritten:
-                        rewritten = query
-                    if rewritten != query:
-                        logger.debug("memory.query_rewritten",
-                                     original=query[:50], rewritten=rewritten[:50])
-                    queries = [rewritten]
+                queries = await self._transform_parallel(query, context, _diffusion_enabled)
             else:
-                # 串行降级（原有逻辑）
-                rewritten = await self._mm._query_transformer.rewrite_query(query, context)
-                if rewritten and rewritten != query:
-                    queries = [rewritten]
-                    logger.debug("memory.query_rewritten", original=query[:50], rewritten=rewritten[:50])
-                expand_count = getattr(config, "QUERY_EXPAND_COUNT", 2) if _diffusion_enabled else 0
-                if expand_count > 0:
-                    expanded = await self._mm._query_transformer.expand_query(rewritten, n=expand_count)
-                    if expanded and len(expanded) > 1:
-                        queries = expanded
-                        logger.debug("memory.query_expanded", count=len(queries))
+                queries = await self._transform_serial(query, context, _diffusion_enabled)
         except Exception as e:
             logger.warning("memory.query_transform_failed", error=str(e))
+        return queries
+
+    async def _transform_parallel(self, query: str, context: str,
+                                  diffusion_enabled: bool) -> list[str]:
+        """并行/精准检索路径：rewrite + 可选 expand（各自独立 LLM 调用）。"""
+        import config
+        expand_count = getattr(config, "QUERY_EXPAND_COUNT", 2) if diffusion_enabled else 0
+        rewrite_task = asyncio.create_task(
+            self._mm._query_transformer.rewrite_query(query, context)
+        )
+        if expand_count > 0:
+            expand_task = asyncio.create_task(
+                self._mm._query_transformer.expand_query(query, n=expand_count)
+            )
+            rewritten, expanded = await asyncio.gather(
+                rewrite_task, expand_task, return_exceptions=True
+            )
+            # 异常降级：rewrite 失败用原查询，expand 失败用 [query]
+            if isinstance(rewritten, Exception):
+                logger.warning("memory.rewrite_failed", error=str(rewritten))
+                rewritten = query
+            if isinstance(expanded, Exception):
+                logger.warning("memory.expand_failed", error=str(expanded))
+                expanded = [query]
+            if not rewritten:
+                rewritten = query
+            if not expanded:
+                expanded = [query]
+            if rewritten != query:
+                logger.debug("memory.query_rewritten",
+                             original=query[:50], rewritten=rewritten[:50])
+            # 合并：[rewritten] + [q for q in expanded if q != rewritten]
+            merged = [rewritten]
+            for q in expanded:
+                if q != rewritten:
+                    merged.append(q)
+            queries = merged
+            if len(queries) > 1:
+                logger.debug("memory.query_expanded", count=len(queries))
+            return queries
+
+        # 精准检索：只执行 rewrite，不扩散
+        rewritten = await rewrite_task
+        if isinstance(rewritten, Exception):
+            logger.warning("memory.rewrite_failed", error=str(rewritten))
+            rewritten = query
+        if not rewritten:
+            rewritten = query
+        if rewritten != query:
+            logger.debug("memory.query_rewritten",
+                         original=query[:50], rewritten=rewritten[:50])
+        return [rewritten]
+
+    async def _transform_serial(self, query: str, context: str,
+                                diffusion_enabled: bool) -> list[str]:
+        """串行降级路径：先 rewrite，再 expand。"""
+        import config
+        queries = [query]
+        rewritten = await self._mm._query_transformer.rewrite_query(query, context)
+        if rewritten and rewritten != query:
+            queries = [rewritten]
+            logger.debug("memory.query_rewritten", original=query[:50], rewritten=rewritten[:50])
+        expand_count = getattr(config, "QUERY_EXPAND_COUNT", 2) if diffusion_enabled else 0
+        if expand_count > 0:
+            expanded = await self._mm._query_transformer.expand_query(rewritten, n=expand_count)
+            if expanded and len(expanded) > 1:
+                queries = expanded
+                logger.debug("memory.query_expanded", count=len(queries))
         return queries
 
     async def _multi_query_parallel_search(self, queries: list[str], query: str,
