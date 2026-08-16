@@ -4,7 +4,7 @@ import { useRouter } from 'vue-router'
 import DendroShader from '../components/fx/DendroShader.vue'
 import DendroEmblem from '../components/fx/DendroEmblem.vue'
 import KeyAccordion, { type TestStatus } from '../components/setup/KeyAccordion.vue'
-import { api, getSetupVersion, getDisclaimerStatus, agreeDisclaimer } from '../api'
+import { api, getSetupVersion } from '../api'
 import { useAuthStore } from '../stores/auth'
 import { t } from '../i18n'
 import Tilt3D from '../components/fx/Tilt3D.vue'
@@ -73,7 +73,7 @@ onMounted(async () => {
 
   // 加载免责协议状态
   try {
-    const status = await getDisclaimerStatus()
+    const status = await api.getDisclaimerStatus()
     disclaimerAgreed.value = !!status.agreed
     disclaimerChecked.value = !!status.agreed  // 已同意则默认勾选
     if (status.agreed) {
@@ -226,7 +226,7 @@ async function handleSave() {
   // 首次同意则写入后端 + localStorage
   if (!disclaimerAgreed.value && disclaimerChecked.value) {
     try {
-      await agreeDisclaimer(true)
+      await api.agreeDisclaimer(true)
       localStorage.setItem('xiaoda_disclaimer_agreed', 'true')
       disclaimerAgreed.value = true
     } catch (e: any) {

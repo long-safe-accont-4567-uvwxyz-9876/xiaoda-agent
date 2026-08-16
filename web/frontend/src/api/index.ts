@@ -69,6 +69,19 @@ export const put = <T = any>(path: string, body?: unknown, confirm = false) =>
 export const del = <T = any>(path: string, confirm = false) =>
   request<T>(path, { method: 'DELETE' }, confirm)
 
+/** 通用文件上传（FormData POST），统一 token 注入与错误处理 */
+async function uploadFile<T>(url: string, formData: FormData, errorMsg = 'Upload failed'): Promise<T> {
+  const token = localStorage.getItem('token')
+  const res = await fetch(`${BASE}${url}`, {
+    method: 'POST',
+    headers: { ...(token ? { Authorization: `Bearer ${token}` } : {}) },
+    body: formData,
+  })
+  const body = await res.json()
+  if (!res.ok || !body.ok) throw new Error(body?.error?.message || errorMsg)
+  return body.data as T
+}
+
 // ── 工作流类型 ──
 export interface WorkflowNode {
   id: string
@@ -135,22 +148,16 @@ export const api = {
   tts: (text: string, voice?: string, style?: string) =>
     post<{ audio_url: string; cached: boolean }>('/media/tts', { text, voice, style }),
 
-  uploadVoiceRef: async (agent: string, formData: FormData) => {
-    const token = localStorage.getItem('token')
-    const res = await fetch(`${BASE}/media/tts/voices/${agent}`, {
-      method: 'POST',
-      headers: { ...(token ? { Authorization: `Bearer ${token}` } : {}) },
-      body: formData,
-    })
-    const body = await res.json()
-    if (!res.ok || !body.ok) throw new Error(body?.error?.message || 'Upload failed')
-    return body.data
-  },
+  uploadVoiceRef: (agent: string, formData: FormData) =>
+    uploadFile<{ voice_ref: string }>(`/media/tts/voices/${agent}`, formData),
 
   // Setup wizard APIs（首次运行时后端免认证；非首次需 token，统一走 request()
   // 以自动处理 X-New-Token 滑动续期，token 失效时引导重新登录而非裸 401 报错）
-  getSetupFirstRun: () => {
-    return fetch(`${BASE}/setup/first-run`).then(r => r.json()).then(b => b.data)
+  getSetupFirstRun: async () => {
+    const res = await fetch(`${BASE}/setup/first-run`)
+    const body = await res.json().catch(() => ({}))
+    if (!res.ok || !body.ok) throw new Error(body?.error?.message || `HTTP ${res.status}`)
+    return body.data
   },
 
   getSetupKeys: () => get<{ keys: any[] }>('/setup/keys'),
@@ -179,15 +186,8 @@ export const api = {
     formData.append('file', file)
     formData.append('description', description)
     formData.append('emotion', emotion)
-    const token = localStorage.getItem('token')
-    const res = await fetch(`${BASE}/agents/${agentName}/stickers`, {
-      method: 'POST',
-      headers: { ...(token ? { Authorization: `Bearer ${token}` } : {}) },
-      body: formData,
-    })
-    const body = await res.json()
-    if (!res.ok || !body.ok) throw new Error(body?.error?.message || 'Upload failed')
-    return body.data as { name: string; description: string; emotion: string; url: string }
+    return uploadFile<{ name: string; description: string; emotion: string; url: string }>(
+      `/agents/${agentName}/stickers`, formData)
   },
 
   deleteSticker: (agentName: string, filename: string) =>
@@ -196,15 +196,7 @@ export const api = {
   uploadImage: async (file: File) => {
     const formData = new FormData()
     formData.append('file', file)
-    const token = localStorage.getItem('token')
-    const res = await fetch(`${BASE}/chat/upload-image`, {
-      method: 'POST',
-      headers: { ...(token ? { Authorization: `Bearer ${token}` } : {}) },
-      body: formData,
-    })
-    const body = await res.json()
-    if (!res.ok || !body.ok) throw new Error(body?.error?.message || 'Upload failed')
-    return body.data as { url: string; name: string }
+    return uploadFile<{ url: string; name: string }>('/chat/upload-image', formData)
   },
 
   // P0 新增（Task 1.9）：文档上传 — 与图片上传分离
@@ -212,29 +204,13 @@ export const api = {
   uploadDoc: async (file: File) => {
     const formData = new FormData()
     formData.append('file', file)
-    const token = localStorage.getItem('token')
-    const res = await fetch(`${BASE}/chat/upload-doc`, {
-      method: 'POST',
-      headers: { ...(token ? { Authorization: `Bearer ${token}` } : {}) },
-      body: formData,
-    })
-    const body = await res.json()
-    if (!res.ok || !body.ok) throw new Error(body?.error?.message || 'Upload failed')
-    return body.data as { url: string; name: string; path: string; ext: string }
+    return uploadFile<{ url: string; name: string; path: string; ext: string }>('/chat/upload-doc', formData)
   },
 
   speechToText: async (file: File) => {
     const formData = new FormData()
     formData.append('file', file)
-    const token = localStorage.getItem('token')
-    const res = await fetch(`${BASE}/chat/speech-to-text`, {
-      method: 'POST',
-      headers: { ...(token ? { Authorization: `Bearer ${token}` } : {}) },
-      body: formData,
-    })
-    const body = await res.json()
-    if (!res.ok || !body.ok) throw new Error(body?.error?.message || 'STT failed')
-    return body.data as { text: string }
+    return uploadFile<{ text: string }>('/chat/speech-to-text', formData, 'STT failed')
   },
 
   // ── 资源列表（工作流编辑器用） ──
@@ -260,12 +236,6 @@ export const api = {
 
 export async function getSetupVersion(): Promise<{ version: string }> {
   return get('/setup/version')
-}
-
-export function exportSessionUrl(sessionId: string): string {
-  // Token 不再通过 URL 查询参数暴露，改为 POST 下载
-  // 此函数保留兼容性但返回空字符串，实际下载由 exportSessionDownload 完成
-  return ''
 }
 
 /** 通过 POST + Authorization header 安全下载会话导出 */
@@ -402,11 +372,3 @@ export const updateKnowledgeRelation = (id: string, data: { relation: string }) 
 
 export const getKnowledgeGraph = (entity = '', depth = 1) =>
   get<{ nodes: any[]; edges: any[] }>(`/insight/knowledge/graph?entity=${encodeURIComponent(entity)}&depth=${depth}`)
-
-// ── 品牌署名与免责协议 ──
-export const getBrandSignature = () =>
-  get<{ signature: string; author: string; version: string }>('/brand/signature')
-export const getDisclaimerStatus = () =>
-  get<{ agreed: boolean; agreed_at: string; text: string }>('/setup/disclaimer-status')
-export const agreeDisclaimer = (agreed: boolean) =>
-  post<{ success: boolean }>('/setup/agree-disclaimer', { agreed })

@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { ref, onMounted } from 'vue'
 import { NButton, NTag, NSpin, useMessage } from 'naive-ui'
-import { getDisclaimerStatus, agreeDisclaimer } from '../api'
+import { api } from '../api'
 import { t } from '../i18n'
 import Tilt3D from '../components/fx/Tilt3D.vue'
 
@@ -19,7 +19,7 @@ onMounted(async () => {
 async function loadStatus() {
   loading.value = true
   try {
-    const status = await getDisclaimerStatus()
+    const status = await api.getDisclaimerStatus()
     agreed.value = !!status.agreed
     agreedAt.value = status.agreed_at || ''
   } catch (e: any) {
@@ -32,7 +32,7 @@ async function loadStatus() {
 async function handleAgree() {
   agreeing.value = true
   try {
-    await agreeDisclaimer(true)
+    await api.agreeDisclaimer(true)
     agreed.value = true
     agreedAt.value = new Date().toISOString()
     message.success(t('disclaimer.agreed'))
