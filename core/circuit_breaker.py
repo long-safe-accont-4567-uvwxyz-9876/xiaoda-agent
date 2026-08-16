@@ -4,11 +4,11 @@
     探测成功 → GREEN（冷却时间重置为初始值）
     探测失败 → RED（冷却时间指数退避，上限 MAX_COOLDOWN）
 """
-from typing import Any, ClassVar
-import time
 import threading
-from enum import Enum
+import time
 from dataclasses import dataclass
+from enum import Enum
+from typing import Any, ClassVar
 
 from loguru import logger
 
@@ -188,9 +188,21 @@ class CircuitBreaker:
 
             if red_signals >= 1:
                 self._red_since = time.time()
+                # P3 可观测性：RED 时带上各维度信号明细（当前值/阈值），
+                # 否则 red_signal 日志 error 字段恒为空，无法定位触发维度
                 self._log_state_change(
                     self._last_state, CircuitState.RED,
                     reason="red_signal", red_signals=red_signals,
+                    consecutive_fails=snap.consecutive_fails,
+                    consecutive_fails_threshold=self.THRESHOLDS["consecutive_fails_red"],
+                    confidence=round(snap.confidence, 3),
+                    confidence_threshold=self.THRESHOLDS["confidence_red"],
+                    fatigue=round(snap.fatigue, 3),
+                    fatigue_threshold=self.THRESHOLDS["fatigue_red"],
+                    deviation=round(snap.deviation, 3),
+                    deviation_threshold=self.THRESHOLDS["deviation_red"],
+                    tool_fail_rate=round(snap.tool_fail_rate, 3),
+                    tool_fail_rate_threshold=self.THRESHOLDS["tool_fail_rate_red"],
                     cooldown=self._current_cooldown,
                 )
                 self._last_state = CircuitState.RED
@@ -242,6 +254,14 @@ class CircuitBreaker:
                 elapsed = max(0.0, time.time() - self._probe_start_time)
             self._red_since = 0.0
             state.consecutive_fails = 0
+            # P3 修复：探测成功即系统当前可用，必须同步恢复持久信号
+            # （confidence/fatigue/deviation）——否则 RED 由这些信号触发时，
+            # 探测成功 → GREEN 后下一条消息 check() 见信号仍在 → 立刻 RED，
+            # 形成"探测成功但一直熔断"的循环（8-15 19:56:38 探测成功、
+            # 19:56:57 无任何失败却再次 RED 的日志实证）。
+            state.confidence = min(1.0, state.confidence + 0.2)
+            state.fatigue = max(0.0, state.fatigue - 0.2)
+            state.deviation = max(0.0, state.deviation - 0.1)
             # Task 12.1: 恢复成功 → 冷却时间重置为初始值
             self._current_cooldown = self._initial_cooldown
             self._reset_probes()
@@ -249,10 +269,16 @@ class CircuitBreaker:
             logger.info(
                 "circuit_breaker.probe_result",
                 result="success", elapsed_ms=round(elapsed * 1000, 1),
+                confidence=round(state.confidence, 3),
+                fatigue=round(state.fatigue, 3),
+                deviation=round(state.deviation, 3),
             )
             self._log_state_change(
                 CircuitState.HALF_OPEN, CircuitState.GREEN,
                 reason="probe_success", elapsed_ms=round(elapsed * 1000, 1),
+                confidence=round(state.confidence, 3),
+                fatigue=round(state.fatigue, 3),
+                deviation=round(state.deviation, 3),
             )
             self._last_state = CircuitState.GREEN
 

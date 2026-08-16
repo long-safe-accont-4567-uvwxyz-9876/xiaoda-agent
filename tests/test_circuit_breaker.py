@@ -5,7 +5,6 @@ import pytest
 
 from core.circuit_breaker import CircuitBreaker, CircuitState, CognitiveState
 
-
 # ── CognitiveState 默认值 ──
 
 
@@ -224,3 +223,69 @@ def test_exponential_backoff_reset_on_success():
     # 探测成功 → 重置为初始 60
     cb.on_half_open_success(state)
     assert cb.RED_RECOVERY_SECONDS == 60
+
+
+# ── P3: 探测成功恢复持久信号（防"探测成功但立刻再 RED"循环） ──
+
+
+def test_half_open_success_restores_persistent_signals():
+    """探测成功必须恢复 confidence/fatigue/deviation，否则下一条消息立刻再 RED。"""
+    cb = CircuitBreaker()
+    # 疲劳触发 RED（fatigue=0.85 > 0.8），而非连续失败
+    state = CognitiveState(fatigue=0.85, confidence=0.3)
+    assert cb.check(state) == CircuitState.RED
+
+    red_time = cb._red_since
+    with patch("core.circuit_breaker.time.time", return_value=red_time + 60):
+        assert cb.check(state) == CircuitState.HALF_OPEN
+
+    cb.on_half_open_success(state)
+    # 恢复后疲劳回落到安全区（0.85 - 0.2 = 0.65 < 0.8），置信度回升
+    assert state.fatigue < cb.THRESHOLDS["fatigue_red"]
+    assert state.confidence > 0.3
+
+    # 下一条消息 check() 不再立刻 RED（回归锁定：8-15 日志实证的循环）
+    result = cb.check(state)
+    assert result != CircuitState.RED
+
+
+def test_half_open_success_heals_confidence_triggered_red():
+    """置信度触发的 RED 在探测成功后不再复发。"""
+    cb = CircuitBreaker()
+    state = CognitiveState(confidence=0.1, fatigue=0.7)
+    assert cb.check(state) == CircuitState.RED
+
+    red_time = cb._red_since
+    with patch("core.circuit_breaker.time.time", return_value=red_time + 60):
+        assert cb.check(state) == CircuitState.HALF_OPEN
+    cb.on_half_open_success(state)
+    assert cb.check(state) == CircuitState.GREEN
+
+
+def test_red_signal_logs_dimension_details():
+    """RED 时日志必须带触发维度明细（可观测性）。"""
+    from loguru import logger as _logger
+
+    records = []
+
+    class _Sink:
+        def write(self, message):
+            records.append(message)
+
+    sink_id = _logger.add(
+        _Sink(),
+        format="{extra[fatigue]} {extra[fatigue_threshold]} "
+               "{extra[confidence]} {extra[confidence_threshold]} {message}",
+    )
+    try:
+        cb = CircuitBreaker()
+        state = CognitiveState(fatigue=0.9, confidence=0.2)
+        cb.check(state)
+    finally:
+        _logger.remove(sink_id)
+
+    joined = "".join(records)
+    assert "0.9" in joined
+    assert "0.8" in joined  # fatigue_threshold
+    assert "0.2" in joined  # confidence
+    assert "circuit_breaker.state_change" in joined
