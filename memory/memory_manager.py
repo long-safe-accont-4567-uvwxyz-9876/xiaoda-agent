@@ -1,50 +1,31 @@
 from typing import Any
-import asyncio
-import re
-import time
 from loguru import logger
 
 from db.database import DatabaseManager
-from db.db_memory import MemoryDB, compute_missing_vec_ids
+from db.db_memory import MemoryDB
 # FTS5 分词工具从 db.fts_utils 导入 (打破 db <-> memory 循环); 这里 re-export
 # 保持向后兼容 (其他模块仍可 `from memory.memory_manager import _tokenize_for_fts`)
 from db.fts_utils import _tokenize_for_fts
 from .vector_store import VectorStore
-from .fsrs_model import FSRSModel, MemoryState, MemoryPhase, ReinforcementSignal, estimate_initial_difficulty, S_INIT
+from .fsrs_model import FSRSModel, estimate_initial_difficulty
 from .memory_distiller import MemoryDistiller
 from .query_cache import QueryCache
 from .retrieval_assessor import RetrievalAssessor
-from utils.atomic_write import atomic_json_write
 from config import get_agent_display_name
-# CodeRabbit 复审修复：fire-and-forget 任务必须保持强引用，否则 event loop 仅持有弱引用
-# 可能被 GC 回收导致任务中途消失。_bg_tasks 是 core.background_tasks 维护的全局任务集合。
-from core.background_tasks import _bg_tasks, _spawn
-from local_ai.integration.errors import is_structured_local_unavailable
 
 
+# 以下 _memory_utils re-export 仅保留有真实外部消费者（`from memory.memory_manager import X`）的符号。
 from memory._memory_utils import (
-    _stage_log,
-    _log_task_exception,
-    _extract_entities,
-    _cn_num_to_int,
     _parse_temporal_query,
-    _get_topic_stopwords,
-    _extract_topic_keywords,
     reciprocal_rank_fusion,
     _normalize_score,
-    RuleBasedMemoryExtractor,
     validate_memory_content,
     _normalize_for_dedupe,
-    _char_bigrams,
-    _natural_time_desc,
 )
 
 from memory._retrieval_engine import RetrievalEngine
 from memory._memory_encoder import MemoryEncoder
 from memory._memory_maintenance import MemoryMaintenance
-
-
-# 模块级工具函数/类已抽取到 memory/_memory_utils.py（上方 import re-export 保持兼容）。
 
 
 class MemoryManager:
