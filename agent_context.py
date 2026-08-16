@@ -266,59 +266,14 @@ class AgentContext:
             # 暂存即将被压缩的消息，供后台记忆编码任务消费
             self._pre_compressed_buffer.extend(compressible)
 
-            if self._compressor:
-                try:
-                    result = self._compressor.compress_history(self.history, keep_recent=keep_recent)
-                    compressed_msgs = result.messages
-                    if len(compressed_msgs) < len(self.history):
-                        # 提取压缩后的摘要
-                        for msg in compressed_msgs:
-                            if msg.get("role") == "system" and "上下文压缩" in msg.get("content", ""):
-                                self._compressed_summary = (
-                                    f"{self._compressed_summary}\n{msg['content']}" if self._compressed_summary else msg["content"]
-                                )
-                                break
-                        self.history = [m for m in compressed_msgs if m.get("role") != "system" or "上下文压缩" not in m.get("content", "")]
-                        if len(self._compressed_summary) > self.MAX_COMPRESSED_SUMMARY_LEN:
-                            self._compressed_summary = self._compressed_summary[-self.MAX_COMPRESSED_SUMMARY_LEN:]
-                        self._compress_count += 1
-                        _after_tokens = self._history_tokens()
-                        logger.info("context.compressed_with_ccr", round=_round + 1,
-                                    before_tokens=_before_tokens,
-                                    after_tokens=_after_tokens,
-                                    saved_tokens=_before_tokens - _after_tokens,
-                                    target=target_tokens,
-                                    max_tokens=max_history_tokens, keep_recent=keep_recent)
-                        _before_tokens = _after_tokens
-                        continue
-                except Exception as e:
-                    logger.debug("context.ccr_compress_failed", error=str(e))
+            if self._try_ccr_compress(keep_recent, _round, _before_tokens, target_tokens, max_history_tokens):
+                _before_tokens = self._history_tokens()
+                continue
 
             # 回退到原有压缩逻辑
-            logger.warning("context.fallback_compress", round=_round + 1,
-                           reason="ccr_unavailable_or_failed",
-                           before_tokens=_before_tokens, target=target_tokens)
-            compress_count = max(1, int(len(compressible) * self.COMPRESS_TARGET_RATIO))
-            to_compress = compressible[:compress_count]
-            remaining_compressible = compressible[compress_count:]
-            preserved = self.history[len(self.history) - preserve_count:]
-
-            summary = await self._summarize_messages(to_compress)
-            if summary:
-                self._compressed_summary = (
-                    f"{self._compressed_summary}\n{summary}" if self._compressed_summary else summary
-                )
-                if len(self._compressed_summary) > self.MAX_COMPRESSED_SUMMARY_LEN:
-                    self._compressed_summary = self._compressed_summary[-self.MAX_COMPRESSED_SUMMARY_LEN:]
-                self._compress_count += 1
-                self.history = remaining_compressible + preserved
-                logger.info("context.compressed", round=_round + 1, compressed=compress_count,
-                            tokens=self._history_tokens(), target=target_tokens,
-                            max_tokens=max_history_tokens, keep_recent=keep_recent)
-            else:
-                # 摘要失败，强制移除最旧的消息
-                removed = self.history.pop(0)
-                logger.debug("context.trimmed", role=removed["role"], preview=removed["content"][:40])
+            await self._fallback_compress(
+                compressible, preserve_count, keep_recent, _round,
+                target_tokens, max_history_tokens, _before_tokens)
 
         # 最终强制裁剪：如果 5 轮后仍超限，强制移除最旧的消息
         while self.history and self._history_tokens() > max_history_tokens:
@@ -334,6 +289,68 @@ class AgentContext:
                     saved_tokens=_before_tokens - _final_tokens,
                     compress_count=self._compress_count,
                     history_len=len(self.history))
+
+    def _try_ccr_compress(self, keep_recent: int, _round: int, _before_tokens: int,
+                          target_tokens: int, max_history_tokens: int) -> bool:
+        """尝试用 ContextCompressor 压缩，成功返回 True（history 已更新）。"""
+        if not self._compressor:
+            return False
+        try:
+            result = self._compressor.compress_history(self.history, keep_recent=keep_recent)
+            compressed_msgs = result.messages
+            if len(compressed_msgs) >= len(self.history):
+                return False
+            # 提取压缩后的摘要
+            for msg in compressed_msgs:
+                if msg.get("role") == "system" and "上下文压缩" in msg.get("content", ""):
+                    self._compressed_summary = (
+                        f"{self._compressed_summary}\n{msg['content']}" if self._compressed_summary else msg["content"]
+                    )
+                    break
+            self.history = [m for m in compressed_msgs if m.get("role") != "system" or "上下文压缩" not in m.get("content", "")]
+            if len(self._compressed_summary) > self.MAX_COMPRESSED_SUMMARY_LEN:
+                self._compressed_summary = self._compressed_summary[-self.MAX_COMPRESSED_SUMMARY_LEN:]
+            self._compress_count += 1
+            _after_tokens = self._history_tokens()
+            logger.info("context.compressed_with_ccr", round=_round + 1,
+                        before_tokens=_before_tokens,
+                        after_tokens=_after_tokens,
+                        saved_tokens=_before_tokens - _after_tokens,
+                        target=target_tokens,
+                        max_tokens=max_history_tokens, keep_recent=keep_recent)
+            return True
+        except Exception as e:
+            logger.debug("context.ccr_compress_failed", error=str(e))
+            return False
+
+    async def _fallback_compress(self, compressible: list, preserve_count: int,
+                                 keep_recent: int, _round: int, target_tokens: int,
+                                 max_history_tokens: int, _before_tokens: int) -> None:
+        """回退压缩：用 _summarize_messages 压缩可压缩段（CCR 不可用或失败时）。"""
+        logger.warning("context.fallback_compress", round=_round + 1,
+                       reason="ccr_unavailable_or_failed",
+                       before_tokens=_before_tokens, target=target_tokens)
+        compress_count = max(1, int(len(compressible) * self.COMPRESS_TARGET_RATIO))
+        to_compress = compressible[:compress_count]
+        remaining_compressible = compressible[compress_count:]
+        preserved = self.history[len(self.history) - preserve_count:]
+
+        summary = await self._summarize_messages(to_compress)
+        if summary:
+            self._compressed_summary = (
+                f"{self._compressed_summary}\n{summary}" if self._compressed_summary else summary
+            )
+            if len(self._compressed_summary) > self.MAX_COMPRESSED_SUMMARY_LEN:
+                self._compressed_summary = self._compressed_summary[-self.MAX_COMPRESSED_SUMMARY_LEN:]
+            self._compress_count += 1
+            self.history = remaining_compressible + preserved
+            logger.info("context.compressed", round=_round + 1, compressed=compress_count,
+                        tokens=self._history_tokens(), target=target_tokens,
+                        max_tokens=max_history_tokens, keep_recent=keep_recent)
+        else:
+            # 摘要失败，强制移除最旧的消息
+            removed = self.history.pop(0)
+            logger.debug("context.trimmed", role=removed["role"], preview=removed["content"][:40])
 
     def _get_dynamic_max_tokens(self) -> int:
         """动态计算 history 的最大允许 token 数。
@@ -663,70 +680,19 @@ class AgentContext:
         conversation_logs 类型的记忆包含原始对话，不做截断，直接展示。
         """
         if not self.memory_retrieval:
-            return ('<memory_retrieval empty="true">\n'
-                    '当前主动检索未直接命中相关记忆。\n'
-                    '如果用户是在询问过去发生的事（如"记得吗""上次""昨天/之前""那时"），'
-                    '请先调用 recall 工具做回忆检索，依据检索结果回答，不要直接说"不记得"。\n'
-                    '只有当 recall 也确认没有相关记忆时，才如实告诉用户不记得，绝不能编造。\n'
-                    '</memory_retrieval>')
+            return self._empty_retrieval_hint()
 
         # 区分原始对话记录和蒸馏记忆
         conv_logs = [m for m in self.memory_retrieval if m.get("type") == "conversation_log"]
         mem_others = [m for m in self.memory_retrieval if m.get("type") != "conversation_log"]
 
         parts = []
-
-        # 原始对话记录：转为叙事格式，不截断
-        if conv_logs:
-            conv_lines = []
-            for m in conv_logs[:30]:
-                summary = m.get("summary", "")
-                if summary:
-                    # P0 修复（数据库原文蹦出根因）：
-                    # 数据库 summary 格式是"用户说: xxx；小妲回复: yyy"，
-                    # 直接注入会让 LLM 模仿这种格式回复。转为叙事对话格式。
-                    conv_lines.append(_narrate_conversation_log(summary))
-            if conv_lines:
-                # 第二重时间锚点：从记忆时间戳推断时间范围，标注在标签属性上
-                # 根因：即使每条 summary 带完整日期，LLM 仍可能被记忆内容里的
-                # 日期字样（如用户当时在回忆"7月16日"）干扰。外层标签明确告诉
-                # LLM "以下都是某段时间的记忆"，提供不可忽略的时间锚点。
-                _ts_list = [float(m.get("timestamp", 0)) for m in conv_logs[:30] if m.get("timestamp")]
-                _range_attr = ""
-                if _ts_list:
-                    try:
-                        from datetime import datetime as _dt_cls
-                        _t_min, _t_max = min(_ts_list), max(_ts_list)
-                        _d_min = _dt_cls.fromtimestamp(_t_min).strftime("%Y年%m月%d日 %H:%M")
-                        _d_max = _dt_cls.fromtimestamp(_t_max).strftime("%Y年%m月%d日 %H:%M")
-                        _range_attr = f' time_range="{_d_min} ~ {_d_max}"'
-                    except (ValueError, OSError):
-                        logger.debug("agent_context.conv_log_time_range_skip", exc_info=True)
-                parts.append(f"<conversation_logs{_range_attr}>\n" + "\n---\n".join(conv_lines) + "\n</conversation_logs>")
-
-        # 蒸馏记忆：正常格式化
-        if mem_others:
-            mem_texts = []
-            for m in mem_others[:15]:
-                summary = m.get("summary", "")
-                if summary:
-                    ts = m.get("timestamp", 0)
-                    # P0 修复（数据库原文蹦出根因）：
-                    # 原格式 "· [07-18 14:30] 记忆内容" 的 [MM-DD HH:MM] 是内部标记，
-                    # LLM 回复时会直接引用 "[07-18]"。改为自然语言相对时间（如"昨天""前天"）。
-                    if ts:
-                        try:
-                            _rel_time = _relative_time_str(float(ts))
-                            mem_texts.append(f"·（{_rel_time}）{_smart_truncate_summary(summary, 500)}")
-                        except (ValueError, TypeError, OSError):
-                            mem_texts.append(f"· {_smart_truncate_summary(summary, 500)}")
-                    else:
-                        mem_texts.append(f"· {_smart_truncate_summary(summary, 500)}")
-                kg_ctx = m.get("kg_context", "")
-                if kg_ctx:
-                    mem_texts.append(kg_ctx[:200])
-            if mem_texts:
-                parts.append("<distilled_memories>\n" + "\n".join(mem_texts) + "\n</distilled_memories>")
+        conv_part = self._format_conversation_logs(conv_logs)
+        if conv_part:
+            parts.append(conv_part)
+        mem_part = self._format_distilled_memories(mem_others)
+        if mem_part:
+            parts.append(mem_part)
 
         if parts:
             # 只呈现记忆本身，不附带 <instructions> 使用说明。
@@ -746,12 +712,75 @@ class AgentContext:
                 + "\n\n".join(parts) + "\n"
                 + "</memory_retrieval>"
             )
+        return self._empty_retrieval_hint()
+
+    @staticmethod
+    def _empty_retrieval_hint() -> str:
+        """无记忆/无有效内容时的元认知提示（引导先 recall 而非直接说"不记得"）。"""
         return ('<memory_retrieval empty="true">\n'
                 '当前主动检索未直接命中相关记忆。\n'
-                    '如果用户是在询问过去发生的事（如"记得吗""上次""昨天/之前""那时"），'
-                    '请先调用 recall 工具做回忆检索，依据检索结果回答，不要直接说"不记得"。\n'
-                    '只有当 recall 也确认没有相关记忆时，才如实告诉用户不记得，绝不能编造。\n'
+                '如果用户是在询问过去发生的事（如"记得吗""上次""昨天/之前""那时"），'
+                '请先调用 recall 工具做回忆检索，依据检索结果回答，不要直接说"不记得"。\n'
+                '只有当 recall 也确认没有相关记忆时，才如实告诉用户不记得，绝不能编造。\n'
                 '</memory_retrieval>')
+
+    def _format_conversation_logs(self, conv_logs: list) -> str | None:
+        """格式化原始对话记录为叙事对话格式（不截断）。无有效内容返回 None。"""
+        if not conv_logs:
+            return None
+        conv_lines = []
+        for m in conv_logs[:30]:
+            summary = m.get("summary", "")
+            if summary:
+                # P0 修复（数据库原文蹦出根因）：
+                # 数据库 summary 格式是"用户说: xxx；小妲回复: yyy"，
+                # 直接注入会让 LLM 模仿这种格式回复。转为叙事对话格式。
+                conv_lines.append(_narrate_conversation_log(summary))
+        if not conv_lines:
+            return None
+        # 第二重时间锚点：从记忆时间戳推断时间范围，标注在标签属性上
+        # 根因：即使每条 summary 带完整日期，LLM 仍可能被记忆内容里的
+        # 日期字样（如用户当时在回忆"7月16日"）干扰。外层标签明确告诉
+        # LLM "以下都是某段时间的记忆"，提供不可忽略的时间锚点。
+        _ts_list = [float(m.get("timestamp", 0)) for m in conv_logs[:30] if m.get("timestamp")]
+        _range_attr = ""
+        if _ts_list:
+            try:
+                from datetime import datetime as _dt_cls
+                _t_min, _t_max = min(_ts_list), max(_ts_list)
+                _d_min = _dt_cls.fromtimestamp(_t_min).strftime("%Y年%m月%d日 %H:%M")
+                _d_max = _dt_cls.fromtimestamp(_t_max).strftime("%Y年%m月%d日 %H:%M")
+                _range_attr = f' time_range="{_d_min} ~ {_d_max}"'
+            except (ValueError, OSError):
+                logger.debug("agent_context.conv_log_time_range_skip", exc_info=True)
+        return f"<conversation_logs{_range_attr}>\n" + "\n---\n".join(conv_lines) + "\n</conversation_logs>"
+
+    def _format_distilled_memories(self, mem_others: list) -> str | None:
+        """格式化蒸馏记忆（自然语言相对时间 + 智能截断 + KG 上下文）。无内容返回 None。"""
+        if not mem_others:
+            return None
+        mem_texts = []
+        for m in mem_others[:15]:
+            summary = m.get("summary", "")
+            if summary:
+                ts = m.get("timestamp", 0)
+                # P0 修复（数据库原文蹦出根因）：
+                # 原格式 "· [07-18 14:30] 记忆内容" 的 [MM-DD HH:MM] 是内部标记，
+                # LLM 回复时会直接引用 "[07-18]"。改为自然语言相对时间（如"昨天""前天"）。
+                if ts:
+                    try:
+                        _rel_time = _relative_time_str(float(ts))
+                        mem_texts.append(f"·（{_rel_time}）{_smart_truncate_summary(summary, 500)}")
+                    except (ValueError, TypeError, OSError):
+                        mem_texts.append(f"· {_smart_truncate_summary(summary, 500)}")
+                else:
+                    mem_texts.append(f"· {_smart_truncate_summary(summary, 500)}")
+            kg_ctx = m.get("kg_context", "")
+            if kg_ctx:
+                mem_texts.append(kg_ctx[:200])
+        if not mem_texts:
+            return None
+        return "<distilled_memories>\n" + "\n".join(mem_texts) + "\n</distilled_memories>"
 
     def _build_volatile_content(self, source: str, exclude_memory: bool = False) -> str:
         """构建 Volatile 层：时间/情绪/记忆/关注点/待办/小莉/场景约束/失败提醒。"""
@@ -915,67 +944,73 @@ class AgentContext:
             for row in rows:
                 user_msg = row.get("user_message", "")
                 asst_msg = row.get("assistant_reply", "")
-                if not user_msg and not asst_msg:
+                if self._should_skip_history_row(user_msg, asst_msg):
                     continue
-                # P0 修复（Task 3.2）：空 assistant_reply 不注入历史摘要
-                # 根因：原实现 user 非空 + asst 空 仍被注入，造成"用户说了 → 小妲没回"的上下文割裂
-                # 修复：跳过空回复记录（与 background_tasks.py Task 3.1 配套）
-                if not asst_msg or not asst_msg.strip():
-                    continue
-                # P0 修复（人格崩溃期污染过滤）：跳过 Agnes/艾格妮丝 出厂默认自介泄漏
-                # 根因：SOUL.md 被自动覆盖（混入"小莉下属"段、丢失记忆铁律）期间，LLM 误认
-                #   身份为"Agnes/艾格妮丝"（Sapiens AI 出厂默认人格），回复写库后会被本函数
-                #   原文注入（"这是你亲身经历的事"），导致 LLM 惯性继续扮演 Agnes。
-                # 修复：过滤含出厂自介标记的回复记录（2026-08-07 人格漂移事故）。
-                _agnes_markers = ("我是 Agnes", "我是艾格妮丝", "由 Sapiens AI", "Sapiens AI 开发",
-                                  "小妲姐姐是另一个助手", "小妲姐姐创造出来的", "艾格妮丝（Agnes）")
-                if any(m in asst_msg for m in _agnes_markers):
-                    logger.warning("context.skip_agnes_pollution",
-                                   asst_preview=asst_msg[:60])
-                    continue
-                # P0 修复（上下文污染根因）：过滤被污染的历史记录
-                # 根因：nudge_engine/greeting_scheduler 旧版本把场景提示作为 user_input 传入，
-                #       导致 conversation_logs.user_message 出现"（场景：现在早上...）"等系统提示。
-                #       这些记录被注入历史摘要后，LLM 在后续轮次会回应这些元提示，造成角色出戏。
-                #       即使新版本已修复（场景提示走 system_context），旧记录仍需过滤。
-                # 过滤模式：
-                #   1. "（场景：" / "(场景：" — 主动问候场景提示泄漏
-                #   2. "（主动问候）" / "(主动问候)" — 占位符（系统内部消息，非真实用户输入）
-                #   3. "请继续完成你的回复" — 截断重试指令泄漏
-                #   4. "请使用 web_search 工具搜索" — 搜索模式指令泄漏
-                if user_msg:
-                    _pollution_markers = (
-                        "（场景：", "(场景：",
-                        "（主动问候）", "(主动问候)",
-                        "请继续完成你的回复",
-                        "请使用 web_search 工具搜索",
-                        "请使用 web_search",
-                    )
-                    if any(user_msg.startswith(m) for m in _pollution_markers):
-                        logger.debug("context.skip_polluted_history",
-                                     user_preview=user_msg[:60])
-                        continue
-                user_preview = user_msg[:200].replace("\n", " ") if user_msg else ""
-                asst_preview = asst_msg[:200].replace("\n", " ") if asst_msg else ""
-                ts = row.get("timestamp", 0)
-                # P0 修复（数据库原文蹦出 + 旁观者视角根因）：
-                # 原格式 "· [07-18 14:30] 爸爸: xxx → 小妲: yyy" 的 [MM-DD HH:MM] 是内部标记，
-                # LLM 回复时会直接引用 "[07-18]"。改为自然语言相对时间（如"昨天""前天"）。
-                # 同时用第一人称（小妲=我）让 LLM 把历史当成自己的经历，而非旁观者复述。
-                if ts:
-                    try:
-                        _rel_time = _relative_time_str(float(ts))
-                        summaries.append(f"·（{_rel_time}）{term}说了：{user_preview}；我回应：{asst_preview}")
-                    except (ValueError, TypeError, OSError):
-                        summaries.append(f"· {term}说了：{user_preview}；我回应：{asst_preview}")
-                else:
-                    summaries.append(f"· {term}说了：{user_preview}；我回应：{asst_preview}")
+                summaries.append(
+                    self._format_history_row(user_msg, asst_msg, row.get("timestamp", 0), term)
+                )
 
             if summaries:
                 self._restored_summary = "\n".join(summaries[-10:])
                 logger.info("context.restored", items=len(summaries), user_id=user_id, term=term)
         except Exception as e:
             logger.warning("context.restore_failed", error=str(e))
+
+    @staticmethod
+    def _should_skip_history_row(user_msg: str, asst_msg: str) -> bool:
+        """判断历史行是否应跳过（空回复 / Agnes 污染 / 场景提示污染）。"""
+        if not user_msg and not asst_msg:
+            return True
+        # P0 修复（Task 3.2）：空 assistant_reply 不注入历史摘要
+        # 根因：原实现 user 非空 + asst 空 仍被注入，造成"用户说了 → 小妲没回"的上下文割裂
+        if not asst_msg or not asst_msg.strip():
+            return True
+        # P0 修复（人格崩溃期污染过滤）：跳过 Agnes/艾格妮丝 出厂默认自介泄漏
+        # 根因：SOUL.md 被自动覆盖（混入"小莉下属"段、丢失记忆铁律）期间，LLM 误认
+        #   身份为"Agnes/艾格妮丝"（Sapiens AI 出厂默认人格），回复写库后会被本函数
+        #   原文注入（"这是你亲身经历的事"），导致 LLM 惯性继续扮演 Agnes。
+        _agnes_markers = ("我是 Agnes", "我是艾格妮丝", "由 Sapiens AI", "Sapiens AI 开发",
+                          "小妲姐姐是另一个助手", "小妲姐姐创造出来的", "艾格妮丝（Agnes）")
+        if any(m in asst_msg for m in _agnes_markers):
+            logger.warning("context.skip_agnes_pollution",
+                           asst_preview=asst_msg[:60])
+            return True
+        # P0 修复（上下文污染根因）：过滤被污染的历史记录
+        # 根因：nudge_engine/greeting_scheduler 旧版本把场景提示作为 user_input 传入，
+        #       导致 conversation_logs.user_message 出现"（场景：现在早上...）"等系统提示。
+        #       这些记录被注入历史摘要后，LLM 在后续轮次会回应这些元提示，造成角色出戏。
+        if user_msg:
+            _pollution_markers = (
+                "（场景：", "(场景：",
+                "（主动问候）", "(主动问候)",
+                "请继续完成你的回复",
+                "请使用 web_search 工具搜索",
+                "请使用 web_search",
+            )
+            if any(user_msg.startswith(m) for m in _pollution_markers):
+                logger.debug("context.skip_polluted_history",
+                             user_preview=user_msg[:60])
+                return True
+        return False
+
+    @staticmethod
+    def _format_history_row(user_msg: str, asst_msg: str, ts: Any, term: str) -> str:
+        """格式化单行历史为叙事格式（自然语言相对时间 + 第一人称）。
+
+        P0 修复（数据库原文蹦出 + 旁观者视角根因）：
+        原格式 "· [07-18 14:30] 爸爸: xxx → 小妲: yyy" 的 [MM-DD HH:MM] 是内部标记，
+        LLM 回复时会直接引用 "[07-18]"。改为自然语言相对时间（如"昨天""前天"）。
+        同时用第一人称（小妲=我）让 LLM 把历史当成自己的经历，而非旁观者复述。
+        """
+        user_preview = user_msg[:200].replace("\n", " ") if user_msg else ""
+        asst_preview = asst_msg[:200].replace("\n", " ") if asst_msg else ""
+        if ts:
+            try:
+                _rel_time = _relative_time_str(float(ts))
+                return f"·（{_rel_time}）{term}说了：{user_preview}；我回应：{asst_preview}"
+            except (ValueError, TypeError, OSError):
+                return f"· {term}说了：{user_preview}；我回应：{asst_preview}"
+        return f"· {term}说了：{user_preview}；我回应：{asst_preview}"
 
     def get_xiaoda_prompt(self) -> str:
         """获取小妲的系统提示词。
