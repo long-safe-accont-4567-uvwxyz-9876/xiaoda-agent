@@ -593,15 +593,42 @@ class SubAgentManagerMixin:
         # A2A 共享黑板：委托前读取已有产出，避免重复工作（黑板为 None 时跳过）
         bb = getattr(self.context, "shared_blackboard", None)
         task_key = self._bb_task_key(name, task, user_id=_ctx.user_id if _ctx else "")
-        if bb is not None:
-            try:
-                cached = await bb.get(task_key)
-                if cached is not None:
-                    logger.debug("blackboard.delegate_hit key={} agent={}", task_key, name)
-                    return cached
-            except Exception as e:
-                logger.debug("blackboard.get_failed key={} error={}", task_key, e)
+        cached = await self._read_blackboard_cache(name, task, bb, task_key)
+        if cached is not None:
+            return cached
         context = self._build_sub_agent_context(task_hint=task)
+        result, _duration = await self._dispatch_and_record(name, task, context, _ctx, agent)
+        # I7: 记录子 Agent 工作履历 (供路由器智能调度)
+        try:
+            from core.agent_work_record import get_work_recorder
+            get_work_recorder().record(
+                name, task_type=mode, success=result is not None,
+                duration=_duration)
+        except Exception as e:
+            logger.debug("sub_agent.work_record_failed", error=str(e))
+        if result is None:
+            return f"{agent.config.display_name}现在有点累了...等会儿再试吧💤"
+
+        result = await self._verify_result(name, task, result, mode, verifier)
+        await self._write_blackboard_cache(bb, task_key, result, name)
+        return result
+
+    async def _read_blackboard_cache(self, name: str, task: str, bb: Any, task_key: str) -> str | None:
+        """A2A 共享黑板读取已有产出；命中返回缓存，未命中/失败返回 None。"""
+        if bb is None:
+            return None
+        try:
+            cached = await bb.get(task_key)
+            if cached is not None:
+                logger.debug("blackboard.delegate_hit key={} agent={}", task_key, name)
+                return cached
+        except Exception as e:
+            logger.debug("blackboard.get_failed key={} error={}", task_key, e)
+        return None
+
+    async def _dispatch_and_record(self, name: str, task: str, context: Any,
+                                   _ctx: Any, agent: Any) -> tuple[str | None, float]:
+        """dispatch 子代理 + 事件 emit + BeliefRouter 反馈；失败重新抛出。"""
         import time as _time_mod
         _t0 = _time_mod.time()
         task_id = gen_task_id(name)
@@ -645,35 +672,31 @@ class SubAgentManagerMixin:
                 except Exception as e:
                     logger.debug("belief_router.update_failed agent={} error={}", name, str(e)[:100])
             raise
-        # I7: 记录子 Agent 工作履历 (供路由器智能调度)
-        try:
-            from core.agent_work_record import get_work_recorder
-            get_work_recorder().record(
-                name, task_type=mode, success=result is not None,
-                duration=_duration)
-        except Exception as e:
-            logger.debug("sub_agent.work_record_failed", error=str(e))
-        if result is None:
-            return f"{agent.config.display_name}现在有点累了...等会儿再试吧💤"
+        return result, _duration
 
-        # generate_verify 模式：委托验证子代理审查结果（借鉴 Trae Code Review Step 5.5）
+    async def _verify_result(self, name: str, task: str, result: str,
+                             mode: str, verifier: str) -> str:
+        """generate_verify / single 模式的交叉验证（single 模式按风险自动触发）。"""
         if mode == "generate_verify" and verifier:
-            result = await self._cross_verify(name, verifier, task, result)
-        elif mode == "single":
+            return await self._cross_verify(name, verifier, task, result)
+        if mode == "single":
             # 自动验证：检测输出是否包含关键操作痕迹，自动触发交叉验证
             from core.risk_classifier import OutputRiskDetector
             is_critical, suggested_verifier = OutputRiskDetector.detect(result)
             if is_critical and suggested_verifier and suggested_verifier != name:
                 logger.info("agent.auto_verify_triggered generator={} verifier={}",
                             name, suggested_verifier)
-                result = await self._cross_verify(name, suggested_verifier, task, result)
-        # A2A 共享黑板：委托完成后写入产出，供父代理汇总或其他子代理复用
-        if bb is not None:
-            try:
-                await bb.put(task_key, result, agent_name=name)
-            except Exception as e:
-                logger.debug("blackboard.put_failed key={} error={}", task_key, e)
+                return await self._cross_verify(name, suggested_verifier, task, result)
         return result
+
+    async def _write_blackboard_cache(self, bb: Any, task_key: str, result: str, name: str) -> None:
+        """A2A 共享黑板写入产出（黑板为 None 时跳过）。"""
+        if bb is None:
+            return
+        try:
+            await bb.put(task_key, result, agent_name=name)
+        except Exception as e:
+            logger.debug("blackboard.put_failed key={} error={}", task_key, e)
 
     async def _cross_verify(self, generator: str, verifier: str,
                              task: str, generated: str) -> str:
