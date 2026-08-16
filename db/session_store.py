@@ -1,8 +1,10 @@
 """会话存储抽象层 — 借鉴 Claude Agent SDK 的 SessionStore 设计"""
 from __future__ import annotations
 
-from typing import Any, Protocol, runtime_checkable
+import json
+import time
 from dataclasses import dataclass, field
+from typing import Any, Protocol, runtime_checkable
 
 from loguru import logger
 
@@ -171,3 +173,210 @@ def summary_to_session_info(entry: SessionSummaryEntry) -> SessionInfo | None:
         tag=data.get("tag"),
         created_at=data.get("created_at"),
     )
+
+
+class SessionStoreMixin:
+    # ── SessionStoreProtocol 实现 ──────────────────────────────────
+
+    async def append_session_entry(self, session_id: str, entry: dict[str, Any]) -> None:
+        """追加一条会话条目，并增量折叠摘要"""
+        now = time.time()
+        entry_json = json.dumps(entry, ensure_ascii=False)
+        await self._conn.execute(
+            """INSERT INTO session_entries (session_id, entry_json, created_at)
+               VALUES (?, ?, ?)""",
+            (session_id, entry_json, now),
+        )
+
+        # 加载已有摘要
+        prev_summary = await self._load_summary_entry(session_id)
+
+        # 增量折叠
+        new_summary = fold_session_summary(prev_summary, session_id, entry)
+        new_summary.mtime = int(now * 1000)
+
+        # 持久化摘要
+        await self._conn.execute(
+            """INSERT OR REPLACE INTO session_summaries (session_id, mtime, summary_data)
+               VALUES (?, ?, ?)""",
+            (session_id, new_summary.mtime, json.dumps(new_summary.data, ensure_ascii=False)),
+        )
+        await self._conn.commit()
+
+    async def load_session(self, session_id: str) -> list[dict[str, Any]] | None:
+        """加载完整会话条目列表"""
+        cursor = await self._conn.execute(
+            """SELECT entry_json FROM session_entries
+               WHERE session_id=? ORDER BY created_at ASC, id ASC""",
+            (session_id,),
+        )
+        rows = await cursor.fetchall()
+        if not rows:
+            return None
+        result = []
+        for row in rows:
+            try:
+                result.append(json.loads(row["entry_json"]))
+            except (json.JSONDecodeError, TypeError):
+                continue
+        return result
+
+    async def list_sessions(self, project_key: str = "default") -> list[SessionInfo]:
+        """列出所有会话（含增量摘要信息）"""
+        cursor = await self._conn.execute(
+            """SELECT s.id, s.summary, s.ended_at, s.started_at, s.status,
+                      sm.mtime, sm.summary_data
+               FROM sessions s
+               LEFT JOIN session_summaries sm ON s.id = sm.session_id
+               ORDER BY COALESCE(sm.mtime, s.ended_at * 1000, 0) DESC"""
+        )
+        rows = await cursor.fetchall()
+
+        results: list[SessionInfo] = []
+        for row in rows:
+            info = self._build_session_info(row)
+            if info is not None:
+                results.append(info)
+        return results
+
+    def _build_session_info(self, row: Any) -> SessionInfo | None:
+        """从一行 sessions+session_summaries 联表结果构造 SessionInfo；无有效摘要返回 None。"""
+        sid = row["id"]
+        summary_text = row["summary"] or ""
+        mtime = row["mtime"] or int((row["ended_at"] or row["started_at"] or 0) * 1000)
+        summary_data = {}
+        try:
+            summary_data = json.loads(row["summary_data"]) if row["summary_data"] else {}
+        except (json.JSONDecodeError, TypeError):
+            logger.debug("database.summary_data_parse_failed", exc_info=True)
+        custom_title = summary_data.get("custom_title") or summary_data.get("ai_title")
+        first_prompt = summary_data.get("first_prompt") if summary_data.get("first_prompt_locked") else None
+        display_summary = (
+            custom_title
+            or summary_data.get("last_prompt")
+            or summary_data.get("summary_hint")
+            or first_prompt
+            or summary_text
+        )
+        if not display_summary:
+            return None
+        return SessionInfo(
+            session_id=sid,
+            summary=display_summary,
+            last_modified=mtime,
+            custom_title=custom_title,
+            first_prompt=first_prompt,
+            tag=summary_data.get("tag"),
+            created_at=summary_data.get("created_at"),
+        )
+
+    async def delete_session(self, session_id: str) -> None:
+        """删除会话及其所有条目和摘要"""
+        await self._conn.execute("DELETE FROM session_entries WHERE session_id=?", (session_id,))
+        await self._conn.execute("DELETE FROM session_summaries WHERE session_id=?", (session_id,))
+        await self._conn.execute("DELETE FROM sessions WHERE id=?", (session_id,))
+        await self._conn.commit()
+
+    async def rename_session(self, session_id: str, new_title: str) -> None:
+        """重命名会话（更新 custom_title）"""
+        # 更新 sessions 表的 summary
+        await self._conn.execute(
+            "UPDATE sessions SET summary=? WHERE id=?",
+            (new_title, session_id),
+        )
+        # 更新增量摘要中的 custom_title
+        prev = await self._load_summary_entry(session_id)
+        if prev is None:
+            prev = SessionSummaryEntry(session_id=session_id, mtime=int(time.time() * 1000), data={})
+        prev.data["custom_title"] = new_title
+        prev.mtime = int(time.time() * 1000)
+        await self._conn.execute(
+            """INSERT OR REPLACE INTO session_summaries (session_id, mtime, summary_data)
+               VALUES (?, ?, ?)""",
+            (session_id, prev.mtime, json.dumps(prev.data, ensure_ascii=False)),
+        )
+        await self._conn.commit()
+
+    async def tag_session(self, session_id: str, tag: str) -> None:
+        """为会话添加标签"""
+        prev = await self._load_summary_entry(session_id)
+        if prev is None:
+            prev = SessionSummaryEntry(session_id=session_id, mtime=int(time.time() * 1000), data={})
+        prev.data["tag"] = tag
+        prev.mtime = int(time.time() * 1000)
+        await self._conn.execute(
+            """INSERT OR REPLACE INTO session_summaries (session_id, mtime, summary_data)
+               VALUES (?, ?, ?)""",
+            (session_id, prev.mtime, json.dumps(prev.data, ensure_ascii=False)),
+        )
+        await self._conn.commit()
+
+    async def fork_session(self, session_id: str) -> str | None:
+        """Fork 一个会话，返回新会话 ID"""
+        # 加载原始会话条目
+        entries = await self.load_session(session_id)
+        if entries is None:
+            return None
+
+        # 获取原始会话信息
+        cursor = await self._conn.execute("SELECT * FROM sessions WHERE id=?", (session_id,))
+        orig = await cursor.fetchone()
+        if not orig:
+            return None
+
+        # 创建新会话
+        now = time.time()
+        date_str = time.strftime("%Y%m%d", time.localtime(now))
+        new_id = f"SES-{date_str}-{int(now % 100000):05d}"
+
+        await self._conn.execute(
+            """INSERT INTO sessions (id, user_openid, summary, turn_count, total_cost_usd,
+               cache_hit_tokens, cache_miss_tokens, started_at, ended_at, status)
+               VALUES (?, ?, ?, 0, 0, 0, 0, ?, ?, 'active')""",
+            (new_id, orig["user_openid"], f"Fork of {session_id}", now, now),
+        )
+
+        # 复制所有条目
+        for entry in entries:
+            entry_json = json.dumps(entry, ensure_ascii=False)
+            await self._conn.execute(
+                """INSERT INTO session_entries (session_id, entry_json, created_at)
+                   VALUES (?, ?, ?)""",
+                (new_id, entry_json, now),
+            )
+
+        # 复制摘要
+        prev = await self._load_summary_entry(session_id)
+        if prev is not None:
+            new_summary = SessionSummaryEntry(
+                session_id=new_id,
+                mtime=int(now * 1000),
+                data=dict(prev.data),
+            )
+            await self._conn.execute(
+                """INSERT OR REPLACE INTO session_summaries (session_id, mtime, summary_data)
+                   VALUES (?, ?, ?)""",
+                (new_id, new_summary.mtime, json.dumps(new_summary.data, ensure_ascii=False)),
+            )
+
+        await self._conn.commit()
+        return new_id
+
+    async def _load_summary_entry(self, session_id: str) -> SessionSummaryEntry | None:
+        """从 session_summaries 表加载摘要条目"""
+        cursor = await self._conn.execute(
+            "SELECT mtime, summary_data FROM session_summaries WHERE session_id=?",
+            (session_id,),
+        )
+        row = await cursor.fetchone()
+        if not row:
+            return None
+        try:
+            data = json.loads(row["summary_data"])
+        except (json.JSONDecodeError, TypeError):
+            data = {}
+        return SessionSummaryEntry(
+            session_id=session_id,
+            mtime=row["mtime"],
+            data=data,
+        )

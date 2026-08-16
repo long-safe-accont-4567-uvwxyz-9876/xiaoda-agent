@@ -1,9 +1,6 @@
 import asyncio
 import contextlib
-import json
-import sqlite3
 import sys
-import time
 from contextvars import ContextVar
 from pathlib import Path
 from typing import Any
@@ -13,9 +10,6 @@ from loguru import logger
 
 from config import DATA_DIR
 
-from . import db_workflow
-from .legacy_migrations import LegacyMigrationMixin
-from .ddl_schema import DDLMixin
 from .conversation_logs import ConversationLogMixin
 from .db_analytics import AnalyticsDB
 from .db_kg_v2 import KnowledgeDBV2
@@ -25,13 +19,12 @@ from .db_local_ai import LocalAIDB, transaction_lock_for
 from .db_memory import MemoryDB
 from .db_notebook import NotebookDB
 from .db_temporal_memory import TemporalMemoryDB
+from .ddl_schema import DDLMixin
 from .index_manager import build_default_index_manager
+from .legacy_migrations import LegacyMigrationMixin
+from .lifecycle_sessions import LifecycleSessionMixin
 from .profile_store import ProfileStore
-from .session_store import (
-    SessionInfo,
-    SessionSummaryEntry,
-    fold_session_summary,
-)
+from .session_store import SessionStoreMixin
 
 DB_DIR = DATA_DIR
 DB_PATH = DB_DIR / "agent.db"
@@ -68,7 +61,7 @@ def _detect_fs_type(path: Path) -> str:
     return ""
 
 
-class DatabaseManager(LegacyMigrationMixin, DDLMixin, ConversationLogMixin):
+class DatabaseManager(LegacyMigrationMixin, DDLMixin, ConversationLogMixin, LifecycleSessionMixin, SessionStoreMixin):
     """管理 SQLite 数据库连接与各子 DB 模块的生命周期。"""
 
     def _db_ro_uri(self) -> str:
@@ -473,319 +466,3 @@ class DatabaseManager(LegacyMigrationMixin, DDLMixin, ConversationLogMixin):
             return cur.lastrowid or 0
         return cur.rowcount
 
-    async def create_session(self, user_openid: str = "", auto_commit: bool = True) -> str:
-        now = time.time()
-        date_str = time.strftime("%Y%m%d", time.localtime(now))
-        session_id = f"SES-{date_str}-{int(now % 100000):05d}"
-        await self._conn.execute(
-            """INSERT INTO sessions
-               (id, user_openid, started_at, ended_at, status)
-               VALUES (?, ?, ?, ?, 'active')""",
-            (session_id, user_openid, now, now),
-        )
-        if auto_commit:
-            await self._conn.commit()
-        return session_id
-
-    async def get_active_session(self, user_openid: str, idle_seconds: int = 1800) -> dict | None:
-        cutoff = time.time() - idle_seconds
-        cursor = await self._conn.execute(
-            """SELECT * FROM sessions
-               WHERE user_openid=? AND status='active' AND ended_at >= ?
-               ORDER BY ended_at DESC LIMIT 1""",
-            (user_openid, cutoff),
-        )
-        row = await cursor.fetchone()
-        return dict(row) if row else None
-
-    async def update_session(self, session_id: str, cost_usd: float = 0,
-                              cache_hit: int = 0, cache_miss: int = 0,
-                              auto_commit: bool = True) -> None:
-        now = time.time()
-        await self._conn.execute(
-            """UPDATE sessions
-               SET turn_count = turn_count + 1,
-                   total_cost_usd = total_cost_usd + ?,
-                   cache_hit_tokens = cache_hit_tokens + ?,
-                   cache_miss_tokens = cache_miss_tokens + ?,
-                   ended_at = ?
-               WHERE id=?""",
-            (cost_usd, cache_hit, cache_miss, now, session_id),
-        )
-        if auto_commit:
-            await self._conn.commit()
-
-    async def archive_session(self, session_id: str, summary: str = "",
-                               auto_commit: bool = True) -> None:
-        now = time.time()
-        await self._conn.execute(
-            """UPDATE sessions
-               SET status='archived', summary=?, ended_at=?
-               WHERE id=?""",
-            (summary, now, session_id),
-        )
-        if auto_commit:
-            await self._conn.commit()
-
-    async def get_archived_sessions(self, user_openid: str = "", limit: int = 10) -> list[dict]:
-        if user_openid:
-            cursor = await self._conn.execute(
-                """SELECT * FROM sessions
-                   WHERE user_openid=? AND status='archived'
-                   ORDER BY ended_at DESC LIMIT ?""",
-                (user_openid, limit),
-            )
-        else:
-            cursor = await self._conn.execute(
-                """SELECT * FROM sessions
-                   WHERE status='archived'
-                   ORDER BY ended_at DESC LIMIT ?""",
-                (limit,),
-            )
-        rows = await cursor.fetchall()
-        return [dict(r) for r in rows]
-
-    async def get_active_sessions(self, limit: int = 10) -> list[dict]:
-        cursor = await self._conn.execute(
-            """SELECT * FROM sessions
-               WHERE status='active'
-               ORDER BY ended_at DESC LIMIT ?""",
-            (limit,),
-        )
-        rows = await cursor.fetchall()
-        return [dict(r) for r in rows]
-
-    async def auto_archive_stale_sessions(self, idle_seconds: int = 3600,
-                                           auto_commit: bool = True) -> int:
-        cutoff = time.time() - idle_seconds
-        cursor = await self._conn.execute(
-            """UPDATE sessions
-               SET status='archived', ended_at=?
-               WHERE status='active' AND ended_at > 0 AND ended_at < ?""",
-            (time.time(), cutoff),
-        )
-        if auto_commit:
-            await self._conn.commit()
-        return cursor.rowcount
-
-    async def get_cron_last_run(self, task_name: str) -> float | None:
-        cursor = await self._conn.execute(
-            "SELECT last_run FROM cron_last_run WHERE task_name=?", (task_name,)
-        )
-        row = await cursor.fetchone()
-        return row["last_run"] if row else None
-
-    async def set_cron_last_run(self, task_name: str, ts: float | None = None,
-                                 auto_commit: bool = True) -> None:
-        ts = ts or time.time()
-        sql = "INSERT OR REPLACE INTO cron_last_run (task_name, last_run) VALUES (?, ?)"
-        if not auto_commit or self._write_tx_active.get():
-            await self._conn.execute(sql, (task_name, ts))
-            return
-        async with self.write_transaction() as conn:
-            await conn.execute(sql, (task_name, ts))
-
-    # ── SessionStoreProtocol 实现 ──────────────────────────────────
-
-    async def append_session_entry(self, session_id: str, entry: dict[str, Any]) -> None:
-        """追加一条会话条目，并增量折叠摘要"""
-        now = time.time()
-        entry_json = json.dumps(entry, ensure_ascii=False)
-        await self._conn.execute(
-            """INSERT INTO session_entries (session_id, entry_json, created_at)
-               VALUES (?, ?, ?)""",
-            (session_id, entry_json, now),
-        )
-
-        # 加载已有摘要
-        prev_summary = await self._load_summary_entry(session_id)
-
-        # 增量折叠
-        new_summary = fold_session_summary(prev_summary, session_id, entry)
-        new_summary.mtime = int(now * 1000)
-
-        # 持久化摘要
-        await self._conn.execute(
-            """INSERT OR REPLACE INTO session_summaries (session_id, mtime, summary_data)
-               VALUES (?, ?, ?)""",
-            (session_id, new_summary.mtime, json.dumps(new_summary.data, ensure_ascii=False)),
-        )
-        await self._conn.commit()
-
-    async def load_session(self, session_id: str) -> list[dict[str, Any]] | None:
-        """加载完整会话条目列表"""
-        cursor = await self._conn.execute(
-            """SELECT entry_json FROM session_entries
-               WHERE session_id=? ORDER BY created_at ASC, id ASC""",
-            (session_id,),
-        )
-        rows = await cursor.fetchall()
-        if not rows:
-            return None
-        result = []
-        for row in rows:
-            try:
-                result.append(json.loads(row["entry_json"]))
-            except (json.JSONDecodeError, TypeError):
-                continue
-        return result
-
-    async def list_sessions(self, project_key: str = "default") -> list[SessionInfo]:
-        """列出所有会话（含增量摘要信息）"""
-        cursor = await self._conn.execute(
-            """SELECT s.id, s.summary, s.ended_at, s.started_at, s.status,
-                      sm.mtime, sm.summary_data
-               FROM sessions s
-               LEFT JOIN session_summaries sm ON s.id = sm.session_id
-               ORDER BY COALESCE(sm.mtime, s.ended_at * 1000, 0) DESC"""
-        )
-        rows = await cursor.fetchall()
-
-        results: list[SessionInfo] = []
-        for row in rows:
-            info = self._build_session_info(row)
-            if info is not None:
-                results.append(info)
-        return results
-
-    def _build_session_info(self, row: Any) -> SessionInfo | None:
-        """从一行 sessions+session_summaries 联表结果构造 SessionInfo；无有效摘要返回 None。"""
-        sid = row["id"]
-        summary_text = row["summary"] or ""
-        mtime = row["mtime"] or int((row["ended_at"] or row["started_at"] or 0) * 1000)
-        summary_data = {}
-        try:
-            summary_data = json.loads(row["summary_data"]) if row["summary_data"] else {}
-        except (json.JSONDecodeError, TypeError):
-            logger.debug("database.summary_data_parse_failed", exc_info=True)
-        custom_title = summary_data.get("custom_title") or summary_data.get("ai_title")
-        first_prompt = summary_data.get("first_prompt") if summary_data.get("first_prompt_locked") else None
-        display_summary = (
-            custom_title
-            or summary_data.get("last_prompt")
-            or summary_data.get("summary_hint")
-            or first_prompt
-            or summary_text
-        )
-        if not display_summary:
-            return None
-        return SessionInfo(
-            session_id=sid,
-            summary=display_summary,
-            last_modified=mtime,
-            custom_title=custom_title,
-            first_prompt=first_prompt,
-            tag=summary_data.get("tag"),
-            created_at=summary_data.get("created_at"),
-        )
-
-    async def delete_session(self, session_id: str) -> None:
-        """删除会话及其所有条目和摘要"""
-        await self._conn.execute("DELETE FROM session_entries WHERE session_id=?", (session_id,))
-        await self._conn.execute("DELETE FROM session_summaries WHERE session_id=?", (session_id,))
-        await self._conn.execute("DELETE FROM sessions WHERE id=?", (session_id,))
-        await self._conn.commit()
-
-    async def rename_session(self, session_id: str, new_title: str) -> None:
-        """重命名会话（更新 custom_title）"""
-        # 更新 sessions 表的 summary
-        await self._conn.execute(
-            "UPDATE sessions SET summary=? WHERE id=?",
-            (new_title, session_id),
-        )
-        # 更新增量摘要中的 custom_title
-        prev = await self._load_summary_entry(session_id)
-        if prev is None:
-            prev = SessionSummaryEntry(session_id=session_id, mtime=int(time.time() * 1000), data={})
-        prev.data["custom_title"] = new_title
-        prev.mtime = int(time.time() * 1000)
-        await self._conn.execute(
-            """INSERT OR REPLACE INTO session_summaries (session_id, mtime, summary_data)
-               VALUES (?, ?, ?)""",
-            (session_id, prev.mtime, json.dumps(prev.data, ensure_ascii=False)),
-        )
-        await self._conn.commit()
-
-    async def tag_session(self, session_id: str, tag: str) -> None:
-        """为会话添加标签"""
-        prev = await self._load_summary_entry(session_id)
-        if prev is None:
-            prev = SessionSummaryEntry(session_id=session_id, mtime=int(time.time() * 1000), data={})
-        prev.data["tag"] = tag
-        prev.mtime = int(time.time() * 1000)
-        await self._conn.execute(
-            """INSERT OR REPLACE INTO session_summaries (session_id, mtime, summary_data)
-               VALUES (?, ?, ?)""",
-            (session_id, prev.mtime, json.dumps(prev.data, ensure_ascii=False)),
-        )
-        await self._conn.commit()
-
-    async def fork_session(self, session_id: str) -> str | None:
-        """Fork 一个会话，返回新会话 ID"""
-        # 加载原始会话条目
-        entries = await self.load_session(session_id)
-        if entries is None:
-            return None
-
-        # 获取原始会话信息
-        cursor = await self._conn.execute("SELECT * FROM sessions WHERE id=?", (session_id,))
-        orig = await cursor.fetchone()
-        if not orig:
-            return None
-
-        # 创建新会话
-        now = time.time()
-        date_str = time.strftime("%Y%m%d", time.localtime(now))
-        new_id = f"SES-{date_str}-{int(now % 100000):05d}"
-
-        await self._conn.execute(
-            """INSERT INTO sessions (id, user_openid, summary, turn_count, total_cost_usd,
-               cache_hit_tokens, cache_miss_tokens, started_at, ended_at, status)
-               VALUES (?, ?, ?, 0, 0, 0, 0, ?, ?, 'active')""",
-            (new_id, orig["user_openid"], f"Fork of {session_id}", now, now),
-        )
-
-        # 复制所有条目
-        for entry in entries:
-            entry_json = json.dumps(entry, ensure_ascii=False)
-            await self._conn.execute(
-                """INSERT INTO session_entries (session_id, entry_json, created_at)
-                   VALUES (?, ?, ?)""",
-                (new_id, entry_json, now),
-            )
-
-        # 复制摘要
-        prev = await self._load_summary_entry(session_id)
-        if prev is not None:
-            new_summary = SessionSummaryEntry(
-                session_id=new_id,
-                mtime=int(now * 1000),
-                data=dict(prev.data),
-            )
-            await self._conn.execute(
-                """INSERT OR REPLACE INTO session_summaries (session_id, mtime, summary_data)
-                   VALUES (?, ?, ?)""",
-                (new_id, new_summary.mtime, json.dumps(new_summary.data, ensure_ascii=False)),
-            )
-
-        await self._conn.commit()
-        return new_id
-
-    async def _load_summary_entry(self, session_id: str) -> SessionSummaryEntry | None:
-        """从 session_summaries 表加载摘要条目"""
-        cursor = await self._conn.execute(
-            "SELECT mtime, summary_data FROM session_summaries WHERE session_id=?",
-            (session_id,),
-        )
-        row = await cursor.fetchone()
-        if not row:
-            return None
-        try:
-            data = json.loads(row["summary_data"])
-        except (json.JSONDecodeError, TypeError):
-            data = {}
-        return SessionSummaryEntry(
-            session_id=session_id,
-            mtime=row["mtime"],
-            data=data,
-        )

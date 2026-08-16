@@ -6,11 +6,9 @@
 """
 from __future__ import annotations
 
-import asyncio
-import json
 import sys
 import time
-from pathlib import Path
+from typing import Any
 
 from loguru import logger
 
@@ -66,9 +64,9 @@ class LegacyMigrationMixin:
             except (OSError, RuntimeError) as e:
                 logger.error("database.dirty_auto_retry_failed", error=str(e))
                 logger.critical(
-                    f"⚠️ 自动修复失败！请手动修复：\n"
-                    f"  1. python -m db.repair_migration --mark-clean\n"
-                    f"  2. 或删除 agent.db 重新初始化（会丢失历史数据）\n"
+                    f"⚠️ 自动修复失败！请手动修复：\n"  # noqa: F541
+                    f"  1. python -m db.repair_migration --mark-clean\n"  # noqa: F541
+                    f"  2. 或删除 agent.db 重新初始化（会丢失历史数据）\n"  # noqa: F541
                 )
                 try:
                     await self._conn.close()
