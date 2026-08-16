@@ -13,7 +13,13 @@ import re
 import uuid
 from pathlib import Path
 
-from channel_adapter_base import ChannelAdapterBase, parse_env_csv, upsert_env_file_line
+from channel_adapter_base import (
+    STREAM_C2C_MAX_SEGMENTS,
+    STREAM_GROUP_MAX_SEGMENTS,
+    ChannelAdapterBase,
+    parse_env_csv,
+    upsert_env_file_line,
+)
 
 from dotenv import load_dotenv
 # P0 修复（Windows 安装包 QQ 离线 bug 根因）：
@@ -212,8 +218,10 @@ APP_SECRET = os.getenv("QQBOT_APP_SECRET", "")
 
 _qq_cfg = AGENT_CONFIG.get("qq_bot", {})
 MAX_REPLY_LEN = _qq_cfg.get("max_reply_length", 8000)
-QQ_C2C_MAX_SEGMENTS = 4
-QQ_GROUP_MAX_SEGMENTS = 4
+# A2：分片配额常量已下沉到 channel_adapter_base（STREAM_*_MAX_SEGMENTS），
+# 这里保留同名别名，维持既有调用点与测试的 import 面不变。
+QQ_C2C_MAX_SEGMENTS = STREAM_C2C_MAX_SEGMENTS
+QQ_GROUP_MAX_SEGMENTS = STREAM_GROUP_MAX_SEGMENTS
 QQ_GROUP_MEDIA_BUDGET = 3
 
 # HITL: Agent 输出中嵌入的高危操作标记，QQ 适配器拦截后触发两段式确认
@@ -1238,98 +1246,6 @@ class AIQQBot(ChannelAdapterBase, botpy.Client):
         # 最终兜底：返回最小版本
         return tmp_path
 
-    def _split_text_by_bytes(self, text: str, byte_limit: int = 7800) -> list[str]:
-        """按字节上限分割文本，每段不超过 byte_limit 字节。
-
-        P1-6 修复：C2C 流式第 4 段合并后可能远超 QQ API 8000 字节上限，
-        合并后需调用本方法按字节再分割，逐片发送。
-
-        - 短文本（≤ byte_limit 字节）返回单片
-        - 长文本按字节上限切片，优先在换行处切分
-        - 闭合截断处未结束的 markdown 代码块（```）
-
-        Args:
-            text: 原始文本
-            byte_limit: 字节上限，默认 7800（留 200 字节余量给 8000 字节 QQ API 上限）
-
-        Returns:
-            分割后的文本段列表（每段 ≤ byte_limit 字节）
-        """
-        if not text:
-            return []
-        encoded = text.encode('utf-8')
-        if len(encoded) <= byte_limit:
-            return [text]
-
-        from utils.text_utils import _find_char_boundary
-
-        segments: list[str] = []
-        remaining = text
-        while remaining:
-            encoded = remaining.encode('utf-8')
-            if len(encoded) <= byte_limit:
-                segments.append(remaining)
-                break
-
-            # 留 10% 余量避免边界字符是多字节字符
-            safe_limit = int(byte_limit * 0.9)
-            target_chars = _find_char_boundary(remaining, safe_limit)
-            # 优先在换行处切分（向前查找，找到的换行符包含在当前段）
-            search_end = min(len(remaining), target_chars + 100)
-            best_pos = remaining.rfind('\n', max(0, target_chars - 200), search_end)
-            if best_pos == -1 or best_pos < target_chars // 2:
-                best_pos = target_chars
-
-            chunk = remaining[:best_pos]
-            while len((chunk.rstrip() + ('\n```' if chunk.count('```') % 2 else '')).encode('utf-8')) > byte_limit:
-                best_pos -= 1
-                chunk = remaining[:best_pos]
-            tail = remaining[best_pos:]
-            if chunk.count('```') % 2 != 0:
-                chunk = chunk.rstrip() + '\n```'
-                tail = '```\n' + tail
-            remaining = tail
-            segments.append(chunk)
-
-        return segments
-
-    def _split_text_for_streaming(self, text: str, chunk_size: int = 300) -> list[str]:
-        """将文本切片为流式发送的段。
-
-        - 短回复（< 400 字符）返回单片
-        - 长回复按 chunk_size 切片，避免切断 markdown 代码块和 URL
-        - chunk_size 默认 300，建议范围 200-400
-
-        Args:
-            text: 原始文本
-            chunk_size: 每片字符数，默认 300
-
-        Returns:
-            切片后的文本段列表
-        """
-        if not text:
-            return []
-        if len(text) < 400:
-            return [text]
-
-        segments: list[str] = []
-        pos = 0
-        text_len = len(text)
-        while pos < text_len:
-            end = min(pos + chunk_size, text_len)
-            if end >= text_len:
-                segments.append(text[pos:])
-                break
-            # 调整切片点：避免切断代码块和 URL
-            end = self._adjust_boundary_for_code_block(text, pos, end)
-            end = self._adjust_boundary_for_url(text, pos, end)
-            # 防止零长度段或回退
-            if end <= pos:
-                end = min(pos + chunk_size, text_len)
-            segments.append(text[pos:end])
-            pos = end
-        return segments
-
     def _split_group_text(self, text: str) -> list[str]:
         from utils.text_utils import split_for_group_passive
 
@@ -1343,67 +1259,6 @@ class AIQQBot(ChannelAdapterBase, botpy.Client):
         segments[-1] = last + marker
         return segments
 
-    def _adjust_boundary_for_code_block(self, text: str, start: int, end: int) -> int:
-        """若切片点位于 markdown 代码块内部，向后调整到代码块结束。
-
-        通过统计 [start, end) 范围内的 ``` 数量判断是否在代码块内部。
-        若为奇数，表示切片点在代码块内部，需要向后查找下一个 ``` 并调整到其后。
-
-        Args:
-            text: 完整文本
-            start: 当前段起始位置
-            end: 原始切片点
-
-        Returns:
-            调整后的切片点
-        """
-        segment = text[start:end]
-        fence_count = segment.count('```')
-        if fence_count % 2 == 0:
-            return end  # 不在代码块内
-        # 在代码块内，找到下一个 ```
-        next_fence = text.find('```', end)
-        if next_fence == -1:
-            return len(text)  # 没有闭合，剩余全部作为一段
-        new_end = next_fence + 3
-        # 防止单段过大（超过 6000 字符则放弃调整）
-        if new_end - start > 6000:
-            return end
-        return new_end
-
-    def _adjust_boundary_for_url(self, text: str, start: int, end: int) -> int:
-        """若切片点位于 URL 中间，向后调整到 URL 结束。
-
-        在 end 之前的窗口内查找最近的 http:// 或 https://，
-        若 URL 延伸到 end 之后，则将 end 调整到 URL 结束位置。
-
-        Args:
-            text: 完整文本
-            start: 当前段起始位置
-            end: 原始切片点
-
-        Returns:
-            调整后的切片点
-        """
-        if end >= len(text):
-            return end
-        # 在 end 之前的窗口内查找最近的 http:// 或 https://
-        search_start = max(0, end - 200)
-        last_http = text.rfind('http://', search_start, end)
-        last_https = text.rfind('https://', search_start, end)
-        url_start = max(last_http, last_https)
-        if url_start == -1:
-            return end
-        # URL 结束位置：第一个空白或中英文标点
-        url_end = end
-        stop_chars = set(' \t\n\r，。；！？「」『』（）()【】[]<>「」')
-        while url_end < len(text) and text[url_end] not in stop_chars:
-            url_end += 1
-        # 防止单段过大
-        if url_end - start > 6000:
-            return end
-        return url_end if url_end > end else end
-
     @staticmethod
     def _remaining_segments_after_error(segments: list[str], index: int,
                                         exc: BaseException) -> str:
@@ -1416,29 +1271,6 @@ class AIQQBot(ChannelAdapterBase, botpy.Client):
         if isinstance(exc, TimeoutError):
             return "".join(segments[index + 1:])
         return "".join(segments[index:])
-
-    def _cap_stream_segments(self, segments: list[str], is_group: bool,
-                             resplit_event: str, capped_event: str) -> list[str]:
-        """按被动回复配额截断流式分片，超出的尾部合并到最后一片。
-
-        C2C 合并后按字节上限重切（避免单条超 QQ API 8000 字节上限）；
-        群聊走 split_for_group_passive，每段 ≤4000 字节，最多 4 片不会触发本分支。
-        """
-        max_segs = QQ_GROUP_MAX_SEGMENTS if is_group else QQ_C2C_MAX_SEGMENTS
-        if len(segments) <= max_segs:
-            return segments
-        original_segment_count = len(segments)
-        merged_tail = "".join(segments[max_segs - 1:])
-        if not is_group:
-            resplit = self._split_text_by_bytes(merged_tail, 7800)
-            segments = segments[:max_segs - 1] + resplit
-            logger.info(resplit_event + " original={} final={} max_segs={}",
-                        original_segment_count, len(segments), max_segs)
-        else:
-            segments = segments[:max_segs - 1] + [merged_tail]
-            logger.info(capped_event + " original={} capped={}",
-                        original_segment_count, max_segs)
-        return segments
 
     async def _send_streaming_reply(self, message: Any, full_text: str) -> None:
         """流式分片发送回复，模拟打字效果。

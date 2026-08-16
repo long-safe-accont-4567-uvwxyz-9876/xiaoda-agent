@@ -14,10 +14,23 @@ class FakeCore:
     def __init__(self, result):
         self._result = result
         self.called = False
+        self.sessions = {}
+        self.created = 0
 
-    async def process(self, text, user_id="", source="", user_openid=""):
+    async def process(self, text, user_id="", source="", user_openid="",
+                      session_id=None, status_callback=None, **kwargs):
         self.called = True
         return self._result
+
+    # A2：_handle_text_message 现在会先取/建 per-user session
+    async def get_session(self, user_openid):
+        return self.sessions.get(user_openid)
+
+    async def create_session(self, user_openid=""):
+        self.created += 1
+        sid = f"wx_sess_{user_openid[:8]}_{self.created}"
+        self.sessions[user_openid] = {"id": sid}
+        return sid
 
 
 class FakeClient:
@@ -42,6 +55,14 @@ def _make_adapter(core, sticker_path=None):
     # W4 修复后 context token 按用户隔离（_ctx_by_user），替代原 _last_context_token
     adapter._ctx_by_user = {"user@im.wechat": "ctx_tok"}
     adapter._expired = False
+    # A2 新增状态（正常实例由 __init__ 初始化，__new__ 路径手动补齐）
+    adapter._user_session_cache = {}
+    adapter._user_session_cache_ts = {}
+    adapter._USER_SESSION_CACHE_TTL = 3600
+    adapter._USER_SESSION_CACHE_MAX_SIZE = 1000
+    adapter._last_status_by_user = {}
+    adapter._last_status_by_user_ts = {}
+    adapter._USER_STATUS_TTL = 3600
     return adapter
 
 

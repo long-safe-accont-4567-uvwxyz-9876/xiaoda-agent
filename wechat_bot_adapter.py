@@ -14,6 +14,8 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+import random
+import sqlite3
 import threading
 import time
 import weakref
@@ -240,6 +242,19 @@ class WeChatBotAdapter(ChannelAdapterBase):
         # 连续多次失败才判定 token 真正失效。避免一次抖动就清凭证强制人工重扫码。
         self._expire_retries = 0
         self._MAX_EXPIRE_RETRIES = 3
+
+        # A2：per-user session_id 内存缓存（对齐 qq_bot_adapter._c2c_session_cache 语义）：
+        # from_user_id → session_id，TTL 1 小时 + FIFO 上限，避免每条消息都查 DB。
+        self._user_session_cache: dict[str, str] = {}
+        self._user_session_cache_ts: dict[str, float] = {}
+        self._USER_SESSION_CACHE_TTL = 3600  # 缓存有效期 1 小时
+        self._USER_SESSION_CACHE_MAX_SIZE = 1000
+
+        # A2：per-user 最近一次 status_callback 状态（微信无事件总线用户通道，
+        # 仅记录不发送）：from_user_id → 状态文本，TTL 清理防无界增长。
+        self._last_status_by_user: dict[str, str] = {}
+        self._last_status_by_user_ts: dict[str, float] = {}
+        self._USER_STATUS_TTL = 3600
 
         logger.info(
             "wechat_bot.init user={}",
@@ -812,6 +827,133 @@ class WeChatBotAdapter(ChannelAdapterBase):
                     from_user_id[:16],
                 )
 
+    # ------------------------------------------------------------------
+    # A2：per-user session 管理（对齐 qq_bot_adapter._get_or_create_c2c_session）
+    # ------------------------------------------------------------------
+
+    def _prune_user_session_cache(self) -> None:
+        """清理用户 session 缓存中的过期与超限条目（QQ _prune_c2c_session_cache 轻量版）。
+
+        1. 删除超过 TTL 的过期条目（避免永久驻留）
+        2. 超过 MAX_SIZE 时按 FIFO（最早 ts）淘汰最旧条目（防多用户长期运行内存泄漏）
+        """
+        now = time.time()
+        expired = [
+            k for k, ts in self._user_session_cache_ts.items()
+            if now - ts > self._USER_SESSION_CACHE_TTL
+        ]
+        for k in expired:
+            self._user_session_cache.pop(k, None)
+            self._user_session_cache_ts.pop(k, None)
+        overflow = len(self._user_session_cache) - self._USER_SESSION_CACHE_MAX_SIZE
+        if overflow > 0:
+            sorted_keys = sorted(self._user_session_cache_ts.items(), key=lambda kv: kv[1])
+            for k, _ in sorted_keys[:overflow]:
+                self._user_session_cache.pop(k, None)
+                self._user_session_cache_ts.pop(k, None)
+
+    def _set_user_session_cache(self, user_id: str, sid: str) -> None:
+        """统一缓存写入 + 立即执行 size cap（对齐 QQ _set_c2c_session_cache）。"""
+        self._user_session_cache[user_id] = sid
+        self._user_session_cache_ts[user_id] = time.time()
+        self._prune_user_session_cache()
+
+    async def _get_or_create_user_session(self, from_user_id: str) -> str:
+        """获取或创建用户会话 session_id（对齐 QQ _get_or_create_c2c_session 语义）。
+
+        - 内存缓存优先（TTL 1 小时 + FIFO 上限），避免每条消息都查 DB
+        - 检测到 wechat_tmp_ 兜底 ID 时视为缓存失效，跳过缓存继续查 DB
+          （对齐 QQ P1-7：临时 ID 不存在于 sessions 表，继续缓存会导致上下文永久丢失）
+        - DB 异常/超时兜底 wechat_tmp_{from_user_id[:16]}，总 deadline 20s
+        """
+        self._prune_user_session_cache()
+        cached_sid = self._user_session_cache.get(from_user_id)
+        cached_ts = self._user_session_cache_ts.get(from_user_id, 0)
+        if (cached_sid
+                and not cached_sid.startswith("wechat_tmp_")
+                and (time.time() - cached_ts < self._USER_SESSION_CACHE_TTL)):
+            return cached_sid
+
+        deadline = time.monotonic() + 20.0
+        try:
+            session = await asyncio.wait_for(
+                self._core.get_session(from_user_id),
+                timeout=max(deadline - time.monotonic(), 0.1),
+            )
+            if session:
+                sid = session["id"]
+                self._set_user_session_cache(from_user_id, sid)
+                return sid
+            # 没有活跃会话，创建新会话
+            sid = await asyncio.wait_for(
+                self._core.create_session(from_user_id),
+                timeout=max(deadline - time.monotonic(), 0.1),
+            )
+            self._set_user_session_cache(from_user_id, sid)
+            return sid
+        except (TimeoutError, sqlite3.OperationalError) as e:
+            logger.warning(
+                "wechat_bot.user_session_db_error user={} error={}, retrying",
+                from_user_id[:16], str(e)[:100],
+            )
+            # DB 锁/超时后用剩余时间重试一次（锁通常是短暂的）
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                logger.error("wechat_bot.user_session_deadline_exhausted user={}", from_user_id[:16])
+                return f"wechat_tmp_{from_user_id[:16]}"
+            try:
+                session = await asyncio.wait_for(
+                    self._core.get_session(from_user_id),
+                    timeout=remaining,
+                )
+                if session:
+                    sid = session["id"]
+                    self._set_user_session_cache(from_user_id, sid)
+                    return sid
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    logger.error("wechat_bot.user_session_deadline_exhausted user={}", from_user_id[:16])
+                    return f"wechat_tmp_{from_user_id[:16]}"
+                sid = await asyncio.wait_for(
+                    self._core.create_session(from_user_id),
+                    timeout=remaining,
+                )
+                self._set_user_session_cache(from_user_id, sid)
+                return sid
+            except (TimeoutError, sqlite3.OperationalError) as e2:
+                logger.error(
+                    "wechat_bot.user_session_db_error_retry user={} error={}",
+                    from_user_id[:16], str(e2)[:100],
+                )
+                # 关键修复（对齐 QQ）：DB 超时/锁时返回临时 session_id，保证消息不丢失；
+                # 后续 process 仍能执行，仅持久化能力受影响
+                return f"wechat_tmp_{from_user_id[:16]}"
+        except (KeyError, OSError, RuntimeError) as e:
+            logger.error("wechat_bot.user_session_failed error={}", str(e)[:200])
+            # 同样返回临时 session_id，避免消息丢失
+            return f"wechat_tmp_{from_user_id[:16]}"
+
+    # ------------------------------------------------------------------
+    # A2：status_callback 最近状态记录（微信无事件总线用户通道，仅记录不发送）
+    # ------------------------------------------------------------------
+
+    def _prune_last_status_cache(self) -> None:
+        """清理过期状态条目（TTL 1 小时），避免长期运行内存线性增长。"""
+        now = time.time()
+        expired = [
+            k for k, ts in self._last_status_by_user_ts.items()
+            if now - ts > self._USER_STATUS_TTL
+        ]
+        for k in expired:
+            self._last_status_by_user.pop(k, None)
+            self._last_status_by_user_ts.pop(k, None)
+
+    def _remember_last_status(self, user_id: str, status: str) -> None:
+        """记录用户最近一次中间状态并清理过期条目。"""
+        self._last_status_by_user[user_id] = status
+        self._last_status_by_user_ts[user_id] = time.time()
+        self._prune_last_status_cache()
+
     async def _handle_text_message(
         self, text: str, from_user_id: str, context_token: str
     ) -> None:
@@ -853,6 +995,22 @@ class WeChatBotAdapter(ChannelAdapterBase):
             "wechat_bot.calling_core_process user_id={} text_len={}",
             user_id, len(text),
         )
+        # A2：对齐 QQ C2C——先取/建 per-user session（内存缓存优先，DB 异常兜底临时 ID）
+        session_id = await self._get_or_create_user_session(from_user_id)
+        logger.debug(
+            "wechat_bot.session_ready user={} session_id={}",
+            from_user_id[:16], session_id[:32],
+        )
+
+        # A2：status_callback（签名与 QQ status_notify 一致）。
+        # 微信无事件总线用户通道：仅记 DEBUG 日志 + 维护 per-user 最近状态，不做协议发送。
+        async def status_notify(msg: str) -> None:
+            logger.debug(
+                "wechat_bot.status_notify user={} status={}",
+                from_user_id[:16], str(msg)[:200],
+            )
+            self._remember_last_status(from_user_id, str(msg))
+
         try:
             result = await asyncio.wait_for(
                 self._core.process(
@@ -860,6 +1018,8 @@ class WeChatBotAdapter(ChannelAdapterBase):
                     user_id=user_id,
                     source="wechat_c2c",
                     user_openid=from_user_id,
+                    session_id=session_id,
+                    status_callback=status_notify,
                 ),
                 timeout=120,
             )
@@ -895,19 +1055,86 @@ class WeChatBotAdapter(ChannelAdapterBase):
             user_id, len(reply), bool(sticker_path), sticker_path,
         )
         # 先发文本回复（保证用户一定能看到回复）
-        logger.info(
-            "wechat_bot.sending_text_reply user_id={} reply_len={}",
-            user_id, len(reply),
-        )
-        text_sent = await self.send_message(
-            reply,
-            to_user_id=from_user_id,
-            context_token=context_token,
-        )
-        logger.info(
-            "wechat_bot.text_reply_sent user_id={} sent={}",
-            user_id, text_sent,
-        )
+        # A2：分段流式发送（对齐 QQ C2C 流式）——~300 字符/片、最多 4 片，
+        # 超出尾部合并后按字节重切；单片时走原有单条 send_message 路径（行为不变）。
+        segments = self._split_text_for_streaming(reply, 300)
+        segments = self._cap_stream_segments(
+            segments, False,
+            "wechat_bot.stream_capped_resplit", "wechat_bot.stream_capped")
+        if len(segments) <= 1:
+            logger.info(
+                "wechat_bot.sending_text_reply user_id={} reply_len={}",
+                user_id, len(reply),
+            )
+            text_sent = await self.send_message(
+                reply,
+                to_user_id=from_user_id,
+                context_token=context_token,
+            )
+            logger.info(
+                "wechat_bot.text_reply_sent user_id={} sent={}",
+                user_id, text_sent,
+            )
+        else:
+            num_segments = len(segments)
+            logger.info(
+                "wechat_bot.stream_start user_id={} reply_len={} segments={}",
+                user_id, len(reply), num_segments,
+            )
+            for i, seg in enumerate(segments):
+                if i > 0:
+                    # 段间 800-1200ms 停顿模拟打字节奏（对齐 QQ）
+                    await asyncio.sleep(random.uniform(0.8, 1.2))
+                try:
+                    seg_ok = await self.send_message(
+                        seg,
+                        to_user_id=from_user_id,
+                        context_token=context_token,
+                    )
+                except Exception as e:
+                    # send_message 内部已兜底全部异常并返回 False，此处仅防御
+                    logger.warning(
+                        "wechat_bot.stream_segment_exception index={} total={} error={}",
+                        i, num_segments, str(e)[:200],
+                    )
+                    seg_ok = False
+                if seg_ok:
+                    logger.debug(
+                        "wechat_bot.stream_segment index={} total={} sent=True size={}",
+                        i, num_segments, len(seg),
+                    )
+                else:
+                    # 某段失败：合并剩余段（含当前段——send_message 返回 False 表示
+                    # 服务端 ret != 0，当前段未被接受，对齐 QQ 连接错误路径）为单条
+                    # 重发一次，沿用 send_message 的 context_token 缓存重试能力。
+                    logger.warning(
+                        "wechat_bot.stream_segment_failed index={} total={} merging_remaining",
+                        i, num_segments,
+                    )
+                    remaining = "".join(segments[i:])
+                    try:
+                        merged_ok = await self.send_message(
+                            remaining,
+                            to_user_id=from_user_id,
+                            context_token=context_token,
+                        )
+                    except Exception as e:
+                        logger.warning(
+                            "wechat_bot.stream_merged_exception size={} error={}",
+                            len(remaining), str(e)[:200],
+                        )
+                        merged_ok = False
+                    if merged_ok:
+                        logger.info(
+                            "wechat_bot.stream_merged_resend_ok merged_from={} size={}",
+                            num_segments - i, len(remaining),
+                        )
+                    else:
+                        logger.warning(
+                            "wechat_bot.stream_merged_resend_failed size={}",
+                            len(remaining),
+                        )
+                    break
         # 再发表情包（纯图，独立消息）：失败不回退文本，避免重复发送
         if sticker_path and Path(sticker_path).exists():
             logger.info(
