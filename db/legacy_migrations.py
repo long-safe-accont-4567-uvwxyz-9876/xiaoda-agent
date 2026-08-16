@@ -71,7 +71,7 @@ class LegacyMigrationMixin:
                 try:
                     await self._conn.close()
                 except (OSError, RuntimeError):
-                    pass
+                    logger.debug("legacy_migrations.close_before_exit_failed", exc_info=True)
                 sys.exit(1)
 
     async def _current_schema_version(self) -> int:

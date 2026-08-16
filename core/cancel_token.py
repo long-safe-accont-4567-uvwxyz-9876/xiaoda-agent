@@ -64,7 +64,7 @@ class CancelToken:
                 self._reason = f"timeout({self._timeout}s)"
                 logger.info("cancel_token.timeout_cancelled timeout={}s", self._timeout)
         except asyncio.CancelledError:
-            pass
+            pass  # 超时协程被取消属正常路径，无需记录
 
     @property
     def is_cancelled(self) -> bool:

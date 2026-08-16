@@ -395,7 +395,7 @@ async def trigger_mail_auth_login(request: Request) -> Any:
                     auth_url = url_match.group(1).rstrip(")")
                     break
         except TimeoutError:
-            pass
+            logger.debug("mail_manage.inbox_preview_timeout")
 
         if auth_url:
             # 不杀进程，让它继续等待用户完成 OAuth 回调

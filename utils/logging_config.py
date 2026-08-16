@@ -211,7 +211,7 @@ def setup_logging() -> None:
                 try:
                     logger.remove(_sid)
                 except (ValueError, KeyError):
-                    pass
+                    logger.debug("logging_config.remove_sink_failed", exc_info=True)
             # 日志目录不可写（USB 盘只读/权限不足），降级到 stderr-only
             # 不崩溃应用——stderr sink 已在上面添加，日志仍可输出到控制台
             print(f"[logging] WARNING: 文件日志不可用（{e}），降级到 stderr-only", file=sys.stderr)

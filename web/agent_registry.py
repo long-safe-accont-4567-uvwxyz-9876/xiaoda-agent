@@ -289,7 +289,7 @@ class AgentRegistry:
                             agent.config.base_url, agent.config.api_key_env = self._resolve_provider_info(
                                 agent.config.provider)
                         except ValueError:
-                            pass
+                            logger.debug("agent_registry.provider_parse_failed", exc_info=True)
                         # 如果 provider/model/base_url 变了，重建客户端
                         if (agent.config.provider != old_provider
                                 or agent.config.model != old_model

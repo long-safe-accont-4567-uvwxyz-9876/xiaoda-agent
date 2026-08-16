@@ -283,7 +283,7 @@ async def upload_wallpaper(name: str, body: dict, request: Request, _user: str =
             if old != fp and old.suffix.lstrip(".") in _EXT:
                 old.unlink(missing_ok=True)
     except OSError:
-        pass
+        logger.debug("agents.old_config_unlink_failed", exc_info=True)
     if name == "xiaoda":
         # 主体不在 dispatcher 中，壁纸持久化到 webui 配置
         from web.config_service import get_config_service

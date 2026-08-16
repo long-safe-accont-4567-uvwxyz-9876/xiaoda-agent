@@ -160,7 +160,7 @@ async def network_diag(action: str, target: str = "8.8.8.8", count: int = 3) -> 
                             lines.append(f"  {a}")
                     return ToolResult.ok("网络接口信息:\n" + "\n".join(lines))
                 except json.JSONDecodeError:
-                    pass
+                    logger.debug("system_tools.netinfo_not_json fallback_to_ip_cmd")
             rc, stdout, _stderr = await _run_cmd(["ip", "addr"], timeout=30)
             if rc == 0:
                 return ToolResult.ok(f"网络接口信息:\n{stdout.strip()}")

@@ -176,7 +176,7 @@ def _collect_cpu_mem_metrics(psutil: Any) -> dict:
         load1, load5, load15 = os.getloadavg()
         data["load"] = [load1, load5, load15]
     except (AttributeError, OSError):
-        pass
+        logger.debug("health.load_avg_unavailable", exc_info=True)
 
     # ── 内存 ──
     try:

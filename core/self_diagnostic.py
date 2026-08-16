@@ -137,7 +137,7 @@ class SelfDiagnostic:
                     metrics={"memory_mb": mem},
                 )
         except ImportError:
-            pass
+            logger.debug("self_diagnostic.module_unavailable", exc_info=True)
         except Exception as e:
             logger.debug(f"SelfDiag.memory_check_failed: {e}")
         return None

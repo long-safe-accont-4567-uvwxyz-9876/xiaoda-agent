@@ -317,7 +317,7 @@ class NotebookManager:
                 target = base.replace(hour=hour, minute=minute, second=0, microsecond=0)
                 return target.timestamp()
         except (ValueError, IndexError):
-            pass
+            logger.debug("notebook_manager.timestamp_parse_failed", exc_info=True)
 
         for cn, num in cn_num.items():
             if time_str.strip() == cn or time_str.strip().startswith(cn):

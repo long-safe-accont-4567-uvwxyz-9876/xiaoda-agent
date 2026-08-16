@@ -123,7 +123,7 @@ def _fetch_html(url: str, timeout: int = 15) -> tuple[int, str, str]:
             return resp.status_code, "", f"HTTP 错误: {resp.status_code}"
         return resp.status_code, resp.text, ""
     except ImportError:
-        pass
+        logger.debug("web_browse_tools.httpx_unavailable", exc_info=True)
     except Exception as e:
         logger.debug("web_browse.primp_failed", error=str(e))
 

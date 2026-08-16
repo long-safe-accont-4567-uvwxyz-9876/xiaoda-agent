@@ -185,7 +185,7 @@ def resolve_emotion(label: str) -> Emotion:
     try:
         return Emotion(label)
     except ValueError:
-        pass
+        logger.debug("emotion_enum.label_parse_failed fallback_to_alias")
     # 查别名表
     if label in EMOTION_ALIASES:
         return EMOTION_ALIASES[label]

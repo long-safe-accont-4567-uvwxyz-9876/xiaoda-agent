@@ -27,7 +27,7 @@ def _warmup_jieba() -> None:
         import jieba
         jieba.initialize()
     except Exception:
-        pass
+        logger.warning("constraint_injector.jieba_init_failed", exc_info=True)
 
 threading.Thread(target=_warmup_jieba, daemon=True, name="jieba-warmup").start()
 

@@ -154,7 +154,7 @@ class AgentIntrospector:
                 try:
                     asyncio.get_running_loop()
                 except RuntimeError:
-                    pass
+                    logger.debug("introspection.no_event_loop_skip_async_close", exc_info=True)
                 else:
                     _fire_and_forget(_signal_stream.emit(
                         "cognitive_load", state.cognitive_load, "introspection"))

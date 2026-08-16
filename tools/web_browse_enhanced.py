@@ -113,7 +113,7 @@ async def _extract_bilibili(url: str) -> tuple[str, str]:
             if title and desc:
                 return title, f"# {title}\n\n{desc}"
         except json.JSONDecodeError:
-            pass
+            logger.debug("web_browse.meta_not_json fallback_to_jina")
     return await _extract_via_jina(url)
 
 

@@ -193,7 +193,7 @@ class BehavioralHealthScorer:
                 try:
                     asyncio.get_running_loop()
                 except RuntimeError:
-                    pass
+                    logger.debug("behavioral_health.no_event_loop_skip", exc_info=True)
                 else:
                     _fire_and_forget(_signal_stream.emit(
                         "health", float(score_val) / 5.0, "behavioral_health"))

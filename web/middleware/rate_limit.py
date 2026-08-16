@@ -123,7 +123,7 @@ def _trust_forwarded_for() -> bool:
         if _cfg_val:
             return True
     except Exception:
-        pass
+        logger.debug("rate_limit.trust_forwarded_for_config_read_failed", exc_info=True)
     return False
 
 

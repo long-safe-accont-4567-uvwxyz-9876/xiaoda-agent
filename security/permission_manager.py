@@ -662,7 +662,7 @@ def _clear_persisted_mode() -> None:
         import os as _os
         _os.remove(path)
     except FileNotFoundError:
-        pass
+        pass  # 幂等删除：文件本就不存在
     except Exception as e:
         logger.debug("permission_manager.persist_clear_failed path=%s err=%s", path, e)
 

@@ -180,7 +180,7 @@ class ErrorClassifier:
             if isinstance(exc, openai.APIConnectionError):
                 return FailoverReason.CONNECTION_ERROR
         except (AttributeError, TypeError):
-            pass
+            logger.debug("error_classifier.exc_attr_inspect_failed", exc_info=True)
 
         return None
 

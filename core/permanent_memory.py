@@ -186,7 +186,7 @@ class PermanentMemoryManager:
                     if tmp.exists():
                         tmp.unlink()
                 except OSError:
-                    pass
+                    logger.debug("permanent_memory.tmp_unlink_failed", exc_info=True)
 
         try:
             loop = asyncio.get_running_loop()

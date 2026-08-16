@@ -90,7 +90,7 @@ class ToolCallRepair:
             json.loads(arguments_str)
             return arguments_str
         except json.JSONDecodeError:
-            pass
+            logger.debug("tool_repair.arguments_not_json")
 
         repaired = arguments_str.rstrip()
         repaired = re.sub(r',\s*"[^"]*"\s*:\s*$', '', repaired)

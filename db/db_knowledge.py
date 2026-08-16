@@ -280,7 +280,7 @@ class KnowledgeDB:
                 try:
                     await self._conn.rollback()
                 except Exception:
-                    pass
+                    logger.warning("db_knowledge.rollback_failed", exc_info=True)
                 # 重试：连接已清理，应该能成功
                 _retry_ok = False
                 try:

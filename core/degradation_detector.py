@@ -429,7 +429,7 @@ class DegradationDetector:
                 except TimeoutError:
                     continue
         except asyncio.CancelledError:
-            pass
+            pass  # 检测循环被取消属正常关闭路径
 
     def stop(self) -> None:
         """停止后台检测"""

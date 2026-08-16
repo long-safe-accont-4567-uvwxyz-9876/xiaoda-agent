@@ -257,7 +257,7 @@ class ToolDAG:
                 try:
                     await asyncio.wait_for(evt.wait(), timeout=1.0)
                 except TimeoutError:
-                    pass
+                    pass  # 1s 轮询超时属正常节奏，继续下一轮
                 finally:
                     if evt in self._waiters:
                         self._waiters.remove(evt)
