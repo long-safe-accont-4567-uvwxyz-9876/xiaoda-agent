@@ -211,6 +211,8 @@ class TestVerificationRetryWallClockGuard:
         proc._clean_reply = MagicMock(
             side_effect=lambda x: x if isinstance(x, str) else "")
         proc.router.route = AsyncMock(return_value=mock_result)
+        # 截断重试循环已抽为独立方法，需绑定真实实现
+        proc._retry_incomplete_reply = MessageProcessorMixin._retry_incomplete_reply.__get__(proc)
 
         # loop_start 使主调用 remaining≈4s（执行），重试循环 remaining=2s（<3 break）
         loop_start = time.time() - 46

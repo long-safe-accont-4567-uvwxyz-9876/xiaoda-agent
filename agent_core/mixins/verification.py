@@ -253,116 +253,132 @@ class VerificationMixin:
             if not early_reply or not early_reply.strip():
                 trace.warning("verification.empty_reply_after_tools", turn=turn_idx)
                 return None, "", None, None  # signal failure → 走 _finalize_verification_reply
-            # 截断兜底：循环重试直到回复完整或达到最大重试次数，确保用户永不看到截断
-            # P0 修复（emoji 感知）：原检查只认 ASCII/CJK 标点，角色扮演回复常以 emoji 结尾
-            # （如 "💕"、"😳💗"），被误判不完整 → 追加 "。" → 产生 "💕。" 丑陋输出。
-            # 改用 ends_with_valid_ending() 包含 emoji 判定，避免 false-positive 截断。
-            from utils.llm_cleanup import has_english_reasoning_leak as _early_has_eng_leak
-            from utils.llm_cleanup import strip_english_reasoning_leak as _early_strip_eng_leak
-            _early_considered_complete = False
-            # 获取工具后回复的 finish_reason（用于完整性判定）
-            _early_finish_reason = None
-            if not isinstance(current_result, str):
-                _early_finish_reason = getattr(current_result.choices[0], "finish_reason", None)
-            else:
-                _early_finish_reason = _stream_finish_reason_var.get()
-            # 重试机制保留：工具调用后回复不完整时续写，最多 3 次重试
-            # P0 修复（阻塞根因 2026-08-04）：重试循环必须受墙钟硬约束
-            # 根因：原实现每次重试用固定 timeout=LLM_CALL_TIMEOUT(30s) 且不检查剩余时间，
-            #   3 次重试最多 90s，远超 VERIFICATION_WALL_TIMEOUT(50s)。
-            #   日志实测 llm_verify 阶段 74-89s（86752/74908/89574ms），
-            #   导致 main_path 97s + wechat_bot.process_timeout / qq_bot.c2c_timeout 连锁超时。
-            # 修复：每轮重试前计算墙钟剩余时间，<3s 则立即停止重试接受当前回复；
-            #   单次重试超时取 min(LLM_CALL_TIMEOUT, remaining)，绝不超出墙钟。
-            for _early_retry in range(3):
-                _early_remaining = self.VERIFICATION_WALL_TIMEOUT - (time.time() - loop_start)
-                if _early_remaining < 3:
-                    trace.warning("verification.incomplete_retry_no_time_left",
-                                  retry=_early_retry, remaining=round(_early_remaining, 1))
-                    break
-                _early_rstripped = early_reply.rstrip()
-                _early_ends_valid = ends_with_valid_ending(_early_rstripped)
-                _early_has_opening = any(kw in early_reply for kw in ["让我", "查一下", "看看", "查查", "找找"])
-                _early_eng_leak = _early_has_eng_leak(early_reply)
-                _early_just_cleaned = False
-                if _early_eng_leak:
-                    # N7: 英文推理泄漏 → 清洗后视为不完整，触发重试
-                    early_reply = _early_strip_eng_leak(early_reply, context="after_tools")
-                    _early_rstripped = early_reply.rstrip()
-                    _early_ends_valid = ends_with_valid_ending(_early_rstripped)
-                    _early_just_cleaned = True
-                # 完整性判定（P0 修复：emoji 感知 + 信任 LLM finish_reason="stop"）
-                # 根因：原检查只认标点，emoji 结尾被误判不完整 → 追加 "。" → "💕。"
-                # 修复：
-                #   1. 使用 ends_with_valid_ending() 包含 emoji 判定
-                #   2. finish_reason="stop" + 长回复(>=30字符) → 信任 LLM，视为完整
-                #   3. 清洗后即使有标点也视为不完整（内容被截断，需重试获取剩余部分）
-                #   4. 开场白回复（"让我查一下。"等）即使 <30 字符也不能标记为完整
-                # CodeRabbit #1 修复：移除独立的 `or _early_ends_valid`
-                # 原 implementation 最后一行让前两个 length-specific 条件失效，
-                # 导致短开场白（"让我查一下。"）即使 _early_has_opening=True 也被误判完整
-                # 修复：_early_ends_valid 只在 length-specific 分支中评估
-                #   - 短回复(<30)：非开场白 + 合法结尾 → 完整
-                #   - 长回复(>=30)：finish_reason="stop" 或 合法结尾 → 完整（保留 finish_reason=None 信任）
-                # P1-4 修复：内部场景（system_context 非空）跳过提前完成判定，
-                # 避免主动问候被 force_close 或误判完整后截断。
-                if _system_context_var.get():
-                    _early_considered_complete = True
-                    break  # 内部场景：信任 LLM 输出，不做完整性判定
-                _early_complete = not _early_just_cleaned and (
-                    (len(early_reply) < 30 and not _early_has_opening and _early_ends_valid)
-                    or (len(early_reply) >= 30 and _early_finish_reason == "stop")
-                    or (len(early_reply) >= 30 and _early_ends_valid)
-                )
-                if _early_complete:
-                    _early_considered_complete = True
-                    break  # 回复完整
-                # 只有短回复开场白 或 无合法结尾长回复 或 英文泄漏时才重试
-                _need_retry = (
-                    (len(early_reply) < 80 and _early_has_opening)
-                    or not _early_ends_valid
-                    or _early_eng_leak
-                    or _early_just_cleaned
-                )
-                if not _need_retry:
-                    break  # 不符合重试条件
-                trace.warning("verification.incomplete_reply_after_tools",
-                              reply_len=len(early_reply), reply_preview=early_reply[:50],
-                              retry=_early_retry, has_eng_leak=_early_eng_leak)
-                try:
-                    # P0 修复（上下文污染根因）：assistant-prefill 续写，不追加 user message，
-                    # 元指令不进入 LLM 可见上下文；用副本避免污染 verification loop 共享的 messages。
-                    # P0 修复（阻塞根因）：超时取 min(LLM_CALL_TIMEOUT, remaining)，绝不超出墙钟。
-                    early_reply, _early_action, _early_retry_len = await self._retry_continuation(
-                        early_reply, messages,
-                        task_type=task_type, temperature=temperature, max_tokens=max_tokens,
-                        user_openid=user_openid, session_id=session_id,
-                        timeout=min(self.LLM_CALL_TIMEOUT, _early_remaining),
-                        context="after_tools_retry", min_len=10,
-                    )
-                except Exception as e:
-                    trace.warning("verification.incomplete_retry_failed_after_tools", error=str(e))
-                    break
-                if _early_action == "discarded":
-                    # 重试重复 = LLM 认为回复已完成，视为完整不再 force_close
-                    _early_considered_complete = True
-                    break  # 重试重复
-                if _early_action == "empty":
-                    break  # 重试返回空或太短
-                trace.info("verification.incomplete_retry_success_after_tools",
-                           final_len=len(early_reply), retry=_early_retry,
-                           merge_action=_early_action)
+            early_reply, _early_considered_complete = await self._retry_incomplete_reply(
+                early_reply, current_result, messages, task_type, temperature,
+                max_tokens, user_openid, session_id, trace, loop_start, turn_idx)
             # 最终兜底：仅当 for 循环未判定完整时才处理
-            # P0 修复：不再盲目追加 "。" —— 使用 emoji 感知的结尾判定
             if not _early_considered_complete:
                 early_reply, _early_fc_action = _force_close_incomplete_reply(early_reply)
                 if _early_fc_action == "degraded":
                     trace.warning("verification.empty_after_leak_strip_degraded_after_tools")
                 elif _early_fc_action == "force_closed":
                     trace.warning("verification.incomplete_force_closed_after_tools", final_len=len(early_reply))
+
             return None, "", None, early_reply
 
         return current_tool_calls, current_assistant_content, current_reasoning, None
+
+    async def _retry_incomplete_reply(self, early_reply: str, current_result: Any,
+                                      messages: Any, task_type: Any, temperature: Any,
+                                      max_tokens: Any, user_openid: Any, session_id: Any,
+                                      trace: Any, loop_start: Any, turn_idx: Any) -> tuple[str, bool]:
+        """工具后回复不完整时的续写重试（最多 3 次，受墙钟硬约束）。
+
+        P0 修复（emoji 感知）：使用 ends_with_valid_ending() 包含 emoji 判定，
+        避免 emoji 结尾被误判不完整 → 追加句号。
+        P0 修复（阻塞根因）：每轮重试前计算墙钟剩余时间，超时取 min(LLM_CALL_TIMEOUT, remaining)。
+        """
+        # 截断兜底：循环重试直到回复完整或达到最大重试次数，确保用户永不看到截断
+        # P0 修复（emoji 感知）：原检查只认 ASCII/CJK 标点，角色扮演回复常以 emoji 结尾
+        # （如 "💕"、"😳💗"），被误判不完整 → 追加 "。" → 产生 "💕。" 丑陋输出。
+        # 改用 ends_with_valid_ending() 包含 emoji 判定，避免 false-positive 截断。
+        from utils.llm_cleanup import has_english_reasoning_leak as _early_has_eng_leak
+        from utils.llm_cleanup import strip_english_reasoning_leak as _early_strip_eng_leak
+        _early_considered_complete = False
+        # 获取工具后回复的 finish_reason（用于完整性判定）
+        _early_finish_reason = None
+        if not isinstance(current_result, str):
+            _early_finish_reason = getattr(current_result.choices[0], "finish_reason", None)
+        else:
+            _early_finish_reason = _stream_finish_reason_var.get()
+        # 重试机制保留：工具调用后回复不完整时续写，最多 3 次重试
+        # P0 修复（阻塞根因 2026-08-04）：重试循环必须受墙钟硬约束
+        # 根因：原实现每次重试用固定 timeout=LLM_CALL_TIMEOUT(30s) 且不检查剩余时间，
+        #   3 次重试最多 90s，远超 VERIFICATION_WALL_TIMEOUT(50s)。
+        #   日志实测 llm_verify 阶段 74-89s（86752/74908/89574ms），
+        #   导致 main_path 97s + wechat_bot.process_timeout / qq_bot.c2c_timeout 连锁超时。
+        # 修复：每轮重试前计算墙钟剩余时间，<3s 则立即停止重试接受当前回复；
+        #   单次重试超时取 min(LLM_CALL_TIMEOUT, remaining)，绝不超出墙钟。
+        for _early_retry in range(3):
+            _early_remaining = self.VERIFICATION_WALL_TIMEOUT - (time.time() - loop_start)
+            if _early_remaining < 3:
+                trace.warning("verification.incomplete_retry_no_time_left",
+                              retry=_early_retry, remaining=round(_early_remaining, 1))
+                break
+            _early_rstripped = early_reply.rstrip()
+            _early_ends_valid = ends_with_valid_ending(_early_rstripped)
+            _early_has_opening = any(kw in early_reply for kw in ["让我", "查一下", "看看", "查查", "找找"])
+            _early_eng_leak = _early_has_eng_leak(early_reply)
+            _early_just_cleaned = False
+            if _early_eng_leak:
+                # N7: 英文推理泄漏 → 清洗后视为不完整，触发重试
+                early_reply = _early_strip_eng_leak(early_reply, context="after_tools")
+                _early_rstripped = early_reply.rstrip()
+                _early_ends_valid = ends_with_valid_ending(_early_rstripped)
+                _early_just_cleaned = True
+            # 完整性判定（P0 修复：emoji 感知 + 信任 LLM finish_reason="stop"）
+            # 根因：原检查只认标点，emoji 结尾被误判不完整 → 追加 "。" → "💕。"
+            # 修复：
+            #   1. 使用 ends_with_valid_ending() 包含 emoji 判定
+            #   2. finish_reason="stop" + 长回复(>=30字符) → 信任 LLM，视为完整
+            #   3. 清洗后即使有标点也视为不完整（内容被截断，需重试获取剩余部分）
+            #   4. 开场白回复（"让我查一下。"等）即使 <30 字符也不能标记为完整
+            # CodeRabbit #1 修复：移除独立的 `or _early_ends_valid`
+            # 原 implementation 最后一行让前两个 length-specific 条件失效，
+            # 导致短开场白（"让我查一下。"）即使 _early_has_opening=True 也被误判完整
+            # 修复：_early_ends_valid 只在 length-specific 分支中评估
+            #   - 短回复(<30)：非开场白 + 合法结尾 → 完整
+            #   - 长回复(>=30)：finish_reason="stop" 或 合法结尾 → 完整（保留 finish_reason=None 信任）
+            # P1-4 修复：内部场景（system_context 非空）跳过提前完成判定，
+            # 避免主动问候被 force_close 或误判完整后截断。
+            if _system_context_var.get():
+                _early_considered_complete = True
+                break  # 内部场景：信任 LLM 输出，不做完整性判定
+            _early_complete = not _early_just_cleaned and (
+                (len(early_reply) < 30 and not _early_has_opening and _early_ends_valid)
+                or (len(early_reply) >= 30 and _early_finish_reason == "stop")
+                or (len(early_reply) >= 30 and _early_ends_valid)
+            )
+            if _early_complete:
+                _early_considered_complete = True
+                break  # 回复完整
+            # 只有短回复开场白 或 无合法结尾长回复 或 英文泄漏时才重试
+            _need_retry = (
+                (len(early_reply) < 80 and _early_has_opening)
+                or not _early_ends_valid
+                or _early_eng_leak
+                or _early_just_cleaned
+            )
+            if not _need_retry:
+                break  # 不符合重试条件
+            trace.warning("verification.incomplete_reply_after_tools",
+                          reply_len=len(early_reply), reply_preview=early_reply[:50],
+                          retry=_early_retry, has_eng_leak=_early_eng_leak)
+            try:
+                # P0 修复（上下文污染根因）：assistant-prefill 续写，不追加 user message，
+                # 元指令不进入 LLM 可见上下文；用副本避免污染 verification loop 共享的 messages。
+                # P0 修复（阻塞根因）：超时取 min(LLM_CALL_TIMEOUT, remaining)，绝不超出墙钟。
+                early_reply, _early_action, _early_retry_len = await self._retry_continuation(
+                    early_reply, messages,
+                    task_type=task_type, temperature=temperature, max_tokens=max_tokens,
+                    user_openid=user_openid, session_id=session_id,
+                    timeout=min(self.LLM_CALL_TIMEOUT, _early_remaining),
+                    context="after_tools_retry", min_len=10,
+                )
+            except Exception as e:
+                trace.warning("verification.incomplete_retry_failed_after_tools", error=str(e))
+                break
+            if _early_action == "discarded":
+                # 重试重复 = LLM 认为回复已完成，视为完整不再 force_close
+                _early_considered_complete = True
+                break  # 重试重复
+            if _early_action == "empty":
+                break  # 重试返回空或太短
+            trace.info("verification.incomplete_retry_success_after_tools",
+                       final_len=len(early_reply), retry=_early_retry,
+                       merge_action=_early_action)
+
+        return early_reply, _early_considered_complete
 
     async def _finalize_verification_reply(self, user_input: Any, all_tool_results: Any, last_tool_calls: Any,
                                             current_assistant_content: Any, trace: Any, user_openid: Any, session_id: Any,
@@ -470,29 +486,33 @@ class VerificationMixin:
 
         # 空回复保护：根据 finish_reason 分类处理
         if not reply or not reply.strip():
-            # P0 重构（用户明确要求"不许截断"）：
-            # 移除 length 截断的"请继续"重试逻辑——该 prompt 会污染上下文，
-            # LLM 在后续轮次回应"继续完成"等元词汇，造成角色出戏。
-            # max_tokens 已提升到 131072，正常情况不会触发 length 截断。
-            # 若仍触发（极端情况），直接降级返回提示，由上层 fallback 接管。
-            if _finish_reason == "length":
-                trace.warning("verification.empty_first_reply_length_no_retry",
-                              hint="max_tokens=131072 下仍触发 length 截断，直接降级")
-                return get_empty_reply_for_finish_reason("length")
-            elif _finish_reason == "content_filter":
-                # content_filter：内容被安全过滤，直接返回专用提示
-                trace.warning("verification.empty_first_reply_content_filter")
-                return get_empty_reply_for_finish_reason("content_filter")
-            elif _finish_reason == "tool_calls":
-                # tool_calls：LLM 想调用工具但没生成文本，给个友好提示
-                trace.warning("verification.empty_first_reply_tool_calls_only")
-                return get_empty_reply_for_finish_reason("tool_calls")
-            else:
-                # 未知 finish_reason（包括 None/stop 等），保留原 DEGRADED_REPLY 行为
-                trace.warning("verification.empty_first_reply",
-                              finish_reason=_finish_reason)
-                raise RuntimeError(f"empty_reply: LLM 返回空内容（finish_reason={_finish_reason}），触发 fallback")
+            return self._handle_empty_reply(_finish_reason, trace)
 
+        reply, _reply_considered_complete = await self._retry_verification_reply(
+            reply, messages, _finish_reason, task_type, temperature, max_tokens,
+            user_openid, session_id)
+        # 最终兜底：仅当未判定完整时才处理
+        # P0 修复：不再盲目追加 "。" —— 这会产生 "💕。" 丑陋输出
+        # 改为：仅在回复不以合法标记结尾且较长时追加 "。"（极端兜底）
+        if not _reply_considered_complete:
+            reply, _fc_action = _force_close_incomplete_reply(reply)
+            if _fc_action == "degraded":
+                logger.warning("verification.empty_after_leak_strip_degraded")
+            elif _fc_action == "force_closed":
+                logger.warning("verification.incomplete_force_closed", final_len=len(reply))
+
+        return reply
+
+    async def _retry_verification_reply(self, reply: str, messages: list[dict],
+                                        finish_reason: Any, task_type: str,
+                                        temperature: float, max_tokens: int | None,
+                                        user_openid: str, session_id: str) -> tuple[str, bool]:
+        """清洗英文泄漏 + 完整性判定 + length/no_finish 截断重试。
+
+        P0 修复（用户明确要求"我需要重试机制，但是不要给我提前截断了"）：
+        截断兜底双层策略——finish_reason="length" 或 None（流式死流）时用
+        assistant-prefill 续写重试；英文推理泄漏纯文本清洗不触发 LLM 调用。
+        """
         # 截断兜底：清洗英文泄漏 + length 截断重试（用户要求保留重试机制）
         # P0 修复（用户明确要求"我需要重试机制，但是不要给我提前截断了"）：
         # 原实现移除了所有重试，导致 finish_reason="length" 时直接 force_close，
@@ -531,9 +551,9 @@ class VerificationMixin:
         # 修复：内部场景直接信任 LLM 输出，不做完整性判定/force_close。
         if _system_context_var.get():
             _reply_considered_complete = True
-        elif not _eng_leak and is_reply_likely_complete(reply, _finish_reason):
+        elif not _eng_leak and is_reply_likely_complete(reply, finish_reason):
             _reply_considered_complete = True
-        elif _finish_reason == "length" and reply.strip() and len(reply) > 10:
+        elif finish_reason == "length" and reply.strip() and len(reply) > 10:
             # P0 修复：finish_reason="length" 时用 assistant-prefill 续写重试
             # 用户明确要求保留重试机制用于兜底异常截断
             # 关键：不追加 "请继续完成" 等 user message（会污染上下文），
@@ -547,11 +567,11 @@ class VerificationMixin:
                 )
             except Exception as e:
                 logger.warning("verification.length_retry_failed",
-                               error=str(e)[:200], finish_reason=_finish_reason)
+                               error=str(e)[:200], finish_reason=finish_reason)
             else:
                 if _retry_action == "empty":
                     logger.warning("verification.length_retry_empty",
-                                   finish_reason=_finish_reason)
+                                   finish_reason=finish_reason)
                 elif _retry_action == "discarded":
                     logger.warning("verification.length_retry_duplicate",
                                    retry_len=_retry_len)
@@ -560,16 +580,16 @@ class VerificationMixin:
                                 original_len=len(_reply_rstripped),
                                 final_len=len(reply), action=_retry_action)
                     _reply_considered_complete = True
-        elif _finish_reason is None and reply.strip() and len(reply) > 10 and not ends_with_valid_ending(reply.rstrip()):
+        elif finish_reason is None and reply.strip() and len(reply) > 10 and not ends_with_valid_ending(reply.rstrip()):
             # P0 修复（qq_group 截断根因）：流式响应未收到 finish_reason
             # 根因：provider 中途关闭连接不发送 finish_reason chunk，
-            #       _stream_finish_reason 保持 None，content 被静默截断。
-            #       原 _finish_reason is None 时不触发任何重试，直接 force_close。
+            #       _streamfinish_reason 保持 None，content 被静默截断。
+            #       原 finish_reason is None 时不触发任何重试，直接 force_close。
             # 修复：当 finish_reason is None 且 content 不以合法标记结尾时，
             #       视为潜在截断，用 assistant-prefill 续写重试（与 length 相同策略）。
             # 注意：仅在 content 不以 emoji/标点结尾时触发，避免对正常回复的误判。
             logger.warning("verification.stream_no_finish_retry",
-                           reply_len=len(reply), finish_reason=_finish_reason)
+                           reply_len=len(reply), finish_reason=finish_reason)
             try:
                 reply, _retry_action, _retry_len = await self._retry_continuation(
                     reply, messages,
@@ -579,7 +599,7 @@ class VerificationMixin:
                 )
             except Exception as e:
                 logger.warning("verification.no_finish_retry_failed",
-                               error=str(e)[:200], finish_reason=_finish_reason)
+                               error=str(e)[:200], finish_reason=finish_reason)
             else:
                 if _retry_action == "discarded":
                     # 重试重复 = LLM 认为回复已完成，视为完整
@@ -587,7 +607,7 @@ class VerificationMixin:
                 elif _retry_action == "empty":
                     # 空续写 = LLM 无续写内容，确认回复已完成，标记完整避免 force_close 追加 "。"
                     logger.info("verification.no_finish_retry_empty_confirmed_complete",
-                                finish_reason=_finish_reason, reply_len=len(reply),
+                                finish_reason=finish_reason, reply_len=len(reply),
                                 note="empty_retry_means_llm_confirmed_no_continuation")
                     _reply_considered_complete = True
                 else:
@@ -595,18 +615,35 @@ class VerificationMixin:
                                 original_len=len(_reply_rstripped),
                                 final_len=len(reply), action=_retry_action)
                     _reply_considered_complete = True
-        elif _finish_reason == "length":
+        elif finish_reason == "length":
             # length 截断但回复太短无法重试
             logger.warning("verification.length_too_short_to_retry",
-                           reply_len=len(reply), finish_reason=_finish_reason)
-        # 最终兜底：仅当未判定完整时才处理
-        # P0 修复：不再盲目追加 "。" —— 这会产生 "💕。" 丑陋输出
-        # 改为：仅在回复不以合法标记结尾且较长时追加 "。"（极端兜底）
-        if not _reply_considered_complete:
-            reply, _fc_action = _force_close_incomplete_reply(reply)
-            if _fc_action == "degraded":
-                logger.warning("verification.empty_after_leak_strip_degraded")
-            elif _fc_action == "force_closed":
-                logger.warning("verification.incomplete_force_closed", final_len=len(reply))
+                           reply_len=len(reply), finish_reason=finish_reason)
 
-        return reply
+        return reply, _reply_considered_complete
+
+    @staticmethod
+    def _handle_empty_reply(finish_reason: Any, trace: Any) -> str:
+        """空回复保护：按 finish_reason 分类返回提示或 raise fallback。
+
+        P0 重构（用户明确要求"不许截断"）：移除 length 截断的"请继续"重试逻辑，
+        max_tokens 已提升到 131072，正常不会触发 length 截断；若仍触发（极端），
+        直接降级返回提示，由上层 fallback 接管。
+        """
+        if finish_reason == "length":
+            trace.warning("verification.empty_first_reply_length_no_retry",
+                          hint="max_tokens=131072 下仍触发 length 截断，直接降级")
+            return get_empty_reply_for_finish_reason("length")
+        elif finish_reason == "content_filter":
+            # content_filter：内容被安全过滤，直接返回专用提示
+            trace.warning("verification.empty_first_reply_content_filter")
+            return get_empty_reply_for_finish_reason("content_filter")
+        elif finish_reason == "tool_calls":
+            # tool_calls：LLM 想调用工具但没生成文本，给个友好提示
+            trace.warning("verification.empty_first_reply_tool_calls_only")
+            return get_empty_reply_for_finish_reason("tool_calls")
+        else:
+            # 未知 finish_reason（包括 None/stop 等），保留原 DEGRADED_REPLY 行为
+            trace.warning("verification.empty_first_reply",
+                          finish_reason=finish_reason)
+            raise RuntimeError(f"empty_reply: LLM 返回空内容（finish_reason={finish_reason}），触发 fallback")

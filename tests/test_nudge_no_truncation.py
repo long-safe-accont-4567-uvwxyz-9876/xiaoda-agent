@@ -67,6 +67,8 @@ class TestInternalScenarioSkipsEarlyComplete:
         proc._clean_reply = MagicMock(side_effect=lambda x: x.strip() if isinstance(x, str) else "")
         # 首轮无 tool_calls 分支已抽取为独立方法，需绑定真实实现
         proc._finalize_reply_without_tools = MessageProcessorMixin._finalize_reply_without_tools.__get__(proc)
+        proc._retry_verification_reply = MessageProcessorMixin._retry_verification_reply.__get__(proc)
+        proc._handle_empty_reply = MessageProcessorMixin._handle_empty_reply.__get__(proc)
 
         # 设置 finish_reason="stop"（避免触发 length/no_finish 重试）
         _stream_finish_reason_var.set("stop")
@@ -103,6 +105,8 @@ class TestInternalScenarioSkipsEarlyComplete:
         proc._clean_reply = MagicMock(side_effect=lambda x: x.strip() if isinstance(x, str) else "")
         # 首轮无 tool_calls 分支已抽取为独立方法，需绑定真实实现
         proc._finalize_reply_without_tools = MessageProcessorMixin._finalize_reply_without_tools.__get__(proc)
+        proc._retry_verification_reply = MessageProcessorMixin._retry_verification_reply.__get__(proc)
+        proc._handle_empty_reply = MessageProcessorMixin._handle_empty_reply.__get__(proc)
 
         _stream_finish_reason_var.set("stop")
         # 正常场景：system_context 为空
