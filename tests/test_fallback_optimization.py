@@ -166,10 +166,10 @@ class TestTruncationDetection:
             f"chat max_tokens 应 >= 2048，当前为 {ROUTE_TABLE['chat']['max_tokens']}"
 
     def test_fast_path_logs_reply_len(self):
-        """fast_path.done 日志应包含 reply_len 字段"""
+        """fast_path.done 日志应包含 reply_len 字段（Phase 3 后日志代码在 main_path mixin）"""
         import inspect
-        import agent_core.message_processor as mp_mod
-        source = inspect.getsource(mp_mod)
+        import agent_core.mixins.main_path as main_path_mod
+        source = inspect.getsource(main_path_mod)
         assert "reply_len" in source, "fast_path 日志应包含 reply_len 字段"
 
     def test_model_router_checks_finish_reason(self):
