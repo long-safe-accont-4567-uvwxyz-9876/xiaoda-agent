@@ -499,7 +499,7 @@ class AIQQBot(ChannelAdapterBase, botpy.Client):
                     # 恢复 nudge 功能节点的后端/本地模型选择（on_ready 晚于 lifespan 的
                     # restore，若 bot 未就绪 restore 会跳过，这里在就绪后补一次恢复）
                     try:
-                        from web.local_deploy_nodes import get_backend, get_local_model
+                        from web.node_registry import get_backend, get_local_model
                         _cfg = self._get_config_service()
                         if _cfg is not None:
                             _nudge_backend = get_backend(_cfg, "nudge")
