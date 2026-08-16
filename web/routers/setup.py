@@ -311,6 +311,32 @@ async def get_keys() -> Any:
 _TIMEOUT = 10.0
 
 
+async def _test_get_with_bearer(key_value: str, url: str, name: str,
+                                 success_msg: str | None = None) -> tuple[bool, str]:
+    """GET + Bearer 头的通用验证模板。
+
+    适用 deepseek/openrouter/agnes/modelscope/github 等「GET models 端点 → 200/401」
+    的 provider。成功消息默认 ``{name} API Key 验证成功``。
+    保留 wolframalpha（特殊 queryresult 解析）与 ollama/llama_cpp（URL 规范化 + SSRF）独立实现。
+    """
+    success_msg = success_msg or f"{name} API Key 验证成功"
+    try:
+        async with httpx.AsyncClient(timeout=_TIMEOUT) as client:
+            resp = await client.get(
+                url,
+                headers={"Authorization": f"Bearer {key_value}"},
+            )
+            if resp.status_code == 200:
+                return True, success_msg
+            if resp.status_code == 401:
+                return False, f"{name} API Key 无效或已过期"
+            return False, f"{name} API 返回 HTTP {resp.status_code}"
+    except httpx.TimeoutException:
+        return False, f"{name} API 请求超时"
+    except Exception as e:
+        return False, f"{name} API 请求失败: {e}"
+
+
 async def _test_mimo(key_value: str) -> tuple[bool, str]:
     """测试 MiMo API Key。"""
     try:
@@ -387,60 +413,21 @@ async def _test_siliconflow(key_value: str) -> tuple[bool, str]:
 
 async def _test_openrouter(key_value: str) -> tuple[bool, str]:
     """测试 OpenRouter API Key。"""
-    try:
-        async with httpx.AsyncClient(timeout=_TIMEOUT) as client:
-            resp = await client.get(
-                "https://openrouter.ai/api/v1/models",
-                headers={"Authorization": f"Bearer {key_value}"},
-            )
-            if resp.status_code == 200:
-                return True, "OpenRouter API Key 验证成功"
-            if resp.status_code == 401:
-                return False, "OpenRouter API Key 无效或已过期"
-            return False, f"OpenRouter API 返回 HTTP {resp.status_code}"
-    except httpx.TimeoutException:
-        return False, "OpenRouter API 请求超时"
-    except Exception as e:
-        return False, f"OpenRouter API 请求失败: {e}"
+    return await _test_get_with_bearer(
+        key_value, "https://openrouter.ai/api/v1/models", "OpenRouter")
 
 
 async def _test_deepseek(key_value: str) -> tuple[bool, str]:
     """测试 DeepSeek API Key。"""
-    try:
-        async with httpx.AsyncClient(timeout=_TIMEOUT) as client:
-            resp = await client.get(
-                "https://api.deepseek.com/v1/models",
-                headers={"Authorization": f"Bearer {key_value}"},
-            )
-            if resp.status_code == 200:
-                return True, "DeepSeek API Key 验证成功"
-            if resp.status_code == 401:
-                return False, "DeepSeek API Key 无效或已过期"
-            return False, f"DeepSeek API 返回 HTTP {resp.status_code}"
-    except httpx.TimeoutException:
-        return False, "DeepSeek API 请求超时"
-    except Exception as e:
-        return False, f"DeepSeek API 请求失败: {e}"
+    return await _test_get_with_bearer(
+        key_value, "https://api.deepseek.com/v1/models", "DeepSeek")
 
 
 async def _test_agnes(key_value: str) -> tuple[bool, str]:
     """测试 Agnes AI API Key。"""
     _agnes_url = os.getenv("AGNES_BASE_URL", "https://apihub.agnes-ai.cn/v1")
-    try:
-        async with httpx.AsyncClient(timeout=_TIMEOUT) as client:
-            resp = await client.get(
-                f"{_agnes_url.rstrip('/')}/models",
-                headers={"Authorization": f"Bearer {key_value}"},
-            )
-            if resp.status_code == 200:
-                return True, "Agnes AI API Key 验证成功"
-            if resp.status_code == 401:
-                return False, "Agnes AI API Key 无效或已过期"
-            return False, f"Agnes AI API 返回 HTTP {resp.status_code}"
-    except httpx.TimeoutException:
-        return False, "Agnes AI API 请求超时"
-    except Exception as e:
-        return False, f"Agnes AI API 请求失败: {e}"
+    return await _test_get_with_bearer(
+        key_value, f"{_agnes_url.rstrip('/')}/models", "Agnes AI")
 
 
 async def _test_wolframalpha(key_value: str) -> tuple[bool, str]:
@@ -476,21 +463,9 @@ async def _test_wolframalpha(key_value: str) -> tuple[bool, str]:
 
 async def _test_modelscope(key_value: str) -> tuple[bool, str]:
     """测试 ModelScope Access Token（推理 API）。"""
-    try:
-        async with httpx.AsyncClient(timeout=_TIMEOUT) as client:
-            resp = await client.get(
-                "https://api-inference.modelscope.cn/v1/models",
-                headers={"Authorization": f"Bearer {key_value}"},
-            )
-            if resp.status_code == 200:
-                return True, "ModelScope Access Token 验证成功"
-            if resp.status_code == 401:
-                return False, "ModelScope Access Token 无效或已过期"
-            return False, f"ModelScope API 返回 HTTP {resp.status_code}"
-    except httpx.TimeoutException:
-        return False, "ModelScope API 请求超时"
-    except Exception as e:
-        return False, f"ModelScope API 请求失败: {e}"
+    return await _test_get_with_bearer(
+        key_value, "https://api-inference.modelscope.cn/v1/models",
+        "ModelScope Access Token")
 
 
 async def _test_tavily(key_value: str) -> tuple[bool, str]:
@@ -516,6 +491,7 @@ async def _test_tavily(key_value: str) -> tuple[bool, str]:
 
 async def _test_github(key_value: str) -> tuple[bool, str]:
     """测试 GitHub Personal Access Token。"""
+    # GitHub 需额外 Accept 头，无法复用 _test_get_with_bearer（其只发 Authorization）
     try:
         async with httpx.AsyncClient(timeout=_TIMEOUT) as client:
             resp = await client.get(
