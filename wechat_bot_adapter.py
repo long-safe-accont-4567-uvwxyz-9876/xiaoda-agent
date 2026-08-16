@@ -24,6 +24,13 @@ from loguru import logger
 
 from ilink_client import ILinkClient, SessionExpiredError, ILinkRetError
 
+from channel_adapter_base import (
+    ChannelAdapterBase,
+    clear_json_credentials,
+    load_json_credentials,
+    save_json_credentials,
+)
+
 
 # ============================================================================
 # 常量定义
@@ -41,6 +48,8 @@ def save_credentials(bot_token: str, ilink_bot_id: str, ilink_user_id: str, base
     """保存凭证到 ~/.ai-agent/wechat_credentials.json
 
     模块级函数，供路由层直接调用，无需创建 WeChatBotAdapter 实例。
+    薄包装：实际落盘逻辑复用 channel_adapter_base.save_json_credentials
+    （原子写入 + 0600 权限 + 陈旧游标清理），行为与原实现逐字节等价。
 
     Args:
         bot_token: iLink Bearer token
@@ -48,83 +57,44 @@ def save_credentials(bot_token: str, ilink_bot_id: str, ilink_user_id: str, base
         ilink_user_id: 登录后的 user ID
         baseurl: 服务端下发的活跃 base URL
     """
-    try:
-        CREDENTIALS_PATH.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
-        data = {
-            "bot_token": bot_token,
-            "ilink_bot_id": ilink_bot_id,
-            "ilink_user_id": ilink_user_id,
-            "baseurl": baseurl,
-        }
-        # 原子写入 + 限制权限：先写临时文件 chmod 0600，再 replace 覆盖，
-        # 避免明文 token 权限过宽、且失败时留下半截文件。
-        # Minor#6（R3）：用 os.open 以 0600 模式创建文件再写入，消除
-        # "先写后 chmod" 的权限窗口（写入瞬间临时文件不短暂暴露为 umask 默认权限）。
-        tmp_path = CREDENTIALS_PATH.with_suffix(".json.tmp")
-        fd = os.open(tmp_path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
-        with os.fdopen(fd, "w", encoding="utf-8") as f:
-            json.dump(data, f, ensure_ascii=False, indent=2)
-        os.chmod(tmp_path, 0o600)
-        tmp_path.replace(CREDENTIALS_PATH)
-        # m4：写入新凭证意味着新会话开始，清除陈旧游标，避免服务端按旧游标
-        # 重放上一会话的历史积压消息（串话/重复回复根因之一）。
-        try:
-            cursor_path = CREDENTIALS_PATH.with_name("wechat_cursor.json")
-            if cursor_path.exists():
-                cursor_path.unlink()
-                logger.info("wechat_bot.stale_cursor_cleared path={}", cursor_path)
-        except Exception as ce:
-            logger.warning("wechat_bot.cursor_clear_failed error={}", str(ce)[:120])
-        logger.info("wechat_bot.credentials_saved path={}", CREDENTIALS_PATH)
-    except Exception as e:
-        logger.error(
-            "wechat_bot.credentials_save_failed error={}",
-            str(e)[:200],
-        )
-        raise
+    data = {
+        "bot_token": bot_token,
+        "ilink_bot_id": ilink_bot_id,
+        "ilink_user_id": ilink_user_id,
+        "baseurl": baseurl,
+    }
+    # 写入新凭证意味着新会话开始，清除陈旧游标，避免服务端按旧游标
+    # 重放上一会话的历史积压消息（串话/重复回复根因之一）。
+    save_json_credentials(
+        CREDENTIALS_PATH,
+        data,
+        cursor_path=CREDENTIALS_PATH.with_name("wechat_cursor.json"),
+        event="wechat_bot",
+    )
 
 
 def load_credentials() -> Optional[dict]:
     """从 ~/.ai-agent/wechat_credentials.json 加载凭证
 
     模块级函数，供路由层直接调用，无需创建 WeChatBotAdapter 实例。
+    薄包装：实际读取逻辑复用 channel_adapter_base.load_json_credentials
+    （损坏文件容错），行为与原实现逐字节等价。
 
     Returns:
         凭证字典（含 bot_token/ilink_bot_id/ilink_user_id/baseurl），
         文件不存在或无效时返回 None
     """
-    if not CREDENTIALS_PATH.exists():
-        return None
-    try:
-        data = json.loads(CREDENTIALS_PATH.read_text(encoding="utf-8"))
-        if not isinstance(data, dict):
-            return None
-        bot_token = data.get("bot_token", "")
-        if not bot_token:
-            return None
-        return data
-    except Exception as e:
-        logger.error(
-            "wechat_bot.credentials_load_failed error={}",
-            str(e)[:200],
-        )
-        return None
+    return load_json_credentials(CREDENTIALS_PATH, required_key="bot_token", event="wechat_bot")
 
 
 def clear_credentials() -> None:
     """删除凭证文件
 
     模块级函数，供路由层直接调用，无需创建 WeChatBotAdapter 实例。
+    薄包装：实际删除逻辑复用 channel_adapter_base.clear_json_credentials，
+    行为与原实现逐字节等价。
     """
-    try:
-        if CREDENTIALS_PATH.exists():
-            CREDENTIALS_PATH.unlink()
-            logger.info("wechat_bot.credentials_cleared path={}", CREDENTIALS_PATH)
-    except Exception as e:
-        logger.warning(
-            "wechat_bot.credentials_clear_failed error={}",
-            str(e)[:200],
-        )
+    clear_json_credentials(CREDENTIALS_PATH, event="wechat_bot")
 
 # iLink 默认服务端地址（登录后可能被 baseurl 覆盖）
 ILINK_DEFAULT_BASE_URL = "https://ilinkai.weixin.qq.com"
@@ -188,7 +158,7 @@ def _get_start_lock() -> "asyncio.Lock":
         return lock
 
 
-class WeChatBotAdapter:
+class WeChatBotAdapter(ChannelAdapterBase):
     """微信 Bot 适配器（iLink 协议）
 
     基于 ILinkClient 实现微信官方 Bot API：
@@ -256,10 +226,9 @@ class WeChatBotAdapter:
         self._CTX_MAX = 256   # 硬上限，超出时按时间戳淘汰最旧项
         self._last_from_user_id: str = ""
 
-        # 消息去重缓存：msg_id → 时间戳，保留最近 1 小时（对齐 qq_bot_adapter）。
+        # 消息去重缓存：msg_id → 时间戳，保留最近 1 小时（见 ChannelAdapterBase）。
         # 仅做 msg_id 级去重（同一 msg_id 的精确重复才拦截），不做内容级去重。
-        self._processed_msg_ids: dict[str, float] = {}
-        self._MSG_ID_TTL = 3600  # 1 小时
+        self._init_dedup_state()
 
         # W3：per-user 串行锁——同一用户消息串行处理，不同用户并发（对齐 qq_bot_adapter）。
         # 防止同用户连发消息时并发调用 AgentCore 导致会话上下文竞争、回复乱序。
@@ -280,21 +249,6 @@ class WeChatBotAdapter:
     # ------------------------------------------------------------------
     # 消息去重与游标持久化
     # ------------------------------------------------------------------
-
-    def _is_duplicate_msg(self, msg_id: str) -> bool:
-        """msg_id 级去重：同一 msg_id 的精确重复才拦截（对齐 qq_bot_adapter）。
-
-        网络抖动重试/进程重启后服务端重放时，防止同一消息被处理多次
-        （每次处理都会发 ACK + 回复，token 成本翻倍）。
-        """
-        now = time.time()
-        expired = [k for k, ts in self._processed_msg_ids.items() if now - ts > self._MSG_ID_TTL]
-        for k in expired:
-            del self._processed_msg_ids[k]
-        if msg_id in self._processed_msg_ids:
-            return True
-        self._processed_msg_ids[msg_id] = now
-        return False
 
     @staticmethod
     def _cursor_path() -> Path:

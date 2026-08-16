@@ -13,6 +13,8 @@ import re
 import uuid
 from pathlib import Path
 
+from channel_adapter_base import ChannelAdapterBase, parse_env_csv, upsert_env_file_line
+
 from dotenv import load_dotenv
 # P0 修复（Windows 安装包 QQ 离线 bug 根因）：
 # load_dotenv() 无参数时只读取 CWD/.env，Windows 安装包从 C:\Program Files\ 启动时
@@ -253,27 +255,14 @@ def _save_master_openid(openid: str) -> None:
             env_path = Path(ENV_PATH)
         except ImportError:
             env_path = Path(__file__).parent / ".env"
-        if not env_path.exists():
-            env_path.write_text(f"MASTER_QQ_OPENID={value}\n", encoding="utf-8-sig")
-        else:
-            lines = env_path.read_text(encoding="utf-8-sig").splitlines(keepends=True)
-            found = False
-            for i, line in enumerate(lines):
-                if line.strip().startswith("MASTER_QQ_OPENID="):
-                    lines[i] = f"MASTER_QQ_OPENID={value}\n"
-                    found = True
-                    break
-            if not found:
-                lines.append(f"\nMASTER_QQ_OPENID={value}\n")
-            env_path.write_text("".join(lines), encoding="utf-8-sig")
+        upsert_env_file_line(env_path, "MASTER_QQ_OPENID", value)
         os.environ["MASTER_QQ_OPENID"] = value
         logger.info("qq_bot.master_openid_saved", openid=openid, total=len(ids))
 
 
 def _parse_master_ids() -> list[str]:
     """解析 MASTER_QQ_OPENID 环境变量为去空白的 openid 列表（逗号分隔）。"""
-    raw = os.getenv("MASTER_QQ_OPENID", "").strip()
-    return [x.strip() for x in raw.split(",") if x.strip()]
+    return parse_env_csv("MASTER_QQ_OPENID")
 
 
 def _build_user_input(content: str, attachment_info: str) -> str:
@@ -354,7 +343,7 @@ class AttachmentResult(NamedTuple):
     attachment_info: str
 
 
-class AIQQBot(botpy.Client):
+class AIQQBot(ChannelAdapterBase, botpy.Client):
     """QQ 机器人适配器，处理消息接收、去重与 AgentCore 调用。"""
     def __init__(self, *args: Any, agent: "AgentCore | None" = None, **kwargs: Any) -> None:
         super().__init__(*args, **kwargs)
@@ -362,9 +351,8 @@ class AIQQBot(botpy.Client):
         self.agent = agent or AgentCore()
         self._agent_shared = agent is not None
         self.nudge_engine = None
-        # 消息去重缓存：msg_id → 时间戳，保留最近 1 小时
-        self._processed_msg_ids: dict[str, float] = {}
-        self._MSG_ID_TTL = 3600  # 1 小时
+        # 消息去重缓存：msg_id → 时间戳，保留最近 1 小时（见 ChannelAdapterBase）
+        self._init_dedup_state()
         # 注：用户明确要求"我发送的内容不需要去重"——
         # 不做内容级去重（即使网关重连重投递导致重复回复，也不拦截用户手动重发）。
         # 仅保留 msg_id 级去重（同一 msg_id 的精确重复才拦截）。
@@ -393,18 +381,6 @@ class AIQQBot(botpy.Client):
         self._approval_message_ctx = self._new_approval_context()
         global _ACTIVE_BOT
         _ACTIVE_BOT = self
-
-    def _is_duplicate_msg(self, msg_id: str) -> bool:
-        now = time.time()
-        # 清理过期项
-        expired = [k for k, ts in self._processed_msg_ids.items() if now - ts > self._MSG_ID_TTL]
-        for k in expired:
-            del self._processed_msg_ids[k]
-        # 检查重复
-        if msg_id in self._processed_msg_ids:
-            return True
-        self._processed_msg_ids[msg_id] = now
-        return False
 
     @staticmethod
     def _new_approval_context() -> contextvars.ContextVar[Any]:
