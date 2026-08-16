@@ -206,14 +206,26 @@ def test_resource_collections_are_exposed(client: TestClient) -> None:
 def test_main_app_mounts_all_local_ai_resource_routes() -> None:
     from web.server import create_app
 
-    paths = {route.path for route in create_app().routes}
+    # FastAPI 新版 app.routes 含 _IncludedRouter 包装（内部才持有具体路由），
+    # 需递归展开 original_router 取 path
+    def _iter_paths(routes):
+        for route in routes:
+            inner = getattr(route, "original_router", None)
+            if inner is not None:
+                yield from _iter_paths(inner.routes)
+            elif hasattr(route, "path"):
+                yield route.path
+
+    paths = set(_iter_paths(create_app().routes))
+    # _IncludedRouter 内部 path 不带 include_router 时的 /api/v1 前缀，
+    # 按无前缀形式比对
     assert {
-        "/api/v1/local-ai/devices",
-        "/api/v1/local-ai/catalog",
-        "/api/v1/local-ai/models",
-        "/api/v1/local-ai/downloads",
-        "/api/v1/local-ai/instances",
-        "/api/v1/local-ai/storage",
+        "/local-ai/devices",
+        "/local-ai/catalog",
+        "/local-ai/models",
+        "/local-ai/downloads",
+        "/local-ai/instances",
+        "/local-ai/storage",
     } <= paths
 
 
