@@ -8,7 +8,7 @@
   被拦截的 fixed/random 问候在 DND 结束后 10 分钟内补发一次
 """
 from __future__ import annotations
-from typing import Any
+from typing import Any, ClassVar
 
 import asyncio
 import json
@@ -252,7 +252,7 @@ class GreetingScheduler:
     # ── 风格线索池：每次随机抽取 1-2 条，让 LLM 在中间插值，避免输出相似 ──
     # 设计理念：参考"calibrated unpredictability"——不靠规则堆砌，
     # 而是用多条"风格线索"叠加，模型会在中间自动插值产生惊喜
-    _MOOD_SEEDS: list[str] = [
+    _MOOD_SEEDS: ClassVar[list[str]] = [
         "刚刚在发呆，脑子里有点空",
         "刚刚想到一个没道理的小问题",
         "有点困，眼皮在打架",
@@ -276,7 +276,7 @@ class GreetingScheduler:
     ]
 
     # 形式线索池：随机选一种形式，打破"问候语"的固定模式
-    _FORM_SEEDS: list[str] = [
+    _FORM_SEEDS: ClassVar[list[str]] = [
         "只是一声轻轻的「嗯」",
         "一个问句",
         "一句没头没尾的话",
@@ -292,7 +292,7 @@ class GreetingScheduler:
     ]
 
     # 偶发事件池（低概率 8%）：偶尔来点意想不到的，制造"眼前一亮"
-    _RARE_SEEDS: list[str] = [
+    _RARE_SEEDS: ClassVar[list[str]] = [
         "今天忽然不想说话，只发一个字",
         "今天想给爸爸出个没道理的小谜语",
         "今天想跟爸爸说一句最近学到的话",

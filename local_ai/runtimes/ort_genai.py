@@ -4,19 +4,19 @@ import asyncio
 import json
 import math
 from pathlib import Path
-from typing import Any, AsyncIterator, Mapping, Sequence
+from typing import ClassVar, Any, AsyncIterator, Mapping, Sequence
 
 from local_ai.contracts import RuntimeKind, RuntimeProfile
 from local_ai.runtimes.base import Runtime, RuntimeDependencyError, RuntimeValidationError
 
 
 class OrtGenAiChatRuntime(Runtime):
-    _PROVIDERS = {
+    _PROVIDERS: ClassVar[dict[str, str]] = {
         "CPUExecutionProvider": "cpu",
         "CUDAExecutionProvider": "cuda",
         "DmlExecutionProvider": "dml",
     }
-    _RUNTIME_OPTION_NAMES = {
+    _RUNTIME_OPTION_NAMES: ClassVar[set[str]] = {
         "chat_template",
         "do_sample",
         "fallback_bindings",

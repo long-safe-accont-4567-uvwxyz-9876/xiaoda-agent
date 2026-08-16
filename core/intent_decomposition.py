@@ -14,6 +14,7 @@ SAE 将 d_model 维残差流编码为 d_sae 维稀疏特征:
 - SAELens/sae_lens/saes/sae.py: SAE.encode()/decode()
 - SAELens/sae_lens/training/activations_store.py: ActivationsStore
 """
+from typing import ClassVar
 from dataclasses import dataclass, field
 from loguru import logger
 
@@ -59,12 +60,12 @@ class IntentDecomposer:
     输出意图分解器 — 对齐 SAELens 的 SAE encode/decode 范式。
     """
 
-    INTENT_DIMENSIONS = [
+    INTENT_DIMENSIONS: ClassVar[list[str]] = [
         "knowledge", "emotional", "safety", "creative",
         "factual", "social", "procedural",
     ]
 
-    INTENT_KEYWORDS = {
+    INTENT_KEYWORDS: ClassVar[dict[str, list[str]]] = {
         "knowledge": ["根据", "资料显示", "研究表明", "数据表明", "据统计",
                       "据了解", "据报道", "according to", "research shows"],
         "emotional": ["别担心", "加油", "理解你的感受", "心疼", "开心",

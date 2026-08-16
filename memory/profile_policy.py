@@ -2,7 +2,7 @@ import time
 import math
 import json
 from dataclasses import dataclass
-from typing import Any
+from typing import ClassVar, Any
 
 from db.profile_store import ProfileField, ProfileStore
 from memory.scope import Scope
@@ -27,8 +27,8 @@ class ProfileDecision:
 
 
 class ProfilePolicy:
-    _VALUE_TYPES = {"string", "integer", "number", "boolean", "string_list"}
-    _PYTHON_TYPES = {
+    _VALUE_TYPES: ClassVar[set[str]] = {"string", "integer", "number", "boolean", "string_list"}
+    _PYTHON_TYPES: ClassVar[dict[str, type]] = {
         "string": str,
         "integer": int,
         "number": (int, float),

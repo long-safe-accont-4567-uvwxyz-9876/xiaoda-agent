@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import asyncio
 from collections import OrderedDict
-from typing import Any
+from typing import Any, ClassVar
 
 from loguru import logger
 
@@ -40,7 +40,7 @@ class ReplyDedupMixin:
     #   - 极端场景（>256 活跃 session）LRU 淘汰最久未访问者，该用户下次对话
     #     去重历史为空重新积累，是 graceful 行为而非功能损坏
     REPLY_DEDUP_SESSION_CAP = 256       # 最大缓存 session 数，LRU 淘汰
-    _recent_replies: "OrderedDict[str, list[str]]" = OrderedDict()  # session_id -> [reply1, ...]
+    _recent_replies: ClassVar["OrderedDict[str, list[str]]"] = OrderedDict()  # session_id -> [reply1, ...]
 
     def _dedup_buf(self, user_id: str) -> list[str]:
         """获取用户的去重缓冲（LRU 维护 + 上限淘汰）。

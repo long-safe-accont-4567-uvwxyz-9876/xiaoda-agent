@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import sys
 import time
-from typing import Any
+from typing import ClassVar, Any
 
 from loguru import logger
 
@@ -649,7 +649,7 @@ class LegacyMigrationMixin:
         await self._migrate_v14_kg_v2_tables(_fts5_available)
 
     # FSRS-DSR 迁移列定义（episodic_memories 与 concept_nodes 共用）
-    _FSRS_COLUMNS = {
+    _FSRS_COLUMNS: ClassVar[dict[str, str]] = {
         "difficulty": "difficulty REAL DEFAULT 5.0",
         "stability": "stability REAL DEFAULT 3.0",
         "phase": "phase TEXT DEFAULT 'buffer'",

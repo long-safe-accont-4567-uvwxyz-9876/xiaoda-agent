@@ -18,7 +18,7 @@ import contextvars
 import json
 import sqlite3
 import time
-from typing import Any, TYPE_CHECKING
+from typing import Any, TYPE_CHECKING, ClassVar
 
 from loguru import logger
 
@@ -483,7 +483,7 @@ class BackgroundTaskManager:
         except (OSError, ValueError, RuntimeError) as e:
             logger.warning("portrait.cold_start_failed", error=str(e))
 
-    _consecutive_failures: dict[str, int] = {}
+    _consecutive_failures: ClassVar[dict[str, int]] = {}
 
     async def _should_run(self, task_name: str, interval_hours: float) -> bool:
         """检查周期任务是否应运行（基于 cron_last_run 表）。

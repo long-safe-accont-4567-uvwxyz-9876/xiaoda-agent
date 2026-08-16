@@ -2,6 +2,7 @@
 
 基于 mind v6.2.8 的 key 提取策略，适配中文场景。
 """
+from typing import ClassVar
 import re
 
 import jieba
@@ -49,7 +50,7 @@ class KeyExtractor:
     MAX_KEYS = 24  # 与 mind 一致
 
     # 同义词归一化映射
-    NORMALIZE = {
+    NORMALIZE: ClassVar[dict[str, str]] = {
         "postgre": "postgresql",
         "postgres": "postgresql",
         "redis缓存": "redis",
