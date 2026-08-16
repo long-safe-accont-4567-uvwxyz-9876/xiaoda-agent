@@ -23,6 +23,25 @@ from web.routers.models import router as models_router
 from web.routers.providers import router as providers_router
 
 
+@pytest.fixture(autouse=True)
+def _pin_example_com_dns(monkeypatch):
+    """把 example.com 的 DNS 解析钉死为公网 IP（测试夹具域名的真实地址）。
+
+    局域网网关 DNS（172.16.9.135）曾把 example.com 黑洞到 127.0.0.1，
+    导致 SSRF 校验误判公网 URL 为回环。测试不依赖外部 DNS 才能稳定。
+    """
+    import security.ssrf_guard as ssrf
+
+    _orig_resolve = ssrf._resolve_all_ips
+
+    def _fake_resolve(hostname: str, port: int) -> list[str]:
+        if hostname == "example.com":
+            return ["93.184.216.34"]
+        return _orig_resolve(hostname, port)
+
+    monkeypatch.setattr(ssrf, "_resolve_all_ips", _fake_resolve)
+
+
 class FakeRuntimeRouter:
     def __init__(self, _custom_clients=None, **extra):
         self._custom_clients = dict(_custom_clients or {})
