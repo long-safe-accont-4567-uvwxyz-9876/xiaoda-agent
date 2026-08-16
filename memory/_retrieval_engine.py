@@ -1594,12 +1594,16 @@ class RetrievalEngine(EntityKgBoostMixin, MemoryMetadataMixin):
 
         各子查询检索时关闭内部 Reranker，统一在合并池上做一次批量精排。
         """
-        all_results: list[dict] = []
-        seen_ids: set[str] = set()
-        # P1-4: 合并 embed 批处理。原实现每个子查询在 retrieve_memories_hybrid
-        # 内部各自 embed 一次（N 个子查询 = N 次 API 调用/推理）。
-        # 这里先批量 embed 一次，子查询检索时复用向量，减少 embed 延迟与限流。
-        # 批量失败时降级为 None，各子查询回退内部独立 embed（single-flight 兜底）。
+        precomputed_vecs = await self._batch_embed_queries(queries)
+        all_results = await self._gather_hybrid_results(
+            queries, precomputed_vecs, k, scope)
+        return await self._batch_rerank(all_results, query, k)
+
+    async def _batch_embed_queries(self, queries: list[str]) -> list[list[float] | None]:
+        """P1-4: 合并 embed 批处理，子查询检索时复用向量，减少 embed 延迟与限流。
+
+        批量失败时降级为 None，各子查询回退内部独立 embed（single-flight 兜底）。
+        """
         precomputed_vecs: list[list[float] | None] = [None] * len(queries)
         if getattr(self._mm, "vec", None):
             try:
@@ -1609,6 +1613,14 @@ class RetrievalEngine(EntityKgBoostMixin, MemoryMetadataMixin):
                         precomputed_vecs[i] = v
             except Exception as e:
                 logger.debug("memory.batch_embed_failed", error=str(e))
+        return precomputed_vecs
+
+    async def _gather_hybrid_results(self, queries: list[str],
+                                     precomputed_vecs: list[list[float] | None],
+                                     k: int, scope: Any | None) -> list[dict]:
+        """并行执行各子查询的 hybrid 检索，去重合并候选池。"""
+        all_results: list[dict] = []
+        seen_ids: set[str] = set()
         hybrid_tasks = [
             self._mm.retrieve_memories_hybrid(
                 q, k=k * 2, use_reranker=False, scope=scope,
@@ -1629,7 +1641,11 @@ class RetrievalEngine(EntityKgBoostMixin, MemoryMetadataMixin):
                 if rid and rid not in seen_ids:
                     seen_ids.add(rid)
                     all_results.append(r)
-        # 批量 Reranker：对合并后的候选池用原始 query 重排一次
+        return all_results
+
+    async def _batch_rerank(self, all_results: list[dict], query: str,
+                            k: int) -> list[dict]:
+        """批量 Reranker：对合并后的候选池用原始 query 重排一次。"""
         if self._mm._reranker and self._mm._reranker.available and len(all_results) > k:
             try:
                 docs = [r.get("summary", "") for r in all_results]
