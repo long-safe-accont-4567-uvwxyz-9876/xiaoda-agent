@@ -1,75 +1,74 @@
-from typing import Any, ClassVar
-from collections.abc import AsyncIterator
-import copy
-import os
-import time
 import asyncio
+import contextlib
 import contextvars
+import os
 import threading
-from openai import AsyncOpenAI
+import time
+from collections.abc import AsyncIterator
+from typing import Any, ClassVar
+
 import openai as _openai_mod  # 用于 openai.APIError 异常捕获
 from loguru import logger
+from openai import AsyncOpenAI
 
-from db.db_analytics import AnalyticsDB
-from utils.metrics import metrics
 from config import AGNES_BASE_URL, AGNES_TEXT_MODEL, PROMPT_CACHING_ENABLED
+from config import DEFAULT_PROVIDER as _CFG_DEFAULT_PROVIDER
+from config import FLASH_MODEL_NAME as _CFG_FLASH_MODEL
 from config import MODEL_NAME as _CFG_MODEL_NAME
-from config import FLASH_MODEL_NAME as _CFG_FLASH_MODEL, DEFAULT_PROVIDER as _CFG_DEFAULT_PROVIDER
-from config import MIMO_MODEL as _CFG_MIMO_MODEL
-from config import set_default_provider as _set_default_provider
 from config import get_builtin_providers as _get_builtin_providers
-from transports import ProviderTransport, MiMoTransport, AgnesTransport
-# 根因修复：agnes API connect=5s 过短导致 APIConnectionError，统一从 agnes_transport 引入共享 httpx 配置
-from transports.agnes_transport import _get_agnes_http_client, AGNES_HTTP_TIMEOUT, close_agnes_shared_client
-from utils.prompt_caching import apply_cache_control
-from utils.llm_cleanup import merge_continuation
-from utils.error_classifier import ErrorClassifier, RecoveryAction
-from utils.credential_pool import get_credential_pool
-from utils.common import mask_api_key as _mask_api_key, DEFAULT_MAX_TOKENS
-from security.ssrf_guard import validate_url as _ssrf_validate_url
+from config import set_default_provider as _set_default_provider
 from core.app_exception import LLMError
 from core.error_codes import ErrorCodeEnum
+from db.db_analytics import AnalyticsDB
+from llm_gateway.client_lifecycle import ClientLifecycleMixin, _ssrf_check  # noqa: F401,E402
+from llm_gateway.fallback_chain import FallbackChainMixin  # noqa: E402
 from llm_gateway.transports import CompletionRequest, TransportError
-import contextlib
 
 # ── Phase 1 拆分：provider 配置块抽为 model_router_config（函数体逐字节搬移） ──
 # 同名 re-export 保持兼容：`from model_router import MIMO_MODEL` 与
 # `patch("model_router.MIMO_MODEL")` 等既有用法不受影响。
 from model_router_config import (  # noqa: F401,E402
-    _load_provider_metadata,
-    _PROVIDER_METADATA,
-    _PROVIDER_CAPS_FROM_FILE,
-    _ollama_model_map_from_file,
-    _ollama_model_map_from_env,
-    _ollama_default_model_from_env,
-    _load_ollama_model_map,
-    _OLLAMA_MODEL_MAP,
-    _OLLAMA_DEFAULT_MODEL,
+    _CROSS_PROVIDER_MAP,
     _LOCAL_ORT_PROVIDER,
-    translate_model_for_provider,
-    _load_provider_base_url,
-    _resolve_provider_key,
-    MIMO_MODEL,
-    MIMO_PRO_MODEL,
-    MIMO_BASE_URL,
+    _OLLAMA_DEFAULT_MODEL,
+    _OLLAMA_MODEL_MAP,
+    _PROVIDER_CAPS_FROM_FILE,
+    _PROVIDER_METADATA,
     MIMO_API_KEY,
+    MIMO_BASE_URL,
+    MIMO_MODEL,
     MIMO_PRICING,
+    MIMO_PRO_MODEL,
+    PROVIDER_MAX_TOKENS_CAP,
     PROVIDER_PRICING,
+    _apply_env_cross_provider_fallback,
+    _cross_provider_map_from_file,
     _env_max_tokens_cap,
     _file_max_tokens_cap,
-    _load_provider_max_tokens_cap,
-    PROVIDER_MAX_TOKENS_CAP,
-    _cross_provider_map_from_file,
-    _apply_env_cross_provider_fallback,
     _load_cross_provider_map,
-    _CROSS_PROVIDER_MAP,
+    _load_ollama_model_map,
+    _load_provider_base_url,
+    _load_provider_max_tokens_cap,
+    _load_provider_metadata,
+    _ollama_default_model_from_env,
+    _ollama_model_map_from_env,
+    _ollama_model_map_from_file,
+    _resolve_provider_key,
+    translate_model_for_provider,
 )
 
 # ── Phase 2 拆分：ModelRouteRegistry 抽为 model_router_registry（逐字节搬移） ──
 from model_router_registry import ModelRouteRegistry as ModelRouteRegistry  # noqa: F401,E402
-from llm_gateway.client_lifecycle import ClientLifecycleMixin, _ssrf_check  # noqa: F401,E402
-from llm_gateway.fallback_chain import FallbackChainMixin  # noqa: E402
+from transports import AgnesTransport, MiMoTransport, ProviderTransport
 
+# 根因修复：agnes API connect=5s 过短导致 APIConnectionError，统一从 agnes_transport 引入共享 httpx 配置
+from transports.agnes_transport import AGNES_HTTP_TIMEOUT, _get_agnes_http_client, close_agnes_shared_client
+from utils.common import DEFAULT_MAX_TOKENS
+from utils.credential_pool import get_credential_pool
+from utils.error_classifier import ErrorClassifier, RecoveryAction
+from utils.llm_cleanup import merge_continuation
+from utils.metrics import metrics
+from utils.prompt_caching import apply_cache_control
 
 ROUTE_TABLE = {
     # chat 主路由：128K 上限，支撑长时间连贯对话，搭配滑动窗口+摘要压缩避免退化

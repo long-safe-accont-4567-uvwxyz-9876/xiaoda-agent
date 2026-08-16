@@ -15,7 +15,6 @@ import os
 
 from loguru import logger
 
-from config import MODEL_NAME as _CFG_MODEL_NAME
 from config import MIMO_MODEL as _CFG_MIMO_MODEL
 
 

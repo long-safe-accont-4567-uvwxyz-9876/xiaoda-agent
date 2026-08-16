@@ -21,8 +21,6 @@ from openai import AsyncOpenAI
 
 from config import AGNES_BASE_URL
 from config import get_builtin_providers as _get_builtin_providers
-from transports.agnes_transport import _get_agnes_http_client, AGNES_HTTP_TIMEOUT
-from utils.common import mask_api_key as _mask_api_key
 from core.app_exception import LLMError
 from core.error_codes import ErrorCodeEnum
 from model_router_config import (
@@ -30,6 +28,8 @@ from model_router_config import (
     _resolve_provider_key,
 )
 from security.ssrf_guard import validate_url as _ssrf_validate_url
+from transports.agnes_transport import AGNES_HTTP_TIMEOUT, _get_agnes_http_client
+from utils.common import mask_api_key as _mask_api_key
 
 
 def _ssrf_check(url: str) -> None:
@@ -88,8 +88,8 @@ class ClientLifecycleMixin:
     def _lazy_register_provider(self, provider: str) -> None:
         """懒注册：从 config_service 恢复未注册的自定义 provider。"""
         try:
-            from web.config_service import get_config_service
             from web._provider_keys import load_provider_key
+            from web.config_service import get_config_service
             from web.custom_providers import register_into_router
             cfg = get_config_service()
             record = cfg.get(f"models.providers.{provider}")
@@ -154,7 +154,8 @@ class ClientLifecycleMixin:
         if _old_clients:
             try:
                 import asyncio
-                loop = asyncio.get_running_loop()
+                # 无事件循环探测：同步路径下此处抛 RuntimeError，由下方 except 降级
+                asyncio.get_running_loop()
 
                 async def _close_old() -> None:
                     await asyncio.gather(
