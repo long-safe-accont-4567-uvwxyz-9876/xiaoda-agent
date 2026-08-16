@@ -651,7 +651,7 @@ class SubAgent:
         return assistant_msg
 
     async def _exec_one_tool_call(self, tc: Any, invocation: Any | None = None) -> dict:
-        """执行单个工具调用：风暴检测 → 截断修复 → 护栏检查 → 执行 → 后处理。"""
+        """执行单个工具调用：风暴检测 → 截断修复 → 授权/路径/权限检查 → 执行 → 后处理。"""
         tool_name = tc.name
         args_str = tc.arguments_json
 
@@ -667,68 +667,20 @@ class SubAgent:
 
         args = tc.parse_arguments()
 
-        if invocation is not None and tool_name not in invocation.allowed_tools:
-            return {"tool_call_id": tc.id, "content": json.dumps({"error": f"工具 {tool_name} 未授权"}, ensure_ascii=False)}
+        # 结构化隔离调用的工具授权检查（allowed_tools + 禁止嵌套代理通信）
+        denied = self._check_invocation_authorization(tc, tool_name, invocation)
+        if denied:
+            return denied
 
-        if invocation is not None and tool_name == SUB_AGENT_MESSAGE_TOOL:
-            return {"tool_call_id": tc.id, "content": json.dumps({"error": "结构化隔离调用禁止嵌套代理通信"}, ensure_ascii=False)}
+        # 路径策略检查（资源路径工具的路径安全校验）
+        denied = self._check_path_policy(tc, tool_name, args, invocation)
+        if denied:
+            return denied
 
-        if invocation is not None and tool_name in _RESOURCE_PATH_TOOLS:
-            import fnmatch
-
-            path = _extract_path_from_args(tool_name, args)
-            if tool_name == "search_files":
-                path = args.get("pattern", "")
-            path = path.replace("\\", "/") if isinstance(path, str) else ""
-            if not path:
-                logger.warning(
-                    "sub_agent.path_policy_denied",
-                    target=invocation.target,
-                    request_id=invocation.request_id or "",
-                    tool=tool_name,
-                    reason="missing_path",
-                    path="",
-                    allowed_pattern_count=len(invocation.allowed_paths),
-                    forbidden_pattern_count=len(invocation.forbidden_paths),
-                )
-                return {"tool_call_id": tc.id, "content": json.dumps({"error": f"工具 {tool_name} 缺少路径，路径策略拒绝执行"}, ensure_ascii=False)}
-            path_parts = path.split("/")
-            is_windows_absolute = len(path) >= 3 and path[0].isalpha() and path[1:3] == ":/"
-            if path.startswith(("/", "~")) or is_windows_absolute or any(part == ".." for part in path_parts) or "\x00" in path:
-                logger.warning(
-                    "sub_agent.path_policy_denied",
-                    target=invocation.target,
-                    request_id=invocation.request_id or "",
-                    tool=tool_name,
-                    reason="unsafe_path",
-                    path=_safe_log_path(path),
-                    allowed_pattern_count=len(invocation.allowed_paths),
-                    forbidden_pattern_count=len(invocation.forbidden_paths),
-                )
-                return {"tool_call_id": tc.id, "content": json.dumps({"error": f"路径策略拒绝不安全路径 {path}"}, ensure_ascii=False)}
-            if invocation.allowed_paths or invocation.forbidden_paths:
-                forbidden = any(fnmatch.fnmatch(path, pattern) for pattern in invocation.forbidden_paths)
-                allowed = not invocation.allowed_paths or any(fnmatch.fnmatch(path, pattern) for pattern in invocation.allowed_paths)
-                if forbidden or not allowed:
-                    logger.warning(
-                        "sub_agent.path_policy_denied",
-                        target=invocation.target,
-                        request_id=invocation.request_id or "",
-                        tool=tool_name,
-                        reason="forbidden_pattern" if forbidden else "not_allowed",
-                        path=_safe_log_path(path),
-                        allowed_pattern_count=len(invocation.allowed_paths),
-                        forbidden_pattern_count=len(invocation.forbidden_paths),
-                    )
-                    return {"tool_call_id": tc.id, "content": json.dumps({"error": f"路径策略拒绝访问 {path}"}, ensure_ascii=False)}
-
-        if invocation is not None and invocation.permission_mode == "strict":
-            from tool_engine.tool_registry import ToolPermission, get_tool
-
-            registered_tool = get_tool(tool_name)
-            permission = registered_tool.get("permission", ToolPermission.READ_ONLY) if registered_tool else None
-            if permission != ToolPermission.READ_ONLY:
-                return {"tool_call_id": tc.id, "content": json.dumps({"error": f"strict 模式拒绝执行工具 {tool_name}"}, ensure_ascii=False)}
+        # strict 模式的工具权限检查（仅 READ_ONLY 工具可执行）
+        denied = self._check_strict_mode(tc, tool_name, invocation)
+        if denied:
+            return denied
 
         if tool_name not in self._filtered_tool_names():
             return {
@@ -746,23 +698,10 @@ class SubAgent:
             }, ensure_ascii=False)
             return {"tool_call_id": tc.id, "content": tool_result_content}
 
-        # 子代理专属工具：submit_memory（实例方法拦截，不走全局 executor）
-        if tool_name == SUB_AGENT_MEMORY_TOOL:
-            try:
-                result_text = await self.submit_memory(**args)
-            except (OSError, ValueError, RuntimeError) as e:
-                logger.warning("sub_agent.submit_memory_call_failed", error=str(e)[:200])
-                result_text = f"错误: {e}"
-            return {"tool_call_id": tc.id, "content": result_text}
-
-        # 子代理专属工具：send_message_to_agent（实例方法拦截，不走全局 executor）
-        if tool_name == SUB_AGENT_MESSAGE_TOOL:
-            try:
-                result_text = await self.send_message_to_agent(**args)
-            except (OSError, ValueError, RuntimeError) as e:
-                logger.warning("sub_agent.send_message_to_agent_call_failed", error=str(e)[:200])
-                result_text = f"错误: {e}"
-            return {"tool_call_id": tc.id, "content": result_text}
+        # 子代理专属工具（submit_memory / send_message_to_agent）实例方法拦截
+        special = await self._exec_sub_agent_special_tool(tc, tool_name, args)
+        if special is not None:
+            return special
 
         # 工具护栏检查
         guardrails = get_tool_guardrails()
@@ -783,6 +722,102 @@ class SubAgent:
             result_text = f"[护栏警告: {guard_msg}]\n{result_text}"
 
         return {"tool_call_id": tc.id, "content": result_text}
+
+    @staticmethod
+    def _check_invocation_authorization(tc: Any, tool_name: str, invocation: Any | None) -> dict | None:
+        """结构化隔离调用的工具授权检查。拒绝返回错误 dict，通过返回 None。"""
+        if invocation is None:
+            return None
+        if tool_name not in invocation.allowed_tools:
+            return {"tool_call_id": tc.id, "content": json.dumps({"error": f"工具 {tool_name} 未授权"}, ensure_ascii=False)}
+        if tool_name == SUB_AGENT_MESSAGE_TOOL:
+            return {"tool_call_id": tc.id, "content": json.dumps({"error": "结构化隔离调用禁止嵌套代理通信"}, ensure_ascii=False)}
+        return None
+
+    def _check_path_policy(self, tc: Any, tool_name: str, args: dict, invocation: Any | None) -> dict | None:
+        """路径策略检查（资源路径工具）。拒绝返回错误 dict，通过返回 None。"""
+        if invocation is None or tool_name not in _RESOURCE_PATH_TOOLS:
+            return None
+        import fnmatch
+
+        path = _extract_path_from_args(tool_name, args)
+        if tool_name == "search_files":
+            path = args.get("pattern", "")
+        path = path.replace("\\", "/") if isinstance(path, str) else ""
+        if not path:
+            logger.warning(
+                "sub_agent.path_policy_denied",
+                target=invocation.target,
+                request_id=invocation.request_id or "",
+                tool=tool_name,
+                reason="missing_path",
+                path="",
+                allowed_pattern_count=len(invocation.allowed_paths),
+                forbidden_pattern_count=len(invocation.forbidden_paths),
+            )
+            return {"tool_call_id": tc.id, "content": json.dumps({"error": f"工具 {tool_name} 缺少路径，路径策略拒绝执行"}, ensure_ascii=False)}
+        path_parts = path.split("/")
+        is_windows_absolute = len(path) >= 3 and path[0].isalpha() and path[1:3] == ":/"
+        if path.startswith(("/", "~")) or is_windows_absolute or any(part == ".." for part in path_parts) or "\x00" in path:
+            logger.warning(
+                "sub_agent.path_policy_denied",
+                target=invocation.target,
+                request_id=invocation.request_id or "",
+                tool=tool_name,
+                reason="unsafe_path",
+                path=_safe_log_path(path),
+                allowed_pattern_count=len(invocation.allowed_paths),
+                forbidden_pattern_count=len(invocation.forbidden_paths),
+            )
+            return {"tool_call_id": tc.id, "content": json.dumps({"error": f"路径策略拒绝不安全路径 {path}"}, ensure_ascii=False)}
+        if invocation.allowed_paths or invocation.forbidden_paths:
+            forbidden = any(fnmatch.fnmatch(path, pattern) for pattern in invocation.forbidden_paths)
+            allowed = not invocation.allowed_paths or any(fnmatch.fnmatch(path, pattern) for pattern in invocation.allowed_paths)
+            if forbidden or not allowed:
+                logger.warning(
+                    "sub_agent.path_policy_denied",
+                    target=invocation.target,
+                    request_id=invocation.request_id or "",
+                    tool=tool_name,
+                    reason="forbidden_pattern" if forbidden else "not_allowed",
+                    path=_safe_log_path(path),
+                    allowed_pattern_count=len(invocation.allowed_paths),
+                    forbidden_pattern_count=len(invocation.forbidden_paths),
+                )
+                return {"tool_call_id": tc.id, "content": json.dumps({"error": f"路径策略拒绝访问 {path}"}, ensure_ascii=False)}
+        return None
+
+    @staticmethod
+    def _check_strict_mode(tc: Any, tool_name: str, invocation: Any | None) -> dict | None:
+        """strict 模式的工具权限检查（仅 READ_ONLY 可执行）。拒绝返回错误 dict，通过返回 None。"""
+        if invocation is None or invocation.permission_mode != "strict":
+            return None
+        from tool_engine.tool_registry import ToolPermission, get_tool
+
+        registered_tool = get_tool(tool_name)
+        permission = registered_tool.get("permission", ToolPermission.READ_ONLY) if registered_tool else None
+        if permission != ToolPermission.READ_ONLY:
+            return {"tool_call_id": tc.id, "content": json.dumps({"error": f"strict 模式拒绝执行工具 {tool_name}"}, ensure_ascii=False)}
+        return None
+
+    async def _exec_sub_agent_special_tool(self, tc: Any, tool_name: str, args: dict) -> dict | None:
+        """子代理专属工具（submit_memory / send_message_to_agent）实例方法拦截。非专属返回 None。"""
+        if tool_name == SUB_AGENT_MEMORY_TOOL:
+            try:
+                result_text = await self.submit_memory(**args)
+            except (OSError, ValueError, RuntimeError) as e:
+                logger.warning("sub_agent.submit_memory_call_failed", error=str(e)[:200])
+                result_text = f"错误: {e}"
+            return {"tool_call_id": tc.id, "content": result_text}
+
+        if tool_name == SUB_AGENT_MESSAGE_TOOL:
+            try:
+                result_text = await self.send_message_to_agent(**args)
+            except (OSError, ValueError, RuntimeError) as e:
+                logger.warning("sub_agent.send_message_to_agent_call_failed", error=str(e)[:200])
+                result_text = f"错误: {e}"
+            return {"tool_call_id": tc.id, "content": result_text}
+        return None
 
     async def _summarize_after_tools(self, working: list[dict], api_timeout: int,
                                        remaining: float) -> str:
