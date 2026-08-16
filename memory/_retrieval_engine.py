@@ -568,37 +568,76 @@ class RetrievalEngine:
         else:
             fts_weight, vec_weight = 1.0, 1.0
 
-        oversample_k = rerank_limit  # RRF 融合后取 Top-N 送 Reranker
+        ranked_lists, weights = self._build_fusion_lists(
+            fts_items, vec_items, kg_items, child_items, spread_items, entity_items,
+            fts_weight, vec_weight)
+        fused = reciprocal_rank_fusion(
+            ranked_lists, limit=rerank_limit,
+            weights=weights,
+        )
+
+        # 按 RRF 排序获取完整记录（合并所有通道候选）
+        all_items = self._merge_all_items(
+            fts_items, vec_items, kg_items, child_items, spread_items, entity_items)
+
+        # ── mem0 SPEC: Entity Boost 精排加分 ──
+        candidates = []
+        for item_id, rrf_score in fused:
+            if item_id in all_items:
+                item = all_items[item_id]
+                item["rrf_score"] = rrf_score
+                candidates.append(item)
+        candidates = await self._mm._apply_entity_boost(query, candidates, scope)
+
+        # Reranker 精排（可用时）；不可用/失败返回 None 走降级
+        reranked_results = await self._apply_reranker(
+            query, k, use_reranker, fused, all_items, candidates, scope, tier, _start, kg_v2_items)
+        if reranked_results is not None:
+            return reranked_results
+
+        # 降级：无 Reranker 或 Reranker 失败时走 candidates (已含 entity boost)
+        final = candidates[:k]
+        # KG v2 事实作为补充候选追加 (已带 rrf_score, 不参与 ID-based 去重)
+        # 先切片再追加, 确保至少有部分 kg_v2 命中能露出
+        if kg_v2_items and len(final) < k:
+            final.extend(kg_v2_items[:k - len(final)])
+        logger.info("memory.search", event="memory_search",
+                    query=query[:100], tier=tier, results=len(final),
+                    duration_ms=int((time.time() - _start) * 1000))
+        return final
+
+    @staticmethod
+    def _build_fusion_lists(fts_items: list, vec_items: list, kg_items: list,
+                            child_items: list, spread_items: list, entity_items: list,
+                            fts_weight: float, vec_weight: float) -> tuple[list, list]:
+        """构建多路 ID 列表与权重（KG/子chunk/扩散/实体 通道无结果时自动降级）。"""
         fts_ids = [str(item["id"]) for item in fts_items]
         vec_ids = [str(item["id"]) for item in vec_items]
-        # 构建多路 ID 列表（KG/子chunk/扩散/实体 通道无结果时自动降级）
         ranked_lists = [fts_ids, vec_ids]
         weights = [fts_weight, vec_weight]
         if kg_items:
             for _kitem in kg_items:
                 _kitem["kg_recall"] = True
-            kg_ids = [str(item["id"]) for item in kg_items]
-            ranked_lists.append(kg_ids)
+            ranked_lists.append([str(item["id"]) for item in kg_items])
             weights.append(0.8)  # KG 通道权重
         if child_items:
-            child_ids = [str(item["id"]) for item in child_items]
-            ranked_lists.append(child_ids)
+            ranked_lists.append([str(item["id"]) for item in child_items])
             weights.append(0.9)  # 子chunk召回的父chunk权重
         if spread_items:
-            spread_ids = [str(item["id"]) for item in spread_items]
-            ranked_lists.append(spread_ids)
+            ranked_lists.append([str(item["id"]) for item in spread_items])
             weights.append(0.85)  # 扩散激活权重略低于直接匹配
         if entity_items:
-            entity_ids = [str(item["id"]) for item in entity_items]
-            ranked_lists.append(entity_ids)
+            ranked_lists.append([str(item["id"]) for item in entity_items])
             weights.append(0.7)  # 实体召回权重
-        fused = reciprocal_rank_fusion(
-            ranked_lists, limit=oversample_k,
-            weights=weights,
-        )
+        return ranked_lists, weights
 
-        # 按 RRF 排序获取完整记录（合并所有通道候选）
-        # 注意: 同一 id 在多通道出现时需合并标记（如 kg_recall），避免后通道覆盖前通道标记
+    @staticmethod
+    def _merge_all_items(fts_items: list, vec_items: list, kg_items: list,
+                         child_items: list, spread_items: list, entity_items: list) -> dict[str, dict]:
+        """合并所有通道候选（同一 id 合并布尔标记 + 保留较高 score）。
+
+        注意: 同一 id 在多通道出现时需合并标记（如 kg_recall），避免后通道覆盖前通道标记。
+        """
         all_items: dict[str, dict] = {}
         for item in fts_items + vec_items + kg_items + child_items + spread_items + entity_items:
             key = str(item["id"])
@@ -613,53 +652,42 @@ class RetrievalEngine:
                     existing["score"] = item["score"]
             else:
                 all_items[key] = item
+        return all_items
 
-        # ── mem0 SPEC: Entity Boost 精排加分 ──
-        candidates = []
-        for item_id, rrf_score in fused:
-            if item_id in all_items:
-                item = all_items[item_id]
-                item["rrf_score"] = rrf_score
-                candidates.append(item)
-        candidates = await self._mm._apply_entity_boost(query, candidates, scope)
+    async def _apply_reranker(self, query: str, k: int, use_reranker: bool,
+                              fused: list, all_items: dict[str, dict],
+                              candidates: list, scope: Any, tier: str,
+                              _start: float, kg_v2_items: list) -> list[dict] | None:
+        """Reranker 精排；不可用/失败返回 None 走降级。
 
-        # Reranker 精排
+        local reranker service 已选但模型不可用时 raise（而非静默降级）。
+        """
         reranker_available = bool(self._mm._reranker and self._mm._reranker.available)
         if use_reranker and self._mm._reranker_service is not None and not reranker_available:
             from local_ai.integration.reranker import LocalRerankerUnavailableError
 
             raise LocalRerankerUnavailableError("selected local reranker model is unavailable")
-        if use_reranker and reranker_available and len(candidates) > k:
-            # 根因修复（2026-07-29）：移除外层 5s wait_for 超时（治标）。
-            # reranker 已用共享 httpx client（connect=15s）+ 单次请求 5s timeout，
-            # _hybrid_rerank 内部有 try/except 返回 None（失败降级到 RRF 排序）。
-            # 原外层 5s 与内层 5s 双层超时，外层必然先触发，reranker 实际耗时被截断。
-            __st = time.time()
-            reranked = await self._mm._hybrid_rerank(query, fused, all_items, k)
-            _stage_log("hybrid_rerank", __st, query)
-            if reranked:
-                # 对 reranked 也应用 entity boost
-                reranked = await self._mm._apply_entity_boost(query, reranked, scope)
-                # KG v2 事实作为补充候选追加 (已带 rrf_score, 不参与 Reranker ID-based 排序)
-                # 先切片再追加, 避免 reranker 返回 k 条时 [:k] 丢弃全部 kg_v2_items
-                results = reranked[:k]
-                if kg_v2_items and len(results) < k:
-                    results.extend(kg_v2_items[:k - len(results)])
-                logger.info("memory.search", event="memory_search",
-                            query=query[:100], tier=tier, results=len(results),
-                            duration_ms=int((time.time() - _start) * 1000))
-                return results
-
-        # 降级：无 Reranker 或 Reranker 失败时走 candidates (已含 entity boost)
-        final = candidates[:k]
-        # KG v2 事实作为补充候选追加 (已带 rrf_score, 不参与 ID-based 去重)
-        # 先切片再追加, 确保至少有部分 kg_v2 命中能露出
-        if kg_v2_items and len(final) < k:
-            final.extend(kg_v2_items[:k - len(final)])
+        if not (use_reranker and reranker_available and len(candidates) > k):
+            return None
+        # 根因修复（2026-07-29）：移除外层 5s wait_for 超时（治标）。
+        # reranker 已用共享 httpx client（connect=15s）+ 单次请求 5s timeout，
+        # _hybrid_rerank 内部有 try/except 返回 None（失败降级到 RRF 排序）。
+        __st = time.time()
+        reranked = await self._mm._hybrid_rerank(query, fused, all_items, k)
+        _stage_log("hybrid_rerank", __st, query)
+        if not reranked:
+            return None
+        # 对 reranked 也应用 entity boost
+        reranked = await self._mm._apply_entity_boost(query, reranked, scope)
+        # KG v2 事实作为补充候选追加 (已带 rrf_score, 不参与 Reranker ID-based 排序)
+        # 先切片再追加, 避免 reranker 返回 k 条时 [:k] 丢弃全部 kg_v2_items
+        results = reranked[:k]
+        if kg_v2_items and len(results) < k:
+            results.extend(kg_v2_items[:k - len(results)])
         logger.info("memory.search", event="memory_search",
-                    query=query[:100], tier=tier, results=len(final),
+                    query=query[:100], tier=tier, results=len(results),
                     duration_ms=int((time.time() - _start) * 1000))
-        return final
+        return results
 
     async def _hybrid_fts_search(self, query: str, k: int) -> list[dict]:
         """FTS 检索"""
