@@ -1,21 +1,21 @@
 """消息处理 Mixin —— 拆分自原 agent_core.py 的 AgentCore 类。
 
-包含主处理流程 _process_impl 及消息分类、语音意图识别、图片描述、
-聊天目标路由等消息处理相关方法。
+包含主处理流程 _process_impl 及消息分类、图片描述、聊天目标路由等
+消息处理相关方法。
+
+Phase 1 拆分：问候（GreetingMixin）与语音判定（VoiceMixin）逻辑已迁至
+agent_core/mixins/，本模块 re-export 保持外部 import 兼容。
 """
 from __future__ import annotations
 
 import asyncio
 import json
 import os
-import random
 import re
 import time
 import tempfile
 from collections import OrderedDict
-from datetime import datetime
 from typing import Any, TYPE_CHECKING, NamedTuple
-from zoneinfo import ZoneInfo
 
 import openai as _openai_mod  # P0 Task 1.8：用于捕获 BadRequestError/APIError
 
@@ -25,7 +25,6 @@ from utils.common import safe_int as _safe_int, DEFAULT_MAX_TOKENS
 from loguru import logger
 
 from config import (MIMO_MODEL, AGENT_CONFIG, build_safe_system_prompt,
-                    TTS_ASYNC_MODE,
                     SIMPLE_CHAT_FASTPATH, STREAM_TEXT_PUSH, get_agent_display_name)
 from prompt_builder import build_scene_aware_prompt
 from core.chat_processor import ChatProcessor
@@ -44,122 +43,30 @@ from utils.llm_cleanup import deduplicate_multi_reply, merge_continuation
 from agent_core._shared import (
     DEGRADED_REPLY, is_degraded_reply,
     get_empty_reply_for_finish_reason,
-    _pending_tts_audio,
     _current_request_ctx,
     _stream_finish_reason_var,
     ALLOWED_NON_MASTER_TOOLS as _ALLOWED_NON_MASTER_TOOLS,
 )
 
 
-def _get_temperature(model_cfg: dict | None = None) -> float:
-    """读取 temperature：优先 webui_overrides，回退 agent.json5 默认值。"""
-    from config import get_temperature
-    default = float(model_cfg.get("temperature", 0.7)) if model_cfg else 0.7
-    return get_temperature(default=default)
+# ── Phase 1 拆分：问候/语音逻辑迁至 agent_core/mixins/，此处 re-export 保持外部兼容 ──
+# 叶子模块依赖约定：mixin 只依赖 agent_core._shared 及 config/core 叶子模块，
+# 不得 import agent_core.message_processor（避免循环导入）。
+# `as` 冗余别名是 ruff 认可的显式 re-export 标记（避免 F401）。
+from agent_core.mixins.greeting import (
+    GreetingMixin,
+    _SH_TZ as _SH_TZ,                                    # re-export（白盒测试依赖 mp_module._SH_TZ）
+    _force_close_incomplete_reply as _force_close_incomplete_reply,
+    _is_greeting_enabled as _is_greeting_enabled,        # re-export（外部兼容）
+    _time_greeting_for_hour as _time_greeting_for_hour,  # re-export（外部兼容）
+)
+from agent_core.mixins.voice import (
+    VoiceMixin,
+    _decide_tts_trigger as _decide_tts_trigger,          # re-export（sub_agent_manager 依赖）
+    _get_temperature as _get_temperature,
+    _should_auto_tts as _should_auto_tts,                # re-export（向后兼容别名）
+)
 
-
-# ── TTS 触发时机控制（v2：移除冷却，改为智能时机判断） ─────────
-# 设计背景：用户反馈 voice_mode 开启后 TTS "失控"——不分场合地每条都触发语音，
-#   连代码块/URL/子 agent 技术回复也朗读。冷却（8s/30s）治标不治本：
-#   只降频率不解决"该不该发"，且只对主路径生效，子 agent 路径完全没冷却。
-# 新方案：4 个触发点统一过 _decide_tts_trigger，用内容适宜性守卫替代冷却。
-#   - force_voice（用户显式"发语音"）→ 信任用户意图，直接通过
-#   - voice_mode（粘性语音模式）→ 必须通过 _is_suitable_for_voice 内容守卫
-#   - 适合语音：自然人语（闲聊/问候/情感/解释）
-#   - 不适合语音：代码块/URL/文件路径/标签/DSML 残留/极短/超长
-
-
-# 语音适宜性守卫的特征常量：命中即视为技术内容（不适合语音朗读）
-_CODE_KEYWORD_SIGS = ('def ', 'class ', 'import ', 'from ',
-                      'function ', 'const ', 'return ')
-_PATH_SIGS = ('/home/', '/usr/', '/var/', '/etc/', '/tmp/',
-              '.py', '.js', '.json', '.md', '.txt', '.sh')
-_TOOL_TAG_SIGS = ('<tool_result', '<tool_call', '[sticker:', '[emotion:')
-
-
-def _looks_like_code_or_url(cleaned: str) -> bool:
-    """判断是否含代码块/代码关键字/JSON/URL 等技术内容。"""
-    if '```' in cleaned:
-        return True
-    if any(sig in cleaned for sig in _CODE_KEYWORD_SIGS):
-        return True
-    # 大括号出现 ≥2 次（JSON/代码块特征）
-    if cleaned.count('{') >= 2 or cleaned.count('}') >= 2:
-        return True
-    # 单层 JSON 对象特征（如 {"key": "value"}，仅 1 对大括号但明显是结构化数据）
-    if '{"' in cleaned or '": "' in cleaned:
-        return True
-    # 任何 URL 都不朗读（原阈值 url_count>=2 太宽松，含 1 个 URL 即视为技术内容）
-    if 'http://' in cleaned or 'https://' in cleaned:
-        return True
-    return False
-
-
-def _looks_like_path_or_tag(cleaned: str) -> bool:
-    """判断是否含文件路径/标签/DSML 残留等技术内容。"""
-    if any(p in cleaned for p in _PATH_SIGS):
-        return True
-    # 纯标签内容（如 [emotion:xxx] [sticker:xxx]）
-    if cleaned.startswith('[') and cleaned.endswith(']') and ':' in cleaned:
-        return True
-    if any(tag in cleaned for tag in _TOOL_TAG_SIGS):
-        return True
-    return False
-
-
-def _is_suitable_for_voice(reply: str) -> bool:
-    """判断回复内容是否适合语音朗读（替代原 _should_auto_tts 守卫）。
-
-    设计原则：TTS 适合"自然人语"，不适合"技术内容"。
-    voice_mode 开启后每条都过此守卫，避免代码/URL/路径被朗读导致"失控"。
-    force_voice（用户显式要求发语音）不走此守卫，信任用户选择。
-    """
-    if not reply:
-        return False
-    cleaned = reply.strip()
-    if not cleaned or len(cleaned) < 8:
-        return False  # 极短回复不朗读（原阈值 5 太低）
-    if len(cleaned) > 400:
-        return False  # 超长回复（>400字）不朗读，语音太长体验差
-    if _looks_like_code_or_url(cleaned):
-        return False
-    if _looks_like_path_or_tag(cleaned):
-        return False
-    # 纯数字/纯符号（字母与中文字符占比 < 40% 视为非自然语言）
-    letters = [c for c in cleaned if c.isalpha() or '\u4e00' <= c <= '\u9fff']
-    if len(letters) < len(cleaned) * 0.4:
-        return False
-    return True
-
-
-def _should_auto_tts(reply: str) -> bool:
-    """[向后兼容别名] 检查回复内容是否适合自动生成 TTS。
-
-    保留函数名防止外部引用断裂；内部委托给 _is_suitable_for_voice。
-    """
-    return _is_suitable_for_voice(reply)
-
-
-def _decide_tts_trigger(reply: str, *, force_voice: bool, voice_mode: bool,
-                        tts_available: bool, tts_enabled: bool) -> bool:
-    """统一 TTS 触发决策：返回 True 才生成语音。
-
-    4 个触发点（greeting 短路 / 主路径 _build_voice_result / 子 agent 串行 / 子 agent 并行）
-    都过此函数，确保守卫逻辑一致，避免子 agent 路径漏守卫导致"失控"。
-
-    时机判断（替代原冷却机制）：
-      - 既非 force_voice 也非 voice_mode → 不触发
-      - TTS 不可用 / 功能降级关闭 / 回复为空或过短 → 不触发
-      - force_voice（用户显式"发语音"）→ 信任用户意图，直接通过（不受守卫限制）
-      - voice_mode（粘性语音模式）→ 必须通过 _is_suitable_for_voice 内容守卫
-    """
-    if not (force_voice or voice_mode):
-        return False
-    if not (tts_available and tts_enabled and reply and len(reply.strip()) > 2):
-        return False
-    if force_voice:
-        return True  # 用户显式意图，信任选择
-    return _is_suitable_for_voice(reply)
 
 if TYPE_CHECKING:
     from agent_core._shared import RequestContext
@@ -172,67 +79,6 @@ from contextvars import ContextVar as _ContextVar
 _system_context_var: _ContextVar[str] = _ContextVar("_system_context", default="")
 
 
-# ── G1: 问候短路（模块级编译正则，一次编译多次使用） ───────────
-_GREETING_PATTERN = re.compile(
-    r'^(你好|您好|hi|hello|hey|嗨|在吗|在不在|在么|'
-    r'早安|早上好|早|午安|下午好|晚上好|晚安|'
-    r'谢谢|感谢|thanks|thx|多谢)\s*[!！。.～~？?]*$',
-    re.IGNORECASE
-)
-
-_THANK_REPLIES = ["不客气～", "不用谢啦～", "举手之劳～"]
-_THANK_KEYWORDS = ("谢谢", "感谢", "thanks", "thx", "多谢")
-
-# reunion_reflection: 用户"回来了"类关键词（用于生成个性化重聚欢迎）
-_REUNION_PATTERN = re.compile(
-    r'(回来了|我回来了|回来啦|我回来啦|回来了吗|到家了|上线了)',
-    re.IGNORECASE,
-)
-
-# G1: 项目硬约束 —— 所有时间函数使用 Asia/Shanghai 时区
-_SH_TZ = ZoneInfo("Asia/Shanghai")
-
-# 时段问候：(start_hour, end_hour, reply) — end_hour 可超过 24 以覆盖跨夜时段
-_TIME_GREETINGS = [
-    (5, 12, "早上好～新的一天开始啦，今天也要加油哦！"),
-    (12, 18, "下午好～今天过得怎么样呀？"),
-    (18, 22, "晚上好～今天辛苦啦，有什么想聊的吗？"),
-    (22, 30, "夜深啦～记得早点休息哦，有什么事明天再说？"),
-]
-
-
-def _time_greeting_for_hour(now_hour: int) -> str:
-    """按 Asia/Shanghai 时段返回问候语；未命中回退到最后一项（覆盖 0-5 点）。"""
-    for start_h, end_h, msg in _TIME_GREETINGS:
-        if start_h <= now_hour < end_h:
-            return msg
-    return _TIME_GREETINGS[-1][2]
-
-
-def _is_greeting_enabled() -> bool:
-    """读取 ENABLE_GREETING_SHORTCUT 开关（默认 false）。
-
-    用户反馈：模板回复（"早上好～新的一天开始啦"）缺乏上下文感知，
-    不如让 LLM 生成自然、有人格温度的问候。默认关闭，让"你好"走 LLM。
-    如需恢复模板短路，设置 ENABLE_GREETING_SHORTCUT=true。
-    """
-    return os.environ.get("ENABLE_GREETING_SHORTCUT", "false").lower() in ("true", "1", "yes")
-
-
-def _force_close_incomplete_reply(reply: str) -> tuple[str, str]:
-    """最终兜底：空回复降级，非空但不以合法标记结尾时追加句号。
-
-    返回 (final_reply, action)，action ∈ {"degraded", "force_closed", "unchanged"}，
-    供调用方按 action 记录对应的观测日志。
-    """
-    if not reply.strip():
-        return DEGRADED_REPLY, "degraded"
-    final = reply.rstrip()
-    if not ends_with_valid_ending(final):
-        return final + "。", "force_closed"
-    return final, "unchanged"
-
-
 class InitRestoreResult(NamedTuple):
     """初始化 + 上下文恢复阶段的结果（原裸 4 元组改为命名结构）。"""
     trace: Any
@@ -241,7 +87,7 @@ class InitRestoreResult(NamedTuple):
     reason: str
 
 
-class MessageProcessorMixin:
+class MessageProcessorMixin(GreetingMixin, VoiceMixin):
     """消息处理相关方法的 Mixin，由 AgentCore 组合使用。"""
 
     # ── Harness 验收循环常量 ──────────────────────────────────
@@ -793,16 +639,6 @@ class MessageProcessorMixin:
 
         return result
 
-    def _resolve_voice_force(self, clean_input: str) -> bool:
-        """根据语音意图切换 voice_mode，返回本轮是否强制语音。"""
-        voice_intent = self._detect_voice_intent(clean_input)
-        if voice_intent == "off":
-            self.set_voice_mode(False)
-            return False
-        if voice_intent == "on":
-            return not self._voice_mode
-        return False
-
     async def _maybe_dispatch_chat_target(
         self, chat_targets: list[str], clean_input: str, user_id: str, source: str,
         session_id: str, trace: Any, force_voice: bool, ctx: RequestContext,
@@ -891,108 +727,6 @@ class MessageProcessorMixin:
                 error_log="agent.restore_failed",
                 timeout_kwargs={"user_id": _restore_id, "hint": "数据库查询阻塞，跳过历史摘要恢复"},
             )
-
-    def _try_greeting_shortcut(self, user_input: str, user_id: str, source: str) -> ProcessResult | None:
-        """G1: 纯问候短路 - 跳过 LLM 直接返回 <100ms.
-
-        - 默认开启（ENABLE_GREETING_SHORTCUT=true）
-        - 群聊跳过（避免刷屏）
-        - 问候不超过 20 字符才命中（避免"你好帮我写代码"误命中）
-        - 感谢类返回随机感谢回复，其他返回时段问候
-
-        Returns:
-            ProcessResult | None: 命中返回 ProcessResult(emotion="greeting")，否则 None
-        """
-        if not _is_greeting_enabled():
-            return None
-        # 群聊跳过（避免刷屏）
-        if source and "group" in source.lower():
-            return None
-        text = (user_input or "").strip()
-        if not text or len(text) > 20:  # 问候不超过 20 字符
-            return None
-        match = _GREETING_PATTERN.match(text)
-        if not match:
-            return None
-        keyword = match.group(1).lower()
-        # G1: 使用 Asia/Shanghai 时区，避免受系统时区影响
-        reply = _time_greeting_for_hour(datetime.now(_SH_TZ).hour)
-        # 感谢类覆盖时段问候
-        if keyword in _THANK_KEYWORDS:
-            reply = random.choice(_THANK_REPLIES)
-        return self._build_greeting_result(reply)
-
-    def _build_greeting_result(self, reply: str) -> ProcessResult:
-        """构造问候短路结果，语音模式下按 TTS 触发时机决定是否设 tts_pending。
-
-        P1-6 + CodeRabbit F4: 语音模式下问候也要走 TTS 路径，但必须与
-        _build_voice_result 的条件对齐：voice_mode + tts.available +
-        TTS_ASYNC_MODE + is_feature_available("tts")。
-        TTS 时机控制 v2：统一过 _decide_tts_trigger（移除冷却，改为内容适宜性守卫）。
-        """
-        if (TTS_ASYNC_MODE
-                and _decide_tts_trigger(
-                    reply, force_voice=False, voice_mode=self._voice_mode,
-                    tts_available=self.tts.available,
-                    tts_enabled=get_degradation_strategy().is_feature_available("tts"))):
-            return ProcessResult(
-                reply=reply, emotion="greeting",
-                tts_pending=True, tts_text=reply,
-            )
-        return ProcessResult(reply=reply, emotion="greeting")
-
-    async def _try_reunion_greeting(self, user_input: str, user_id: str,
-                                    user_openid: str) -> ProcessResult | None:
-        """reunion_reflection 接线：用户"回来了"检测，生成个性化重聚欢迎。
-
-        - 仅命中"回来了/我回来了"等关键词时触发
-        - idle 时长从最近 session 的 ended_at 计算，last_emotion 从 mental_state 读取
-        - 任何异常回退 None，不阻塞主流程（后续仍走正常 LLM 路径）
-        """
-        text = (user_input or "").strip()
-        if not text or len(text) > 20:
-            return None
-        if not _REUNION_PATTERN.search(text):
-            return None
-        try:
-            # 1. idle_seconds：从最近 session 的 ended_at 计算
-            idle_seconds = 0.0
-            _uid = user_openid or user_id
-            if _uid and getattr(self, "db", None) is not None:
-                try:
-                    cursor = await self.db._conn.execute(
-                        "SELECT ended_at FROM sessions WHERE user_openid=? "
-                        "ORDER BY ended_at DESC LIMIT 1",
-                        (_uid,),
-                    )
-                    row = await cursor.fetchone()
-                    if row and row[0]:
-                        idle_seconds = max(0.0, time.time() - float(row[0]))
-                except Exception:
-                    idle_seconds = 0.0
-            # 2. last_emotion：从 mental_state 的 user_last_emotion 读取
-            last_emotion = ("neutral", 0.0)
-            try:
-                from core.mental_state import get_mental_state_manager_if_exists
-                mgr = get_mental_state_manager_if_exists(user_id=user_id)
-                if mgr is not None:
-                    _label = getattr(mgr.state.S, "user_last_emotion", "")
-                    if _label:
-                        last_emotion = (_label, 0.5)
-            except Exception as e:
-                logger.debug("reunion_reflection.last_emotion_failed", error=str(e))
-            # 3. 生成重聚欢迎消息（内部有降级模板，router 缺失也能返回）
-            from emotion.reunion_reflection import generate_reunion_message
-            reply = await generate_reunion_message(
-                idle_seconds=idle_seconds,
-                last_emotion=last_emotion,
-                router=getattr(self, "router", None),
-                address_term=getattr(self.context, "current_address_term", "爸爸"),
-            )
-            return ProcessResult(reply=reply, emotion="greeting")
-        except Exception:
-            logger.debug("reunion_reflection.failed")
-            return None
 
     async def _run_main_process_path(self, ctx: Any, user_input: Any, clean_input: Any, user_id: Any, source: Any,
                                       user_openid: Any, session_id: Any, status_callback: Any, image_data: Any,
@@ -1872,42 +1606,6 @@ class MessageProcessorMixin:
             del _buf[: len(_buf) - self.REPLY_DEDUP_MAX]
         return reply
 
-    async def _build_voice_result(self, clean_reply: Any, emotion_label: Any, force_voice: Any) -> tuple:
-        """构建语音合成结果。返回 (audio_path, tts_pending, tts_text)。
-
-        优先级：synthesize_voice 工具生成的音频 > force_voice（一次性）> _voice_mode（自动触发，有守卫）
-
-        TTS 时机控制 v2：统一过 _decide_tts_trigger（移除冷却，改为内容适宜性守卫）
-        """
-        # 1. 优先检查 LLM 主动调用 synthesize_voice 工具生成的音频
-        tool_audio = _pending_tts_audio.get()
-        if tool_audio is not None:
-            _pending_tts_audio.set(None)  # 消费后清除，避免泄漏到下一轮
-            logger.info("tts.tool_audio_used", audio_path=str(tool_audio))
-            return tool_audio, False, ""
-
-        # 2. 统一触发决策（替代原 should_generate_voice + 内容守卫 + 冷却守卫三层判定）
-        if not _decide_tts_trigger(
-                clean_reply, force_voice=force_voice, voice_mode=self._voice_mode,
-                tts_available=self.tts.available,
-                tts_enabled=get_degradation_strategy().is_feature_available("tts")):
-            return None, False, ""
-
-        # 3. 生成（异步 pending 或同步合成）
-        audio_path = None
-        tts_pending = False
-        tts_text = ""
-        if TTS_ASYNC_MODE:
-            tts_pending = True
-            tts_text = self._clean_reply(clean_reply)
-        else:
-            try:
-                audio_path = await self.tts.synthesize_xiaoda(
-                    self._clean_reply(clean_reply), emotion=emotion_label)
-            except Exception as e:
-                logger.warning("agent.tts_failed", error=str(e))
-        return audio_path, tts_pending, tts_text
-
     def _parse_verification_result(self, current_result: Any, tools: list[dict] | None) -> tuple:
         """从 LLM 输出中解析 tool_calls、assistant_content、reasoning。"""
         current_tool_calls = None
@@ -2188,42 +1886,6 @@ class MessageProcessorMixin:
         if getattr(self, "_think_mode", False):
             return True, "user_think_mode"
         return False, ""
-
-    def _detect_voice_intent(self, user_input: str) -> str:
-        """检测语音意图：三态返回 'none' / 'on' / 'off'。
-
-        - 'off': 含关闭意图（如"不要发语音了"/"关闭语音"→关语音）
-        - 'on':  含明确"用语音回复"动作意图（如"发语音"/"念给我听"→开语音）
-        - 'none': 无明确语音动作意图
-
-        收紧原则（v2）：必须有"动作意图"才触发 on，单纯提及"语音/声音/说话"不触发。
-        回归案例：用户说"语音识别怎么实现"/"声音大点"/"说话方式怪怪的"被旧关键词
-        "语音"/"声音"/"说话"误匹配 → voice_mode 被永久打开 → TTS 失控。
-        旧案例 id=1993 "不要发语音了"：现 off 关键词优先匹配，避免被 on 的"发语音"误判。
-        """
-        # 强意图：明确的"用语音回复"动作（必须含动作语义：发/用/念/读/说给/开启/打开）
-        on_keywords = [
-            "发语音", "用语音", "语音回复", "语音消息", "语音说",
-            "念给我", "念出来", "读给我听", "说给我听",
-            "开启语音", "打开语音", "语音模式", "开启语音模式",
-            "用声音回复", "用声音说", "语音是开的", "语音打开了",
-            "用tts", "用voice",
-        ]
-        # 关闭意图：完整的 off 关键词（不再依赖"否定词前缀 4 字符"检测，更可靠）
-        off_keywords = [
-            "关闭语音", "语音关闭", "关闭语音模式", "语音是关的", "关掉语音",
-            "不要语音", "不用语音", "别发语音", "停止语音",
-            "不要发语音", "别用语音",
-        ]
-        q = user_input.lower()
-        # off 优先检测（避免"不要发语音了"被 on 的"发语音"误匹配）
-        for kw in off_keywords:
-            if kw in q:
-                return "off"
-        for kw in on_keywords:
-            if kw in q:
-                return "on"
-        return "none"
 
     def _update_mental_state_emotion(self, emotion: dict, user_id: str = "") -> None:
         """将检测到的用户情绪更新到 L/M/S 心理状态模型的 S 层.

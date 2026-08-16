@@ -11,6 +11,10 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
+# Phase 1 拆分：_build_greeting_result 已迁至 agent_core.mixins.greeting，
+# TTS_ASYNC_MODE / get_degradation_strategy 在其内部解析自 greeting 模块
+# 命名空间，patch 目标须指向该模块（message_processor 仅 re-export）。
+
 
 def _make_processor():
     """构造 MessageProcessorMixin 实例（绕过完整初始化）。"""
@@ -32,8 +36,8 @@ def _enable_greeting_shortcut(monkeypatch):
 
 def test_greeting_shortcut_returns_tts_when_all_conditions_met():
     """CodeRabbit F4: voice_mode + tts.available + TTS_ASYNC_MODE + 降级正常 → tts_pending=True。"""
-    with patch("agent_core.message_processor.TTS_ASYNC_MODE", True), \
-         patch("agent_core.message_processor.get_degradation_strategy") as mock_deg:
+    with patch("agent_core.mixins.greeting.TTS_ASYNC_MODE", True), \
+         patch("agent_core.mixins.greeting.get_degradation_strategy") as mock_deg:
         mock_deg.return_value.is_feature_available.return_value = True
         p = _make_processor()
         p._voice_mode = True
@@ -51,8 +55,8 @@ def test_greeting_shortcut_returns_tts_when_all_conditions_met():
 
 def test_greeting_shortcut_no_tts_when_voice_mode_off():
     """语音模式关闭时，问候短路不应触发 TTS（保持现有行为）。"""
-    with patch("agent_core.message_processor.TTS_ASYNC_MODE", True), \
-         patch("agent_core.message_processor.get_degradation_strategy") as mock_deg:
+    with patch("agent_core.mixins.greeting.TTS_ASYNC_MODE", True), \
+         patch("agent_core.mixins.greeting.get_degradation_strategy") as mock_deg:
         mock_deg.return_value.is_feature_available.return_value = True
         p = _make_processor()
         p._voice_mode = False
@@ -69,8 +73,8 @@ def test_greeting_shortcut_no_tts_when_voice_mode_off():
 
 def test_greeting_shortcut_no_tts_when_tts_unavailable():
     """CodeRabbit F4: TTS 引擎不可用时不应设 tts_pending（避免无效合成尝试）。"""
-    with patch("agent_core.message_processor.TTS_ASYNC_MODE", True), \
-         patch("agent_core.message_processor.get_degradation_strategy") as mock_deg:
+    with patch("agent_core.mixins.greeting.TTS_ASYNC_MODE", True), \
+         patch("agent_core.mixins.greeting.get_degradation_strategy") as mock_deg:
         mock_deg.return_value.is_feature_available.return_value = True
         p = _make_processor()
         p._voice_mode = True
@@ -88,8 +92,8 @@ def test_greeting_shortcut_no_tts_when_tts_unavailable():
 
 def test_greeting_shortcut_no_tts_when_degraded():
     """CodeRabbit F4: 降级模式下不应设 tts_pending（绕过降级策略是 bug）。"""
-    with patch("agent_core.message_processor.TTS_ASYNC_MODE", True), \
-         patch("agent_core.message_processor.get_degradation_strategy") as mock_deg:
+    with patch("agent_core.mixins.greeting.TTS_ASYNC_MODE", True), \
+         patch("agent_core.mixins.greeting.get_degradation_strategy") as mock_deg:
         mock_deg.return_value.is_feature_available.return_value = False  # 降级模式
         p = _make_processor()
         p._voice_mode = True
@@ -107,8 +111,8 @@ def test_greeting_shortcut_no_tts_when_degraded():
 
 def test_greeting_shortcut_no_tts_when_async_mode_off():
     """CodeRabbit F4: TTS_ASYNC_MODE=False 时不应设 tts_pending（短路是同步的，无法内联合成）。"""
-    with patch("agent_core.message_processor.TTS_ASYNC_MODE", False), \
-         patch("agent_core.message_processor.get_degradation_strategy") as mock_deg:
+    with patch("agent_core.mixins.greeting.TTS_ASYNC_MODE", False), \
+         patch("agent_core.mixins.greeting.get_degradation_strategy") as mock_deg:
         mock_deg.return_value.is_feature_available.return_value = True
         p = _make_processor()
         p._voice_mode = True
@@ -126,8 +130,8 @@ def test_greeting_shortcut_no_tts_when_async_mode_off():
 
 def test_greeting_shortcut_still_returns_emotion_greeting():
     """修复后 emotion 字段应保持 'greeting'（不破坏现有行为）。"""
-    with patch("agent_core.message_processor.TTS_ASYNC_MODE", True), \
-         patch("agent_core.message_processor.get_degradation_strategy") as mock_deg:
+    with patch("agent_core.mixins.greeting.TTS_ASYNC_MODE", True), \
+         patch("agent_core.mixins.greeting.get_degradation_strategy") as mock_deg:
         mock_deg.return_value.is_feature_available.return_value = True
         p = _make_processor()
         p._voice_mode = False
@@ -141,8 +145,8 @@ def test_greeting_shortcut_still_returns_emotion_greeting():
 
 def test_greeting_shortcut_returns_none_for_non_greeting():
     """非问候输入仍应返回 None（不破坏现有行为）。"""
-    with patch("agent_core.message_processor.TTS_ASYNC_MODE", True), \
-         patch("agent_core.message_processor.get_degradation_strategy") as mock_deg:
+    with patch("agent_core.mixins.greeting.TTS_ASYNC_MODE", True), \
+         patch("agent_core.mixins.greeting.get_degradation_strategy") as mock_deg:
         mock_deg.return_value.is_feature_available.return_value = True
         p = _make_processor()
         p._voice_mode = True  # 即使语音模式开启

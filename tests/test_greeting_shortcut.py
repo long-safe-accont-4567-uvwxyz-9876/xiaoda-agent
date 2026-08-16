@@ -116,7 +116,11 @@ def test_greeting_uses_shanghai_timezone(monkeypatch):
             # 返回上海时间 8:00（早上时段）以触发"早上好"
             return datetime(2026, 7, 21, 8, 0, tzinfo=tz)
 
-    monkeypatch.setattr(mp_module, 'datetime', FakeDateTime)
+    # Phase 1 拆分：_try_greeting_shortcut 已迁至 agent_core.mixins.greeting，
+    # 函数体内的 datetime.now 解析自 greeting 模块命名空间，须 patch 该模块
+    # （message_processor 仅 re-export _SH_TZ，不再持有该函数）。
+    from agent_core.mixins import greeting as greeting_module
+    monkeypatch.setattr(greeting_module, 'datetime', FakeDateTime)
 
     mp = _make_processor()
     result = mp._try_greeting_shortcut("你好", "user1", "qq")
