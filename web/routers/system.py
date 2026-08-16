@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import asyncio
-import hmac
 import json
 import os
 import time
@@ -11,9 +10,9 @@ from typing import Any
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from loguru import logger
 
+from utils.common import DEFAULT_WEBUI_PORT
 from web.routers.auth import get_current_user
 from web.schemas import Envelope, SystemStatus
-from utils.common import DEFAULT_WEBUI_PORT
 
 router = APIRouter(tags=["system"], dependencies=[Depends(get_current_user)])
 # 公开路由（无需认证）：OS 信息不敏感，终端需在 token 未就绪/失效时也能正确探测服务端 OS，
@@ -278,20 +277,11 @@ async def set_permission_mode(body: dict, request: Request) -> Any:
     valid = {m.value for m in PermissionMode}
     if mode not in valid:
         raise HTTPException(400, f"未知模式 {mode}")
-    # GOAT 模式需要二次确认
+    # GOAT 模式需要 confirm 头确认（防误触）
+    # 「登录即主人」：持有有效 token 即为主人，不需要额外的密码二次确认。
+    # （goat/bypass 已不落盘持久化，重启自动回到安全档位，见 permission_manager）
     if mode == "goat" and confirm != "yes":
         raise HTTPException(400, "梭哈模式需要二次确认，请传入 confirm: yes")
-    # 「登录即主人」模型下 token 即主人，而 GOAT 会持久化到磁盘、重启后依然
-    # 全权。已配置 WEBUI_PASSWORD 时必须用登录密码做二次确认（恒时比较），
-    # 防止持有 token 的任何人/恶意脚本单凭 confirm 头就把权限永久拉满。
-    if mode == "goat":
-        webui_password = os.getenv("WEBUI_PASSWORD", "")
-        if webui_password:
-            req_password = body.get("password")
-            if (not isinstance(req_password, str)
-                    or not hmac.compare_digest(req_password, webui_password)):
-                logger.warning("system.permission_mode_goat_password_failed")
-                raise HTTPException(403, "切换到梭哈模式需要 WebUI 登录密码二次确认，请传入 password")
     get_permission_manager().set_mode(mode)
     core = request.app.state.core
     await core.db.insert_audit_log("webui.permission_mode.set", "webui", mode)

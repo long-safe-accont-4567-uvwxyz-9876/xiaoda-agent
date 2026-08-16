@@ -7,7 +7,8 @@
 修复：
 1. goat/bypass 不落盘持久化（重启回到默认 DEFAULT 档）
 2. 加载持久化文件时若发现 goat/bypass，降级为 DEFAULT 并告警（历史残留清理）
-3. WebUI API 切换到 goat 时，设置了 WEBUI_PASSWORD 的情况下必须回传正确密码
+
+「登录即主人」：持有有效 token 即为主人，切 goat 只需 confirm:"yes"，不要求密码。
 """
 import sys
 from pathlib import Path
@@ -19,7 +20,9 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from security.permission_manager import (
-    PermissionManager, PermissionMode, _load_persisted_mode, _persist_mode,
+    PermissionManager,
+    PermissionMode,
+    _load_persisted_mode,
 )
 
 
@@ -67,6 +70,7 @@ def test_stale_goat_persisted_file_downgraded(tmp_path, monkeypatch):
 
 def _make_app():
     from unittest.mock import AsyncMock, MagicMock
+
     from web.routers.system import router as system_router
 
     app = FastAPI()
@@ -79,33 +83,9 @@ def _make_app():
     return app
 
 
-def test_goat_requires_password_when_set(monkeypatch):
+def test_goat_confirm_only_succeeds_even_with_password_set(monkeypatch):
+    """登录即主人：设置 WEBUI_PASSWORD 后，confirm:"yes" 即可切 goat（无密码门槛）。"""
     monkeypatch.setenv("WEBUI_PASSWORD", "correct-horse-battery")
-    app = _make_app()
-    client = TestClient(app)
-    token, _ = __import__("web.routers.auth", fromlist=["_issue_token"])._issue_token()
-    headers = {"Authorization": f"Bearer {token}"}
-
-    # 缺密码 → 403（密码二次确认失败）
-    r = client.put("/api/v1/system/permission-mode",
-                   json={"mode": "goat", "confirm": "yes"}, headers=headers)
-    assert r.status_code == 403
-    # 错误密码 → 403
-    r = client.put("/api/v1/system/permission-mode",
-                   json={"mode": "goat", "confirm": "yes", "password": "wrong"},
-                   headers=headers)
-    assert r.status_code == 403
-    # 正确密码 → 200
-    r = client.put("/api/v1/system/permission-mode",
-                   json={"mode": "goat", "confirm": "yes",
-                         "password": "correct-horse-battery"},
-                   headers=headers)
-    assert r.status_code == 200
-
-
-def test_goat_password_not_required_when_no_password_set(monkeypatch):
-    """未设置 WEBUI_PASSWORD（本地回环免密模式）时保持原 confirm 二次确认"""
-    monkeypatch.delenv("WEBUI_PASSWORD", raising=False)
     app = _make_app()
     client = TestClient(app)
     token, _ = __import__("web.routers.auth", fromlist=["_issue_token"])._issue_token()

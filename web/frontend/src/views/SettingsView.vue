@@ -32,7 +32,6 @@ const showRestart = ref(false)
 const restartConfirmText = ref('')
 const showGoatConfirm = ref(false)
 const goatConfirmChecked = ref(false)
-const goatPassword = ref('')
 // 修改登录密码弹窗
 const showChangePwd = ref(false)
 const changePwdOld = ref('')
@@ -104,7 +103,6 @@ async function setPermMode(mode: string) {
   if (mode === 'goat') {
     showGoatConfirm.value = true
     goatConfirmChecked.value = false
-    goatPassword.value = ''
     return
   }
   try {
@@ -117,8 +115,7 @@ async function setPermMode(mode: string) {
 async function confirmGoatMode() {
   if (!goatConfirmChecked.value) return
   try {
-    // 后端在配置了 WEBUI_PASSWORD 时要求 password 二次确认（未配置时忽略该字段）
-    await put('/system/permission-mode', { mode: 'goat', confirm: 'yes', password: goatPassword.value })
+    await put('/system/permission-mode', { mode: 'goat', confirm: 'yes' })
     permissionMode.value = 'goat'
     showGoatConfirm.value = false
     message.success(t('settings.goatEnabled'))
@@ -526,13 +523,6 @@ const permLabel = computed<Record<string, string>>(() => ({
       <n-checkbox v-model:checked="goatConfirmChecked">
         {{ t('settings.goatConfirmCheckbox') }}
       </n-checkbox>
-      <n-input
-        v-model:value="goatPassword"
-        type="password"
-        show-password-on="click"
-        :placeholder="t('login.passwordPlaceholder')"
-        style="margin-top: 12px"
-      />
       <template #footer>
         <div style="display:flex; justify-content:flex-end; gap:10px">
           <n-button @click="showGoatConfirm = false">{{ t('cancel') }}</n-button>

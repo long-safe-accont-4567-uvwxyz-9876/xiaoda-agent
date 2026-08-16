@@ -1,9 +1,7 @@
-"""web/routers/system.py — set_permission_mode GOAT 密码二次确认测试。
+"""web/routers/system.py — set_permission_mode 权限切换测试（登录即主人）。
 
-「登录即主人」模型下，持有有效 token 的任何人都是主人，而 GOAT 模式会持久化
-到磁盘（重启后依然全权）。配置了 WEBUI_PASSWORD 时切换到 goat 必须用登录密码
-二次确认（hmac 恒时比较），否则 403；未配置密码（本机免密模式）保持原有
-confirm:"yes" 机制不变；切回 default/strict 等降权模式不需要密码。
+信任模型：持有有效 token 的人就是主人，切 goat 只需 confirm:"yes" 防误触头，
+不需要额外的密码二次确认（goat/bypass 已不落盘持久化，重启自动回安全档位）。
 """
 import sys
 from pathlib import Path
@@ -60,52 +58,33 @@ def without_password(monkeypatch):
     monkeypatch.delenv("WEBUI_PASSWORD", raising=False)
 
 
-def test_goat_without_password_field_403_when_webui_password_set(with_password, client):
-    """有密码环境：切 goat 缺 password 字段 → 403，模式不变。"""
-    before = get_permission_manager().mode
+def test_goat_with_confirm_succeeds_even_with_password_set(with_password, client):
+    """登录即主人：设置了 WEBUI_PASSWORD 时，confirm:"yes" 即可切 goat（无需密码）。"""
     r = _put(client, {"mode": "goat", "confirm": "yes"})
-    assert r.status_code == 403
-    assert get_permission_manager().mode == before
-    assert client.app.state.core.db.insert_audit_log.await_count == 0
-
-
-def test_goat_wrong_password_403(with_password, client):
-    """有密码环境：错误密码 → 403，模式不变。"""
-    before = get_permission_manager().mode
-    r = _put(client, {"mode": "goat", "confirm": "yes", "password": "wrong-password"})
-    assert r.status_code == 403
-    assert get_permission_manager().mode == before
-    assert client.app.state.core.db.insert_audit_log.await_count == 0
-
-
-def test_goat_correct_password_200_and_mode_takes_effect(with_password, client):
-    """有密码环境：正确密码 → 200 且模式生效，审计日志保持。"""
-    r = _put(client, {"mode": "goat", "confirm": "yes", "password": PASSWORD})
     assert r.status_code == 200, r.text
     assert r.json()["data"]["mode"] == "goat"
     assert get_permission_manager().mode == PermissionMode.GOAT
-    # 保持现有审计行为
     client.app.state.core.db.insert_audit_log.assert_awaited()
     assert client.app.state.core.db.insert_audit_log.await_args.args[0] == "webui.permission_mode.set"
 
 
-def test_goat_still_requires_confirm_even_with_correct_password(with_password, client):
-    """正确密码不能替代 confirm:"yes" 的二次确认。"""
-    before = get_permission_manager().mode
-    r = _put(client, {"mode": "goat", "password": PASSWORD})
-    assert r.status_code == 400
-    assert get_permission_manager().mode == before
-
-
-def test_goat_confirm_only_200_when_no_webui_password(without_password, client):
-    """无密码环境（本机免密模式）：保持原有 confirm:"yes" 机制。"""
+def test_goat_without_password_env_still_confirm_only(without_password, client):
+    """无密码环境（本机免密模式）行为一致：confirm:"yes" 即可。"""
     r = _put(client, {"mode": "goat", "confirm": "yes"})
     assert r.status_code == 200, r.text
     assert get_permission_manager().mode == PermissionMode.GOAT
 
 
-def test_switch_to_default_needs_no_password(with_password, client):
-    """降权切回 default 不需要密码/confirm。"""
+def test_goat_without_confirm_still_400(with_password, client):
+    """缺少 confirm:"yes" 防误触头依旧 400，模式不变。"""
+    before = get_permission_manager().mode
+    r = _put(client, {"mode": "goat"})
+    assert r.status_code == 400
+    assert get_permission_manager().mode == before
+
+
+def test_switch_to_default_needs_no_confirm(with_password, client):
+    """降权切回 default 不需要 confirm。"""
     get_permission_manager().set_mode(PermissionMode.STRICT)
     r = _put(client, {"mode": "default"})
     assert r.status_code == 200, r.text
@@ -114,5 +93,5 @@ def test_switch_to_default_needs_no_password(with_password, client):
 
 def test_unknown_mode_still_400(with_password, client):
     """未知模式依旧 400（回归保护）。"""
-    r = _put(client, {"mode": "supergoat", "confirm": "yes", "password": PASSWORD})
+    r = _put(client, {"mode": "supergoat", "confirm": "yes"})
     assert r.status_code == 400
