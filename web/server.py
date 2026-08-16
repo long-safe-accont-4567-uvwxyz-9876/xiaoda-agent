@@ -616,7 +616,6 @@ async def lifespan(app: FastAPI) -> AsyncIterator[Any]:
         # 预热：服务启动时后台 HEAD 请求建立连接，首次对话连接已热（0s 握手）。
         # keepalive_expiry=300s 保持连接热，正常对话间隔内不过期。
 
-        import asyncio as _asyncio
         from core.background_tasks import _spawn
         _spawn(_prewarm_connections())
         _spawn(_prewarm_local_singletons(core))

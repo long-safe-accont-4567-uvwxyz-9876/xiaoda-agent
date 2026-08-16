@@ -9,7 +9,6 @@
 from __future__ import annotations
 from typing import Any, ClassVar
 
-import hashlib
 import json
 import shutil
 import sys
