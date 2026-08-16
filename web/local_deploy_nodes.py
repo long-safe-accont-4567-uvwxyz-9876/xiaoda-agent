@@ -495,6 +495,16 @@ async def build_status(core: Any, vs: Any, cfg: Any) -> list[dict[str, Any]]:
     return result
 
 
+def _try_set_backend(obj: Any, backend: str, local_model: str | None = None) -> None:
+    """若对象有 set_backend 方法，则热切换其后端；否则静默跳过。
+
+    统一 apply_to_runtime 各节点「获取对象 → 存在且有 set_backend → 切换」
+    的重复模式（对象/模块/引擎实例均适用）。
+    """
+    if obj is not None and hasattr(obj, "set_backend"):
+        obj.set_backend(backend, local_model)
+
+
 def apply_to_runtime(core: Any, vs: Any, node_id: str, backend: str, app: Any = None,
                      local_model: str | None = None) -> None:
     """将节点后端选择立即应用到运行时对象（热生效，无重启）。
@@ -511,33 +521,22 @@ def apply_to_runtime(core: Any, vs: Any, node_id: str, backend: str, app: Any = 
             return
         if node_id == "reranker":
             memory = getattr(core, "memory", None)
-            service = getattr(memory, "_reranker_service", None)
-            if service is not None and hasattr(service, "set_backend"):
-                service.set_backend(backend)
+            _try_set_backend(getattr(memory, "_reranker_service", None), backend, local_model)
             return
         if node_id == "query_transform":
             memory = getattr(core, "memory", None)
-            qt = getattr(memory, "_query_transformer", None)
-            if qt is not None and hasattr(qt, "set_backend"):
-                qt.set_backend(backend, local_model)
+            _try_set_backend(getattr(memory, "_query_transformer", None), backend, local_model)
             return
         if node_id == "instinct":
-            manager = getattr(core, "instinct_manager", None)
-            if manager is not None and hasattr(manager, "set_backend"):
-                manager.set_backend(backend, local_model)
+            _try_set_backend(getattr(core, "instinct_manager", None), backend, local_model)
             return
         if node_id == "error_rule":
-            pipeline = getattr(core, "error_pipeline", None)
-            if pipeline is not None and hasattr(pipeline, "set_backend"):
-                pipeline.set_backend(backend, local_model)
+            _try_set_backend(getattr(core, "error_pipeline", None), backend, local_model)
             return
         if node_id == "kg_extract":
             kg = getattr(core, "knowledge_graph", None)
-            if kg is not None and hasattr(kg, "set_backend"):
-                kg.set_backend(backend, local_model)
-            kg_v2 = getattr(kg, "_kg_v2", None) if kg is not None else None
-            if kg_v2 is not None and hasattr(kg_v2, "set_backend"):
-                kg_v2.set_backend(backend, local_model)
+            _try_set_backend(kg, backend, local_model)
+            _try_set_backend(getattr(kg, "_kg_v2", None) if kg is not None else None, backend, local_model)
             return
         if node_id == "asr":
             # ASR 每次请求读取配置，无需运行时对象
@@ -546,46 +545,39 @@ def apply_to_runtime(core: Any, vs: Any, node_id: str, backend: str, app: Any = 
         # ── 内在世界 LLM 节点 ──
         if node_id == "emotion_llm":
             from emotion import emotion_llm
-            emotion_llm.set_backend(backend, local_model)
+            _try_set_backend(emotion_llm, backend, local_model)
             return
         if node_id == "reunion":
             from emotion import reunion_reflection
-            reunion_reflection.set_backend(backend, local_model)
+            _try_set_backend(reunion_reflection, backend, local_model)
             return
         if node_id == "portrait":
-            pm = getattr(core, "portrait_manager", None)
-            if pm is not None and hasattr(pm, "set_backend"):
-                pm.set_backend(backend, local_model)
+            _try_set_backend(getattr(core, "portrait_manager", None), backend, local_model)
             return
         if node_id == "memory_distill":
             memory = getattr(core, "memory", None)
-            distiller = getattr(memory, "distiller", None)
-            if distiller is not None and hasattr(distiller, "set_backend"):
-                distiller.set_backend(backend, local_model)
+            _try_set_backend(getattr(memory, "distiller", None), backend, local_model)
             return
         if node_id == "dream":
             from core.dream_engine_v2 import get_dream_engine_v2
-            get_dream_engine_v2().set_backend(backend, local_model)
+            _try_set_backend(get_dream_engine_v2(), backend, local_model)
             return
         if node_id == "nudge":
             try:
                 import qq_bot_adapter
                 bot = getattr(qq_bot_adapter, "_ACTIVE_BOT", None)
                 nudge = getattr(bot, "nudge_engine", None) if bot is not None else None
-                if nudge is not None and hasattr(nudge, "set_backend"):
-                    nudge.set_backend(backend, local_model)
+                _try_set_backend(nudge, backend, local_model)
             except (ImportError, AttributeError):
                 logger.debug("local_deploy.nudge_not_available")
             return
         if node_id == "spontaneous_recall":
             obj = getattr(app.state, "spontaneous_recall", None) if app is not None else None
-            if obj is not None and hasattr(obj, "set_backend"):
-                obj.set_backend(backend, local_model)
+            _try_set_backend(obj, backend, local_model)
             return
         if node_id == "growth":
             obj = getattr(app.state, "growth_narrative", None) if app is not None else None
-            if obj is not None and hasattr(obj, "set_backend"):
-                obj.set_backend(backend, local_model)
+            _try_set_backend(obj, backend, local_model)
             return
     except Exception as e:  # noqa: BLE001
         logger.warning("local_deploy.node_apply_failed node={} error={}", node_id, str(e))
