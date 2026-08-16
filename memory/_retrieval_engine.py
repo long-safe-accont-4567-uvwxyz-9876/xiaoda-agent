@@ -25,6 +25,7 @@ from memory._memory_utils import (
     reciprocal_rank_fusion,
 )
 from .fsrs_model import MemoryState, MemoryPhase, ReinforcementSignal, S_INIT
+from memory._retrieval_engine_entity import EntityKgBoostMixin
 
 
 class RecallChannels(NamedTuple):
@@ -43,7 +44,7 @@ class RecallChannels(NamedTuple):
     kg_v2_items: list
 
 
-class RetrievalEngine:
+class RetrievalEngine(EntityKgBoostMixin):
     """检索引擎：承载 MemoryManager 的检索公开/私有方法逻辑。
 
     构造时注入 MemoryManager 实例（mm），所有属性与方法访问都经由 self._mm
@@ -2134,111 +2135,3 @@ class RetrievalEngine:
         except Exception as e:
             logger.warning("memory.batch_touch_error", error=str(e))
 
-    async def _apply_kg_context_enhance(self, results: list[dict]) -> None:
-        """KG 上下文增强：对 top-2 记忆提取实体并补充相关知识点。"""
-        if not (self._mm.kg and results):
-            return
-        try:
-            entity_names: list[str] = []
-            for r in results[:2]:
-                summary = r.get("summary", "")
-                candidates = await asyncio.to_thread(_extract_entities, summary)
-                for word in candidates:
-                    if word not in ("用户", "助手", "人家"):
-                        entity_names.append(word)
-            entity_names = list(set(entity_names))[:3]
-            if entity_names:
-                knowledge = await self._mm.kg.get_related_knowledge(entity_names)
-                if knowledge:
-                    kg_context = await self._mm.kg.format_knowledge_context(knowledge)
-                    if kg_context and results:
-                        results[0]["kg_context"] = kg_context
-        except Exception as e:
-            logger.debug("memory.kg_expand_failed", error=str(e))
-
-    async def _entity_recall(self, query: str, scope: Any,
-                              recall_limit: int = 50) -> list[dict]:
-        """第6路召回：通过实体名反查记忆（mem0 SPEC 优化）。
-
-        流程：
-        1. EntityExtractor 规则快抽查询中的实体名（<10ms，不触发 LLM）
-        2. EntityStore.recall_by_entities 反查关联记忆
-
-        Args:
-            query: 用户查询
-            scope: Scope 对象
-            recall_limit: 召回上限
-        Returns:
-            记忆 dict 列表。失败返回空列表（降级）。
-        """
-        if not self._mm.entity_store or not self._mm.entity_extractor:
-            return []
-        try:
-            entities = self._mm.entity_extractor._rule_based_extract(query)
-            if not entities:
-                return []
-            entity_names = [e.name for e in entities]
-            results = await self._mm.entity_store.recall_by_entities(
-                entity_names, scope=scope, limit=recall_limit
-            )
-            for r in results:
-                r["entity_recall"] = True
-            return results
-        except Exception as e:
-            logger.debug("memory.entity_recall_failed", error=str(e))
-            return []
-
-    async def _apply_entity_boost(self, query: str, candidates: list[dict],
-                                   scope: Any) -> list[dict]:
-        """精排阶段计算 Entity Boost 并加分（mem0 SPEC 优化）。
-
-        对每个候选记忆，计算其关联实体与查询实体的 boost 值，
-        加到 rrf_score 上。
-
-        Args:
-            query: 用户查询
-            candidates: 候选记忆列表（含 rrf_score）
-            scope: Scope 对象
-        Returns:
-            加分后的候选列表（按 rrf_score 降序）
-        """
-        if not self._mm.entity_extractor or not self._mm.entity_store:
-            return candidates
-        if not candidates:
-            return candidates
-        try:
-            query_entities_list = await self._mm.entity_extractor.extract(query, importance=0.3)
-            query_entity_names = {e.name for e in query_entities_list}
-            if not query_entity_names:
-                return candidates
-
-            now = time.time()
-            for candidate in candidates:
-                mem_id = candidate.get("id")
-                if mem_id is None:
-                    continue
-                boost = await self._mm.entity_store.get_query_entities_boost(
-                    mem_id, query_entity_names, now=now
-                )
-                if boost > 0:
-                    candidate["rrf_score"] = candidate.get("rrf_score", 0.0) + boost
-                    candidate["entity_boost"] = boost
-
-            candidates.sort(key=lambda x: x.get("rrf_score", 0.0), reverse=True)
-            return candidates
-        except Exception as e:
-            logger.debug("memory.apply_entity_boost_failed", error=str(e))
-            return candidates
-
-    async def _hybrid_fts_search_scoped(self, query: str, k: int,
-                                         scope: Any, is_raw: int | None) -> list[dict]:
-        """FTS 检索 + scope 过滤（mem0 SPEC 优化）"""
-        if not self._mm.memory:
-            return []
-        try:
-            return await self._mm.memory.search_memories_fts_scoped(
-                query, scope=scope, limit=k * 2, is_raw=is_raw
-            )
-        except Exception as e:
-            logger.warning("memory.fts_scoped_search_failed", error=str(e))
-            return []
