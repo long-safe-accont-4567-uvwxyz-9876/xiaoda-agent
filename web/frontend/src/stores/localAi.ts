@@ -163,14 +163,23 @@ export const useLocalAiStore = defineStore('localAi', () => {
     loading.value = true
     error.value = null
     try {
-      const [nextDevices, nextCatalog, nextModels, nextDownloads, nextInstances, storage] = await Promise.all([
+      // 本地数据（devices/models/downloads/instances/storage）并行加载
+      const [nextDevices, nextModels, nextDownloads, nextInstances, storage] = await Promise.all([
         localAiApi.loadDevices(),
-        localAiApi.loadCatalog(catalogAdvanced.value),
         localAiApi.loadModels(),
         localAiApi.loadDownloads(),
         localAiApi.loadInstances(),
         localAiApi.loadDefaultStorage(),
       ])
+      if (generation !== loadGeneration) return
+      // catalog 依赖外部 HuggingFace/ModelScope API（会限流/超时），单独降级：
+      // 失败仅置空目录并记录错误，不拖垮本地数据（devices/models/instances 等）
+      let nextCatalog: CatalogModel[] = []
+      try {
+        nextCatalog = await localAiApi.loadCatalog(catalogAdvanced.value)
+      } catch (catalogErr) {
+        error.value = catalogErr instanceof Error ? catalogErr.message : String(catalogErr)
+      }
       if (generation !== loadGeneration) return
       if (currentDeviceGeneration === deviceGeneration) {
         devicesById.value = reconcileSnapshot(nextDevices, devicesById.value, loadingUpdates.devices)
