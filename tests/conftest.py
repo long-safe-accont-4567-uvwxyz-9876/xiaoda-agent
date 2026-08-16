@@ -88,3 +88,30 @@ def _restore_module_global_state():
     yield
     if _cfg_mod.DEFAULT_PROVIDER != _orig_default_provider:
         _cfg_mod.set_default_provider(_orig_default_provider)
+
+
+@pytest.fixture(scope="session", autouse=True)
+def _stop_leaked_aiosqlite_connections():
+    """兜底停止泄漏的 aiosqlite 连接工作线程（防解释器退出挂死）。
+
+    根因：测试创建 aiosqlite.connect(":memory:") 后未 close（如
+    test_memory_index_reconcile._make_memory_db），每个泄漏连接留下一个
+    非 daemon 工作线程，Python 退出时 threading._shutdown 永久等待 ——
+    表现为测试进程挂死（faulthandler 栈：aiosqlite/core.py
+    _connection_worker_thread）。conn.stop() 是同步且线程安全的停止方式
+    （与 aiosqlite.__del__ 同路径），无需事件循环。
+
+    session 级一次性清理：gc 全堆扫描成本高，逐测试执行会把全量回归
+    从 ~3.5 分钟拖到 15+ 分钟；泄漏线程只在解释器退出时致命，
+    结束时统一 stop 即可。
+    """
+    yield
+    import gc
+    import aiosqlite as _aiosqlite
+    gc.collect()  # 打破引用循环，让可回收对象先走 __del__（自带 stop）
+    for obj in gc.get_objects():
+        if isinstance(obj, _aiosqlite.Connection):
+            try:
+                obj.stop()
+            except Exception:
+                pass
