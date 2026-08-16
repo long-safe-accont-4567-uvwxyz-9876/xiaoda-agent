@@ -179,5 +179,7 @@ class TestTruncationDetection:
         source = inspect.getsource(ModelRouter._handle_route_response)
         assert "finish_reason" in source, \
             "_handle_route_response 应检查 finish_reason"
-        assert "truncated_by_max_tokens" in source, \
+        # 截断告警日志已随 length 重试逻辑抽至 _retry_truncated_content
+        retry_source = inspect.getsource(ModelRouter._retry_truncated_content)
+        assert "truncated_by_max_tokens" in retry_source, \
             "应有 truncated_by_max_tokens 告警日志"

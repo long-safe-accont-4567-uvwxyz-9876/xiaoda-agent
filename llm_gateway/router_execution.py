@@ -536,70 +536,9 @@ class ExecutionMixin:
         if finish_reason and finish_reason != "stop":
             content_len = len(content)
             if finish_reason == "length":
-                logger.warning("llm.truncated_by_max_tokens",
-                               model=model, task=task_type,
-                               content_len=content_len,
-                               finish_reason=finish_reason)
-                # 重试机制保留：使用 assistant-prefill 续写（不追加 user message）
-                # 关键：不追加 "请继续完成你的回复" 等 user message，
-                #       避免污染上下文（LLM 会在后续轮次回应这些元词汇）
-                # Feature flag: TRUNCATION_RETRY_DERECURSE（默认 true）
-                _derecurse = os.getenv("TRUNCATION_RETRY_DERECURSE", "true").lower() in ("true", "1", "yes")
-                # CodeRabbit #6 修复：加 messages 非空检查（防御性编程）
-                # _handle_route_response 的 messages 参数是 list[dict] | None = None
-                # 虽然 _route_with_retry 签名是非 Optional，但防御性检查避免潜在 None 触发 AttributeError
-                if messages and content and len(content) > 10:
-                    _retry_max_tokens = max_tokens * 2 if max_tokens else None
-                    for _retry_round in range(2):  # 最多 2 轮重试
-                        try:
-                            retry_messages = messages.copy()
-                            # assistant-prefill：追加已有内容，让 LLM 从此处续写
-                            retry_messages.append({"role": "assistant", "content": content})
-                            # 注意：不追加任何 user message，避免"请继续"prompt 污染上下文
-                            if _derecurse:
-                                # 新路径：直接调底层，不递归 route()，返回原始 response
-                                retry_response = await self._route_for_continuation(
-                                    task_type, retry_messages, temperature=temperature,
-                                    max_tokens=_retry_max_tokens,
-                                    user_openid=user_openid, session_id=session_id,
-                                )
-                                retry_content = ""
-                                _retry_finish = None
-                                if retry_response is not None:
-                                    _choices = getattr(retry_response, "choices", None) or []
-                                    if _choices:
-                                        retry_content = getattr(_choices[0].message, "content", "") or ""
-                                        _retry_finish = getattr(_choices[0], "finish_reason", None)
-                            else:
-                                # 旧路径（兼容回退）：递归调用 route()
-                                retry_result = await self.route(
-                                    task_type, retry_messages, temperature=temperature,
-                                    max_tokens=_retry_max_tokens,
-                                    user_openid=user_openid, session_id=session_id,
-                                )
-                                retry_content = retry_result if isinstance(retry_result, str) else (retry_result.choices[0].message.content or "")
-                                _retry_finish = getattr(retry_result, "choices", [{}])
-                                _retry_finish = getattr(_retry_finish[0], "finish_reason", None) if _retry_finish else None
-                            if retry_content and len(retry_content) > 5:
-                                content, _merge_action = merge_continuation(
-                                    content, retry_content, assume_tail=True,
-                                )
-                                logger.info("llm.truncated_retry_success",
-                                            final_len=len(content), model=model,
-                                            retry_round=_retry_round + 1,
-                                            finish_reason=_retry_finish,
-                                            derecurse=_derecurse,
-                                            merge_action=_merge_action,
-                                            method="assistant_prefill")
-                                # 检查是否仍然截断（基于真实 finish_reason 判断）
-                                if _retry_finish != "length":
-                                    break  # 不再截断，退出重试
-                            else:
-                                break  # 无内容，退出
-                        except Exception as e:
-                            logger.warning("llm.truncated_retry_failed", error=str(e), model=model,
-                                           retry_round=_retry_round + 1)
-                            break
+                content = await self._retry_truncated_content(
+                    content, model, task_type, messages, temperature, max_tokens,
+                    user_openid, session_id)
             elif finish_reason == "content_filter":
                 logger.warning("llm.content_filtered",
                                model=model, task=task_type,
@@ -639,6 +578,79 @@ class ExecutionMixin:
             from utils.text_utils import strip_reasoning
             content = strip_reasoning(content)
 
+        return content
+
+    async def _retry_truncated_content(self, content: str, model: str, task_type: str,
+                                       messages: list[dict] | None, temperature: float | None,
+                                       max_tokens: int | None, user_openid: str,
+                                       session_id: str) -> str:
+        """length 截断时用 assistant-prefill 续写（去递归化，最多 2 轮）。
+
+        P0 重构（用户要求"不许截断" + "重试机制保留"）：
+        重试不追加 user message（避免"请继续"prompt 污染上下文），改用
+        assistant-prefill（追加已有内容让 LLM 续写），走 _route_for_continuation
+        去递归化。最多 2 轮。
+        """
+        content_len = len(content)
+        logger.warning("llm.truncated_by_max_tokens",
+                       model=model, task=task_type,
+                       content_len=content_len,
+                       finish_reason="length")
+        # Feature flag: TRUNCATION_RETRY_DERECURSE（默认 true）
+        _derecurse = os.getenv("TRUNCATION_RETRY_DERECURSE", "true").lower() in ("true", "1", "yes")
+        # CodeRabbit #6 修复：加 messages 非空检查（防御性编程）
+        if messages and content and len(content) > 10:
+            _retry_max_tokens = max_tokens * 2 if max_tokens else None
+            for _retry_round in range(2):  # 最多 2 轮重试
+                try:
+                    retry_messages = messages.copy()
+                    # assistant-prefill：追加已有内容，让 LLM 从此处续写
+                    retry_messages.append({"role": "assistant", "content": content})
+                    # 注意：不追加任何 user message，避免"请继续"prompt 污染上下文
+                    if _derecurse:
+                        # 新路径：直接调底层，不递归 route()，返回原始 response
+                        retry_response = await self._route_for_continuation(
+                            task_type, retry_messages, temperature=temperature,
+                            max_tokens=_retry_max_tokens,
+                            user_openid=user_openid, session_id=session_id,
+                        )
+                        retry_content = ""
+                        _retry_finish = None
+                        if retry_response is not None:
+                            _choices = getattr(retry_response, "choices", None) or []
+                            if _choices:
+                                retry_content = getattr(_choices[0].message, "content", "") or ""
+                                _retry_finish = getattr(_choices[0], "finish_reason", None)
+                    else:
+                        # 旧路径（兼容回退）：递归调用 route()
+                        retry_result = await self.route(
+                            task_type, retry_messages, temperature=temperature,
+                            max_tokens=_retry_max_tokens,
+                            user_openid=user_openid, session_id=session_id,
+                        )
+                        retry_content = retry_result if isinstance(retry_result, str) else (retry_result.choices[0].message.content or "")
+                        _retry_finish = getattr(retry_result, "choices", [{}])
+                        _retry_finish = getattr(_retry_finish[0], "finish_reason", None) if _retry_finish else None
+                    if retry_content and len(retry_content) > 5:
+                        content, _merge_action = merge_continuation(
+                            content, retry_content, assume_tail=True,
+                        )
+                        logger.info("llm.truncated_retry_success",
+                                    final_len=len(content), model=model,
+                                    retry_round=_retry_round + 1,
+                                    finish_reason=_retry_finish,
+                                    derecurse=_derecurse,
+                                    merge_action=_merge_action,
+                                    method="assistant_prefill")
+                        # 检查是否仍然截断（基于真实 finish_reason 判断）
+                        if _retry_finish != "length":
+                            break  # 不再截断，退出重试
+                    else:
+                        break  # 无内容，退出
+                except Exception as e:
+                    logger.warning("llm.truncated_retry_failed", error=str(e), model=model,
+                                   retry_round=_retry_round + 1)
+                    break
         return content
 
     async def _handle_route_exception(self, e: Exception, provider: str,
