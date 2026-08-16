@@ -2161,7 +2161,7 @@ class MessageProcessorMixin:
             # 取舍：降级时 stream=False，把流式退化为一次性返回。
             # 原因：此处再消费一个 fallback provider 的流对象需要重复 stall timeout/finish_reason
             # 检测逻辑，复杂且易错；非流式返回用户感知仅是「这次没有逐字效果」，可靠性优先。
-            fb_result = await self.router._try_fallback_chain(
+            fb_result = await self.router.fallback_chat(
                 e, task_type, messages,
                 kwargs.get("temperature", 0.7),
                 False,

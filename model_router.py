@@ -1336,6 +1336,18 @@ class ModelRouter:
             return self._agnes_client
         raise ValueError(f"unsupported builtin provider: {provider}")
 
+    async def fallback_chat(self, e: Exception, task_type: str,
+                            messages: list[dict], temperature: float,
+                            stream: bool, tools: list[dict] | None,
+                            tool_choice: str | None, timeout: int,
+                            user_openid: str, session_id: str,
+                            extra_headers: dict | None,
+                            original_max_tokens: int | None = None) -> str | object | None:
+        """公开别名：跨模块调用 _try_fallback_chain 的稳定入口（替代私有方法白盒依赖）。"""
+        return await self._try_fallback_chain(
+            e, task_type, messages, temperature, stream, tools, tool_choice,
+            timeout, user_openid, session_id, extra_headers, original_max_tokens)
+
     async def _try_fallback_chain(self, e: Exception, task_type: str,
                                   messages: list[dict], temperature: float,
                                   stream: bool, tools: list[dict] | None,
@@ -2624,3 +2636,21 @@ class ModelRouter:
         rc = _reasoning_content_var.get("")
         _reasoning_content_var.set("")
         return rc if rc else None
+
+# ── 全局单例工厂 ──────────────────────────────────────────────
+# core/dream_engine_v2 与 emotion/emotion_llm 的 local 推理路径需要共享一个
+# ModelRouter，但两者都不是 AgentCore 持有方。此前它们引用不存在的
+# get_model_router()（潜伏 ImportError 死路径，调用方 try/except 后静默降级
+# 为 None）。补上懒加载单例，修复死路径。
+_model_router_singleton: ModelRouter | None = None
+_model_router_lock = threading.Lock()
+
+
+def get_model_router() -> ModelRouter:
+    """获取全局 ModelRouter 单例（懒加载）。"""
+    global _model_router_singleton
+    if _model_router_singleton is None:
+        with _model_router_lock:
+            if _model_router_singleton is None:
+                _model_router_singleton = ModelRouter()
+    return _model_router_singleton

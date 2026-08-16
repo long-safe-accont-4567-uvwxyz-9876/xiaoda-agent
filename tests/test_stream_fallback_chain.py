@@ -1,9 +1,9 @@
 """流式调用接入跨 Provider 降级链的验证测试。
 
 验证 _stream_llm_response 在主 Provider 流式失败时：
-(a) 无部分内容 → 走 _try_fallback_chain，成功则直接返回，route 不被调用
-(b) _try_fallback_chain 返回 None → 回落到 route()
-(c) 有部分内容 → 返回带中断提示的部分内容，_try_fallback_chain 不被调用（避免重复内容）
+(a) 无部分内容 → 走 fallback_chat，成功则直接返回，route 不被调用
+(b) fallback_chat 返回 None → 回落到 route()
+(c) 有部分内容 → 返回带中断提示的部分内容，fallback_chat 不被调用（避免重复内容）
 """
 from __future__ import annotations
 
@@ -46,7 +46,7 @@ async def test_no_partial_returns_fallback_text():
     """(a) 无部分内容时返回 fallback 文本，route 不被调用。"""
     router = MagicMock()
     router.chat_stream = _make_raising_stream()
-    router._try_fallback_chain = AsyncMock(return_value="fallback text")
+    router.fallback_chat = AsyncMock(return_value="fallback text")
     router.route = AsyncMock(return_value="route text")
     processor = _build_processor(router)
 
@@ -61,16 +61,16 @@ async def test_no_partial_returns_fallback_text():
         )
 
     assert result == "fallback text"
-    router._try_fallback_chain.assert_awaited_once()
+    router.fallback_chat.assert_awaited_once()
     router.route.assert_not_called()
 
 
 @pytest.mark.asyncio
 async def test_fallback_returns_none_falls_back_to_route():
-    """(b) _try_fallback_chain 返回 None 时回落到 route()。"""
+    """(b) fallback_chat 返回 None 时回落到 route()。"""
     router = MagicMock()
     router.chat_stream = _make_raising_stream()
-    router._try_fallback_chain = AsyncMock(return_value=None)
+    router.fallback_chat = AsyncMock(return_value=None)
     router.route = AsyncMock(return_value="route text")
     processor = _build_processor(router)
 
@@ -81,16 +81,16 @@ async def test_fallback_returns_none_falls_back_to_route():
         )
 
     assert result == "route text"
-    router._try_fallback_chain.assert_awaited_once()
+    router.fallback_chat.assert_awaited_once()
     router.route.assert_awaited_once()
 
 
 @pytest.mark.asyncio
 async def test_partial_content_skips_fallback_chain():
-    """(c) 有部分内容时返回中断提示，_try_fallback_chain 不被调用。"""
+    """(c) 有部分内容时返回中断提示，fallback_chat 不被调用。"""
     router = MagicMock()
     router.chat_stream = _make_partial_then_raise_stream()
-    router._try_fallback_chain = AsyncMock(return_value="fallback text")
+    router.fallback_chat = AsyncMock(return_value="fallback text")
     router.route = AsyncMock(return_value="route text")
     processor = _build_processor(router)
 
@@ -102,5 +102,5 @@ async def test_partial_content_skips_fallback_chain():
 
     assert result.endswith("[⚠️ 内容生成中断，以上为已生成的部分]")
     assert "部分内容" in result
-    router._try_fallback_chain.assert_not_called()
+    router.fallback_chat.assert_not_called()
     router.route.assert_not_called()
