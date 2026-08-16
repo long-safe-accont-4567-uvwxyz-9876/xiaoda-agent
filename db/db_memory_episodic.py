@@ -6,6 +6,8 @@ _sync_fts 保留在 MemoryDB（跨组共享且依赖模块级计数器 _record_f
 """
 from __future__ import annotations
 
+from typing import Any
+
 import time
 
 from loguru import logger

@@ -188,7 +188,7 @@ def _save_crash_snapshot(crash_dir: str, reason: str, restart_count: int,
         snap_path = Path(crash_dir) / f"snapshot_{ts}.json"
         snap_path.write_text(json.dumps(snap, indent=2, ensure_ascii=False), encoding="utf-8")
     except OSError:
-        log.debug("watchdog.crash_snapshot_save_failed reason=%s pid=%s", reason, pid, exc_info=True)
+        logging.getLogger("watchdog").debug("watchdog.crash_snapshot_save_failed reason=%s pid=%s", reason, pid, exc_info=True)
 
 
 class Watchdog:

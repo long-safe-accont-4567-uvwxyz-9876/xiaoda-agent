@@ -639,7 +639,6 @@ def _run_desktop(host: str, port: int) -> None:
     from utils.logging_config import setup_logging
     setup_logging()
 
-    from loguru import logger
     logger.info("agent.desktop.start", port=port)
 
     # 1. 端口冲突检测

@@ -6,6 +6,8 @@ Mixin 组合：MemoryDB 继承 SearchMixin 获得会话查询与检索
 """
 from __future__ import annotations
 
+from typing import Any
+
 from loguru import logger
 
 from db.db_memory_utils import _sql_placeholders, _scope_where, _rows_to_fts_results

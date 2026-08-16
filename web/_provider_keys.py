@@ -112,6 +112,5 @@ def load_provider_key(provider_id: str) -> str:
             return raw
         except OSError:
             logger.debug("provider_keys.plain_migration_write_failed provider={}", provider_id, exc_info=True)
-    from loguru import logger
     logger.warning("provider_key.unrecognized_format provider={} raw_len={}", provider_id, len(raw))
     return ""

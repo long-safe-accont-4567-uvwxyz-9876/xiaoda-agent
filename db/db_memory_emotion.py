@@ -1,6 +1,8 @@
 """MemoryDB 的情绪检索 + 定时回忆笔记 + FSRS 方法组 —— 拆分自 db/db_memory.py。"""
 from __future__ import annotations
 
+from typing import Any
+
 import time
 
 from loguru import logger

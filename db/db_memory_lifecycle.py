@@ -1,6 +1,8 @@
 """MemoryDB 的删除/统计/时间检索方法组 —— 拆分自 db/db_memory.py。"""
 from __future__ import annotations
 
+from typing import Any
+
 from loguru import logger
 
 from db.db_memory_utils import _sql_placeholders
