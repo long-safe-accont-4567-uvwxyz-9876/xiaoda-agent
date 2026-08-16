@@ -89,13 +89,19 @@ class AgentCoreBootstrapper:
         if not _mimo_key or not _mimo_key.strip():
             logger.warning("agent_core.degraded_mode reason=no_mimo_api_key")
             if not reinit:
-                # 首次降级启动：初始化基础设施
+                # 首次降级启动：基础设施与认知系统分别容错——
+                # infra 失败时 cognitive 仍可尝试（memory_manager 等组件
+                # 对 vec_store=None 有兜底），但两者失败原因分别记录，
+                # 避免单点故障掩盖其它组件的真实错误。
                 try:
                     await self._init_infrastructure()
                     _ensure_workspace_template()
+                except Exception as e:
+                    logger.warning("agent_core.degraded_init_infrastructure_error error={}", str(e))
+                try:
                     await self._init_cognitive()
                 except Exception as e:
-                    logger.warning("agent_core.degraded_init_partial_error error={}", str(e))
+                    logger.warning("agent_core.degraded_init_cognitive_error error={}", str(e))
             # _initialized 保持 False → process() 返回降级回复
             return
 
@@ -621,26 +627,29 @@ class AgentCoreBootstrapper:
         logger.info("instinct_manager.initialized")
 
         # P5: 失败经验→规则闭环（可选组件，失败安全）
+        # 先构造到局部变量，全部成功（构造 + set_backend）后再赋给 core
+        # 与注入 handler——异常时 core.error_pipeline 保持原值（None），
+        # 不会留下半初始化对象被别处读到。
         try:
             from tool_engine.error_rule_pipeline import ErrorRulePipeline
-            core.error_pipeline = ErrorRulePipeline(db=core.db, router=core.router)
+            pipeline = ErrorRulePipeline(db=core.db, router=core.router)
             error_backend = get_backend(get_config_service(), "error_rule")
             if error_backend == "off":
-                core.error_pipeline.set_backend("off")
+                pipeline.set_backend("off")
             elif error_backend == "local":
-                core.error_pipeline.set_backend("local")
+                pipeline.set_backend("local")
             elif sf_key:
-                core.error_pipeline.set_free_model_client(
+                pipeline.set_free_model_client(
                     api_key=sf_key,
                     base_url="https://api.siliconflow.cn/v1",
                     model="THUDM/GLM-4-9B-0414",
                 )
-            # 注入到 ToolCallHandler（延后注入，避免构造期循环依赖）
+            # 构造与后端配置均成功，原子提交到 core 并注入 handler
+            core.error_pipeline = pipeline
             if getattr(core, "_tool_call_handler", None) is not None:
-                core._tool_call_handler.set_error_pipeline(core.error_pipeline)
+                core._tool_call_handler.set_error_pipeline(pipeline)
             logger.info("error_rule_pipeline.initialized")
         except Exception as e:
-            core.error_pipeline = None
             logger.warning("error_rule_pipeline.init_failed", error=str(e))
 
     # ── 子代理注册 ────────────────────────────────────────
@@ -1066,14 +1075,19 @@ class AgentCoreBootstrapper:
                                     ensure_ascii=False),
                     )
                 except Exception:
-                    # 审计失败（db 不可用等）不阻断启动
-                    logger.debug("bootstrap.mcp_audit_failed: {}", exc_info=True)
+                    # 审计失败（db 不可用等）不阻断启动，但提级为 warning：
+                    # 这是安全审计路径（被 sanitize 拒绝的 server），审计失败
+                    # 会让攻击痕迹静默丢失，需要可见性。
+                    logger.warning("bootstrap.mcp_audit_failed: {}", exc_info=True)
             if clean_servers:
                 try:
                     await core._mcp_manager.start_all(clean_servers)
                     logger.info("mcp.servers_started", count=len(core._mcp_manager._clients))
                 except Exception as e:
-                    logger.warning("mcp.start_failed", error=str(e))
+                    # 补充 clean/rejected 计数：排查时区分「全部被 sanitize 拒」
+                    # 与「启动真崩」。sanitize 拒绝的 server 已在上方逐条 warn。
+                    logger.warning("mcp.start_failed error={} clean={} rejected={}",
+                                   str(e), len(clean_servers), len(rejected))
 
     # ── 插件自动启用 ──────────────────────────────────────
 
