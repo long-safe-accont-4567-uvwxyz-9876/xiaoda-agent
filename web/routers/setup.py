@@ -99,7 +99,7 @@ async def _is_first_run_or_authenticated(request: Request) -> str:
         raise HTTPException(
             status_code=503,
             detail="Setup availability check failed. Configure .env manually or contact admin."
-        )
+        ) from None
     if first_run:
         _require_local_source(request)
         return "setup"
@@ -151,7 +151,7 @@ async def _profile_endpoint_access(request: Request) -> str:
         raise HTTPException(
             status_code=503,
             detail="Setup availability check failed. Configure .env manually or contact admin."
-        )
+        ) from None
     if first_run:
         _require_local_source(request)
         return "setup"

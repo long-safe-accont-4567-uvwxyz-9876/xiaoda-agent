@@ -381,7 +381,7 @@ class ExecutionMixin:
                 from local_ai.integration.reranker import LocalModelUnavailableError
 
                 if isinstance(error.__cause__, LocalModelUnavailableError):
-                    raise error.__cause__
+                    raise error.__cause__ from None
             raise
 
     @staticmethod

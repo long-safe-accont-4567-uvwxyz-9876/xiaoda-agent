@@ -239,7 +239,7 @@ class MediaTaskQueue:
                 if ip_str not in resolved_ips:
                     resolved_ips.append(ip_str)
             if not resolved_ips:
-                raise RuntimeError(f"blocked: internal ip (DNS 无记录 {hostname})")
+                raise RuntimeError(f"blocked: internal ip (DNS 无记录 {hostname})") from None
             for ip_str in resolved_ips:
                 _check_ip(ip_str)
 

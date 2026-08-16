@@ -211,7 +211,7 @@ def _resolve_data_path(kioxia_path: Path, fallback_path: Path) -> Path:
             logger.debug("config.data_path_writable path=%s", kioxia_path)
         except (OSError, PermissionError):
             logger.warning("config.data_path_readonly path=%s", kioxia_path)
-            raise OSError(f"Filesystem is read-only: {kioxia_path}")
+            raise OSError(f"Filesystem is read-only: {kioxia_path}") from None
         return kioxia_path
     except (OSError, PermissionError):
         logger.debug("config.data_path_resolve_failed", exc_info=True)

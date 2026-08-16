@@ -131,7 +131,7 @@ async def browse_directory(path: str = ""):
     try:
         entries = os.listdir(target)
     except PermissionError:
-        raise HTTPException(status_code=403, detail=f"无权限访问：{target}")
+        raise HTTPException(status_code=403, detail=f"无权限访问：{target}") from None
     dirs = sorted([e for e in entries if os.path.isdir(os.path.join(target, e))])
     parent = os.path.dirname(target)
     return Envelope(data={
