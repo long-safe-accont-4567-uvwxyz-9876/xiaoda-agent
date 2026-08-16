@@ -292,28 +292,8 @@ class PermissionManager:
                 # 未注册的敏感工具（如工具注册失败）也必须拒绝，与 INTERACTIVE/CUSTOM 模式一致
                 return False, f"{self._mode.value} 模式是只读的，不允许执行 {tool_name}"
 
-        # GOAT 模式：全部放行，但对 shell 命令做防傻检查
-        if self._mode == PermissionMode.GOAT:
-            if tool_name == "shell_command" and tool_input:
-                cmd = tool_input.get("command", "")
-                if cmd:
-                    is_dangerous, reason = self.check_goat_dangerous_command(cmd)
-                    if is_dangerous:
-                        return False, reason
-            return True, ""
-
-        # BYPASS 模式：全部放行，但对 shell 命令做防傻检查（与 GOAT 一致）
-        if self._mode == PermissionMode.BYPASS:
-            if tool_name == "shell_command" and tool_input:
-                cmd = tool_input.get("command", "")
-                if cmd:
-                    is_dangerous, reason = self.check_goat_dangerous_command(cmd)
-                    if is_dangerous:
-                        return False, reason
-            return True, ""
-
-        # ── 新增模式：AUTO 全自动放行（但仍受路径范围限制）──
-        if self._mode == PermissionMode.AUTO:
+        # GOAT / BYPASS / AUTO 模式：全部放行，但对 shell 命令做防傻检查
+        if self._mode in (PermissionMode.GOAT, PermissionMode.BYPASS, PermissionMode.AUTO):
             if tool_name == "shell_command" and tool_input:
                 cmd = tool_input.get("command", "")
                 if cmd:
@@ -327,18 +307,7 @@ class PermissionManager:
             if tool_name in self._auto_allow_tools:
                 return True, "auto-allowed by config"
             # 非 auto_allow 的工具：READ_ONLY 放行，READ_WRITE/EXECUTE 需确认
-            from tool_engine.tool_registry import ToolPermission, get_tool
-            tool = get_tool(tool_name)
-            if tool:
-                perm = tool.get("permission", ToolPermission.READ_ONLY)
-                if perm == ToolPermission.READ_ONLY:
-                    return True, ""
-                perm_label = perm.value if hasattr(perm, "value") else str(perm)
-                return False, f"自定义模式下 {tool_name}（{perm_label}）需要用户确认"
-            # 未知工具回退到 _SENSITIVE_TOOLS
-            if tool_name in _SENSITIVE_TOOLS:
-                return False, f"自定义模式下 {tool_name} 需要确认"
-            return True, ""
+            return self._check_read_only_or_confirm(tool_name, "自定义模式")
 
         # STRICT 模式：敏感工具需要确认
         if self._mode == PermissionMode.STRICT and tool_name in _SENSITIVE_TOOLS:
@@ -346,20 +315,24 @@ class PermissionManager:
 
         # ── 新增模式：INTERACTIVE 交互式确认 ──
         if self._mode == PermissionMode.INTERACTIVE:
-            # 只读工具直接放行
-            from tool_engine.tool_registry import ToolPermission, get_tool
-            tool = get_tool(tool_name)
-            if tool:
-                perm = tool.get("permission", ToolPermission.READ_ONLY)
-                if perm == ToolPermission.READ_ONLY:
-                    return True, ""
-                # READ_WRITE/EXECUTE 工具需要确认
-                perm_label = perm.value if hasattr(perm, "value") else str(perm)
-                return False, f"交互式模式下 {tool_name}（{perm_label}）需要用户确认"
-            # 未知工具回退到 _SENSITIVE_TOOLS
-            if tool_name in _SENSITIVE_TOOLS:
-                return False, f"交互式模式下 {tool_name} 需要用户确认"
+            return self._check_read_only_or_confirm(tool_name, "交互式模式")
 
+        return True, ""
+
+    def _check_read_only_or_confirm(self, tool_name: str, mode_label: str) -> tuple[bool, str]:
+        """READ_ONLY 工具放行，READ_WRITE/EXECUTE 需确认；未知工具回退 _SENSITIVE_TOOLS。"""
+        from tool_engine.tool_registry import ToolPermission, get_tool
+        tool = get_tool(tool_name)
+        if tool:
+            perm = tool.get("permission", ToolPermission.READ_ONLY)
+            if perm == ToolPermission.READ_ONLY:
+                return True, ""
+            # READ_WRITE/EXECUTE 工具需要确认
+            perm_label = perm.value if hasattr(perm, "value") else str(perm)
+            return False, f"{mode_label}下 {tool_name}（{perm_label}）需要用户确认"
+        # 未知工具回退到 _SENSITIVE_TOOLS
+        if tool_name in _SENSITIVE_TOOLS:
+            return False, f"{mode_label}下 {tool_name} 需要确认"
         return True, ""
 
     def decide_security_action(self, threat_type: str, confidence: float) -> str:
