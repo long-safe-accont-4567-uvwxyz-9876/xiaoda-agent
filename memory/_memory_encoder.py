@@ -724,16 +724,7 @@ class MemoryEncoder:
         """
         import json
         try:
-            # 构建对话文本（比 _generate_summary 保留更多内容，给 LLM 更多上下文）
-            lines = []
-            for msg in exchanges[-6:]:
-                role = msg.get("role", "")
-                content = msg.get("content", "")
-                if role == "user" and content:
-                    lines.append(f"用户: {content[:300]}")
-                elif role == "assistant" and content:
-                    lines.append(f"{get_agent_display_name('xiaoda')}: {content[:300]}")
-            text = "\n".join(lines)
+            text = self._build_enrichment_text(exchanges)
             if not text or len(text) < 10:
                 return
 
@@ -759,19 +750,7 @@ class MemoryEncoder:
             if not result:
                 return
 
-            # 去除可能的 <think> 标签
-            if "<think>" in result:
-                result = re.sub(r"<think>.*?</think>", "", result, flags=re.DOTALL).strip()
-
-            # 提取 JSON（LLM 可能返回带 markdown 代码块的）
-            json_str = result
-            if "```json" in json_str:
-                json_str = json_str.split("```json")[1].split("```")[0]
-            elif "```" in json_str:
-                json_str = json_str.split("```")[1].split("```")[0]
-            json_str = json_str.strip()
-
-            data = json.loads(json_str)
+            data = self._extract_enrichment_json(result)
 
             new_summary = data.get("summary", "").strip()
             entities = json.dumps(data.get("entities", []), ensure_ascii=False)
@@ -807,64 +786,7 @@ class MemoryEncoder:
             logger.info("memory.enriched", mem_id=mem_id, event_type=event_type,
                         entities_count=len(data.get("entities", [])))
 
-            # ── Phase 2: enrichment子chunk化 — 将实体/决策/话题写入子chunk ──
-            import config as _enrich_cfg
-            if getattr(_enrich_cfg, 'PARENT_CHILD_CHUNK_ENABLED', True) and self._mm.vec:
-                try:
-                    enrich_parent_summary = update_summary or new_summary or ""
-                    enrich_children: list[tuple[int, str]] = []
-                    entity_list = data.get("entities", [])
-                    meta = data.get("metadata", {})
-                    decision = meta.get("decision", "").strip()
-                    topic = meta.get("topic", "").strip()
-
-                    # 实体子chunk
-                    for ent in entity_list[:5]:  # 最多5个实体
-                        ent_str = str(ent).strip()
-                        if not ent_str or len(ent_str) < 2:
-                            continue
-                        content = f"实体: {ent_str}"
-                        embed_content = (f"[上下文: {enrich_parent_summary[:80]}] {content}"
-                                         if getattr(_enrich_cfg, 'CONTEXTUAL_RETRIEVAL_ENABLED', True)
-                                         else content)
-                        cid = await self._mm.memory.insert_child_chunk(
-                            parent_id=mem_id, content=content,
-                            embed_content=embed_content, chunk_type='entity',
-                            importance=0.7)
-                        enrich_children.append((cid, embed_content))
-
-                    # 决策子chunk
-                    if decision and len(decision) >= 5:
-                        content = f"决策: {decision}"
-                        embed_content = (f"[上下文: {enrich_parent_summary[:80]}] {content}"
-                                         if getattr(_enrich_cfg, 'CONTEXTUAL_RETRIEVAL_ENABLED', True)
-                                         else content)
-                        cid = await self._mm.memory.insert_child_chunk(
-                            parent_id=mem_id, content=content,
-                            embed_content=embed_content, chunk_type='decision',
-                            importance=0.9)
-                        enrich_children.append((cid, embed_content))
-
-                    # 话题子chunk
-                    if topic and len(topic) >= 2:
-                        content = f"话题: {topic}"
-                        embed_content = (f"[上下文: {enrich_parent_summary[:80]}] {content}"
-                                         if getattr(_enrich_cfg, 'CONTEXTUAL_RETRIEVAL_ENABLED', True)
-                                         else content)
-                        cid = await self._mm.memory.insert_child_chunk(
-                            parent_id=mem_id, content=content,
-                            embed_content=embed_content, chunk_type='topic',
-                            importance=0.6)
-                        enrich_children.append((cid, embed_content))
-
-                    # 批量嵌入
-                    if enrich_children:
-                        await self._mm.vec.batch_upsert_children(enrich_children)
-                        logger.debug("memory.enrich_child_chunks",
-                                     parent_id=mem_id, count=len(enrich_children))
-                except Exception as e:
-                    logger.debug("memory.enrich_child_failed",
-                                 error=str(e), error_type=type(e).__name__)
+            await self._write_enrichment_child_chunks(mem_id, data, update_summary, new_summary)
 
             # enrichment 更新了 summary/entities/子chunk，失效查询缓存
             if self._mm._query_cache:
@@ -873,6 +795,96 @@ class MemoryEncoder:
 
         except Exception as e:
             logger.debug("memory.enrich_failed",
+                         error=str(e), error_type=type(e).__name__)
+
+    @staticmethod
+    def _build_enrichment_text(exchanges: list[dict]) -> str:
+        """构建对话文本（比 _generate_summary 保留更多内容，给 LLM 更多上下文）。"""
+        lines = []
+        for msg in exchanges[-6:]:
+            role = msg.get("role", "")
+            content = msg.get("content", "")
+            if role == "user" and content:
+                lines.append(f"用户: {content[:300]}")
+            elif role == "assistant" and content:
+                lines.append(f"{get_agent_display_name('xiaoda')}: {content[:300]}")
+        return "\n".join(lines)
+
+    @staticmethod
+    def _extract_enrichment_json(result: str) -> dict:
+        """去除 think 标签 + 提取 JSON（LLM 可能返回带 markdown 代码块的）。"""
+        import re
+        if "<think>" in result:
+            result = re.sub(r"<think>.*?</think>", "", result, flags=re.DOTALL).strip()
+        json_str = result
+        if "```json" in json_str:
+            json_str = json_str.split("```json")[1].split("```")[0]
+        elif "```" in json_str:
+            json_str = json_str.split("```")[1].split("```")[0]
+        json_str = json_str.strip()
+        import json
+        return json.loads(json_str)
+
+    async def _write_enrichment_child_chunks(self, mem_id: int, data: dict,
+                                             update_summary: str, new_summary: str) -> None:
+        """Phase 2: enrichment 子chunk化 — 实体/决策/话题写入子chunk + 批量嵌入。"""
+        import config as _enrich_cfg
+        if not (getattr(_enrich_cfg, 'PARENT_CHILD_CHUNK_ENABLED', True) and self._mm.vec):
+            return
+        try:
+            enrich_parent_summary = update_summary or new_summary or ""
+            enrich_children: list[tuple[int, str]] = []
+            entity_list = data.get("entities", [])
+            meta = data.get("metadata", {})
+            decision = meta.get("decision", "").strip()
+            topic = meta.get("topic", "").strip()
+
+            # 实体子chunk
+            for ent in entity_list[:5]:  # 最多5个实体
+                ent_str = str(ent).strip()
+                if not ent_str or len(ent_str) < 2:
+                    continue
+                content = f"实体: {ent_str}"
+                embed_content = (f"[上下文: {enrich_parent_summary[:80]}] {content}"
+                                 if getattr(_enrich_cfg, 'CONTEXTUAL_RETRIEVAL_ENABLED', True)
+                                 else content)
+                cid = await self._mm.memory.insert_child_chunk(
+                    parent_id=mem_id, content=content,
+                    embed_content=embed_content, chunk_type='entity',
+                    importance=0.7)
+                enrich_children.append((cid, embed_content))
+
+            # 决策子chunk
+            if decision and len(decision) >= 5:
+                content = f"决策: {decision}"
+                embed_content = (f"[上下文: {enrich_parent_summary[:80]}] {content}"
+                                 if getattr(_enrich_cfg, 'CONTEXTUAL_RETRIEVAL_ENABLED', True)
+                                 else content)
+                cid = await self._mm.memory.insert_child_chunk(
+                    parent_id=mem_id, content=content,
+                    embed_content=embed_content, chunk_type='decision',
+                    importance=0.9)
+                enrich_children.append((cid, embed_content))
+
+            # 话题子chunk
+            if topic and len(topic) >= 2:
+                content = f"话题: {topic}"
+                embed_content = (f"[上下文: {enrich_parent_summary[:80]}] {content}"
+                                 if getattr(_enrich_cfg, 'CONTEXTUAL_RETRIEVAL_ENABLED', True)
+                                 else content)
+                cid = await self._mm.memory.insert_child_chunk(
+                    parent_id=mem_id, content=content,
+                    embed_content=embed_content, chunk_type='topic',
+                    importance=0.6)
+                enrich_children.append((cid, embed_content))
+
+            # 批量嵌入
+            if enrich_children:
+                await self._mm.vec.batch_upsert_children(enrich_children)
+                logger.debug("memory.enrich_child_chunks",
+                             parent_id=mem_id, count=len(enrich_children))
+        except Exception as e:
+            logger.debug("memory.enrich_child_failed",
                          error=str(e), error_type=type(e).__name__)
 
     def _estimate_importance(self, exchanges: list[dict], context: dict) -> float:
