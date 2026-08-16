@@ -550,44 +550,7 @@ class AgentRegistry:
         """更新 Agent 配置，必要时热重载模型客户端并持久化。"""
         # 主体小妲特殊处理：不在 dispatcher 中，只更新壁纸/人格/voice_ref/display_name
         if name == "xiaoda":
-            if data.get("wallpaper"):
-                from web.config_service import get_config_service
-                get_config_service().set("ui.main_wallpaper", _normalize_wallpaper(data["wallpaper"]))
-            personality_text = data.pop("personality_text", None)
-            # P0 修复（2026-08-04）：空字符串保护。
-            # 前端 save() 总传 personality_text（即使为空），原 `is not None` 判断
-            # 让空串触发 write_text("") → 写入 3字节 BOM → 人格文件被清空 →
-            # 下次读取返回空 → 前端 personality.value="" → 再次保存又写空 → 循环。
-            # 改为非空才写入，杜绝误清空。
-            if personality_text is not None and personality_text.strip():
-                from config import reverse_agent_name_replacements, WORKSPACE_DIR
-                personality_text = reverse_agent_name_replacements(personality_text)
-                soul_path = WORKSPACE_DIR / "SOUL.md"
-                soul_path.write_text(personality_text, encoding="utf-8-sig")
-            # voice_ref 更新
-            if "voice_ref" in data:
-                self._save_xiaoda_field("voice_ref", data["voice_ref"])
-            # 随心即言 ACK 自定义回复：持久化到 xiaoda.json（get_ack_message 读取）
-            if "ack_messages" in data:
-                self._save_xiaoda_field("ack_messages", data["ack_messages"])
-            # display_name 更新：持久化 + 旧名加入 deprecated_names + 同步 MAIN_AGENT_META
-            if "display_name" in data and data["display_name"]:
-                old_dn = self._load_xiaoda_cfg().get("display_name", "")
-                new_dn = data["display_name"]
-                if old_dn and old_dn != new_dn:
-                    # 旧显示名自动加入 deprecated_names，确保 SOUL.md 等文件中的旧名被替换
-                    cfg = self._load_xiaoda_cfg()
-                    deps = cfg.get("deprecated_names", [])
-                    if old_dn not in deps:
-                        deps.append(old_dn)
-                        self._save_xiaoda_field("deprecated_names", deps)
-                self._save_xiaoda_field("display_name", new_dn)
-                MAIN_AGENT_META["display_name"] = new_dn
-            # display_name_en 更新：持久化 + 同步 MAIN_AGENT_META
-            if "display_name_en" in data and data["display_name_en"]:
-                self._save_xiaoda_field("display_name_en", data["display_name_en"])
-                MAIN_AGENT_META["display_name_en"] = data["display_name_en"]
-            return self.get("xiaoda")
+            return self._update_xiaoda(data)
         agent = self._require(name)
         personality_text = data.pop("personality_text", None)
         # 记录旧值，用于判断是否需要热重载客户端
@@ -643,6 +606,48 @@ class AgentRegistry:
             await agent.init()  # 重载人格
         self._save_config(agent.config)
         return self._serialize(agent.config, enabled=name not in self._disabled)
+
+    def _update_xiaoda(self, data: dict) -> dict:
+        """更新主体小妲（不在 dispatcher 中）：壁纸/人格/voice_ref/ack/display_name。"""
+        if data.get("wallpaper"):
+            from web.config_service import get_config_service
+            get_config_service().set("ui.main_wallpaper", _normalize_wallpaper(data["wallpaper"]))
+        personality_text = data.pop("personality_text", None)
+        # P0 修复（2026-08-04）：空字符串保护。
+        # 前端 save() 总传 personality_text（即使为空），原 `is not None` 判断
+        # 让空串触发 write_text("") → 写入 3字节 BOM → 人格文件被清空 →
+        # 下次读取返回空 → 前端 personality.value="" → 再次保存又写空 → 循环。
+        # 改为非空才写入，杜绝误清空。
+        if personality_text is not None and personality_text.strip():
+            from config import reverse_agent_name_replacements, WORKSPACE_DIR
+            personality_text = reverse_agent_name_replacements(personality_text)
+            soul_path = WORKSPACE_DIR / "SOUL.md"
+            soul_path.write_text(personality_text, encoding="utf-8-sig")
+        # voice_ref 更新
+        if "voice_ref" in data:
+            self._save_xiaoda_field("voice_ref", data["voice_ref"])
+        # 随心即言 ACK 自定义回复：持久化到 xiaoda.json（get_ack_message 读取）
+        if "ack_messages" in data:
+            self._save_xiaoda_field("ack_messages", data["ack_messages"])
+        # display_name 更新：持久化 + 旧名加入 deprecated_names + 同步 MAIN_AGENT_META
+        if "display_name" in data and data["display_name"]:
+            old_dn = self._load_xiaoda_cfg().get("display_name", "")
+            new_dn = data["display_name"]
+            if old_dn and old_dn != new_dn:
+                # 旧显示名自动加入 deprecated_names，确保 SOUL.md 等文件中的旧名被替换
+                cfg = self._load_xiaoda_cfg()
+                deps = cfg.get("deprecated_names", [])
+                if old_dn not in deps:
+                    deps.append(old_dn)
+                    self._save_xiaoda_field("deprecated_names", deps)
+            self._save_xiaoda_field("display_name", new_dn)
+            MAIN_AGENT_META["display_name"] = new_dn
+        # display_name_en 更新：持久化 + 同步 MAIN_AGENT_META
+        if "display_name_en" in data and data["display_name_en"]:
+            self._save_xiaoda_field("display_name_en", data["display_name_en"])
+            MAIN_AGENT_META["display_name_en"] = data["display_name_en"]
+        return self.get("xiaoda")
+
 
     async def delete(self, name: str) -> None:
         """删除自定义 Agent，从 dispatcher 注销并清理配置文件。"""
