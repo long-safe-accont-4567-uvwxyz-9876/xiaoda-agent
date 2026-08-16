@@ -310,184 +310,185 @@ def _register_data_dir_checks(doc: DoctorCheck) -> None:
 
     doc.add_check("Data Writable", "L7-DataDirs", _check_writable)
 
+"""注册智能自修复检查（Layer 8）— 跨平台适配 Docker/Windows/Linux。"""
+
+def _check_stale_locks() -> tuple:
+    from config import DATA_DIR
+    lock_patterns = ["*.lock", "*.pid", "*.lck"]
+    stale = []
+    for pattern in lock_patterns:
+        for f in DATA_DIR.rglob(pattern):
+            try:
+                age = time.time() - f.stat().st_mtime
+                if age > 3600:
+                    stale.append(f"{f.name} ({age:.0f}s old)")
+            except OSError:
+                logger.debug("doctor.stale_lock_stat_failed: {}", f, exc_info=True)
+    if stale:
+        return False, f"Stale lock files: {', '.join(stale[:3])}"
+    return True, "No stale lock files"
+
+def _fix_stale_locks() -> None:
+    from config import DATA_DIR
+    lock_patterns = ["*.lock", "*.pid", "*.lck"]
+    for pattern in lock_patterns:
+        for f in DATA_DIR.rglob(pattern):
+            try:
+                age = time.time() - f.stat().st_mtime
+                if age > 3600:
+                    f.unlink()
+                    logger.info("doctor.stale_lock_removed", file=str(f))
+            except OSError:
+                logger.debug("doctor.stale_lock_unlink_failed: {}", f, exc_info=True)
+
+def _check_port_conflict() -> tuple:
+    import socket
+    port = _safe_int(os.getenv("WEBUI_PORT", str(DEFAULT_WEBUI_PORT)), DEFAULT_WEBUI_PORT)
+    s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    s.settimeout(1)
+    try:
+        s.bind(("127.0.0.1", port))
+        s.close()
+        return True, f"Port {port} available"
+    except OSError:
+        s.close()
+        return False, f"Port {port} in use by another process"
+
+def _fix_port_conflict() -> None:
+    port_str = os.getenv("WEBUI_PORT", str(DEFAULT_WEBUI_PORT))
+    if not port_str.isdigit() or not (1 <= int(port_str) <= 65535):
+        logger.warning("doctor.invalid_port value={}", port_str)
+        return
+    port = int(port_str)
+    platform = _detect_platform()
+    if platform == "windows":
+        subprocess.run(
+            ["powershell", "-NoProfile", "-Command",
+             f"Get-NetTCPConnection -LocalPort {port} -ErrorAction SilentlyContinue | ForEach-Object {{ Stop-Process -Id $_.OwningProcess -Force -ErrorAction SilentlyContinue }}"],
+            timeout=10, capture_output=True, check=False,
+        )
+    elif platform == "docker":
+        logger.warning("doctor.port_conflict_docker", port=port, hint="Change WEBUI_PORT env var")
+    else:
+        result = subprocess.run(
+            ["lsof", f"-ti:{port}"],
+            timeout=10, capture_output=True, check=False,
+            stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
+        )
+        pids = result.stdout.decode().strip().split()
+        if pids:
+            subprocess.run(["kill", "-9", *pids], timeout=5, capture_output=True, check=False)
+    time.sleep(1)
+
+def _check_log_rotation() -> tuple:
+    from config import LOG_DIR
+    if not LOG_DIR.exists():
+        return True, "Log dir not yet created"
+    total_size = sum(f.stat().st_size for f in LOG_DIR.rglob("*") if f.is_file())
+    size_mb = total_size / (1024 * 1024)
+    if size_mb > 500:
+        return False, f"Log dir too large: {size_mb:.0f} MB"
+    return True, f"Log dir size OK: {size_mb:.1f} MB"
+
+def _fix_log_rotation() -> None:
+    from config import LOG_DIR
+    if not LOG_DIR.exists():
+        return
+    for f in sorted(LOG_DIR.glob("*.log.*"), reverse=True):
+        if f.stat().st_size > 10 * 1024 * 1024:
+            f.unlink()
+            logger.info("doctor.large_log_removed", file=str(f))
+    for f in sorted(LOG_DIR.glob("*.log"), reverse=True)[5:]:
+        f.unlink()
+        logger.info("doctor.old_log_removed", file=str(f))
+
+def _check_temp_files() -> tuple:
+    from config import DATA_DIR
+    temp_patterns = ["*.tmp", "*.temp", "*.bak", "*.swp", "*~"]
+    found = []
+    for pattern in temp_patterns:
+        for f in DATA_DIR.rglob(pattern):
+            found.append(f.name)
+    if found:
+        return False, f"Temp files found: {', '.join(found[:5])}"
+    return True, "No temp files"
+
+def _fix_temp_files() -> None:
+    from config import DATA_DIR
+    temp_patterns = ["*.tmp", "*.temp", "*.swp", "*~"]
+    for pattern in temp_patterns:
+        for f in DATA_DIR.rglob(pattern):
+            try:
+                f.unlink()
+                logger.info("doctor.temp_file_removed", file=str(f))
+            except OSError:
+                logger.debug("doctor.temp_file_unlink_failed: {}", f, exc_info=True)
+
+def _check_docker_volume() -> tuple:
+    if _detect_platform() != "docker":
+        return True, "Not Docker environment (skipped)"
+    data_dir = os.getenv("KIOXIA_DATA_DIR", "")
+    if not data_dir:
+        return False, "KIOXIA_DATA_DIR not set in Docker"
+    data_path = Path(data_dir)
+    if not data_path.exists():
+        return False, f"Docker data dir not found: {data_dir}"
+    if not os.access(data_path, os.W_OK):
+        return False, f"Docker data dir not writable: {data_dir}"
+    return True, f"Docker volume OK ({data_dir})"
+
+def _fix_docker_volume() -> None:
+    data_dir = os.getenv("KIOXIA_DATA_DIR", "/data")
+    Path(data_dir).mkdir(parents=True, exist_ok=True)
+    with contextlib.suppress(OSError):
+        os.chmod(data_dir, 0o755)
+
+def _check_voice_ref_dirs() -> tuple:
+    from config import VOICE_REF_DIR
+    if not VOICE_REF_DIR.exists():
+        return False, f"VOICE_REF_DIR missing: {VOICE_REF_DIR}"
+    agent_dirs = [d for d in VOICE_REF_DIR.iterdir() if d.is_dir()] if VOICE_REF_DIR.exists() else []
+    return True, f"VOICE_REF_DIR OK ({len(agent_dirs)} agent dirs)"
+
+def _fix_voice_ref_dirs() -> None:
+    from config import VOICE_REF_DIR
+    VOICE_REF_DIR.mkdir(parents=True, exist_ok=True)
+    for agent in ("xiaoda", "xiaoli", "xiaoke", "xiaolian", "xiaolang"):
+        (VOICE_REF_DIR / agent).mkdir(parents=True, exist_ok=True)
+
+def _check_sticker_dirs() -> tuple:
+    from config import STICKER_DIR, XIAOLI_STICKER_DIR, AGENT_STICKER_BASE
+    missing = []
+    for name, d in [("stickers", STICKER_DIR), ("xiaoli-stickers", XIAOLI_STICKER_DIR),
+                    ("agent-stickers", AGENT_STICKER_BASE)]:
+        if not d.exists():
+            missing.append(name)
+    if missing:
+        return False, f"Sticker dirs missing: {', '.join(missing)}"
+    return True, "All sticker dirs exist"
+
+def _fix_sticker_dirs() -> None:
+    from config import STICKER_DIR, XIAOLI_STICKER_DIR, AGENT_STICKER_BASE
+    for d in [STICKER_DIR, XIAOLI_STICKER_DIR, AGENT_STICKER_BASE]:
+        d.mkdir(parents=True, exist_ok=True)
+
+
+
+_SELF_HEAL_CHECKS: list[tuple[str, Any, Any]] = [
+    ("Stale Lock Files", _check_stale_locks, _fix_stale_locks),
+    ("Port Conflict", _check_port_conflict, _fix_port_conflict),
+    ("Log Rotation", _check_log_rotation, _fix_log_rotation),
+    ("Temp Files", _check_temp_files, _fix_temp_files),
+    ("Docker Volume", _check_docker_volume, _fix_docker_volume),
+    ("Voice Ref Dirs", _check_voice_ref_dirs, _fix_voice_ref_dirs),
+    ("Sticker Dirs", _check_sticker_dirs, _fix_sticker_dirs),
+]
+
 
 def _register_self_heal_checks(doc: DoctorCheck) -> None:
     """注册智能自修复检查（Layer 8）— 跨平台适配 Docker/Windows/Linux。"""
-
-    def _check_stale_locks() -> tuple:
-        from config import DATA_DIR
-        lock_patterns = ["*.lock", "*.pid", "*.lck"]
-        stale = []
-        for pattern in lock_patterns:
-            for f in DATA_DIR.rglob(pattern):
-                try:
-                    age = time.time() - f.stat().st_mtime
-                    if age > 3600:
-                        stale.append(f"{f.name} ({age:.0f}s old)")
-                except OSError:
-                    logger.debug("doctor.stale_lock_stat_failed: {}", f, exc_info=True)
-        if stale:
-            return False, f"Stale lock files: {', '.join(stale[:3])}"
-        return True, "No stale lock files"
-
-    def _fix_stale_locks() -> None:
-        from config import DATA_DIR
-        lock_patterns = ["*.lock", "*.pid", "*.lck"]
-        for pattern in lock_patterns:
-            for f in DATA_DIR.rglob(pattern):
-                try:
-                    age = time.time() - f.stat().st_mtime
-                    if age > 3600:
-                        f.unlink()
-                        logger.info("doctor.stale_lock_removed", file=str(f))
-                except OSError:
-                    logger.debug("doctor.stale_lock_unlink_failed: {}", f, exc_info=True)
-
-    doc.add_check("Stale Lock Files", "L8-SelfHeal", _check_stale_locks, _fix_stale_locks)
-
-    def _check_port_conflict() -> tuple:
-        import socket
-        port = _safe_int(os.getenv("WEBUI_PORT", str(DEFAULT_WEBUI_PORT)), DEFAULT_WEBUI_PORT)
-        s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        s.settimeout(1)
-        try:
-            s.bind(("127.0.0.1", port))
-            s.close()
-            return True, f"Port {port} available"
-        except OSError:
-            s.close()
-            return False, f"Port {port} in use by another process"
-
-    def _fix_port_conflict() -> None:
-        port_str = os.getenv("WEBUI_PORT", str(DEFAULT_WEBUI_PORT))
-        if not port_str.isdigit() or not (1 <= int(port_str) <= 65535):
-            logger.warning("doctor.invalid_port value={}", port_str)
-            return
-        port = int(port_str)
-        platform = _detect_platform()
-        if platform == "windows":
-            subprocess.run(
-                ["powershell", "-NoProfile", "-Command",
-                 f"Get-NetTCPConnection -LocalPort {port} -ErrorAction SilentlyContinue | ForEach-Object {{ Stop-Process -Id $_.OwningProcess -Force -ErrorAction SilentlyContinue }}"],
-                timeout=10, capture_output=True, check=False,
-            )
-        elif platform == "docker":
-            logger.warning("doctor.port_conflict_docker", port=port, hint="Change WEBUI_PORT env var")
-        else:
-            result = subprocess.run(
-                ["lsof", f"-ti:{port}"],
-                timeout=10, capture_output=True, check=False,
-                stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
-            )
-            pids = result.stdout.decode().strip().split()
-            if pids:
-                subprocess.run(["kill", "-9", *pids], timeout=5, capture_output=True, check=False)
-        time.sleep(1)
-
-    doc.add_check("Port Conflict", "L8-SelfHeal", _check_port_conflict, _fix_port_conflict)
-
-    def _check_log_rotation() -> tuple:
-        from config import LOG_DIR
-        if not LOG_DIR.exists():
-            return True, "Log dir not yet created"
-        total_size = sum(f.stat().st_size for f in LOG_DIR.rglob("*") if f.is_file())
-        size_mb = total_size / (1024 * 1024)
-        if size_mb > 500:
-            return False, f"Log dir too large: {size_mb:.0f} MB"
-        return True, f"Log dir size OK: {size_mb:.1f} MB"
-
-    def _fix_log_rotation() -> None:
-        from config import LOG_DIR
-        if not LOG_DIR.exists():
-            return
-        for f in sorted(LOG_DIR.glob("*.log.*"), reverse=True):
-            if f.stat().st_size > 10 * 1024 * 1024:
-                f.unlink()
-                logger.info("doctor.large_log_removed", file=str(f))
-        for f in sorted(LOG_DIR.glob("*.log"), reverse=True)[5:]:
-            f.unlink()
-            logger.info("doctor.old_log_removed", file=str(f))
-
-    doc.add_check("Log Rotation", "L8-SelfHeal", _check_log_rotation, _fix_log_rotation)
-
-    def _check_temp_files() -> tuple:
-        from config import DATA_DIR
-        temp_patterns = ["*.tmp", "*.temp", "*.bak", "*.swp", "*~"]
-        found = []
-        for pattern in temp_patterns:
-            for f in DATA_DIR.rglob(pattern):
-                found.append(f.name)
-        if found:
-            return False, f"Temp files found: {', '.join(found[:5])}"
-        return True, "No temp files"
-
-    def _fix_temp_files() -> None:
-        from config import DATA_DIR
-        temp_patterns = ["*.tmp", "*.temp", "*.swp", "*~"]
-        for pattern in temp_patterns:
-            for f in DATA_DIR.rglob(pattern):
-                try:
-                    f.unlink()
-                    logger.info("doctor.temp_file_removed", file=str(f))
-                except OSError:
-                    logger.debug("doctor.temp_file_unlink_failed: {}", f, exc_info=True)
-
-    doc.add_check("Temp Files", "L8-SelfHeal", _check_temp_files, _fix_temp_files)
-
-    def _check_docker_volume() -> tuple:
-        if _detect_platform() != "docker":
-            return True, "Not Docker environment (skipped)"
-        data_dir = os.getenv("KIOXIA_DATA_DIR", "")
-        if not data_dir:
-            return False, "KIOXIA_DATA_DIR not set in Docker"
-        data_path = Path(data_dir)
-        if not data_path.exists():
-            return False, f"Docker data dir not found: {data_dir}"
-        if not os.access(data_path, os.W_OK):
-            return False, f"Docker data dir not writable: {data_dir}"
-        return True, f"Docker volume OK ({data_dir})"
-
-    def _fix_docker_volume() -> None:
-        data_dir = os.getenv("KIOXIA_DATA_DIR", "/data")
-        Path(data_dir).mkdir(parents=True, exist_ok=True)
-        with contextlib.suppress(OSError):
-            os.chmod(data_dir, 0o755)
-
-    doc.add_check("Docker Volume", "L8-SelfHeal", _check_docker_volume, _fix_docker_volume)
-
-    def _check_voice_ref_dirs() -> tuple:
-        from config import VOICE_REF_DIR
-        if not VOICE_REF_DIR.exists():
-            return False, f"VOICE_REF_DIR missing: {VOICE_REF_DIR}"
-        agent_dirs = [d for d in VOICE_REF_DIR.iterdir() if d.is_dir()] if VOICE_REF_DIR.exists() else []
-        return True, f"VOICE_REF_DIR OK ({len(agent_dirs)} agent dirs)"
-
-    def _fix_voice_ref_dirs() -> None:
-        from config import VOICE_REF_DIR
-        VOICE_REF_DIR.mkdir(parents=True, exist_ok=True)
-        for agent in ("xiaoda", "xiaoli", "xiaoke", "xiaolian", "xiaolang"):
-            (VOICE_REF_DIR / agent).mkdir(parents=True, exist_ok=True)
-
-    doc.add_check("Voice Ref Dirs", "L8-SelfHeal", _check_voice_ref_dirs, _fix_voice_ref_dirs)
-
-    def _check_sticker_dirs() -> tuple:
-        from config import STICKER_DIR, XIAOLI_STICKER_DIR, AGENT_STICKER_BASE
-        missing = []
-        for name, d in [("stickers", STICKER_DIR), ("xiaoli-stickers", XIAOLI_STICKER_DIR),
-                        ("agent-stickers", AGENT_STICKER_BASE)]:
-            if not d.exists():
-                missing.append(name)
-        if missing:
-            return False, f"Sticker dirs missing: {', '.join(missing)}"
-        return True, "All sticker dirs exist"
-
-    def _fix_sticker_dirs() -> None:
-        from config import STICKER_DIR, XIAOLI_STICKER_DIR, AGENT_STICKER_BASE
-        for d in [STICKER_DIR, XIAOLI_STICKER_DIR, AGENT_STICKER_BASE]:
-            d.mkdir(parents=True, exist_ok=True)
-
-    doc.add_check("Sticker Dirs", "L8-SelfHeal", _check_sticker_dirs, _fix_sticker_dirs)
-
+    for name, check, fix in _SELF_HEAL_CHECKS:
+        doc.add_check(name, "L8-SelfHeal", check, fix)
 
 def _register_behavior_checks(doc: DoctorCheck) -> None:
     """注册行为健康和 zombie 进程检查（Layer 9-10）。"""
