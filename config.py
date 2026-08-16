@@ -56,7 +56,7 @@ from config_agents import (  # noqa: F401,E402
 # ── Phase 4 拆分：env 开关/常量表抽为 config_constants（逐字节搬移）──
 # 同名 re-export 保持兼容（契约见 tests/test_config_constants_module.py）。
 from config_constants import (  # noqa: F401,E402
-    get_secret, _safe_positive_float,
+    get_secret, _safe_positive_float, _safe_float,
     TRUST_FORWARDED_FOR, DEEPSEEK_API_KEY, MIMO_API_KEY,
     AGNES_API_KEY, AGNES_BASE_URL, AGNES_TEXT_MODEL, AGNES_IMAGE_MODEL, AGNES_VIDEO_MODEL,
     ASR_API_KEY, ASR_BASE_URL, ASR_MODEL, JINA_API_KEY,
