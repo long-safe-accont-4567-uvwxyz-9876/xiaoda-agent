@@ -39,7 +39,14 @@ jobs:
 
       - name: Install system dependencies (Linux)
         if: runner.os == 'Linux'
-        run: sudo apt-get update && sudo apt-get install -y portaudio19-dev
+        run: |
+          sudo apt-get update && sudo apt-get install -y \
+            portaudio19-dev \
+            libstdc++6 \
+            libgcc-s1 \
+            libglib2.0-0 \
+            libssl3 \
+            zlib1g
 
       - name: Set up Python 3.11
         uses: actions/setup-python@v5
@@ -132,14 +139,9 @@ jobs:
         run: |
           pip install pyinstaller
           pip install onnx
-          pip install -r requirements.txt
+          pip install -r requirements.lock -q
           pip install ".[local-ai]"
           pip install fastapi uvicorn[standard] websockets python-multipart sse-starlette httpx Pillow numpy rich python-dotenv loguru openai aiosqlite pydantic jieba pyyaml pilk pywebview
-          # pin 本地 AI 依赖到实测兼容版本：requirements.txt 只给范围，CI 解析到新版
-          # onnxruntime 时与 onnxruntime-genai==0.15.2 的 native lib ABI 不匹配，
-          # 导致 frozen exe 在 Linux 加载 genai so 失败（Windows DLL 搜索宽松不受影响）。
-          # 以下版本经板端 frozen 构建 + smoke 实测通过。
-          pip install "onnxruntime==1.28.0" "onnxruntime-genai==0.15.2" "onnx==1.22.0" "numpy==1.26.4" "tokenizers==0.23.1"
 
       - name: Verify pilk installed (SILK codec for voice messages)
         shell: python
@@ -706,7 +708,14 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - name: Install system dependencies
-        run: sudo apt-get update && sudo apt-get install -y portaudio19-dev
+        run: |
+          sudo apt-get update && sudo apt-get install -y \
+            portaudio19-dev \
+            libstdc++6 \
+            libgcc-s1 \
+            libglib2.0-0 \
+            libssl3 \
+            zlib1g
       - uses: actions/setup-python@v5
         with:
           python-version: '3.11'
