@@ -74,8 +74,10 @@ async def test_modelscope_skips_invalid_id_items():
     ids = [item.id for item in result.items]
     assert "plugin-legit-one" in ids
     assert "plugin-legit_two" in ids
+    # 非法 id 被规范化保留（bad/id → bad-id），而不是导致整份清单失败
+    assert "plugin-bad-id" in ids
     assert "plugin-bad/id" not in ids
-    assert len(result.items) == 2
+    assert len(result.items) == 3
 
 
 @pytest.mark.asyncio

@@ -13,9 +13,12 @@ const downloading = ref('')
 const showStorage = ref(false)
 const pendingModelId = ref('')
 
+// 规范化模型 id：去掉内置/本地的 id 前缀（builtin:/local:），与目录 id 匹配
+const normModelId = (id: string) => (id.includes(':') ? id.split(':')[1] : id)
+
 // 目录中「已收录但未下载」的候选（排除已安装），供灰色展示 + 一键下载
 const pendingCatalog = computed(() => {
-  const installedIds = new Set(store.models.map(m => m.catalog_id).filter(Boolean))
+  const installedIds = new Set(store.models.map(m => normModelId(m.catalog_id)).filter(Boolean))
   return store.catalog.filter(c => !installedIds.has(c.id))
 })
 

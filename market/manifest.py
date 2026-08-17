@@ -34,6 +34,16 @@ _SKILL_CATEGORIES = [
 ]
 
 
+def _normalize_item_id(skill_id: str) -> str:
+    """规范化 ModelScope skill id → 合法市场 item id。
+
+    ModelScope 的 skill id 含 `owner/name` 斜杠与 `@scope` 前缀，而
+    ``MarketItem.id`` 仅允许 ``[a-zA-Z0-9_-]``。这里把 `/`→`-`、`@`→`_`、
+    其余非法字符丢弃，保证 id 可作唯一标识且不含路径/包名危险字符。
+    """
+    return re.sub(r"[^a-zA-Z0-9_-]", "-", skill_id.replace("/", "-").replace("@", "_"))
+
+
 class MarketItem(BaseModel):
     """市场中的单个条目（插件、MCP 工具或技能）"""
     id: str = Field(description="唯一标识")
@@ -178,7 +188,7 @@ class ManifestFetcher:
                         skill_id = skill.get("id", "")
                         try:
                             item = MarketItem(
-                                id=f"{self._item_type}-{skill_id}",
+                                id=f"{self._item_type}-{_normalize_item_id(skill_id)}",
                                 type=self._item_type,
                                 name=skill.get("display_name", str(skill_id)),
                                 description=skill.get("description", ""),
@@ -304,14 +314,33 @@ class ManifestFetcher:
             logger.debug("market.cache_save_failed", error=str(e))
 
     def _load_local(self) -> MarketManifest | None:
-        """从本地缓存加载"""
+        """从本地缓存加载
+
+        兼容旧缓存：早期版本把 ModelScope 的原始 skill id（含 `/`、`@`）直接写入
+        items，违反 ``MarketItem.id`` 校验。加载失败时按新规则规范化 id 后重试。
+        """
+        if not self._cache_file.exists():
+            return None
         try:
-            if self._cache_file.exists():
-                data = json.loads(self._cache_file.read_text(encoding="utf-8"))
-                return MarketManifest(**data)
+            data = json.loads(self._cache_file.read_text(encoding="utf-8"))
         except Exception as e:
             logger.debug("market.cache_load_failed", error=str(e))
-        return None
+            return None
+
+        try:
+            return MarketManifest(**data)
+        except Exception as e:
+            logger.debug("market.cache_id_mismatch_reloading", error=str(e))
+        # 旧缓存：逐 item 规范化 id 后重试
+        try:
+            items = data.get("items", [])
+            for it in items:
+                if isinstance(it, dict) and "id" in it:
+                    it["id"] = _normalize_item_id(str(it["id"]))
+            return MarketManifest(**data)
+        except Exception as e:
+            logger.debug("market.cache_reload_failed", error=str(e))
+            return None
 
 
 # 全局单例
