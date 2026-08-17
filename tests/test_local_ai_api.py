@@ -207,18 +207,22 @@ def test_main_app_mounts_all_local_ai_resource_routes() -> None:
     from web.server import create_app
 
     # FastAPI 新版 app.routes 含 _IncludedRouter 包装（内部才持有具体路由），
-    # 需递归展开 original_router 取 path
+    # 需递归展开 original_router 取 path。
+    # 不同 FastAPI 版本下 _IncludedRouter.original_router.routes 暴露的 path
+    # 可能带 /api/v1 前缀（0.115/0.136）也可能不带（0.137+），统一剥离前缀后比对，
+    # 避免跨版本脆弱。
     def _iter_paths(routes):
         for route in routes:
             inner = getattr(route, "original_router", None)
             if inner is not None:
                 yield from _iter_paths(inner.routes)
             elif hasattr(route, "path"):
-                yield route.path
+                path = route.path
+                if path.startswith("/api/v1/"):
+                    path = path[len("/api/v1"):]
+                yield path
 
     paths = set(_iter_paths(create_app().routes))
-    # _IncludedRouter 内部 path 不带 include_router 时的 /api/v1 前缀，
-    # 按无前缀形式比对
     assert {
         "/local-ai/devices",
         "/local-ai/catalog",
