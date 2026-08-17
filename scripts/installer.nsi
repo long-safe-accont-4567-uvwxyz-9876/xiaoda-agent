@@ -215,7 +215,9 @@ IfErrors 0 path_already_exists
   ${Else}
     WriteRegStr HKCU "Environment" "PATH" "$R0;$INSTDIR"
   ${EndIf}
-  SendMessage ${HWND_BROADCAST} ${WM_SETTINGCHANGE} 0 "STR:Environment"
+  ; 广播环境变量变更：SendMessageTimeoutW + SMTO_ABORTIFHUNG(=2) + 2000ms 超时。
+  ; 原 SendMessage HWND_BROADCAST 同步广播，若有窗口无响应会永久阻塞卡死。
+  System::Call 'user32::SendMessageTimeoutW(i ${HWND_BROADCAST}, i ${WM_SETTINGCHANGE}, i 0, w "Environment", i 2, i 2000, *i .r0) .r0'
 path_already_exists:
 SectionEnd
 
@@ -258,5 +260,8 @@ ${Else}
   ${WordReplace} "$R1" ";$INSTDIR" "" "+" $R2
   WriteRegStr HKCU "Environment" "PATH" "$R2"
 ${EndIf}
-SendMessage ${HWND_BROADCAST} ${WM_SETTINGCHANGE} 0 "STR:Environment"
+; 广播环境变量变更：SendMessageTimeoutW + SMTO_ABORTIFHUNG(=2) + 2000ms 超时。
+; 原 SendMessage HWND_BROADCAST 同步广播，若有窗口无响应会永久阻塞，
+; 导致卸载卡死在最后一步无法完成。改用超时版，跳过挂起窗口。
+System::Call 'user32::SendMessageTimeoutW(i ${HWND_BROADCAST}, i ${WM_SETTINGCHANGE}, i 0, w "Environment", i 2, i 2000, *i .r0) .r0'
 SectionEnd
