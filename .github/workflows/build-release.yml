@@ -329,7 +329,18 @@ jobs:
           ls -lh "$ORT_GENAI"
           SMOKE_DIR="$RUNNER_TEMP/local-ai-smoke"
           python scripts/create_ort_genai_smoke_model.py "$SMOKE_DIR"
-          "$EXE" local-ai-smoke "$SMOKE_DIR"
+          # smoke 失败时输出诊断信息（native lib 依赖、ldd 结果），便于定位
+          # frozen exe 在 CI Linux 加载 genai so 失败的根因
+          if ! "$EXE" local-ai-smoke "$SMOKE_DIR"; then
+            echo "=== smoke 失败，诊断 native lib 依赖 ==="
+            echo "--- genai so 依赖链 (ldd) ---"
+            ldd "$ORT_GENAI" 2>&1 | head -20 || true
+            echo "--- onnxruntime so 依赖链 (ldd) ---"
+            find dist/xiaoda-agent -name "libonnxruntime.so*" -exec ldd {} \; 2>&1 | head -20 || true
+            echo "--- dist 内 genai 相关文件 ---"
+            find dist/xiaoda-agent -iname "*genai*" 2>/dev/null | head -20 || true
+            exit 1
+          fi
 
       - name: Ensure assets bundled in dist
         shell: bash
@@ -705,6 +716,17 @@ jobs:
       # 部分 async/pytest-asyncio 测试在 CI 环境失败（本地同版本全绿）。
       - run: pip install -r requirements.lock -q
       - run: pip install pytest pytest-asyncio pytest-timeout
+      # 创建测试环境：大量测试依赖 ~/.ai-agent/ 下的 agent 配置与 workspace 模板，
+      # 缺失则启动时找不到配置导致测试失败/超时（ci-tests.yml 有此步骤，本地因
+      # 已有 ~/.ai-agent/ 故全绿）。与 ci-tests.yml 的 Create test environment 对齐。
+      - name: Create test environment
+        run: |
+          mkdir -p ~/.ai-agent/logs
+          mkdir -p ~/.ai-agent/workspace
+          mkdir -p ~/.ai-agent/config/agents
+          mkdir -p ~/.ai-agent/data/db
+          cp -r config/workspace ~/.ai-agent/workspace/
+          cp -r config/agents/*.json ~/.ai-agent/config/agents/ 2>/dev/null || true
       - run: python -m pytest tests/ -x -q --timeout=60 --durations=30 -k "not e2e_real_scenario"
 
   release:
