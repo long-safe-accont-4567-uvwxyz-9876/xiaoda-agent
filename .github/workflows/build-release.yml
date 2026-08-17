@@ -135,6 +135,11 @@ jobs:
           pip install -r requirements.txt
           pip install ".[local-ai]"
           pip install fastapi uvicorn[standard] websockets python-multipart sse-starlette httpx Pillow numpy rich python-dotenv loguru openai aiosqlite pydantic jieba pyyaml pilk pywebview
+          # pin 本地 AI 依赖到实测兼容版本：requirements.txt 只给范围，CI 解析到新版
+          # onnxruntime 时与 onnxruntime-genai==0.15.2 的 native lib ABI 不匹配，
+          # 导致 frozen exe 在 Linux 加载 genai so 失败（Windows DLL 搜索宽松不受影响）。
+          # 以下版本经板端 frozen 构建 + smoke 实测通过。
+          pip install "onnxruntime==1.28.0" "onnxruntime-genai==0.15.2" "onnx==1.22.0" "numpy==1.26.4" "tokenizers==0.23.1"
 
       - name: Verify pilk installed (SILK codec for voice messages)
         shell: python
@@ -695,8 +700,11 @@ jobs:
         with:
           python-version: '3.11'
           cache: pip
-      - run: pip install -r requirements.txt
-      - run: pip install pytest pytest-asyncio pytest-timeout numpy
+      # 用 requirements.lock 锁定版本：与 ci-tests.yml 对齐，避免 requirements.txt
+      # 版本范围解析到与 onnxruntime-genai ABI 不兼容的新版 onnxruntime，导致
+      # 部分 async/pytest-asyncio 测试在 CI 环境失败（本地同版本全绿）。
+      - run: pip install -r requirements.lock -q
+      - run: pip install pytest pytest-asyncio pytest-timeout
       - run: python -m pytest tests/ -x -q --timeout=60 --durations=30 -k "not e2e_real_scenario"
 
   release:

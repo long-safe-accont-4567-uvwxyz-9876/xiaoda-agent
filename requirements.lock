@@ -22,6 +22,16 @@ Pillow==11.2.1
 # ── 数值计算 ──
 numpy==1.26.4
 
+# ── 本地 AI 推理（onnxruntime + GenAI + 向量检索）──
+# 锁定精确版本：requirements.txt 只给范围，CI 解析到新版本时与 onnxruntime-genai
+# 的 native lib ABI 不匹配，导致 frozen exe 在 Linux 加载 genai so 失败（Windows
+# 因 DLL 搜索路径宽松不受影响）。以下版本经板端 frozen 构建实测兼容。
+onnxruntime==1.28.0
+onnxruntime-genai==0.15.2
+onnx==1.22.0
+sqlite-vec==0.1.9
+tokenizers==0.23.1
+
 # ── CLI 美化 ──
 rich==13.9.4
 
