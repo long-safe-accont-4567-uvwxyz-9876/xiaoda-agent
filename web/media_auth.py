@@ -85,6 +85,12 @@ class AuthStaticFiles(StaticFiles):
     """带鉴权（cookie/Bearer/query token）+ no-cache 头的媒体静态文件服务。"""
 
     async def get_response(self, path: str, scope: dict) -> Response:
+        # 壁纸为装饰性公开资源（public-wallpaper 端点供登录页无鉴权展示），
+        # 不做 token 校验；其余 /media 内容（TTS 音频/生成图/上传）仍须鉴权。
+        if path.startswith("wallpapers/"):
+            resp = await super().get_response(path, scope)
+            resp.headers["Cache-Control"] = "no-cache, must-revalidate"
+            return resp
         token = _token_from_scope(scope)
         if not _validate(token):
             return JSONResponse(

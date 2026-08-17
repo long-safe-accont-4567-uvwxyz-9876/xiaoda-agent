@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted, ref, watch } from 'vue'
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { NAlert, NButton, NEmpty, NInput, NSelect, NSpin, NTabPane, NTabs, NTag, useMessage } from 'naive-ui'
 import { useLocalAiStore, type HubCategory, type HubSearchResult, type HubSource, type RemoteInspection } from '../../stores/localAi'
 import StoragePickerDialog from './StoragePickerDialog.vue'
@@ -8,16 +8,24 @@ const store = useLocalAiStore()
 const message = useMessage()
 
 // ── 已安装模型：匹配 catalog_id 或安装来源 repository，已下载好的标「已安装」不再提供下载 ──
+// 本地安装 id 带前缀（builtin:/local:），市场 id 是 owner/name 完整路径，
+// 因此按末尾模型名归一化匹配，避免已下载的 bge-small-zh-v1.5 在市场里仍可反复下载。
 const installedKeys = computed(() => {
   const keys = new Set<string>()
   for (const model of store.models) {
     keys.add(model.catalog_id)
     const repository = model.metadata?.repository
     if (typeof repository === 'string' && repository) keys.add(repository)
+    const base = String(model.catalog_id || '').split(/[:/]/).pop()
+    if (base) keys.add(base)
   }
   return keys
 })
-const isInstalled = (id: string) => installedKeys.value.has(id)
+const isInstalled = (id: string) => {
+  if (installedKeys.value.has(id)) return true
+  const base = String(id || '').split('/').pop()
+  return !!base && installedKeys.value.has(base)
+}
 
 // ── 分类节点：从后端能力映射动态加载（非前端写死），失败时用内置兜底 ──
 const CATEGORY_FALLBACK: HubCategory[] = [
@@ -40,6 +48,11 @@ async function loadCategories() {
 }
 
 // ── 在线获取：双源并发检索，跨源同 id 合并为一行（来源标注全部源） ──
+// 逐步加载：一次拉取较多（100，后端上限），前端先显示 20 条，
+// 用户滚动到底部每次再显示 10 条，直到全部展示。
+const MARKET_FETCH = 100
+const MARKET_FIRST = 20
+const MARKET_STEP = 10
 const hubQuery = ref('')
 const hubSource = ref<HubSource>('all')
 const hubSourceOptions = [
@@ -51,6 +64,35 @@ const hubResults = ref<HubSearchResult[]>([])
 const hubErrors = ref<string[]>([])
 const hubSearched = ref(false)
 const hubSearching = ref(false)
+const visibleCount = ref(MARKET_FIRST)
+
+// 逐步显示：滚动到底部时每次多显示 MARKET_STEP 条
+const displayRows = computed(() => marketRows.value.slice(0, visibleCount.value))
+const hasMore = computed(() => visibleCount.value < marketRows.value.length)
+
+function loadMore() {
+  if (hasMore.value && !hubSearching.value) {
+    visibleCount.value = Math.min(visibleCount.value + MARKET_STEP, marketRows.value.length)
+  }
+}
+
+// 无限滚动：底部哨兵进入视口（含 240px 预载）时自动加载下一批。
+// visibleCount/hasMore 变化后重新挂观察器，保证列表不足一屏时也能自动补足。
+const sentinel = ref<HTMLElement | null>(null)
+let observer: IntersectionObserver | null = null
+
+function observeSentinel() {
+  observer?.disconnect()
+  observer = null
+  if (!sentinel.value) return
+  observer = new IntersectionObserver(
+    (entries) => {
+      if (entries.some((entry) => entry.isIntersecting)) loadMore()
+    },
+    { rootMargin: '240px 0px' },
+  )
+  observer.observe(sentinel.value)
+}
 
 async function searchHub(keyword?: string) {
   const query = (keyword ?? hubQuery.value).trim()
@@ -58,9 +100,10 @@ async function searchHub(keyword?: string) {
   hubSearching.value = true
   hubResults.value = []
   hubErrors.value = []
+  visibleCount.value = MARKET_FIRST
   clearInspection()
   try {
-    const response = await store.searchHub(query, hubSource.value, 20, hubCategory.value)
+    const response = await store.searchHub(query, hubSource.value, MARKET_FETCH, hubCategory.value)
     hubResults.value = response.results
     hubErrors.value = response.errors
     hubSearched.value = true
@@ -81,6 +124,11 @@ watch(hubCategory, () => {
 onMounted(() => {
   void loadCategories()
   void searchHub('')
+})
+
+onBeforeUnmount(() => {
+  observer?.disconnect()
+  observer = null
 })
 
 // ── 展示映射（统一中文） ──
@@ -115,6 +163,10 @@ const marketRows = computed(() => hubResults.value.map(item => ({
   item,
 })))
 
+// 无限滚动观察器：marketRows 定义后再注册 watch（displayRows/hasMore 依赖 marketRows，
+// watch 建立依赖追踪时会读取 hasMore.value → 触发 marketRows 求值，必须在定义后才能访问）
+watch([hasMore, visibleCount], () => void nextTick(observeSentinel))
+
 // ── 查看解析（在线模型）：远程仓库详细解析，按首选源走同一契约 ──
 const inspectingId = ref('')
 const inspectingSource = ref('')
@@ -137,8 +189,26 @@ async function toggleInspect(row: { id: string; source: string; item: HubSearchR
     return
   }
   // 首选源：带不可变 hash 的源（跨源合并时后端已选好）
-  const revision = (row.source === 'hf-mirror' ? row.item.sha : row.item.revision) || ''
-  if (!/^[0-9a-fA-F]{7,64}$/.test(revision)) {
+  let revision = (row.source === 'hf-mirror' ? row.item.sha : row.item.revision) || ''
+  // ModelScope 搜索阶段跳过了 revision 解析（提速），检视时按需解析单个仓库
+  if (!/^[0-9a-fA-F]{7,64}$/.test(revision) && row.source === 'modelscope') {
+    clearInspection()
+    inspecting.value = true
+    try {
+      const resolved = await store.resolveHubRevision(row.id, row.source)
+      revision = resolved.revision || ''
+      if (!/^[0-9a-fA-F]{7,64}$/.test(revision)) {
+        message.warning('该仓库没有可用的不可变 commit hash，请换一个仓库')
+        return
+      }
+      row.item.revision = revision
+    } catch (error) {
+      message.error(error instanceof Error ? error.message : String(error))
+      return
+    } finally {
+      inspecting.value = false
+    }
+  } else if (!/^[0-9a-fA-F]{7,64}$/.test(revision)) {
     message.warning('该仓库没有可用的不可变 commit hash，请换一个仓库')
     return
   }
@@ -265,10 +335,10 @@ const missingText = (item: string) => MISSING_TEXT[item] ?? item
     <div v-if="hubSearching" class="load-line"><n-spin size="small" />正在获取模型…</div>
     <n-empty v-else-if="hubSearched && !marketRows.length" description="这个分类下没有匹配的仓库，换个关键词试试" />
     <div v-else-if="marketRows.length" class="model-list">
-      <div class="list-count">共 {{ marketRows.length }} 个模型</div>
+      <div class="list-count">已显示 {{ displayRows.length }} / 共 {{ marketRows.length }} 个模型</div>
 
       <article
-        v-for="row in marketRows"
+        v-for="row in displayRows"
         :key="row.key"
         class="glass-panel model-row"
         :class="{ expanded: isExpanded(row) }"
@@ -333,6 +403,10 @@ const missingText = (item: string) => MISSING_TEXT[item] ?? item
           </div>
         </div>
       </article>
+
+      <div v-if="hasMore" ref="sentinel" class="load-sentinel">
+        <n-spin size="small" /> 下拉加载更多（已显示 {{ displayRows.length }} / {{ marketRows.length }}）
+      </div>
     </div>
 
     <StoragePickerDialog :show="showStorage" :required-bytes="storageBytes" @select="selectStorage" @cancel="showStorage = false" />
@@ -352,6 +426,7 @@ const missingText = (item: string) => MISSING_TEXT[item] ?? item
 
 .load-line { display: flex; align-items: center; justify-content: center; gap: 8px; padding: 28px 0; color: var(--moon-dim); font-size: 13px; }
 .list-count { color: var(--moon-dim); font-size: 12px; }
+.load-sentinel { display: flex; align-items: center; justify-content: center; gap: 8px; padding: 14px 0; color: var(--moon-dim); font-size: 12px; }
 
 .model-list { display: flex; flex-direction: column; gap: 10px; }
 .model-row { padding: 12px 16px; border-radius: 12px; transition: border-color .2s; }

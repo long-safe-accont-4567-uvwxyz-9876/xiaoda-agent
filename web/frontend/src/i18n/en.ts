@@ -1030,6 +1030,7 @@ export default {
     disclaimerSaveFailed: 'Failed to save disclaimer agreement',
     passwordSection: 'Login Password & Recovery Q&A',
     passwordSectionHint: 'Set WebUI login password (required, min 8 chars)',
+    passwordConfiguredHint: 'Login password configured ✓ (leave empty to keep current password)',
     passwordPlaceholder: 'Enter login password (min 8 chars)…',
     recoveryQuestion: 'Recovery question',
     recoveryQuestionPlaceholder: 'e.g. What was the name of my first pet?',
@@ -1306,7 +1307,7 @@ export default {
   keyAccordion: {
     required: 'Required',
     optional: 'Optional',
-    getUrl: 'Get URL:',
+    getUrl: 'Get it at:',
     inputPh: (key: string) => `Enter ${key}`,
     hide: 'Hide',
     show: 'Show',
@@ -1314,6 +1315,9 @@ export default {
     test: 'Test',
     currentValue: 'Current value:',
     testPassed: 'Test passed',
+    configured: 'Configured',
+    configuredTip: 'This key is already configured on the server. No need to re-enter; type a new value only to replace it.',
+    keepCurrent: 'Configured — leave empty to keep',
   },
 
   // SlashPalette.vue

@@ -1044,11 +1044,18 @@ _KNOWN_PROVIDERS = {
 
 
 async def _auto_register_providers(updates: dict) -> list[Any]:
-    """当用户配置了免费模型平台的 Key，自动注册为自定义 Provider。"""
+    """当用户配置了免费模型平台的 Key，自动注册为自定义 Provider。
+
+    provider_service 未就绪（应用尚未完成启动）时降级跳过，不阻塞保存流程。
+    """
     from llm_gateway.provider_service import ProviderService
     from web.app_ref import get_app
 
-    service = get_app().state.provider_service
+    app = get_app()
+    service = getattr(getattr(app, "state", None), "provider_service", None)
+    if service is None:
+        logger.warning("setup.auto_provider_register_skipped reason=provider_service_unavailable")
+        return []
     existing = {definition.id for definition in service.list()}
     known_keys = list(_KNOWN_PROVIDERS.keys())
     provider_snapshots = []
@@ -1104,7 +1111,11 @@ async def _rollback_auto_registered_providers(
 ) -> None:
     if service is None:
         from web.app_ref import get_app
-        service = get_app().state.provider_service
+        app = get_app()
+        service = getattr(getattr(app, "state", None), "provider_service", None)
+    if service is None:
+        logger.warning("setup.provider_rollback_skipped reason=provider_service_unavailable")
+        return
     failures = []
     for snapshot in reversed(provider_snapshots):
         try:

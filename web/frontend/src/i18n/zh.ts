@@ -1031,6 +1031,7 @@ export default {
     disclaimerSaveFailed: '保存免责协议失败',
     passwordSection: '登录密码与找回问答',
     passwordSectionHint: '设置 WebUI 登录密码（必填，至少 8 位）',
+    passwordConfiguredHint: '已配置登录密码 ✓（留空保持原密码，需要修改时直接输入新密码）',
     passwordPlaceholder: '输入登录密码（至少 8 位）…',
     recoveryQuestion: '找回问题',
     recoveryQuestionPlaceholder: '如：我的第一只宠物叫什么？',
@@ -1315,6 +1316,9 @@ export default {
     test: '测试',
     currentValue: '当前值：',
     testPassed: '测试通过',
+    configured: '已配置',
+    configuredTip: '该密钥已在服务器配置，无需重复填写；修改时直接输入新值',
+    keepCurrent: '已配置，留空保持不变',
   },
 
   // SlashPalette.vue

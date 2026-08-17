@@ -153,7 +153,9 @@ def search_hf_mirror(
 
     results: list[dict[str, Any]] = []
     errors: list[str] = []
-    with ThreadPoolExecutor(max_workers=min(len(pipelines), 6)) as pool:
+    # hf-mirror 对并发 API 请求敏感（16 个 pipeline 并发易触发 429），
+    # 限制到 3 个并发降低限流概率；被限流的 pipeline 计入 errors 不阻断。
+    with ThreadPoolExecutor(max_workers=min(len(pipelines), 3)) as pool:
         futures = {pool.submit(fetch, pipeline): pipeline for pipeline in pipelines}
         for future in futures:
             try:
@@ -204,16 +206,20 @@ def search_modelscope(
     *,
     limit: int = 20,
     category: str = "all",
+    resolve_revisions: bool = False,
 ) -> list[dict[str, Any]]:
     """在 ModelScope 搜索模型仓库（新版 OpenAPI，无需鉴权）。
 
-    返回 [{id, name, downloads, likes, revision, pipeline_tag, modified_at, tags, category}]，
-    revision 为默认分支不可变 commit hash（并发解析，失败为 None）。
+    返回 [{id, name, downloads, likes, revision, pipeline_tag, modified_at, tags, category}]。
     category 指定时按任务类型过滤；默认只返回功能性小模型（不含 chat 大模型）。
 
     注意：OpenAPI 的 page_size 上限为 50，此前用 limit*3（=60）会触发 400
     导致 ModelScope 搜索结果为空。这里固定每页 50 并翻页拉取，直到凑够
     limit 个功能节点（热门榜前几页几乎全是对话大模型，翻页才能捞到）。
+
+    resolve_revisions=False（默认）时跳过 commit hash 解析（每结果一次 HTTP，
+    50 个要 3s+），revision 留空；检视/下载阶段由调用方按需解析单仓库。
+    搜索阶段只需展示列表，不需要 revision，跳过可把搜索从 4.5s 降到 1.5s。
     """
     page_size = 50
     max_pages = 3
@@ -278,8 +284,10 @@ def search_modelscope(
         if len(items) < page_size:
             break  # 已到最后一页
     results = collected[:limit]
-    # 并发解析默认分支 commit hash（供检视/下载使用）
-    if results:
+    # 并发解析默认分支 commit hash（供检视/下载使用）。
+    # 搜索阶段默认跳过：每结果一次 HTTP，50 个要 3s+，而用户进入页面只看列表，
+    # 不会检视全部 50 个。revision 留空，检视阶段由前端触发按需解析单个。
+    if results and resolve_revisions:
         ids = [result["id"] for result in results]
         with ThreadPoolExecutor(max_workers=6) as pool:
             revisions = list(pool.map(_modelscope_revision, ids))

@@ -262,6 +262,8 @@ export const localAiApi = {
   searchHub: (q: string, source: HubSource = 'all', limit = 20, category = 'all') =>
     get<HubSearchResponse>(`/local-ai/hub/search?q=${encodeURIComponent(q)}&source=${encodeURIComponent(source)}&limit=${limit}&category=${encodeURIComponent(category)}`),
   hubCategories: () => get<HubCategory[]>('/local-ai/hub/categories'),
+  resolveHubRevision: (repository: string, source: string = 'modelscope') =>
+    get<{ repository: string; revision: string | null }>(`/local-ai/hub/revision?repository=${encodeURIComponent(repository)}&source=${encodeURIComponent(source)}`),
   downloadHubRepository: (repository: string, revision: string, destination: string, requestId: string, source: string = 'modelscope') =>
     post<{ task: DownloadTask }>('/local-ai/hub/download', { repository, revision, destination, request_id: requestId, source }),
   createDownload: (request: DownloadRequest) => post<{ task: DownloadTask }>('/local-ai/downloads', request),

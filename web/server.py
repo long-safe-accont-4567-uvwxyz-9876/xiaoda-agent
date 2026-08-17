@@ -1148,6 +1148,12 @@ def create_app() -> FastAPI:
     if dist_dir.exists():
         app.mount("/", NoCacheHTMLStaticFiles(directory=str(dist_dir), html=True), name="spa")
 
+    # 注册全局 app 引用，供 web.app_ref.get_app() 使用（setup 保存 / probes 探测依赖）。
+    # 之前从未调用 set_app，导致 get_app() 恒返回 None，保存设置时
+    # `get_app().state.provider_service` 抛 "'NoneType' object has no attribute 'state'"。
+    from web.app_ref import set_app
+    set_app(app)
+
     return app
 
 

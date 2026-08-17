@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import shutil
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -12,6 +13,13 @@ logger = logging.getLogger(__name__)
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
 from pydantic import BaseModel, Field
+
+# hub/search 专用独立线程池：search_hub 内部嵌套 3 层 ThreadPoolExecutor，
+# 与 NPU/onnxruntime 推理争抢 asyncio 默认池会把 5s 搜索拖到 12s+。
+# 独立池避免竞争，且进程级单例避免每次请求重建。
+_hub_search_executor = ThreadPoolExecutor(
+    max_workers=8, thread_name_prefix="hub-search"
+)
 
 from local_ai.catalog.curated import CatalogLoader
 from local_ai.catalog.hf_repo import HuggingFaceRepository
@@ -304,9 +312,13 @@ async def hub_search(
 
     if limit < 1 or limit > 100:
         raise HTTPException(status_code=422, detail="limit must be between 1 and 100")
+    # hub/search 内部嵌套 3 层 ThreadPoolExecutor（pipeline 拉取 + revision 解析
+    # + 双源并发），与 onnxruntime/NPU 推理、subprocess 一起争抢 asyncio 默认
+    # 线程池导致 5s 的搜索被拖到 12s+。改用独立大线程池，避免与默认池竞争。
     try:
-        payload = await asyncio.to_thread(
-            search_hub, q, source, limit=limit, category=category
+        payload = await asyncio.get_event_loop().run_in_executor(
+            _hub_search_executor,
+            lambda: search_hub(q, source, limit=limit, category=category),
         )
     except HubSearchError as error:
         raise HTTPException(status_code=502, detail=str(error)) from error
@@ -409,6 +421,33 @@ def _run_remote_inspect(
         else ModelScopeRepository()
     )
     return asyncio.run(adapter.inspect(repository, revision, token))
+
+
+@router.get("/local-ai/hub/revision", response_model=Envelope[dict[str, Any]])
+async def resolve_hub_revision(
+    request: Request,
+    repository: str,
+    source: str = "modelscope",
+) -> Any:
+    """解析仓库默认分支的不可变 commit hash（检视/下载前按需调用）。
+
+    搜索阶段为提速跳过 revision 解析（50 个仓库各一次 HTTP 要 3s+），
+    用户点「查看解析」时前端按需解析单个仓库的 revision，再调检视端点。
+    hf-mirror 搜索结果已带 sha，无需调本端点；仅 ModelScope 需要。
+    """
+    if source not in {"modelscope", "hf-mirror"}:
+        raise HTTPException(status_code=422, detail="source must be modelscope or hf-mirror")
+    if not isinstance(repository, str) or "/" not in repository:
+        raise HTTPException(status_code=422, detail="repository must be owner/name")
+    if source == "hf-mirror":
+        # hf-mirror 搜索结果已带 sha，无需解析
+        raise HTTPException(status_code=422, detail="hf-mirror 搜索结果已带 sha，无需解析 revision")
+    from local_ai.catalog.hub_search import _modelscope_revision
+
+    revision = await asyncio.get_event_loop().run_in_executor(
+        _hub_search_executor, _modelscope_revision, repository
+    )
+    return Envelope(data={"repository": repository, "revision": revision})
 
 
 @router.get("/local-ai/remote/inspect", response_model=Envelope[dict[str, Any]])

@@ -41,7 +41,10 @@ async def probe_provider(core: Any, provider_id: str, provider_service: Any | No
     service = provider_service
     if service is None:
         from web.app_ref import get_app
-        service = get_app().state.provider_service
+        app = get_app()
+        service = getattr(getattr(app, "state", None), "provider_service", None)
+        if service is None:
+            return {"ok": False, "latency_ms": 0, "error": "provider service 未初始化"}
     try:
         report = await service.capabilities(provider_id)
     except KeyError:
@@ -152,7 +155,10 @@ def _list_custom_providers(core: Any, provider_service: Any | None = None) -> li
         service = provider_service
         if service is None:
             from web.app_ref import get_app
-            service = get_app().state.provider_service
+            app = get_app()
+            service = getattr(getattr(app, "state", None), "provider_service", None)
+            if service is None:
+                return out
         for definition in service.list():
             if definition.builtin:
                 continue

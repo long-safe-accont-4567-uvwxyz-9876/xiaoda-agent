@@ -148,10 +148,13 @@ const stageText: Record<string, string> = {
   display: flex;
   gap: 8px;
   overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
+  scrollbar-width: none;
   flex: 1;
   min-width: 0;
   padding: 4px 0;
 }
+.agent-switcher::-webkit-scrollbar { display: none; }
 
 .agent-chip {
   display: flex;

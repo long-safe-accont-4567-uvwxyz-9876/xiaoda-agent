@@ -481,8 +481,16 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
 
     async def dispatch(self, request: Request, call_next: Any) -> Any:
         path = request.url.path
-        # 豁免路径直接放行 (健康检查 / WebSocket / favicon)
-        if path in self._exempt_paths or path.startswith("/ws"):
+        # 豁免路径直接放行 (健康检查 / WebSocket / favicon / 静态资源)
+        # /assets（前端 JS/CSS 分块）与 /media（媒体文件）由磁盘直读，非 API
+        # 滥用面；SPA 一次加载会并发请求几十个 chunk，若计入用户桶会瞬间耗尽
+        # 60/min 导致整页 429 崩溃。媒体鉴权由 media_auth 单独负责，不受影响。
+        if (
+            path in self._exempt_paths
+            or path.startswith("/ws")
+            or path.startswith("/assets/")
+            or path.startswith("/media/")
+        ):
             return await call_next(request)
 
         host = self._client_host(request)

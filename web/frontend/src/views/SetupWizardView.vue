@@ -343,26 +343,10 @@ async function handleSave() {
             {{ testingAll ? t('setupWizard.testing') : t('setupWizard.testAll') }}
           </button>
 
-          <div class="optional-toggle" @click="showOptional = !showOptional">
-            <span class="section-title optional-title">── {{ t('setupWizard.optional') }} ──</span>
-            <span class="toggle-arrow" :class="{ 'arrow-open': showOptional }">❯</span>
-          </div>
-          <Transition name="collapse">
-            <div v-if="showOptional" class="optional-body">
-              <KeyAccordion
-                :items="optionalKeys"
-                :test-statuses="testStatuses"
-                :test-messages="testMessages"
-                @update="handleUpdate"
-                @test="handleTestKey"
-              />
-            </div>
-          </Transition>
-
-          <!-- 登录密码与找回问答（必填） -->
+          <!-- 登录密码与找回问答（未配置时必填）—— 放在必填 Key 之后，不再沉底 -->
           <div class="password-section">
             <h3 class="password-section-title">── {{ t('setupWizard.passwordSection') }} ──</h3>
-            <p class="password-hint">{{ t('setupWizard.passwordSectionHint') }}</p>
+            <p class="password-hint">{{ needsPassword ? t('setupWizard.passwordSectionHint') : t('setupWizard.passwordConfiguredHint') }}</p>
             <input
               :value="webuiPassword"
               type="password"
@@ -384,6 +368,22 @@ async function handleSave() {
             />
             <p class="password-hint">{{ t('setupWizard.recoveryHint') }}</p>
           </div>
+
+          <div class="optional-toggle" @click="showOptional = !showOptional">
+            <span class="section-title optional-title">── {{ t('setupWizard.optional') }} ──</span>
+            <span class="toggle-arrow" :class="{ 'arrow-open': showOptional }">❯</span>
+          </div>
+          <Transition name="collapse">
+            <div v-if="showOptional" class="optional-body">
+              <KeyAccordion
+                :items="optionalKeys"
+                :test-statuses="testStatuses"
+                :test-messages="testMessages"
+                @update="handleUpdate"
+                @test="handleTestKey"
+              />
+            </div>
+          </Transition>
 
           <p v-if="error" class="error-text">{{ error }}</p>
 

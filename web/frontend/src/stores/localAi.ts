@@ -224,6 +224,10 @@ export const useLocalAiStore = defineStore('localAi', () => {
     return localAiApi.searchHub(query, source, limit, category)
   }
 
+  function resolveHubRevision(repository: string, source = 'modelscope'): Promise<{ repository: string; revision: string | null }> {
+    return localAiApi.resolveHubRevision(repository, source)
+  }
+
   function inspectRemote(repository: string, revision: string, source = 'modelscope'): Promise<RemoteInspection> {
     return localAiApi.inspectRemote(repository, revision, source)
   }
@@ -346,7 +350,7 @@ export const useLocalAiStore = defineStore('localAi', () => {
     devices, catalog, models, downloads, instances, defaultStorage, catalogAdvanced, loading, rescanning, error,
     load, rescan, download, pause, resume, cancel, removeDownload, start, stop, remove,
     refreshModels, refreshCatalog, browseStorage, validateStorage, saveDefaultStorage,
-    hubCategories, searchHub, inspectRemote, downloadHubRepository,
+    hubCategories, searchHub, inspectRemote, downloadHubRepository, resolveHubRevision,
     benchmarkModel, refreshDevices, fetchModelNodes, setModelNodeBackend, fetchLocalDeployStatus,
     createRequestId, upsertDevice, upsertDownload, upsertInstance, connectWebSocket, disconnectWebSocket,
   }

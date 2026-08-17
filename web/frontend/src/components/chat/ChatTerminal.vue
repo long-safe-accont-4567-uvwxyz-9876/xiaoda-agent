@@ -198,6 +198,9 @@ function createSession(shell: string) {
     scrollback: 10000,
     allowProposedApi: true,
     convertEol: true,
+    // 移动端触摸滚动：禁用 xterm 默认的鼠标/触摸事件拦截，
+    // 让浏览器原生 touch 滚动接管 .xterm-viewport 的滚动。
+    macOptionIsMeta: true,
   })
   const fitAddon = new FitAddon()
   terminal.loadAddon(fitAddon)
@@ -692,11 +695,21 @@ function onPanelOpened() {
 }
 .term-viewport :deep(.xterm-viewport) {
   overflow-y: auto !important;
+  -webkit-overflow-scrolling: touch !important;
   background: transparent !important;
 }
 .term-viewport :deep(.xterm-screen) {
   width: 100% !important;
   height: 100% !important;
+}
+
+/* 移动端触摸滚动：xterm.js 默认拦截 touch 事件做文本选择，阻止原生滚动。
+   用 touch-action: pan-y 允许垂直触摸滚动，同时保留水平滑动选择文本的能力。 */
+@media (hover: none) and (pointer: coarse) {
+  .term-viewport :deep(.xterm-viewport),
+  .term-viewport :deep(.xterm-screen) {
+    touch-action: pan-y !important;
+  }
 }
 
 .term-empty {

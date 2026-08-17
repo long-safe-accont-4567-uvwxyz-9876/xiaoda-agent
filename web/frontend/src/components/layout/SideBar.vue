@@ -196,6 +196,7 @@ function onLeave() {
   gap: 2px;
   padding: 0 8px;
   overflow-y: auto;
+  -webkit-overflow-scrolling: touch;
 }
 
 .nav-item {
@@ -329,6 +330,9 @@ function onLeave() {
     width: var(--sidebar-mobile-width, min(82vw, 320px));
     transform: translateX(-105%);
     transition: transform 0.25s var(--ease-out);
+    /* 移动端侧栏在 overlay 之上：overlay z-index=70 遮住侧栏会导致点击导航项时
+       事件打到 overlay 而非 router-link，表现为"能点但不导航"。 */
+    z-index: 80;
   }
   .sidebar.mobile-open {
     transform: translateX(0);

@@ -83,6 +83,7 @@ function onTest(key: string) {
         </span>
         <span class="key-name">{{ item.key }}</span>
         <span class="key-label">{{ item.label }}</span>
+        <span v-if="item.configured" class="configured-badge" :title="t('keyAccordion.configuredTip')">✓ {{ t('keyAccordion.configured') }}</span>
         <!-- 测试状态图标 -->
         <span
           class="test-status-icon"
@@ -124,7 +125,7 @@ function onTest(key: string) {
               <input
                 class="dendro-input"
                 :type="showPassword[item.key] ? 'text' : 'password'"
-                :placeholder="tf('keyAccordion.inputPh', item.key)"
+                :placeholder="item.configured && !inputValues[item.key] ? t('keyAccordion.keepCurrent') : tf('keyAccordion.inputPh', item.key)"
                 :value="inputValues[item.key] ?? ''"
                 @input="onInput(item.key, ($event.target as HTMLInputElement).value)"
               />
@@ -227,6 +228,16 @@ function onTest(key: string) {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.configured-badge {
+  font-size: 11px;
+  padding: 2px 8px;
+  border-radius: 4px;
+  color: #4ade80;
+  background: rgba(74, 222, 128, 0.12);
+  border: 1px solid rgba(74, 222, 128, 0.3);
+  flex-shrink: 0;
 }
 
 /* 测试状态图标 */
