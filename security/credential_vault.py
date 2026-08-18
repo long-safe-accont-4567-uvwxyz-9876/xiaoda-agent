@@ -208,12 +208,16 @@ def _dpapi_decrypt(ciphertext: bytes) -> str:
     """使用 DPAPI CryptUnprotectData 解密。返回原始 plaintext。
 
     仅在 sys.platform == 'win32' 且 HAS_WIN32CRYPT = True 时调用。
-    CryptUnprotectData 返回 (description, data, entropy) 三元组。
+    CryptUnprotectData 返回值在不同 pywin32 版本间为 2 或 3 元组，
+    这里统一兼容，只取 data (索引 1)。
     """
-    # CryptUnprotectData(dataIn, optionalEntropy, reserved, promptStruct, flags)
-    _desc, data, _entropy = win32crypt.CryptUnprotectData(  # type: ignore[union-attr]
+    result = win32crypt.CryptUnprotectData(  # type: ignore[union-attr]
         ciphertext, None, None, None, 0
     )
+    # 兼容 (desc, data) 与 (desc, data, entropy/reserved)
+    if len(result) < 2:
+        raise ValueError(f"CryptUnprotectData 返回值异常：{result}")
+    data = result[1]
     return data.decode("utf-8")
 
 
@@ -231,19 +235,20 @@ def _is_dpapi_encrypted(value: str) -> bool:
 
 # ── 公共 API ──────────────────────────────────────────────────
 def is_encrypted(value: str) -> bool:
-    """判断值是否已加密（enc:v1: 前缀 + 合法 base64url 主体）
-
-    注意：此函数仅检测 enc:v1: 格式。DPAPI 加密的值（enc:v2:dpapi:）
-    请使用 _is_dpapi_encrypted 检测，或两者都检查。
-    """
+    """判断值是否已加密（enc:v1: 或 enc:v2:dpapi: 前缀 + 合法 base64url 主体）"""
     if not isinstance(value, str) or not value:
         return False
-    if not value.startswith(_PREFIX):
-        return False
-    encoded = value[len(_PREFIX):]
-    if not encoded:
-        return False
-    return _B64URL_PATTERN.fullmatch(encoded) is not None
+    # 先检测 enc:v1: (Fernet) 格式
+    if value.startswith(_PREFIX):
+        encoded = value[len(_PREFIX):]
+        if encoded and _B64URL_PATTERN.fullmatch(encoded):
+            return True
+    # 再检测 enc:v2:dpapi: 格式
+    if value.startswith(_DPAPI_PREFIX):
+        encoded = value[len(_DPAPI_PREFIX):]
+        if encoded and _B64URL_PATTERN.fullmatch(encoded):
+            return True
+    return False
 
 
 def encrypt(plaintext: str) -> str:

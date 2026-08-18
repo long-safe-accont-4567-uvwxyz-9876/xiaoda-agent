@@ -144,33 +144,27 @@ def test_linux_unchanged():
     """Linux 上 encrypt/decrypt 行为完全不变，走 enc:v1: 路径
 
     验证：
-    - sys.platform 不是 'win32'（真实 Linux 环境）
+    - 强制 v1 路径（patch HAS_WIN32CRYPT=False）
     - encrypt() 返回 enc:v1: 前缀的值
     - decrypt() 能正确解密
     - is_encrypted() 正确识别
     - 不调用 win32crypt
     """
-    # 确认当前是 Linux 环境
-    assert sys.platform != "win32", "此测试必须在非 Windows 环境运行"
-
     plaintext = "sk-linux-unchanged-secret"
 
-    # 不 patch 任何东西，使用真实 Linux 行为
-    encrypted = encrypt(plaintext)
-    assert encrypted.startswith("enc:v1:"), \
-        f"Linux 上应走 enc:v1: 路径，实际: {encrypted[:30]}"
-    assert not encrypted.startswith("enc:v2:dpapi:")
+    with patch.object(cv, "HAS_WIN32CRYPT", False):
+        encrypted = encrypt(plaintext)
+        assert encrypted.startswith("enc:v1:"), \
+            f"v1 路径应输出 enc:v1:，实际: {encrypted[:30]}"
+        assert not encrypted.startswith("enc:v2:dpapi:")
 
-    # is_encrypted 正确识别
-    assert is_encrypted(encrypted) is True
+        assert is_encrypted(encrypted) is True
 
-    # decrypt 正确解密
-    decrypted = decrypt(encrypted)
-    assert decrypted == plaintext
+        decrypted = decrypt(encrypted)
+        assert decrypted == plaintext
 
-    # 幂等性：已加密的值不再重复加密
-    re_encrypted = encrypt(encrypted)
-    assert re_encrypted == encrypted, "已加密的值应幂等返回"
+        re_encrypted = encrypt(encrypted)
+        assert re_encrypted == encrypted, "已加密的值应幂等返回"
 
 
 def test_dpapi_decrypt_failure_falls_back():
@@ -183,8 +177,9 @@ def test_dpapi_decrypt_failure_falls_back():
     """
     plaintext = "sk-test-dpapi-decrypt-fallback"
 
-    # 1. 使用真实 Linux 环境加密得到 v1 密文
-    v1_encrypted = encrypt(plaintext)
+    # 1. 强制 v1 加密（patch HAS_WIN32CRYPT=False 绕过 DPAPI）
+    with patch.object(cv, "HAS_WIN32CRYPT", False):
+        v1_encrypted = encrypt(plaintext)
     assert v1_encrypted.startswith("enc:v1:")
     v1_payload = v1_encrypted[len("enc:v1:"):]
 
@@ -264,8 +259,9 @@ def test_v1_value_still_decrypts_on_windows():
     """
     plaintext = "sk-test-v1-backward-compat"
 
-    # 1. 在 Linux 环境下加密为 v1
-    v1_encrypted = encrypt(plaintext)
+    # 1. 强制 v1 加密（patch HAS_WIN32CRYPT=False 绕过 DPAPI）
+    with patch.object(cv, "HAS_WIN32CRYPT", False):
+        v1_encrypted = encrypt(plaintext)
     assert v1_encrypted.startswith("enc:v1:")
 
     # 2. 切换到 Windows + DPAPI 可用环境

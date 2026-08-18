@@ -21,12 +21,18 @@ if str(_PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(_PROJECT_ROOT))
 
 from security.credential_vault import (
+    HAS_WIN32CRYPT,
     DecryptionError,
     decrypt,
     encrypt,
     is_encrypted,
     migrate_env_file,
 )
+
+
+# DPAPI 环境下 (Windows + pywin32 可用)，encrypt 走内核级 DPAPI 加密，
+# mock getpass/socket 无法模拟机器身份变化，以下测试仅在 v1 路径有效。
+_DPAPI_ACTIVE = sys.platform == "win32" and HAS_WIN32CRYPT
 
 
 def test_encrypt_decrypt_roundtrip():
@@ -79,8 +85,8 @@ def test_migrate_env_idempotent(tmp_path):
     assert n1 == 3
 
     content1 = env_file.read_text(encoding="utf-8")
-    # 明文已被加密
-    assert "enc:v1:" in content1
+    # 明文已被加密（Windows DPAPI → enc:v2:dpapi:, 其他 → enc:v1:）
+    assert "enc:v1:" in content1 or "enc:v2:dpapi:" in content1
     assert "sk-plaintext-key" not in content1
     assert "sk-agnes-key" not in content1
     assert "ghp_token_abc" not in content1
@@ -97,6 +103,7 @@ def test_migrate_env_idempotent(tmp_path):
     assert content2 == content1
 
 
+@pytest.mark.skipif(_DPAPI_ACTIVE, reason="DPAPI 内核级加密无法通过 mock getpass/socket 模拟")
 def test_encrypt_different_per_machine():
     """不同用户名/主机名产生不同密文（机器绑定，mock 验证）"""
     plaintext = "sk-same-secret-value"
