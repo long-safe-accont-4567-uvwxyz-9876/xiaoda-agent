@@ -451,7 +451,17 @@ async def test_embedding_singleflight_accepts_same_text_after_cancelled_generati
     leader = asyncio.create_task(vector_store.embed(["retry"]))
     assert await asyncio.to_thread(runtime.embed_entered.wait, 1)
     waiter = asyncio.create_task(vector_store.embed(["retry"]))
-    await asyncio.sleep(0)
+    # waiter 需经过 selection_key 解析（内含 await 让出点）才到达 shield(inflight)。
+    # 轮询直到 waiter 到达 shield：leader 在 to_thread 中阻塞，不 await inflight future，
+    # 所以 inflight future 的 _callbacks 为空；waiter 的 shield 会注册回调。
+    # 当 future 出现回调时说明 waiter 已挂上共享 future。
+    for _ in range(500):
+        await asyncio.sleep(0)
+        fut = next(iter(vector_store._inflight.values()), None)
+        if fut is not None and fut._callbacks:
+            break
+    else:
+        pytest.fail("waiter did not reach singleflight shield in time")
     leader.cancel()
     await asyncio.sleep(0)
     assert not leader.done()
