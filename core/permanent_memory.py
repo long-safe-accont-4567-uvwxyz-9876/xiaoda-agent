@@ -20,11 +20,17 @@ from typing import ClassVar
 import asyncio
 import json
 import os
+import threading
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
 
 from loguru import logger
+
+try:
+    from utils.atomic_write import atomic_json_write
+except Exception:  # pragma: no cover
+    atomic_json_write = None  # type: ignore[assignment]
 
 # 延迟导入 DATA_DIR, 避免 config 模块在测试中导入失败时影响本模块
 try:
@@ -127,6 +133,8 @@ class PermanentMemoryManager:
         self._memories_path = self._data_dir / "permanent_memories.json"
         # user_id -> {key: PermanentMemoryEntry}
         self._memories: dict[str, dict[str, PermanentMemoryEntry]] = {}
+        # 进程内写锁：防止 run_in_executor 并发写同一文件
+        self._write_lock = threading.Lock()
         self._load()
 
     @property
@@ -167,7 +175,11 @@ class PermanentMemoryManager:
             self._memories = {}
 
     def _save(self) -> None:
-        """原子化保存到 JSON 文件 (.tmp + os.replace), offloaded to thread."""
+        """原子化保存到 JSON 文件, offloaded to thread.
+
+        使用 atomic_json_write（mkstemp 唯一名 + fsync + os.replace + Windows 重试），
+        进程内锁防止 run_in_executor 并发写同一文件导致内容交错/PermissionError。
+        """
         self._memories_path.parent.mkdir(parents=True, exist_ok=True)
         data = {
             uid: {key: entry.to_dict() for key, entry in entries.items()}
@@ -175,18 +187,29 @@ class PermanentMemoryManager:
         }
 
         def _write() -> None:
-            tmp = self._memories_path.with_suffix(".json.tmp")
-            try:
-                with open(tmp, "w", encoding="utf-8") as f:
-                    json.dump(data, f, ensure_ascii=False, indent=2)
-                os.replace(tmp, self._memories_path)
-            except Exception as e:
-                logger.warning(f"PermanentMemory.save_failed: {e}")
-                try:
-                    if tmp.exists():
-                        tmp.unlink()
-                except OSError:
-                    logger.debug("permanent_memory.tmp_unlink_failed", exc_info=True)
+            with self._write_lock:
+                if atomic_json_write is not None:
+                    try:
+                        atomic_json_write(
+                            self._memories_path, data,
+                            encoding="utf-8", indent=2, ensure_ascii=False,
+                        )
+                    except Exception as e:
+                        logger.warning(f"PermanentMemory.save_failed: {e}")
+                else:
+                    # fallback: 固定 tmp 方式（atomic_write 不可用时）
+                    tmp = self._memories_path.with_suffix(".json.tmp")
+                    try:
+                        with open(tmp, "w", encoding="utf-8") as f:
+                            json.dump(data, f, ensure_ascii=False, indent=2)
+                        os.replace(tmp, self._memories_path)
+                    except Exception as e:
+                        logger.warning(f"PermanentMemory.save_failed: {e}")
+                        try:
+                            if tmp.exists():
+                                tmp.unlink()
+                        except OSError:
+                            logger.debug("permanent_memory.tmp_unlink_failed", exc_info=True)
 
         try:
             loop = asyncio.get_running_loop()

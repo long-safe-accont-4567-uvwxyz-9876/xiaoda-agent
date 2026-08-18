@@ -197,7 +197,7 @@ def _audit_code(code: str) -> str | None:
 # 子进程执行用户代码的 wrapper 脚本：
 # - 在子进程中重建 _SAFE_BUILTINS 沙箱（与父进程保持同步）
 # - 从 stdin 读取用户代码（避免命令行长度限制和 shell 转义问题）
-# - 通过单独 fd（_PYEXEC_RESULT_FD 环境变量传入）回传 _result，避免与 stdout/stderr 混淆
+# - 通过临时文件（_PYEXEC_RESULT_FILE 环境变量传入路径）回传 _result，避免与 stdout/stderr 混淆
 # 注意：safe_builtins 字典需与 _SAFE_BUILTINS 保持同步
 _PYEXEC_WRAPPER_SOURCE = '''
 import sys, io, contextlib, math, os
@@ -236,13 +236,14 @@ except BaseException as e:
     _stderr.write("{}: {}".format(type(e).__name__, e))
 sys.__stdout__.write(_stdout.getvalue())
 sys.__stderr__.write(_stderr.getvalue())
-# _result 通过单独 fd 回传（fd 号由环境变量 _PYEXEC_RESULT_FD 指定），
-# 避免与用户 stdout 混淆；fd 号不固定，由父进程 os.pipe() 实际分配后传入
+# _result 通过临时文件回传（路径由环境变量 _PYEXEC_RESULT_FILE 指定），
+# 避免与用户 stdout 混淆；跨平台兼容（Windows 不支持 pass_fds/fd 继承）
 if "_result" in local_vars:
     try:
-        _fd = int(os.environ.get("_PYEXEC_RESULT_FD", "0"))
-        if _fd > 0:
-            os.write(_fd, repr(local_vars["_result"]).encode("utf-8"))
+        _result_file = os.environ.get("_PYEXEC_RESULT_FILE", "")
+        if _result_file:
+            with open(_result_file, "w", encoding="utf-8") as _f:
+                _f.write(repr(local_vars["_result"]))
     except (OSError, ValueError):
         pass
 '''
@@ -303,8 +304,10 @@ def python_executor(code: str) -> ToolResult:
         logger.warning("pyexec.audit_blocked", reason=audit_result, code_preview=code[:200])
         return ToolResult.fail(f"代码安全审查未通过: {audit_result}")
 
-    # 创建管道用于单独回传 _result（fd 号运行时由 os.pipe() 分配）
-    result_r, result_w = os.pipe()
+    # 创建临时文件用于回传 _result（跨平台兼容，Windows 不支持 pass_fds/fd 继承）
+    import tempfile
+    _result_fd, result_path = tempfile.mkstemp(suffix=".pyexec", prefix="pyexec_result_")
+    os.close(_result_fd)  # 父进程关闭 fd，子进程会重新 open(path) 写入
 
     try:
         # Unix: os.setsid 创建新进程组，便于 killpg 杀掉整个进程树
@@ -316,16 +319,15 @@ def python_executor(code: str) -> ToolResult:
             preexec_fn = None
             creationflags = getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)
 
-        # 通过环境变量把 result_w 的 fd 号传给子进程（pass_fds 保持原 fd 号不变）
+        # 通过环境变量把临时文件路径传给子进程
         child_env = os.environ.copy()
-        child_env["_PYEXEC_RESULT_FD"] = str(result_w)
+        child_env["_PYEXEC_RESULT_FILE"] = result_path
         try:
             proc = subprocess.Popen(
                 [sys.executable, "-c", _PYEXEC_WRAPPER_SOURCE],
                 stdin=subprocess.PIPE,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
-                pass_fds=(result_w,),
                 env=child_env,
                 cwd=os.path.expanduser("~"),
                 preexec_fn=preexec_fn,
@@ -335,11 +337,7 @@ def python_executor(code: str) -> ToolResult:
             return ToolResult.fail(f"Python 解释器未找到: {sys.executable}")
         except OSError as e:
             return ToolResult.fail(f"启动子进程失败: {e!s}")
-    finally:
-        # 父进程关闭写端，子进程退出后读端可读到 EOF
-        os.close(result_w)
 
-    try:
         try:
             stdout_bytes, stderr_bytes = proc.communicate(
                 input=code.encode("utf-8"), timeout=_EXEC_TIMEOUT
@@ -349,16 +347,13 @@ def python_executor(code: str) -> ToolResult:
             _kill_process_group(proc)
             return ToolResult.fail(f"代码执行超时（{_EXEC_TIMEOUT}秒）")
 
-        # 读取 _result（子进程退出后 pipe 写端已关闭，读到 EOF）
+        # 读取 _result（子进程写入的临时文件）
+        result_data = ""
         try:
-            result_data = os.read(result_r, 1024 * 1024).decode("utf-8", errors="replace")
-        except OSError:
+            with open(result_path, "r", encoding="utf-8") as _f:
+                result_data = _f.read()
+        except (OSError, UnicodeDecodeError):
             result_data = ""
-        finally:
-            try:
-                os.close(result_r)
-            except OSError:
-                logger.debug("pyexec.close_result_pipe_failed", exc_info=True)
 
         stdout = stdout_bytes.decode("utf-8", errors="replace") if stdout_bytes else ""
         stderr = stderr_bytes.decode("utf-8", errors="replace") if stderr_bytes else ""
@@ -374,6 +369,12 @@ def python_executor(code: str) -> ToolResult:
         return ToolResult.ok("\n".join(result) if result else "代码执行成功（无输出）")
     except Exception as e:
         return ToolResult.fail(f"执行错误: {e!s}")
+    finally:
+        # 清理临时文件
+        try:
+            os.unlink(result_path)
+        except OSError:
+            logger.debug("pyexec.cleanup_result_file_failed", exc_info=True)
 
 
 def _kill_process_group(proc: subprocess.Popen) -> None:

@@ -1,4 +1,5 @@
 import subprocess
+import sys
 import textwrap
 from pathlib import Path
 
@@ -7,6 +8,17 @@ ROOT = Path(__file__).parents[1]
 
 def source(relative_path: str) -> str:
     return (ROOT / relative_path).read_text(encoding="utf-8")
+
+
+def _esbuild_bin(frontend: Path) -> str:
+    """返回可执行的 esbuild 路径。
+
+    Windows 下 node_modules/.bin/esbuild 是 POSIX shell 脚本，CreateProcess
+    无法直接执行（WinError 193）；必须用 .cmd 批处理封装。
+    """
+    if sys.platform == "win32":
+        return str(frontend / "node_modules/.bin/esbuild.cmd")
+    return str(frontend / "node_modules/.bin/esbuild")
 
 
 def test_local_ai_client_exposes_typed_resource_collections_and_actions():
@@ -82,7 +94,7 @@ def test_local_ai_store_request_id_falls_back_without_random_uuid(tmp_path):
         encoding="utf-8",
     )
     subprocess.run(
-        [str(frontend / "node_modules/.bin/esbuild"), str(entry), "--bundle", "--platform=node", "--format=esm", f"--outfile={bundle}"],
+        [_esbuild_bin(frontend), str(entry), "--bundle", "--platform=node", "--format=esm", f"--outfile={bundle}"],
         cwd=frontend,
         check=True,
         capture_output=True,
@@ -141,7 +153,7 @@ def test_local_ai_store_refreshes_models_when_download_completes(tmp_path):
         encoding="utf-8",
     )
     subprocess.run(
-        [str(frontend / "node_modules/.bin/esbuild"), str(entry), "--bundle", "--platform=node", "--format=esm", f"--outfile={bundle}"],
+        [_esbuild_bin(frontend), str(entry), "--bundle", "--platform=node", "--format=esm", f"--outfile={bundle}"],
         cwd=frontend,
         check=True,
         capture_output=True,
@@ -199,7 +211,7 @@ def test_completed_download_model_refresh_cannot_be_overwritten_by_older_load(tm
         encoding="utf-8",
     )
     subprocess.run(
-        [str(frontend / "node_modules/.bin/esbuild"), str(entry), "--bundle", "--platform=node", "--format=esm", f"--outfile={bundle}"],
+        [_esbuild_bin(frontend), str(entry), "--bundle", "--platform=node", "--format=esm", f"--outfile={bundle}"],
         cwd=frontend,
         check=True,
         capture_output=True,
@@ -245,7 +257,7 @@ def test_completed_download_model_refresh_failure_is_visible(tmp_path):
         encoding="utf-8",
     )
     subprocess.run(
-        [str(frontend / "node_modules/.bin/esbuild"), str(entry), "--bundle", "--platform=node", "--format=esm", f"--outfile={bundle}"],
+        [_esbuild_bin(frontend), str(entry), "--bundle", "--platform=node", "--format=esm", f"--outfile={bundle}"],
         cwd=frontend,
         check=True,
         capture_output=True,
@@ -295,7 +307,7 @@ def test_model_removed_during_refresh_cannot_be_resurrected(tmp_path):
         encoding="utf-8",
     )
     subprocess.run(
-        [str(frontend / "node_modules/.bin/esbuild"), str(entry), "--bundle", "--platform=node", "--format=esm", f"--outfile={bundle}"],
+        [_esbuild_bin(frontend), str(entry), "--bundle", "--platform=node", "--format=esm", f"--outfile={bundle}"],
         cwd=frontend,
         check=True,
         capture_output=True,
@@ -350,7 +362,7 @@ def test_model_removed_during_load_cannot_be_resurrected(tmp_path):
         encoding="utf-8",
     )
     subprocess.run(
-        [str(frontend / "node_modules/.bin/esbuild"), str(entry), "--bundle", "--platform=node", "--format=esm", f"--outfile={bundle}"],
+        [_esbuild_bin(frontend), str(entry), "--bundle", "--platform=node", "--format=esm", f"--outfile={bundle}"],
         cwd=frontend,
         check=True,
         capture_output=True,
@@ -403,7 +415,7 @@ def test_removed_model_can_be_reinstalled_from_newer_snapshot(tmp_path):
         encoding="utf-8",
     )
     subprocess.run(
-        [str(frontend / "node_modules/.bin/esbuild"), str(entry), "--bundle", "--platform=node", "--format=esm", f"--outfile={bundle}"],
+        [_esbuild_bin(frontend), str(entry), "--bundle", "--platform=node", "--format=esm", f"--outfile={bundle}"],
         cwd=frontend,
         check=True,
         capture_output=True,
@@ -448,7 +460,7 @@ def test_local_ai_store_tracks_rescan_loading_independently(tmp_path):
         encoding="utf-8",
     )
     subprocess.run(
-        [str(frontend / "node_modules/.bin/esbuild"), str(entry), "--bundle", "--platform=node", "--format=esm", f"--outfile={bundle}"],
+        [_esbuild_bin(frontend), str(entry), "--bundle", "--platform=node", "--format=esm", f"--outfile={bundle}"],
         cwd=frontend,
         check=True,
         capture_output=True,
@@ -503,7 +515,7 @@ def test_rescan_result_cannot_be_overwritten_by_older_load(tmp_path):
         encoding="utf-8",
     )
     subprocess.run(
-        [str(frontend / "node_modules/.bin/esbuild"), str(entry), "--bundle", "--platform=node", "--format=esm", f"--outfile={bundle}"],
+        [_esbuild_bin(frontend), str(entry), "--bundle", "--platform=node", "--format=esm", f"--outfile={bundle}"],
         cwd=frontend,
         check=True,
         capture_output=True,
@@ -552,7 +564,7 @@ def test_rescan_loading_settles_when_newer_load_supersedes_result(tmp_path):
         encoding="utf-8",
     )
     subprocess.run(
-        [str(frontend / "node_modules/.bin/esbuild"), str(entry), "--bundle", "--platform=node", "--format=esm", f"--outfile={bundle}"],
+        [_esbuild_bin(frontend), str(entry), "--bundle", "--platform=node", "--format=esm", f"--outfile={bundle}"],
         cwd=frontend,
         check=True,
         capture_output=True,
@@ -634,7 +646,7 @@ def test_local_ai_store_only_preserves_ids_updated_during_load(tmp_path):
         encoding="utf-8",
     )
     subprocess.run(
-        [str(frontend / "node_modules/.bin/esbuild"), str(entry), "--bundle", "--platform=node", "--format=esm", f"--outfile={bundle}"],
+        [_esbuild_bin(frontend), str(entry), "--bundle", "--platform=node", "--format=esm", f"--outfile={bundle}"],
         cwd=frontend,
         check=True,
         capture_output=True,
@@ -696,7 +708,7 @@ def test_local_ai_store_preserves_websocket_update_across_overlapping_loads(tmp_
         encoding="utf-8",
     )
     subprocess.run(
-        [str(frontend / "node_modules/.bin/esbuild"), str(entry), "--bundle", "--platform=node", "--format=esm", f"--outfile={bundle}"],
+        [_esbuild_bin(frontend), str(entry), "--bundle", "--platform=node", "--format=esm", f"--outfile={bundle}"],
         cwd=frontend,
         check=True,
         capture_output=True,
@@ -832,7 +844,7 @@ def test_storage_picker_ignores_stale_browse_response(tmp_path):
         encoding="utf-8",
     )
     subprocess.run(
-        [str(frontend / "node_modules/.bin/esbuild"), str(entry), "--bundle", "--platform=node", "--format=esm", f"--outfile={bundle}"],
+        [_esbuild_bin(frontend), str(entry), "--bundle", "--platform=node", "--format=esm", f"--outfile={bundle}"],
         cwd=frontend,
         check=True,
         capture_output=True,
@@ -897,7 +909,7 @@ def test_model_market_ignores_stale_choose_validation(tmp_path):
         encoding="utf-8",
     )
     subprocess.run(
-        [str(frontend / "node_modules/.bin/esbuild"), str(entry), "--bundle", "--platform=node", "--format=esm", f"--outfile={bundle}"],
+        [_esbuild_bin(frontend), str(entry), "--bundle", "--platform=node", "--format=esm", f"--outfile={bundle}"],
         cwd=frontend,
         check=True,
         capture_output=True,

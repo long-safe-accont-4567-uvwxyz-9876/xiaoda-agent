@@ -193,18 +193,33 @@ class NpuEmbeddingProvider:
         # 加超时兜底：runner 初始化挂起（如 NPU 设备忙/驱动异常）时不阻塞服务
         buf = b""
         deadline = time.monotonic() + self._timeout_s
-        while True:
-            chunk = self._proc.stdout.read1(4096)  # type: ignore[union-attr]
-            if not chunk:
-                raise RuntimeError("runner exited before magic")
-            buf += chunk
-            idx = buf.find(MAGIC)
-            if idx >= 0:
-                self._pending = buf[idx + len(MAGIC):]
-                return
-            if time.monotonic() > deadline:
-                raise TimeoutError(
-                    f"runner magic timeout after {self._timeout_s:.0f}s")
+        try:
+            while True:
+                chunk = self._proc.stdout.read1(4096)  # type: ignore[union-attr]
+                if not chunk:
+                    raise RuntimeError("runner exited before magic")
+                buf += chunk
+                idx = buf.find(MAGIC)
+                if idx >= 0:
+                    self._pending = buf[idx + len(MAGIC):]
+                    return
+                if time.monotonic() > deadline:
+                    raise TimeoutError(
+                        f"runner magic timeout after {self._timeout_s:.0f}s")
+        except (TimeoutError, Exception) as e:
+            # 清理泄漏的子进程和管道，避免 magic 超时后僵尸进程/stderr 句柄残留
+            try:
+                if self._proc and self._proc.poll() is None:
+                    self._proc.kill()
+                    self._proc.wait(timeout=5)
+            except Exception:
+                pass
+            try:
+                if self._stderr_f and not self._stderr_f.closed:
+                    self._stderr_f.close()
+            except Exception:
+                pass
+            raise
         # (超时抛出后由 load() 捕获，Adaptive 层探测已先排除大部分无 NPU 场景)
 
     # ── 推理 ──────────────────────────────────────────────

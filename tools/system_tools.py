@@ -22,6 +22,13 @@ AGENT_SERVICES = {"xiaoda-web", "qq-agent", "napcat", "qqbot", "nginx", "frpc", 
 
 async def _run_cmd(args: list[str], timeout: int = 30, cwd: str | None = None) -> tuple[int, str, str]:
     """异步执行命令，返回 (returncode, stdout, stderr)"""
+    # Windows 平台门控：这些命令在 Windows 上不存在或参数语义不同
+    _WINDOWS_UNSUPPORTED = {"systemctl", "journalctl", "ip", "ss"}
+    if os.name == "nt" and args and args[0] in _WINDOWS_UNSUPPORTED:
+        return 127, "", f"命令 '{args[0]}' 在 Windows 上不可用"
+    # ping 在 Windows 上用 -n 而非 -c
+    if os.name == "nt" and args and args[0] == "ping" and "-c" in args:
+        return 127, "", "Windows ping 使用 -n 而非 -c 参数"
     try:
         proc = await asyncio.create_subprocess_exec(
             *args,

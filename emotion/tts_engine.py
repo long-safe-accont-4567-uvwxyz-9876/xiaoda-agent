@@ -10,6 +10,11 @@ from collections import OrderedDict
 from pathlib import Path
 from openai import AsyncOpenAI
 from loguru import logger
+
+try:
+    from utils.atomic_write import atomic_write
+except Exception:  # pragma: no cover
+    atomic_write = None  # type: ignore[assignment]
 from .emotion_enum import resolve_emotion, TTS_STYLE_MAP, is_unified
 from config import get_agent_display_name, get_base_url_for_provider
 
@@ -411,7 +416,11 @@ class TTSEngine:
                     data[key] = path.relative_to(self._output_dir).as_posix()
                 except ValueError:
                     data[key] = path.name
-            self._cache_index_path.write_text(json.dumps(data, ensure_ascii=False), encoding="utf-8")
+            _payload = json.dumps(data, ensure_ascii=False)
+            if atomic_write is not None:
+                atomic_write(self._cache_index_path, _payload, encoding="utf-8")
+            else:
+                self._cache_index_path.write_text(_payload, encoding="utf-8")
         except Exception as e:
             logger.warning("tts.cache_index_save_failed error={}", str(e))
 

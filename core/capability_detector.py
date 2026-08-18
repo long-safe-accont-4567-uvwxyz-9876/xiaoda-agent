@@ -231,7 +231,7 @@ def _detect_sbc() -> bool:
     sbc_indicators = ["/proc/device-tree/model", "/proc/device-tree/compatible"]
     for path in sbc_indicators:
         try:
-            with open(path) as f:
+            with open(path, encoding="utf-8", errors="replace") as f:
                 content = f.read().lower()
                 if any(kw in content for kw in ["raspberry", "orange pi", "orangepi",
                                                   "nanopi", "rockpi", "xunlong"]):

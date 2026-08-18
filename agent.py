@@ -41,15 +41,24 @@ except Exception:
 
 
 def _setup_windows_event_loop() -> None:
-    """Windows: 使用 SelectorEventLoop 加速 aiosqlite 线程切换。
+    """Windows: 使用 ProactorEventLoop 以支持 asyncio 子进程。
 
-    ProactorEventLoop 做 aiosqlite 线程间通知比 Linux 慢 3-5 倍，
-    改用 WindowsSelectorEventLoopPolicy 消除线程切换延迟。
+    历史背景：曾用 WindowsSelectorEventLoopPolicy 加速 aiosqlite 线程切换
+    （Proactor 线程间通知比 Linux 慢 3-5 倍）。但 SelectorEventLoop 不支持
+    子进程——create_subprocess_exec/shell 会抛 NotImplementedError，导致
+    MCP stdio（mcp_client._connect_stdio）、shell_command（file_tools_v2）、
+    system_tools、coze-bridge（xiaoda_acp）、agently-cli（mail_tools）等
+    7 个调用点在 Windows 上全部失效。
+
+    权衡：子进程不可用是功能崩溃，aiosqlite 线程切换慢是性能问题——功能优先。
+    实际 aiosqlite 瓶颈在磁盘 IO + SQLite 锁，线程通知开销占比小。
+    ProactorEventLoop 基于 IOCP，支持子进程等待，是 Windows 默认策略；
+    此处显式设置以使意图清晰并便于测试。
     非 Windows 平台不做任何改动，沿用平台默认行为。
     必须在任何 asyncio 事件循环创建之前调用（早于 uvicorn / aiosqlite）。
     """
     if sys.platform == "win32":
-        asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
+        asyncio.set_event_loop_policy(asyncio.WindowsProactorEventLoopPolicy())
 
 
 def _handle_first_run_mode(mode: str) -> None:
@@ -215,6 +224,7 @@ def _correct_sensitive_file_permissions() -> None:
     防止旧文件残留 0644 权限被同机其他用户读取。
     """
     import stat
+    from utils.atomic_write import _restrict_file_permissions_windows
     sensitive_files = [
         # 项目内遗留副本（应在后续清理，此处先校正权限）
         Path(__file__).parent / "credentials" / "webui_secret",
@@ -228,14 +238,15 @@ def _correct_sensitive_file_permissions() -> None:
             if fp.exists() and fp.is_file():
                 current = fp.stat().st_mode
                 if stat.S_IMODE(current) != 0o600:
-                    fp.chmod(0o600)
+                    fp.chmod(0o600)  # Unix: 限制为仅用户可读写
+                    _restrict_file_permissions_windows(fp)  # Windows: 用 ACL 补偿
                     logger.info("agent.sensitive_file_permission_corrected", path=str(fp))
         except (OSError, PermissionError) as exc:
             logger.debug("agent.sensitive_file_permission_failed", path=str(fp), error=str(exc))
 
 
 def main() -> None:
-    # Windows: 使用 SelectorEventLoop 加速 aiosqlite 线程切换（ProactorEventLoop 慢 3-5 倍）
+    # Windows: 使用 ProactorEventLoop 以支持 asyncio 子进程（MCP/shell_command 等）
     # 必须早于任何 asyncio/uvicorn 调用，确保 _run_web/_run_desktop/_run_cli 三路径均生效
     _setup_windows_event_loop()
 
@@ -461,10 +472,18 @@ def _run_web(host: str, port: int) -> None:
 
 
 def _port_bind_ok(host: str, port: int) -> bool:
-    """单次 socket bind 检测：返回端口当前是否可绑定。"""
+    """单次 socket bind 检测：返回端口当前是否可绑定。
+
+    Windows 上不设 SO_REUSEADDR：Windows 的 SO_REUSEADDR 语义与 Linux 不同，
+    允许两个 socket 绑定同一活动端口，会导致端口探测误报"空闲"→ 双监听。
+    Linux 上 SO_REUSEADDR 只放宽 TIME_WAIT，不影响活动端口检测，保留以兼容。
+    """
     try:
         with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
-            s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+            if os.name != "nt":
+                # Linux: SO_REUSEADDR 只放宽 TIME_WAIT
+                s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+            # Windows: 默认独占绑定，端口被 uvicorn 监听则 bind 失败 → 正确检测
             s.settimeout(1)
             s.bind((host, port))
             return True

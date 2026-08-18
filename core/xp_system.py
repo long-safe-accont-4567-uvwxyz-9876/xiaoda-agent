@@ -34,6 +34,11 @@ except Exception:  # pragma: no cover - 配置缺失时退化为项目根目录
     DATA_DIR = Path(__file__).resolve().parent.parent / "data"
     DATA_DIR.mkdir(parents=True, exist_ok=True)
 
+try:
+    from utils.atomic_write import atomic_json_write
+except Exception:  # pragma: no cover
+    atomic_json_write = None  # type: ignore[assignment]
+
 
 class XPLevel(IntEnum):
     """XP 等级
@@ -318,16 +323,26 @@ class XPSystem:
             self._states = {}
 
     def _save(self) -> None:
-        """原子化保存到 JSON 文件 (.tmp + os.replace)"""
+        """原子化保存到 JSON 文件 (atomic_json_write: mkstemp + fsync + os.replace + Windows 重试)"""
         self._state_path.parent.mkdir(parents=True, exist_ok=True)
         data = {
             "users": {uid: s.to_dict() for uid, s in self._states.items()},
             "updated_at": time.time(),
         }
-        tmp = self._state_path.with_suffix(".json.tmp")
-        with open(tmp, "w", encoding="utf-8") as f:
-            json.dump(data, f, ensure_ascii=False, indent=2)
-        os.replace(tmp, self._state_path)
+        try:
+            if atomic_json_write is not None:
+                atomic_json_write(
+                    self._state_path, data,
+                    encoding="utf-8", indent=2, ensure_ascii=False,
+                )
+            else:
+                # fallback: 固定 tmp 方式（atomic_write 不可用时）
+                tmp = self._state_path.with_suffix(".json.tmp")
+                with open(tmp, "w", encoding="utf-8") as f:
+                    json.dump(data, f, ensure_ascii=False, indent=2)
+                os.replace(tmp, self._state_path)
+        except Exception as e:
+            logger.warning(f"XPSystem.save_failed: {e}")
 
     # ── 状态访问 ────────────────────────────────────────────
 

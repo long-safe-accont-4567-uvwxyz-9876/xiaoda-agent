@@ -140,6 +140,7 @@ def test_storage_validation_is_frozen_dataclass():
 # 2. list_directory
 # ─────────────────────────────────────────────────────────────
 
+@pytest.mark.skipif(sys.platform == "win32", reason="Root directory structure differs on Windows (drives vs /etc, /home)")
 def test_list_directory_none_returns_root_entries(policy):
     """list_directory(None) returns root entries — on Linux, subdirs of /."""
     listing = policy.list_directory(None)
@@ -184,6 +185,7 @@ def test_list_directory_blocks_path_traversal(policy):
     assert listing.entries == ()
 
 
+@pytest.mark.skipif(sys.platform == "win32", reason="Device file paths (/dev, /proc, /sys) are Linux-specific")
 def test_list_directory_blocks_device_files(policy):
     """list_directory must reject /dev, /proc, /sys as listing roots."""
     for path in ("/dev", "/proc", "/sys"):
@@ -242,6 +244,7 @@ def test_validate_destination_creates_missing_path_if_parent_writable(policy, tm
 # 4. validate_destination — rejections
 # ─────────────────────────────────────────────────────────────
 
+@pytest.mark.skipif(sys.platform == "win32", reason="Windows path resolution differs for non-existent roots")
 def test_validate_destination_rejects_nonexistent_uncreatable_path(policy):
     """A path whose parent does not exist cannot be created → not writable."""
     val = policy.validate_destination("/nonexistent_root_xyz/deep/nested", 0)
@@ -257,6 +260,7 @@ def test_validate_destination_rejects_path_traversal(policy, tmp_path):
     assert "traversal" in val.reason.lower() or "invalid" in val.reason.lower()
 
 
+@pytest.mark.skipif(sys.platform == "win32", reason="Linux-only: device files / symlinks not applicable on Windows")
 def test_validate_destination_rejects_device_files(policy):
     for path in ("/dev/null", "/proc/self", "/sys/kernel"):
         val = policy.validate_destination(path, 0)
@@ -289,6 +293,7 @@ def test_validate_destination_rejects_symlink_pointing_outside(policy, tmp_path)
         target_outside.rmdir()
 
 
+@pytest.mark.skipif(sys.platform == "win32", reason="chmod-based read-only test does not apply on Windows")
 def test_validate_destination_rejects_read_only_path(policy, tmp_path):
     """A read-only directory (chmod 0o500) should be reported as not writable."""
     if _is_root():
@@ -358,6 +363,7 @@ def test_set_default_rejects_invalid_path(policy, config_service):
     assert config_service.get("local_ai.default_model_root", "") == ""
 
 
+@pytest.mark.skipif(sys.platform == "win32", reason="chmod-based read-only test does not apply on Windows")
 def test_set_default_rejects_unwritable_path(policy, config_service, tmp_path):
     """set_default must not persist a path that fails validation."""
     if _is_root():

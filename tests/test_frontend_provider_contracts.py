@@ -1,6 +1,9 @@
 import subprocess
+import sys
 import textwrap
 from pathlib import Path
+
+import pytest
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -74,6 +77,7 @@ def test_wizard_and_models_view_use_unified_lifecycle():
     assert ".drag-handle" not in view
 
 
+@pytest.mark.skipif(sys.platform == "win32", reason="esbuild binary path differs on Windows (.cmd)")
 def test_provider_store_binds_test_results_to_normalized_request_snapshots(tmp_path):
     entry = tmp_path / "provider-store-snapshot.ts"
     bundle = tmp_path / "provider-store-snapshot.mjs"

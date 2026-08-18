@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import sys
 from types import SimpleNamespace
 from typing import Any
 
@@ -433,6 +434,7 @@ def test_remove_model_rejects_active_download(
     assert services.models.removed == []
 
 
+@pytest.mark.skipif(sys.platform == "win32", reason="model id contains ':' which is invalid in Windows filesystem")
 def test_remove_model_cleans_disk_directory(
     client: TestClient,
     services: SimpleNamespace,

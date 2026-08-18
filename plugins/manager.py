@@ -14,6 +14,11 @@ from typing import Any
 
 from loguru import logger
 
+try:
+    from utils.atomic_write import atomic_write
+except Exception:  # pragma: no cover
+    atomic_write = None  # type: ignore[assignment]
+
 from plugins.manifest import PluginManifest
 from plugins.discovery import discover_plugins
 from plugins.permissions import PermissionChecker
@@ -388,4 +393,8 @@ class PluginManager:
         except ImportError:
             config_path = Path(f"config/plugins/{plugin_id}/config.json")
         config_path.parent.mkdir(parents=True, exist_ok=True)
-        config_path.write_text(json.dumps(config, ensure_ascii=False, indent=2), encoding="utf-8")
+        _payload = json.dumps(config, ensure_ascii=False, indent=2)
+        if atomic_write is not None:
+            atomic_write(config_path, _payload, encoding="utf-8")
+        else:
+            config_path.write_text(_payload, encoding="utf-8")

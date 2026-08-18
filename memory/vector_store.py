@@ -9,6 +9,11 @@ from collections import OrderedDict
 from pathlib import Path
 from loguru import logger
 
+try:
+    from utils.atomic_write import atomic_write
+except Exception:  # pragma: no cover
+    atomic_write = None  # type: ignore[assignment]
+
 
 from utils.common import safe_int as _safe_int
 from local_ai.integration.embedding import LocalEmbeddingService, LocalEmbeddingUnavailableError
@@ -117,18 +122,27 @@ class EmbedCache:
     def _save_persisted(self) -> None:
         """将缓存条目原子写入磁盘（失败静默降级，不影响主流程）。"""
         try:
-            tmp = self._persist_path + ".tmp"
             if _HAS_NUMPY:
+                import io
+                buf = io.BytesIO()
                 np.savez(
-                    tmp,
+                    buf,
                     keys=np.array(list(self._cache.keys())),
                     vecs=np.array(list(self._cache.values()), dtype=np.float32),
                 )
+                content = buf.getvalue()
             else:
                 import pickle
+                content = pickle.dumps(dict(self._cache), protocol=pickle.HIGHEST_PROTOCOL)
+
+            if atomic_write is not None:
+                atomic_write(self._persist_path, content)
+            else:
+                # fallback: 固定 tmp 方式（atomic_write 不可用时）
+                tmp = self._persist_path + ".tmp"
                 with open(tmp, "wb") as f:
-                    pickle.dump(dict(self._cache), f, protocol=pickle.HIGHEST_PROTOCOL)
-            os.replace(tmp, self._persist_path)
+                    f.write(content)
+                os.replace(tmp, self._persist_path)
         except Exception as e:
             logger.debug("embed_cache.save_failed", path=self._persist_path,
                          error=str(e))

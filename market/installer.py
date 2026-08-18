@@ -4,6 +4,7 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import json
+import os
 import shutil
 import tarfile
 import tempfile
@@ -13,6 +14,38 @@ from pathlib import Path
 from typing import Any
 
 from loguru import logger
+
+
+def _rmtree_with_retry(path, max_retries: int = 3) -> None:
+    """Windows 兼容的 rmtree：文件被占用/只读时重试退避。
+
+    Windows 上插件文件被模块加载/杀毒扫描占用时 rmtree 抛 PermissionError。
+    短暂退避后重试通常可成功（占用方释放）。
+    """
+    for attempt in range(max_retries):
+        try:
+            shutil.rmtree(path, ignore_errors=False)
+            return
+        except (PermissionError, OSError):
+            if os.name != "nt" or attempt == max_retries - 1:
+                # 非 Windows 或最后一次：尽力清理后抛出
+                shutil.rmtree(path, ignore_errors=True)
+                if Path(path).exists():
+                    raise
+                return
+            time.sleep(0.1 * (2 ** attempt))  # 100ms, 200ms, 400ms
+
+
+def _unlink_with_retry(path, max_retries: int = 3) -> None:
+    """Windows 兼容的 unlink：文件被占用时重试退避。"""
+    for attempt in range(max_retries):
+        try:
+            Path(path).unlink()
+            return
+        except (PermissionError, OSError):
+            if os.name != "nt" or attempt == max_retries - 1:
+                raise
+            time.sleep(0.1 * (2 ** attempt))
 
 from market.manifest import MarketItem
 from market.url_policy import require_sha256
@@ -138,15 +171,30 @@ class MarketInstaller:
             if not yaml_path:
                 raise InstallError("下载的包中未找到 plugin.yaml，不是合法的插件包")
 
-            # 如果已存在，先卸载旧版本
+            # 如果已存在，先备份旧目录再切换（Windows 回滚机制）
+            plugin_src = yaml_path.parent
             if target_dir.exists():
                 logger.info("market.plugin_upgrade", id=item.id, old_dir=str(target_dir))
                 await self._unload_plugin_if_loaded(item.id)
-                shutil.rmtree(target_dir)
-
-            # 移动到目标目录
-            plugin_src = yaml_path.parent
-            shutil.move(str(plugin_src), str(target_dir))
+                # 先重命名旧目录为 .old（不直接删，便于 move 失败时回滚）
+                backup_dir = target_dir.with_name(target_dir.name + ".old")
+                if backup_dir.exists():
+                    _rmtree_with_retry(backup_dir)
+                os.rename(str(target_dir), str(backup_dir))
+                try:
+                    shutil.move(str(plugin_src), str(target_dir))
+                except Exception:
+                    # move 失败：回滚（把旧目录改回来）
+                    if target_dir.exists():
+                        _rmtree_with_retry(target_dir)
+                    os.rename(str(backup_dir), str(target_dir))
+                    raise
+                else:
+                    # 成功后清理备份
+                    _rmtree_with_retry(backup_dir)
+            else:
+                # 新安装
+                shutil.move(str(plugin_src), str(target_dir))
 
             # 触发插件发现
             if self._plugin_manager:
@@ -175,8 +223,8 @@ class MarketInstaller:
         # 先从运行时卸载
         await self._unload_plugin_if_loaded(plugin_id)
 
-        # 删除目录
-        shutil.rmtree(target_dir)
+        # 删除目录（Windows 兼容重试）
+        _rmtree_with_retry(target_dir)
         logger.info("market.plugin_uninstalled", id=plugin_id)
         return {"status": "ok", "id": plugin_id, "type": "plugin"}
 
@@ -273,7 +321,7 @@ class MarketInstaller:
         target_path = self._skills_dir / f"{skill_id}.md"
         if not target_path.exists():
             raise InstallError(f"技能 '{skill_id}' 未安装")
-        target_path.unlink()
+        _unlink_with_retry(target_path)
         logger.info("market.skill_uninstalled", id=skill_id)
         return {"status": "ok", "id": skill_id, "type": "skill"}
 
@@ -409,7 +457,7 @@ class MarketInstaller:
         config_path = self._mcp_config_dir / f"{mcp_id}.json"
         if not config_path.exists():
             raise InstallError(f"MCP 工具 '{mcp_id}' 未安装")
-        config_path.unlink()
+        _unlink_with_retry(config_path)
         logger.info("market.mcp_uninstalled", id=mcp_id)
         return {"status": "ok", "id": mcp_id, "type": "mcp"}
 

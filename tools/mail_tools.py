@@ -139,26 +139,43 @@ def _truncate_mail_data(data: Any) -> Any:
 
 # ── 底层执行与解析 ──────────────────────────────────────────────────────
 def _ensure_node_in_path(env: dict[str, str]) -> None:
-    """确保 env["PATH"] 包含 node 所在目录（symlink → run.js 需要 node）。"""
-    # 已经能找到 node 就不改
-    path_dirs = env.get("PATH", "").split(os.pathsep)
-    for d in path_dirs:
-        if os.path.isfile(os.path.join(d, "node")):
-            return
-    # 常见 node 位置
-    home = env.get("HOME", os.path.expanduser("~"))
-    node_dirs = [
-        "/usr/local/bin",
-        "/usr/bin",
-        os.path.join(home, ".trae-cn-server/binaries/node/versions/24.16.0/bin"),
-        os.path.join(home, ".nvm/versions/node/*/bin"),
-    ]
+    """确保 env["PATH"] 包含 node 所在目录（symlink → run.js 需要 node）。
+
+    跨平台：Windows 上探测 node.exe 与常见安装路径
+   （Program Files\\nodejs、%APPDATA%\\npm）；POSIX 上探测 node
+    与 /usr/local/bin、/usr/bin、nvm 等路径。
+    """
+    # 跨平台探测 node 可执行文件名
+    node_names = ("node.exe", "node") if os.name == "nt" else ("node",)
+    # 已在 env["PATH"] 中的目录里找到就直接返回
+    for d in env.get("PATH", "").split(os.pathsep):
+        for name in node_names:
+            if os.path.isfile(os.path.join(d, name)):
+                return
+    # shutil.which 会处理 PATHEXT 等细节，作为兜底
+    if shutil.which("node") or shutil.which("node.exe"):
+        return
+    # 探测常见 node 安装路径
+    home = env.get("HOME") or os.path.expanduser("~")
+    if os.name == "nt":
+        node_dirs = [
+            os.path.join(os.environ.get("ProgramFiles", ""), "nodejs"),
+            os.path.join(os.environ.get("APPDATA", ""), "npm"),
+        ]
+    else:
+        node_dirs = [
+            "/usr/local/bin",
+            "/usr/bin",
+            os.path.join(home, ".trae-cn-server/binaries/node/versions/24.16.0/bin"),
+            os.path.join(home, ".nvm/versions/node/*/bin"),
+        ]
     for pattern in node_dirs:
         for match in glob.glob(pattern):
-            node_bin = os.path.join(match, "node")
-            if os.path.isfile(node_bin) and os.access(node_bin, os.X_OK):
-                env["PATH"] = match + os.pathsep + env.get("PATH", "")
-                return
+            for name in node_names:
+                node_bin = os.path.join(match, name)
+                if os.path.isfile(node_bin) and os.access(node_bin, os.X_OK):
+                    env["PATH"] = match + os.pathsep + env.get("PATH", "")
+                    return
 
 
 async def _run_agently(args: list[str], timeout: int = 60) -> tuple[int, str, str]:

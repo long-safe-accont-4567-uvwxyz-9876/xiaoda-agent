@@ -21,6 +21,11 @@ from web.schemas import Envelope, LoginRequest, LoginResponse, RecoverRequest, C
 from web.middleware.rate_limit import _peer_is_trusted_proxy, _trust_forwarded_for
 import contextlib
 
+try:
+    from utils.atomic_write import atomic_json_write
+except Exception:  # pragma: no cover
+    atomic_json_write = None  # type: ignore[assignment]
+
 router = APIRouter(tags=["auth"])
 
 _tokens: OrderedDict[str, float] = OrderedDict()
@@ -198,7 +203,12 @@ def _revoke_token(token: str, grace_seconds: float = 0.0) -> None:
             _revoked_grace.pop(token, None)
         try:
             path.parent.mkdir(parents=True, exist_ok=True)
-            path.write_text(json.dumps(data, ensure_ascii=False), encoding="utf-8")
+            if atomic_json_write is not None:
+                atomic_json_write(
+                    path, data, encoding="utf-8", ensure_ascii=False,
+                )
+            else:
+                path.write_text(json.dumps(data, ensure_ascii=False), encoding="utf-8")
         except Exception as e:
             logger.warning("auth.revoke_save_failed error={}", str(e))
 

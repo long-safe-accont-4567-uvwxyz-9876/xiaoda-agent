@@ -31,6 +31,11 @@ except Exception:  # pragma: no cover - 配置缺失时退化为项目根目录
     DATA_DIR = Path(__file__).resolve().parent.parent / "data"
     DATA_DIR.mkdir(parents=True, exist_ok=True)
 
+try:
+    from utils.atomic_write import atomic_json_write
+except Exception:  # pragma: no cover
+    atomic_json_write = None  # type: ignore[assignment]
+
 
 class EventType(str, Enum):
     """学习事件类型"""
@@ -310,10 +315,18 @@ class LearningFeedbackLoop:
             "strategies": dict(self._strategies),
             "updated_at": time.time(),
         }
-        tmp = self._persist_path.with_suffix(".json.tmp")
-        with open(tmp, "w", encoding="utf-8") as f:
-            json.dump(data, f, ensure_ascii=False, indent=2)
-        os.replace(tmp, self._persist_path)
+        try:
+            if atomic_json_write is not None:
+                atomic_json_write(self._persist_path, data,
+                                  encoding="utf-8", indent=2, ensure_ascii=False)
+            else:
+                # fallback: 固定 tmp 方式（atomic_write 不可用时）
+                tmp = self._persist_path.with_suffix(".json.tmp")
+                with open(tmp, "w", encoding="utf-8") as f:
+                    json.dump(data, f, ensure_ascii=False, indent=2)
+                os.replace(tmp, self._persist_path)
+        except Exception as e:
+            logger.warning(f"LearningFeedback.persist_failed: {e}")
         logger.info(
             f"LearningFeedback.persist path={self._persist_path} "
             f"lessons={len(self._lessons)} strategies={len(self._strategies)}"

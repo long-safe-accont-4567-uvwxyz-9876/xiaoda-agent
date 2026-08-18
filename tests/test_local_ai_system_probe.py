@@ -1,11 +1,21 @@
 import hashlib
 import json
 import subprocess
+from pathlib import Path
 from types import SimpleNamespace
 
 from local_ai.contracts import DeviceState, RuntimeKind
 from local_ai.devices import system_probe
 from local_ai.devices.vip_probe import parse_vip_probe, probe_vip_backend
+
+
+def _read_text_lookup(values):
+    """按 posix 路径查 mock 值：Windows 上 Path 的 str() 用反斜杠，
+    而测试 dict 用正斜杠 key，直接 str(path) 会全部 miss。"""
+    def read_text(path):
+        return values.get(Path(path).as_posix(), "")
+
+    return read_text
 
 
 def test_linux_arm_probe_uses_device_tree_model(monkeypatch):
@@ -140,7 +150,16 @@ def test_windows_probe_uses_cim_video_controllers(monkeypatch):
     assert devices[2].id.startswith("pnp:")
     assert devices[2].id != devices[1].id
     assert devices[2].evidence["driver_version"] == "32.0.15.6094"
-    assert "Win32_VideoController" in calls[0][-1]
+    # 并行探测：CPU/GPU/NPU 三条独立命令，各自含对应查询段
+    assert len(calls) == 3
+    assert any("Win32_VideoController" in call[-1] for call in calls)
+    assert any("Win32_Processor" in call[-1] for call in calls)
+    assert any("Get-PnpDevice" in call[-1] for call in calls)
+    # 每条命令都强制 UTF-8 输出
+    assert all(
+        "OutputEncoding=[System.Text.Encoding]::UTF8" in call[-1]
+        for call in calls
+    )
 
 
 def test_windows_gpu_without_pnp_uses_reproducible_weak_evidence_hash():
@@ -216,7 +235,7 @@ def test_linux_amd_probe_uses_drm_pci_evidence(monkeypatch):
     }
     monkeypatch.setattr(system_probe, "_run_command", lambda command, timeout_s=10.0: "")
     monkeypatch.setattr(system_probe, "_glob_paths", lambda pattern: [card])
-    monkeypatch.setattr(system_probe, "_read_text", lambda path: values.get(str(path), ""))
+    monkeypatch.setattr(system_probe, "_read_text", _read_text_lookup(values))
 
     devices = system_probe.probe_system_devices("linux")
     gpu = next(device for device in devices if device.kind == "gpu")
@@ -292,7 +311,7 @@ def test_linux_amd_probe_uses_base_rocm_ordinals_without_visibility(monkeypatch)
 
     monkeypatch.setattr(system_probe, "_run_command", run)
     monkeypatch.setattr(system_probe, "_glob_paths", lambda pattern: cards)
-    monkeypatch.setattr(system_probe, "_read_text", lambda path: values.get(str(path), ""))
+    monkeypatch.setattr(system_probe, "_read_text", _read_text_lookup(values))
 
     gpus = system_probe._linux_amd_gpus()
 
@@ -480,7 +499,7 @@ def test_linux_drm_probe_ignores_non_amd_and_connector_entries(monkeypatch):
     }
     monkeypatch.setattr(system_probe, "_run_command", lambda command, timeout_s=10.0: "")
     monkeypatch.setattr(system_probe, "_glob_paths", lambda pattern: paths)
-    monkeypatch.setattr(system_probe, "_read_text", lambda path: values.get(str(path), ""))
+    monkeypatch.setattr(system_probe, "_read_text", _read_text_lookup(values))
 
     gpus = [
         device

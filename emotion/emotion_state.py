@@ -16,6 +16,11 @@ import threading
 
 from loguru import logger
 
+try:
+    from utils.atomic_write import atomic_write
+except Exception:  # pragma: no cover
+    atomic_write = None  # type: ignore[assignment]
+
 
 class EmotionState:
     """持续情绪状态（线程安全）。
@@ -230,16 +235,24 @@ class EmotionState:
                 "pad": self._pad,
             }
         payload = json.dumps(data, ensure_ascii=False, indent=2)
+
+        def _do_write() -> None:
+            if atomic_write is not None:
+                try:
+                    atomic_write(self._persist_path, payload, encoding="utf-8")
+                except Exception as e:
+                    logger.warning(f"EmotionState.save_failed: {e}")
+            else:
+                self._persist_path.write_text(payload, encoding="utf-8")
+
         try:
             loop = asyncio.get_running_loop()
             # 同类副作用修复：裸 create_task(to_thread) 无强引用会被 GC 回收导致
             # 情绪状态持久化丢失。用 _spawn 跟踪（线程内写盘 + 完成回收）。
             from core.background_tasks import _spawn
-            _spawn(asyncio.to_thread(
-                self._persist_path.write_text, payload, encoding="utf-8"
-            ))
+            _spawn(asyncio.to_thread(_do_write))
         except RuntimeError:
-            self._persist_path.write_text(payload, encoding="utf-8")
+            _do_write()
 
     def _load(self) -> None:
         """从 JSON 文件加载。"""

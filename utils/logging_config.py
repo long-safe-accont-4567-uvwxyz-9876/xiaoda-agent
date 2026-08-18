@@ -112,6 +112,14 @@ def setup_logging() -> None:
     结构化 extra 字段统一默认值：trace_id / event / duration_ms / user_id /
     session_id / error，调用方可用 logger.bind() 或关键字参数覆盖。
     """
+    # Windows: 确保 stdout/stderr 用 UTF-8，避免 emoji/中文日志在 cp936 控制台崩溃
+    if sys.platform == "win32":
+        for _stream in (sys.stdout, sys.stderr):
+            try:
+                _stream.reconfigure(encoding="utf-8", errors="replace")
+            except (AttributeError, ValueError):
+                pass
+
     logger.remove()
     # 统一 extra 字段默认值，便于结构化日志分析
     logger.configure(

@@ -13,6 +13,11 @@ from pathlib import Path
 from typing import Any, Literal
 
 from loguru import logger
+
+try:
+    from utils.atomic_write import atomic_write
+except Exception:  # pragma: no cover
+    atomic_write = None  # type: ignore[assignment]
 from pydantic import BaseModel, Field, field_validator
 
 # 在线数据源（国内可访问，合法合规）
@@ -307,9 +312,11 @@ class ManifestFetcher:
         """保存到本地缓存"""
         try:
             _CACHE_DIR.mkdir(parents=True, exist_ok=True)
-            self._cache_file.write_text(
-                manifest.model_dump_json(indent=2), encoding="utf-8"
-            )
+            _payload = manifest.model_dump_json(indent=2)
+            if atomic_write is not None:
+                atomic_write(self._cache_file, _payload, encoding="utf-8")
+            else:
+                self._cache_file.write_text(_payload, encoding="utf-8")
         except Exception as e:
             logger.debug("market.cache_save_failed", error=str(e))
 

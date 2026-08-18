@@ -89,12 +89,12 @@ class DirectionVector:
             "magnitude": self.magnitude,
             "meta": self.meta,
         }
-        Path(path).write_text(json.dumps(data, indent=2, ensure_ascii=False))
+        Path(path).write_text(json.dumps(data, indent=2, ensure_ascii=False), encoding="utf-8")
 
     @classmethod
     def load(cls, path: str) -> "DirectionVector":
         """加载 — 对齐 reprobe/loader.py: ProbeLoader.from_file()"""
-        data = json.loads(Path(path).read_text())
+        data = json.loads(Path(path).read_text(encoding="utf-8"))
         return cls(**{k: v for k, v in data.items() if k in cls.__dataclass_fields__})
 
 
@@ -130,7 +130,7 @@ class DirectionRegistry:
             }
             Path(self._storage_path).parent.mkdir(parents=True, exist_ok=True)
             Path(self._storage_path).write_text(
-                json.dumps(registry, indent=2, ensure_ascii=False))
+                json.dumps(registry, indent=2, ensure_ascii=False), encoding="utf-8")
         except Exception as e:
             logger.error(f"direction_registry.save_failed: {e}")
 
@@ -139,7 +139,7 @@ class DirectionRegistry:
         if not path.exists():
             return
         try:
-            registry = json.loads(path.read_text())
+            registry = json.loads(path.read_text(encoding="utf-8"))
             for name, data in registry.items():
                 self._directions[name] = DirectionVector(
                     name=name, dimensions=data["dimensions"],

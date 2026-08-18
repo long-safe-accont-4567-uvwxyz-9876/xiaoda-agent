@@ -34,6 +34,13 @@ from typing import Any, Optional
 import httpx
 from loguru import logger
 
+try:
+    from utils.atomic_write import atomic_write, _restrict_file_permissions_windows
+except Exception:  # pragma: no cover
+    atomic_write = None  # type: ignore[assignment]
+    def _restrict_file_permissions_windows(path):  # type: ignore[no-redef]
+        return
+
 from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
 from cryptography.hazmat.primitives import padding
 
@@ -988,15 +995,18 @@ class ILinkClient:
 
             cursor_path = _Path.home() / ".ai-agent" / "wechat_cursor.json"
             cursor_path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
-            tmp = cursor_path.with_suffix(".tmp")
-            tmp.write_text(
-                _json.dumps({"cursor": cursor}, ensure_ascii=False),
-                encoding="utf-8",
-            )
-            # Minor#4（R3）：游标含会话状态信息，权限对齐凭证文件（0600），
-            # 避免 umask 默认权限（如 0644）导致同机其他用户可读。
-            _os.chmod(tmp, 0o600)
-            tmp.replace(cursor_path)
+            content = _json.dumps({"cursor": cursor}, ensure_ascii=False)
+            if atomic_write is not None:
+                # Minor#4（R3）：游标含会话状态信息，权限对齐凭证文件（0600），
+                # 避免 umask 默认权限（如 0644）导致同机其他用户可读。
+                atomic_write(cursor_path, content, mode=0o600, encoding="utf-8")
+            else:
+                # fallback: 固定 tmp 方式（atomic_write 不可用时）
+                tmp = cursor_path.with_suffix(".tmp")
+                tmp.write_text(content, encoding="utf-8")
+                _os.chmod(tmp, 0o600)  # Unix: 限制为仅用户可读写
+                _restrict_file_permissions_windows(tmp)  # Windows: 用 ACL 补偿
+                tmp.replace(cursor_path)
             logger.info("ilink.verify_cursor_persisted len={}", len(cursor))
         except Exception as e:
             logger.warning(

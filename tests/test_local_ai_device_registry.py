@@ -1,5 +1,6 @@
 import hashlib
 import platform
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
@@ -23,6 +24,16 @@ from local_ai.devices.registry import (
     _binding_key,
 )
 from memory import local_embed
+
+
+def _read_text_lookup(values):
+    """按 posix 路径查 mock 值：Windows 上 Path 的 str() 用反斜杠，
+    而测试 dict 用正斜杠 key，直接 str(path) 会全部 miss。"""
+
+    def read_text(path):
+        return values.get(Path(path).as_posix(), "")
+
+    return read_text
 
 
 def host_architecture():
@@ -242,6 +253,10 @@ def test_linux_nvidia_probe_records_provider_ordinals(monkeypatch):
         "_run_command",
         lambda command: "2, GPU-2, RTX 4090, 24564, 20000, 555.1, 0000:03:00.0",
     )
+    # 宿主环境可能设置了 CUDA_VISIBLE_DEVICES（如 conda），会使
+    # provider_ordinals 变为空；显式清空保证测试确定。
+    monkeypatch.delenv("CUDA_VISIBLE_DEVICES", raising=False)
+    monkeypatch.delenv("NVIDIA_VISIBLE_DEVICES", raising=False)
 
     gpu = system_probe._linux_nvidia_gpus()[0]
 
@@ -261,7 +276,7 @@ def test_amd_and_windows_cim_gpus_do_not_invent_provider_ordinals(monkeypatch):
         "/sys/class/drm/card0/device/mem_info_vram_used": "1000",
         "/sys/class/drm/card0/device/product_name": "AMD GPU",
     }
-    monkeypatch.setattr(system_probe, "_read_text", lambda path: values.get(str(path), ""))
+    monkeypatch.setattr(system_probe, "_read_text", _read_text_lookup(values))
     amd = system_probe._linux_amd_gpus()[0]
     cim = system_probe._windows_gpus(
         {
@@ -289,7 +304,7 @@ def test_rocm_without_ordinal_retains_amd_drm_device_and_continues_scan(monkeypa
         f"{card}/device/product_name": "AMD GPU",
     }
     monkeypatch.setattr(system_probe, "_glob_paths", lambda pattern: [card])
-    monkeypatch.setattr(system_probe, "_read_text", lambda path: values.get(str(path), ""))
+    monkeypatch.setattr(system_probe, "_read_text", _read_text_lookup(values))
     amd = system_probe._linux_amd_gpus()[0]
     device_registry = DeviceRegistry(
         ort_module=fake_ort,

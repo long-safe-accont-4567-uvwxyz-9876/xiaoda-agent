@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import concurrent.futures
 import csv
 import glob
 import hashlib
@@ -34,6 +35,12 @@ def _run_command(command: list[str], timeout_s: float = 10.0) -> str:
             command,
             capture_output=True,
             text=True,
+            # 显式 UTF-8：Windows PowerShell 5.1 在非 UTF-8 系统区域下默认以
+            # OEM/ANSI 编码（如 GBK）写管道，text=True 会按 PYTHONUTF8/locale
+            # 解码导致 UnicodeDecodeError 丢输出。errors=replace 避免 reader
+            # 线程崩溃，保证任何平台都不会因解码失败而整体失效。
+            encoding="utf-8",
+            errors="replace",
             timeout=timeout_s,
             check=False,
         )
@@ -370,18 +377,32 @@ _WINDOWS_ARCHITECTURES = {
     12: "aarch64",
 }
 
+# Windows PowerShell 5.1 输出编码强制 UTF-8（见 _run_command 注释）
+_PS_UTF8_PREFIX = "[Console]::OutputEncoding=[System.Text.Encoding]::UTF8;"
 
-def _windows_payload() -> dict[str, Any]:
-    script = (
-        "$cpu=Get-CimInstance Win32_Processor | Select-Object -First 1;"
+# 单条 PowerShell 探测命令的超时：WMI/CIM 在远程桌面/虚拟化环境下可能
+# 需要 10-20s 才响应；串行总超时 10s 曾导致 payload 全空、GPU/NPU 全部漏检。
+_PS_TIMEOUT_S = 35.0
+
+
+def _windows_cpu_script() -> str:
+    return (
+        _PS_UTF8_PREFIX
+        + "$cpu=Get-CimInstance Win32_Processor | Select-Object -First 1;"
         "$os=Get-CimInstance Win32_OperatingSystem;"
-        "$gpu=@(Get-CimInstance Win32_VideoController | Select-Object "
+        "[pscustomobject]@{cpu=[pscustomobject]@{Name=$cpu.Name;"
+        "Architecture=$cpu.Architecture;"
+        "TotalPhysicalMemory=$os.TotalVisibleMemorySize*1KB;"
+        "FreePhysicalMemory=$os.FreePhysicalMemory}}"
+        " | ConvertTo-Json -Compress -Depth 4"
+    )
+
+
+def _windows_gpu_script() -> str:
+    return (
+        _PS_UTF8_PREFIX
+        + "$gpu=@(Get-CimInstance Win32_VideoController | Select-Object "
         "Name,AdapterRAM,PNPDeviceID,DriverVersion);"
-        # NPU（Intel AI Boost / Qualcomm Hexagon 等注册为 ComputeAccelerator 类）
-        "$npu=@(Get-PnpDevice -PresentOnly -ErrorAction SilentlyContinue | "
-        "Where-Object {$_.Class -eq 'ComputeAccelerator' -or "
-        "$_.FriendlyName -match 'NPU|Neural'} | "
-        "Select-Object FriendlyName,InstanceId);"
         # GPU 真实显存：AdapterRAM 是 32 位 DWORD，4GB+ 会溢出，
         # 用注册表 HardwareInformation.qwMemorySize（QWORD）修正。
         "$adapterRam=@{};"
@@ -389,21 +410,68 @@ def _windows_payload() -> dict[str, Any]:
         "Get-ChildItem $cls -ErrorAction SilentlyContinue | ForEach-Object {"
         "$p=Get-ItemProperty $_.PSPath -ErrorAction SilentlyContinue;"
         "if($p.'HardwareInformation.AdapterString'){"
-        "$adapterRam[$p.'HardwareInformation.AdapterString']="
-        "[int64]$p.'HardwareInformation.qwMemorySize'}};"
-        "[pscustomobject]@{cpu=[pscustomobject]@{Name=$cpu.Name;"
-        "Architecture=$cpu.Architecture;"
-        "TotalPhysicalMemory=$os.TotalVisibleMemorySize*1KB;"
-        "FreePhysicalMemory=$os.FreePhysicalMemory};"
-        "video_controllers=$gpu;npu_devices=$npu;adapter_ram=$adapterRam}"
+        "$k=[string]$p.'HardwareInformation.AdapterString';"
+        "$adapterRam[$k]=[int64]$p.'HardwareInformation.qwMemorySize'}};"
+        "[pscustomobject]@{video_controllers=$gpu;adapter_ram=$adapterRam}"
         " | ConvertTo-Json -Compress -Depth 6"
     )
-    raw = _run_command(["powershell", "-NoProfile", "-Command", script])
-    try:
-        value = json.loads(raw)
-    except (json.JSONDecodeError, TypeError):
-        return {}
-    return value if isinstance(value, dict) else {}
+
+
+def _windows_npu_script() -> str:
+    return (
+        _PS_UTF8_PREFIX
+        # NPU（Intel AI Boost / Qualcomm Hexagon 等注册为 ComputeAccelerator 类）
+        # 收紧：仅接受 Class 为 ComputeAccelerator 且 FriendlyName 含 NPU/Neural
+        # 关键词的设备，避免把输入虚拟化设备（Microsoft Input Configuration
+        # Device / GameViewer gvinput 等）误报为 NPU。
+        + "$npu=@(Get-PnpDevice -PresentOnly -ErrorAction SilentlyContinue | "
+        "Where-Object {$_.Class -eq 'ComputeAccelerator' -and "
+        "($_.FriendlyName -match 'NPU|Neural')} | "
+        "Select-Object FriendlyName,InstanceId);"
+        "[pscustomobject]@{npu_devices=$npu} | ConvertTo-Json -Compress -Depth 6"
+    )
+
+
+def _windows_payload() -> dict[str, Any]:
+    """并行探测 Windows CPU/GPU/NPU，合并为单 payload。
+
+    WMI/CIM 查询在远程桌面/虚拟化主机上可能各需 10-20s，串行会超时；
+    三条命令并行可把总耗时压到最慢一条（约 20s），且任一失败不影响其余。
+    """
+    commands = {
+        "cpu": _windows_cpu_script(),
+        "gpu": _windows_gpu_script(),
+        "npu": _windows_npu_script(),
+    }
+    results: dict[str, str] = {}
+    with concurrent.futures.ThreadPoolExecutor(max_workers=3) as executor:
+        futures = {
+            key: executor.submit(
+                _run_ps_command, script, timeout_s=_PS_TIMEOUT_S
+            )
+            for key, script in commands.items()
+        }
+        for key, future in futures.items():
+            try:
+                results[key] = future.result()
+            except Exception:  # noqa: BLE001
+                results[key] = ""
+    payload: dict[str, Any] = {}
+    for key, raw in results.items():
+        try:
+            value = json.loads(raw)
+        except (json.JSONDecodeError, TypeError):
+            continue
+        if isinstance(value, dict):
+            payload.update(value)
+    return payload
+
+
+def _run_ps_command(script: str, timeout_s: float = _PS_TIMEOUT_S) -> str:
+    """单条 PowerShell 命令，UTF-8 解码（见 _run_command 注释）。"""
+    return _run_command(
+        ["powershell", "-NoProfile", "-Command", script], timeout_s=timeout_s
+    )
 
 
 def _windows_cpu_from_payload(payload: dict[str, Any]) -> ComputeDevice:
@@ -488,10 +556,23 @@ def _windows_gpus(payload: dict[str, Any]) -> list[ComputeDevice]:
         pnp_device_id = controller.get("PNPDeviceID")
         if not isinstance(pnp_device_id, str):
             pnp_device_id = ""
+        # 排除软件虚拟显示适配器（GameViewer/RDP 等注册为 ROOT\DISPLAY\xxxx）：
+        # 它们没有真实算力，混入会让设备列表/推荐失真。
+        # 真实 GPU 走 PCI\VEN_...&DEV_... 硬件路径；无 PNP ID 的条目保留
+        # （走 weak-evidence 哈希身份），仅丢弃显式的 ROOT\ 虚拟设备。
+        if pnp_device_id.strip() and pnp_device_id.strip().casefold().startswith(
+            ("root\\", "root/")
+        ):
+            continue
         # AdapterRAM（DWORD）在 4GB+ 显存溢出为 0/负数，用注册表 QWORD 修正
         total = _non_negative_int(controller.get("AdapterRAM"))
         for key, value in adapter_ram.items():
             if not isinstance(key, str):
+                continue
+            # 注册表 AdapterString 可能存 REG_BINARY（Intel 核显）：PowerShell
+            # [string] 强转会变成 "73 0 110 0 ..." 数字串，非真实名称，跳过。
+            tokens = key.split()
+            if tokens and all(token.isdigit() for token in tokens):
                 continue
             if key.strip().casefold() == name.strip().casefold():
                 qword = _non_negative_int(value)
@@ -531,9 +612,11 @@ def _windows_gpus(payload: dict[str, Any]) -> list[ComputeDevice]:
 
 
 def _windows_npu_devices(payload: dict[str, Any]) -> list[ComputeDevice]:
-    """Windows NPU 探测：ComputeAccelerator 类 PnP 设备（Intel AI Boost /
-    Qualcomm Hexagon NPU 等）。DirectML 可经 DmlExecutionProvider 承载，
-    由 DeviceRegistry 的 DML backend 挂载到 npu 设备。
+    """Windows NPU 探测：ComputeAccelerator 类且名称含 NPU/Neural 的 PnP 设备
+    （Intel AI Boost / Qualcomm Hexagon NPU 等）。DirectML 可经
+    DmlExecutionProvider 承载，由 DeviceRegistry 的 DML backend 挂载到 npu 设备。
+
+    PowerShell 侧已收紧（-and + NPU|Neural 关键词），此处仅防御性解析。
     """
     npu_devices = payload.get("npu_devices", ())
     if isinstance(npu_devices, dict):

@@ -202,6 +202,11 @@ class ZombieDetector:
             logger.warning(f"ZombieDetector.kill_zombie: pid={pid} not registered")
             return False
         try:
+            if os.name == "nt":
+                # Windows: os.kill 对非 CTRL_C/CTRL_BREAK 信号走 TerminateProcess 硬杀，
+                # 无资源清理机会（与 Unix SIGTERM 优雅退出语义不同）。
+                # 已知限制：无法优雅终止，但可防止僵尸进程残留。
+                logger.warning(f"ZombieDetector.kill_zombie windows_hard_kill pid={pid} name={info['name']}")
             os.kill(pid, signal.SIGTERM)
             logger.info(f"ZombieDetector.kill_zombie SIGTERM pid={pid} name={info['name']}")
             self._processes.pop(pid, None)

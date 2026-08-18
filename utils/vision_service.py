@@ -50,8 +50,9 @@ def _get_gpu_names_windows() -> list[str]:
     try:
         result = subprocess.run(
             ["powershell", "-Command",
+             "[Console]::OutputEncoding=[System.Text.Encoding]::UTF8; "
              "Get-CimInstance Win32_VideoController | Select-Object -ExpandProperty Name"],
-            capture_output=True, text=True, timeout=5, check=False,
+            capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=5, check=False,
         )
         return [n.strip() for n in result.stdout.strip().split("\n") if n.strip()]
     except Exception:
@@ -244,7 +245,19 @@ class VisionService:
         CAPTURES_DIR.mkdir(parents=True, exist_ok=True)
 
     def _check_memory(self) -> bool:
-        """检查系统可用内存是否充足（>500MB）。"""
+        """检查系统可用内存是否充足（>500MB）。
+
+        优先用 psutil（跨平台），回退到 /proc/meminfo（仅 Linux）。
+        Windows 上 /proc/meminfo 不存在，原实现恒返回 False 导致视觉模型
+        永远走 api_fallback。
+        """
+        try:
+            import psutil
+            available_mb = psutil.virtual_memory().available / (1024 * 1024)
+            return available_mb > 500
+        except ImportError:
+            pass
+        # fallback: /proc/meminfo（仅 Linux）
         try:
             with open("/proc/meminfo") as f:
                 for line in f:
@@ -252,9 +265,9 @@ class VisionService:
                         available_kb = int(line.split()[1])
                         available_mb = available_kb / 1024
                         return available_mb > 500
-            return False
-        except Exception:
-            return False
+        except (OSError, ValueError):
+            pass
+        return True  # 无法检测时默认允许加载（不误拒）
 
     def _load_model(self) -> None:
         """加载检测模型，按优先级尝试 NPU、NCNN 或回退到 API。"""

@@ -27,6 +27,10 @@ def _run_command(command: list[str], timeout_s: float = 5.0) -> str:
             command,
             capture_output=True,
             text=True,
+            # 与 system_probe._run_command 一致：显式 UTF-8 + errors=replace，
+            # 避免 Windows PowerShell 按系统 OEM/ANSI 编码输出时解码崩溃。
+            encoding="utf-8",
+            errors="replace",
             timeout=timeout_s,
             check=False,
         )
@@ -215,6 +219,8 @@ def _gpu_stats_windows(device: ComputeDevice) -> dict:
                 return {"source": "nvidia_smi"}
     # 通用：Get-Counter 3D 引擎聚合（需要两次采样取差值，较慢，限制单次）
     script = (
+        # 强制 UTF-8 输出，避免 GBK 区域 PowerShell 输出解码失败
+        "[Console]::OutputEncoding=[System.Text.Encoding]::UTF8;"
         "$s=(Get-Counter '\\GPU Engine(*)\\Utilization Percentage' "
         "-ErrorAction SilentlyContinue).CounterSamples | "
         "Measure-Object -Property CookedValue -Sum;"

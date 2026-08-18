@@ -1862,7 +1862,7 @@ class AIQQBot(ChannelAdapterBase, botpy.Client):
             def _do_convert() -> bool:
                 result = subprocess.run(
                     ['ffmpeg', '-y', '-i', str(audio_path), '-ar', '16000', '-ac', '1', '-f', 's16le', str(pcm_path)],
-                    capture_output=True, text=True, timeout=30, check=False
+                    capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=30, check=False
                 )
                 if result.returncode != 0:
                     logger.warning("qq_bot.ffmpeg_failed", stderr=result.stderr[:200])

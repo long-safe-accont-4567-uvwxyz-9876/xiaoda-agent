@@ -27,6 +27,11 @@ from typing import Any
 from loguru import logger
 
 try:
+    from utils.atomic_write import atomic_write
+except Exception:  # pragma: no cover
+    atomic_write = None  # type: ignore[assignment]
+
+try:
     import numpy as np
 
     HAS_NUMPY = True
@@ -289,8 +294,12 @@ class NumpyBruteIndex:
                     "count": buf.count,
                     "deleted": sorted(buf.deleted),
                 }
-            (self._base_dir / _META_NAME).write_text(
-                json.dumps(meta), encoding="utf-8")
+            _meta_path = self._base_dir / _META_NAME
+            _payload = json.dumps(meta)
+            if atomic_write is not None:
+                atomic_write(_meta_path, _payload, encoding="utf-8")
+            else:
+                _meta_path.write_text(_payload, encoding="utf-8")
             logger.info("numpy_index.saved", dir=str(self._base_dir))
             return True
         except Exception as e:  # noqa: BLE001

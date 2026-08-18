@@ -231,8 +231,14 @@ class FileReceiver:
                                 break
                             total_size += len(chunk)
                             if total_size > self.MAX_FILE_SIZE:
-                                os.close(tmp_fd)
-                                os.unlink(tmp_path)
+                                try:
+                                    os.close(tmp_fd)
+                                except OSError:
+                                    pass
+                                try:
+                                    os.unlink(tmp_path)
+                                except OSError:
+                                    pass
                                 return None, total_size
                             os.write(tmp_fd, chunk)
                         os.close(tmp_fd)

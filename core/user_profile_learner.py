@@ -33,6 +33,11 @@ except Exception:
     DATA_DIR = Path(__file__).resolve().parent.parent / "data"
     DATA_DIR.mkdir(parents=True, exist_ok=True)
 
+try:
+    from utils.atomic_write import atomic_json_write
+except Exception:  # pragma: no cover
+    atomic_json_write = None  # type: ignore[assignment]
+
 # ── 常量 ───────────────────────────────────────────────────
 
 # 每多少条新消息触发一次 LLM 认知抽取
@@ -84,10 +89,18 @@ class UserProfileLearner:
 
     def _save(self):
         self._data_path.parent.mkdir(parents=True, exist_ok=True)
-        tmp = self._data_path.with_suffix(".json.tmp")
-        with open(tmp, "w", encoding="utf-8") as f:
-            json.dump(self._stats, f, ensure_ascii=False, indent=2)
-        os.replace(tmp, self._data_path)
+        try:
+            if atomic_json_write is not None:
+                atomic_json_write(self._data_path, self._stats,
+                                  encoding="utf-8", indent=2, ensure_ascii=False)
+            else:
+                # fallback: 固定 tmp 方式（atomic_write 不可用时）
+                tmp = self._data_path.with_suffix(".json.tmp")
+                with open(tmp, "w", encoding="utf-8") as f:
+                    json.dump(self._stats, f, ensure_ascii=False, indent=2)
+                os.replace(tmp, self._data_path)
+        except Exception as e:
+            logger.warning(f"UserProfileLearner.save_failed: {e}")
 
     # ── 统计层（零成本，每条消息调用） ────────────────────────
 

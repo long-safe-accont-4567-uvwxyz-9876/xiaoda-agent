@@ -24,6 +24,13 @@ from typing import Any, Optional
 
 from loguru import logger
 
+try:
+    from utils.atomic_write import atomic_write, _restrict_file_permissions_windows
+except Exception:  # pragma: no cover
+    atomic_write = None  # type: ignore[assignment]
+    def _restrict_file_permissions_windows(path):  # type: ignore[no-redef]
+        return
+
 from ilink_client import ILinkClient, SessionExpiredError, ILinkRetError
 
 from channel_adapter_base import (
@@ -297,15 +304,18 @@ class WeChatBotAdapter(ChannelAdapterBase):
             return
         try:
             path = self._cursor_path()
-            tmp = path.with_suffix(".tmp")
-            tmp.write_text(
-                json.dumps({"cursor": self._cursor}, ensure_ascii=False),
-                encoding="utf-8",
-            )
-            # Minor#4（R3）：游标含会话状态信息，权限对齐凭证文件（0600），
-            # 避免 umask 默认权限（如 0644）导致同机其他用户可读。
-            os.chmod(tmp, 0o600)
-            tmp.replace(path)
+            content = json.dumps({"cursor": self._cursor}, ensure_ascii=False)
+            if atomic_write is not None:
+                # Minor#4（R3）：游标含会话状态信息，权限对齐凭证文件（0600），
+                # 避免 umask 默认权限（如 0644）导致同机其他用户可读。
+                atomic_write(path, content, mode=0o600, encoding="utf-8")
+            else:
+                # fallback: 固定 tmp 方式（atomic_write 不可用时）
+                tmp = path.with_suffix(".tmp")
+                tmp.write_text(content, encoding="utf-8")
+                os.chmod(tmp, 0o600)  # Unix: 限制为仅用户可读写
+                _restrict_file_permissions_windows(tmp)  # Windows: 用 ACL 补偿
+                tmp.replace(path)
         except Exception as e:
             logger.warning("wechat_bot.cursor_save_failed error={}", str(e)[:120])
 

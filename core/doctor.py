@@ -170,14 +170,43 @@ def _fix_db_integrity() -> None:
         return
     import sqlite3
     backup_path = db_path.with_suffix(".db.bak")
-    shutil.copy2(db_path, backup_path)
+    # 用 sqlite3 官方 backup API 做在线一致性备份：
+    # copy2 在主进程在线时可能备份到撕裂状态；WAL 模式下 .db 不含最新数据；
+    # backup API 在源连接内部协调页面拷贝，保证一致性。
+    try:
+        src = sqlite3.connect(str(db_path))
+        dst = sqlite3.connect(str(backup_path))
+        try:
+            src.backup(dst)
+        finally:
+            src.close()
+            dst.close()
+    except sqlite3.OperationalError as e:
+        # 数据库被占用（database is locked）时跳过备份，不级联报错
+        if "locked" in str(e).lower():
+            logger.warning("doctor.db_backup_skipped_locked")
+            return
+        raise
+    # VACUUM 需要排他锁，数据库被占用时跳过
     conn = sqlite3.connect(str(db_path))
-    # VACUUM 失败时也要保证连接关闭，避免句柄泄漏
+    fixed = False
     try:
         conn.execute("VACUUM")
+        fixed = True
+    except sqlite3.OperationalError as e:
+        if "locked" in str(e).lower():
+            logger.warning("doctor.db_vacuum_skipped_locked")
+        else:
+            raise
     finally:
         conn.close()
-    logger.info("doctor.db_integrity_fixed", backup=str(backup_path))
+    if fixed:
+        logger.info("doctor.db_integrity_fixed", backup=str(backup_path))
+    else:
+        logger.warning(
+            "doctor.db_integrity_not_fixed", backup=str(backup_path),
+            reason="vacuum skipped (database locked)",
+        )
 
 def _check_config() -> tuple:
     from config import MIMO_API_KEY

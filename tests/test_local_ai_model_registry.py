@@ -51,7 +51,7 @@ def _make_installed(
         catalog_id=catalog_id,
         revision=revision,
         purpose=purpose,
-        directory=directory or str(Path("/models") / id),
+        directory=directory or str(Path("/models/") / id),
         manifest_checksum=manifest_checksum,
         validation_state=validation_state,
         ownership=ownership,

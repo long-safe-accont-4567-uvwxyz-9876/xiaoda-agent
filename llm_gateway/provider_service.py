@@ -70,14 +70,15 @@ class ProviderCredentialStore:
         return load_provider_key(provider_id)
 
     def write(self, provider_id: str, value: str) -> None:
-        from utils.atomic_write import atomic_write
+        from utils.atomic_write import atomic_write, _restrict_file_permissions_windows
         from web._provider_keys import _encode_key, _key_file
 
         path = _key_file(provider_id)
         path.parent.mkdir(parents=True, exist_ok=True)
         atomic_write(path, _encode_key(value) + "\n", encoding="utf-8", mode=0o600)
         try:
-            os.chmod(path, 0o600)
+            os.chmod(path, 0o600)  # Unix: 限制为仅用户可读写
+            _restrict_file_permissions_windows(path)  # Windows: 用 ACL 补偿
         except OSError:
             logger.debug("provider_service.key_chmod_failed: {}", path, exc_info=True)
 

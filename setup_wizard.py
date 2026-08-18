@@ -24,6 +24,11 @@ except ImportError:
                     vals[k.strip()] = v.strip().strip("'\"")
         return vals
 
+try:
+    from utils.atomic_write import atomic_write
+except Exception:  # pragma: no cover
+    atomic_write = None  # type: ignore[assignment]
+
 
 def _supports_ansi() -> bool:
     if os.environ.get("NO_COLOR", ""):
@@ -286,10 +291,14 @@ def _write_env(existing_lines: list, updates: dict) -> None:
     for k in key_set - written_keys:
         new_lines.append(f"{k}={updates[k]}")
 
-    with open(ENV_PATH, "w", encoding="utf-8") as f:
-        f.write("\n".join(new_lines))
-        if new_lines and new_lines[-1] != "":
-            f.write("\n")
+    content = "\n".join(new_lines)
+    if new_lines and new_lines[-1] != "":
+        content += "\n"
+    if atomic_write is not None:
+        atomic_write(ENV_PATH, content, encoding="utf-8")
+    else:
+        with open(ENV_PATH, "w", encoding="utf-8") as f:
+            f.write(content)
 
 
 def _ask_key(item: dict, current_val: str, is_required: bool) -> str:

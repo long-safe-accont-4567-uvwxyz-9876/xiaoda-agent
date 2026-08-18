@@ -462,7 +462,15 @@ class DownloadManager:
             f"{self._state_path.name}.{uuid.uuid4().hex}.tmp"
         )
         temporary.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
-        os.replace(temporary, self._state_path)
+        self._replace_state(temporary)
+
+    def _replace_state(self, temporary: Path) -> None:
+        """原子替换状态文件，Windows 上 os.replace 覆盖被短暂占用的
+        目标文件会抛 PermissionError（WinError 5）；复用 utils.atomic_write
+        的带重试 replace（50ms→800ms 指数退避），失败时抛异常由调用方处理。"""
+        from utils.atomic_write import _atomic_replace_with_retry
+
+        _atomic_replace_with_retry(temporary, self._state_path)
 
     def _read_state(self) -> dict[str, Any]:
         return json.loads(self._state_path.read_text(encoding="utf-8"))

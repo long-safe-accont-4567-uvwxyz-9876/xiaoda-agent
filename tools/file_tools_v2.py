@@ -8,6 +8,11 @@ import urllib.parse
 from loguru import logger
 from tool_engine.tool_registry import register_tool, ToolPermission, ToolResult
 
+try:
+    from utils.atomic_write import atomic_write as _atomic_write
+except Exception:  # pragma: no cover
+    _atomic_write = None  # type: ignore[assignment]
+
 
 # ==================== 文件路径沙箱 ====================
 
@@ -487,9 +492,10 @@ def read_file(path: str, offset: int = 0, limit: int = 200) -> ToolResult:
         if os.path.isdir(resolved):
             return ToolResult.fail(f"这是一个目录，不是文件: {path}")
 
+        # 流式读取避免大文件 OOM（原 readlines() 全量读入内存）
+        import itertools
         with _open_validated(resolved, mode="r", encoding="utf-8") as f:
-            lines = f.readlines()
-        selected = lines[offset:offset + limit]
+            selected = list(itertools.islice(f, offset, offset + limit))
         content = ''.join(selected)
         return ToolResult.ok(f"文件: {resolved}\n{'='*40}\n{content}")
     except PermissionError as e:
@@ -528,8 +534,12 @@ def write_file(input_str: str) -> ToolResult:
 
         os.makedirs(os.path.dirname(resolved), exist_ok=True)
 
-        with _open_validated(resolved, mode="w", encoding="utf-8") as f:
-            f.write(content)
+        # 原子写入（非原子 "w" 覆盖在崩溃时会导致文件截断/损坏）
+        if _atomic_write is not None:
+            _atomic_write(resolved, content, encoding="utf-8")
+        else:
+            with _open_validated(resolved, mode="w", encoding="utf-8") as f:
+                f.write(content)
 
         return ToolResult.ok(f"文件已写入: {resolved}")
     except PermissionError as e:

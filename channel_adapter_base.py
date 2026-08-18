@@ -40,6 +40,13 @@ from typing import Any
 
 from loguru import logger
 
+try:
+    from utils.atomic_write import atomic_write, _restrict_file_permissions_windows
+except Exception:  # pragma: no cover
+    atomic_write = None  # type: ignore[assignment]
+    def _restrict_file_permissions_windows(path):  # type: ignore[no-redef]
+        return
+
 # 流式回复被动配额上限（原 qq_bot_adapter 模块级常量搬移，QQ 侧保留同名别名）
 STREAM_C2C_MAX_SEGMENTS = 4
 STREAM_GROUP_MAX_SEGMENTS = 4
@@ -285,12 +292,18 @@ def save_json_credentials(
     """
     try:
         path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
-        tmp_path = path.with_suffix(".json.tmp")
-        fd = os.open(tmp_path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
-        with os.fdopen(fd, "w", encoding="utf-8") as f:
-            json.dump(data, f, ensure_ascii=False, indent=2)
-        os.chmod(tmp_path, 0o600)
-        tmp_path.replace(path)
+        content = json.dumps(data, ensure_ascii=False, indent=2)
+        if atomic_write is not None:
+            atomic_write(path, content, mode=0o600, encoding="utf-8")
+        else:
+            # fallback: 固定 tmp 方式（atomic_write 不可用时）
+            tmp_path = path.with_suffix(".json.tmp")
+            fd = os.open(tmp_path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+            with os.fdopen(fd, "w", encoding="utf-8") as f:
+                json.dump(data, f, ensure_ascii=False, indent=2)
+            os.chmod(tmp_path, 0o600)  # Unix: 限制为仅用户可读写
+            _restrict_file_permissions_windows(tmp_path)  # Windows: 用 ACL 补偿
+            tmp_path.replace(path)
         if cursor_path is not None:
             try:
                 if cursor_path.exists():

@@ -1,6 +1,7 @@
 from typing import Any
 import asyncio
 import json
+import os
 import shutil
 import time
 from loguru import logger
@@ -468,33 +469,47 @@ class SlashCommandHandler:
         """同步读取硬件状态（通过 asyncio.to_thread 包装避免阻塞事件循环）"""
         lines: list[str] = []
         try:
-            try:
-                with open("/sys/class/thermal/thermal_zone0/temp") as f:
-                    temp_c = int(f.read().strip()) / 1000
-                temp_icon = "🔥⚠️" if temp_c > 80 else "🌡️"
-                lines.append(f"{temp_icon} CPU温度: {temp_c:.1f}°C")
-            except (OSError, ValueError) as e:
-                logger.debug("slash.hw.temp_read_failed", error=str(e))
-                lines.append("🌡️ CPU温度: 无法读取")
-            try:
-                with open("/sys/devices/system/cpu/cpu0/cpufreq/scaling_cur_freq") as f:
-                    freq_khz = int(f.read().strip())
-                lines.append(f"⚡ CPU频率: {freq_khz // 1000} MHz")
-            except (OSError, ValueError) as e:
-                logger.debug("slash.hw.freq_read_failed", error=str(e))
-                lines.append("⚡ CPU频率: 无法读取")
-            try:
-                with open("/proc/meminfo") as f:
-                    meminfo = f.read()
-                mem_total = int(next(line for line in meminfo.split('\n') if 'MemTotal' in line).split()[1])
-                mem_avail = int(next(line for line in meminfo.split('\n') if 'MemAvailable' in line).split()[1])
-                mem_used = mem_total - mem_avail
-                mem_pct = mem_used / mem_total * 100
-                mem_icon = "💾⚠️" if mem_pct > 90 else "💾"
-                lines.append(f"{mem_icon} 内存: {mem_used//1024}M / {mem_total//1024}M ({mem_pct:.0f}%)")
-            except (OSError, ValueError) as e:
-                logger.debug("slash.hw.mem_read_failed", error=str(e))
-                lines.append("💾 内存: 无法读取")
+            if os.name == "nt":
+                # Windows 上无 /sys /proc，直接占位
+                lines.append("🌡️ CPU温度: Windows 平台不支持")
+                lines.append("⚡ CPU频率: Windows 平台不支持")
+                lines.append("💾 内存: Windows 平台不支持")
+                lines.append("📊 负载: Windows 平台不支持")
+            else:
+                try:
+                    with open("/sys/class/thermal/thermal_zone0/temp") as f:
+                        temp_c = int(f.read().strip()) / 1000
+                    temp_icon = "🔥⚠️" if temp_c > 80 else "🌡️"
+                    lines.append(f"{temp_icon} CPU温度: {temp_c:.1f}°C")
+                except (OSError, ValueError) as e:
+                    logger.debug("slash.hw.temp_read_failed", error=str(e))
+                    lines.append("🌡️ CPU温度: 无法读取")
+                try:
+                    with open("/sys/devices/system/cpu/cpu0/cpufreq/scaling_cur_freq") as f:
+                        freq_khz = int(f.read().strip())
+                    lines.append(f"⚡ CPU频率: {freq_khz // 1000} MHz")
+                except (OSError, ValueError) as e:
+                    logger.debug("slash.hw.freq_read_failed", error=str(e))
+                    lines.append("⚡ CPU频率: 无法读取")
+                try:
+                    with open("/proc/meminfo") as f:
+                        meminfo = f.read()
+                    mem_total = int(next(line for line in meminfo.split('\n') if 'MemTotal' in line).split()[1])
+                    mem_avail = int(next(line for line in meminfo.split('\n') if 'MemAvailable' in line).split()[1])
+                    mem_used = mem_total - mem_avail
+                    mem_pct = mem_used / mem_total * 100
+                    mem_icon = "💾⚠️" if mem_pct > 90 else "💾"
+                    lines.append(f"{mem_icon} 内存: {mem_used//1024}M / {mem_total//1024}M ({mem_pct:.0f}%)")
+                except (OSError, ValueError) as e:
+                    logger.debug("slash.hw.mem_read_failed", error=str(e))
+                    lines.append("💾 内存: 无法读取")
+                try:
+                    with open("/proc/loadavg") as f:
+                        load = f.read().strip().split()[:3]
+                    lines.append(f"📊 负载: {' '.join(load)}")
+                except (OSError, ValueError) as e:
+                    logger.debug("slash.hw.load_read_failed", error=str(e))
+                    lines.append("📊 负载: 无法读取")
             try:
                 usage = shutil.disk_usage('/')
                 pct = usage.used / usage.total * 100 if usage.total > 0 else 0
@@ -502,13 +517,6 @@ class SlashCommandHandler:
             except (OSError, ValueError) as e:
                 logger.debug("slash.hw.disk_read_failed", error=str(e))
                 lines.append("💿 磁盘: 无法读取")
-            try:
-                with open("/proc/loadavg") as f:
-                    load = f.read().strip().split()[:3]
-                lines.append(f"📊 负载: {' '.join(load)}")
-            except (OSError, ValueError) as e:
-                logger.debug("slash.hw.load_read_failed", error=str(e))
-                lines.append("📊 负载: 无法读取")
         except (OSError, RuntimeError):
             logger.debug("slash.hw_outer_error", exc_info=True)
         return lines

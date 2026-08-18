@@ -1,5 +1,14 @@
 import os
 import sys
+
+# Windows: 确保 stdout/stderr 用 UTF-8，避免 emoji/中文 print 到 cp936 控制台崩溃
+if sys.platform == "win32":
+    for _stream in (sys.stdout, sys.stderr):
+        try:
+            _stream.reconfigure(encoding="utf-8", errors="replace")
+        except (AttributeError, ValueError):
+            pass
+
 import time
 import random
 import asyncio

@@ -1,7 +1,10 @@
-"""P0-2: Windows Selector 事件循环策略测试。
+"""P0-2: Windows Proactor 事件循环策略测试。
 
-验证 agent.py 入口在 Windows 平台设置了 WindowsSelectorEventLoopPolicy，
-使 aiosqlite 走 Selector 事件循环以加速线程间通知；非 Windows 平台不受影响。
+验证 agent.py 入口在 Windows 平台设置 WindowsProactorEventLoopPolicy，
+以支持 asyncio 子进程（create_subprocess_exec/shell）；非 Windows 平台不受影响。
+
+历史：曾用 SelectorEventLoop 加速 aiosqlite 线程切换，但 Selector 不支持子进程，
+导致 MCP/shell_command 等 7 个调用点 NotImplementedError，已改回 Proactor。
 """
 import asyncio
 import sys
@@ -25,15 +28,40 @@ def test_setup_windows_event_loop_does_not_raise_on_non_windows():
         assert asyncio.get_event_loop_policy() is policy_before
 
 
-@pytest.mark.skipif(sys.platform != "win32", reason="仅 Windows 启用 Selector 策略")
-def test_windows_uses_selector_event_loop_policy():
-    """Windows 平台调用 _setup_windows_event_loop 后策略应为 WindowsSelectorEventLoopPolicy。"""
+@pytest.mark.skipif(sys.platform != "win32", reason="仅 Windows 启用 Proactor 策略")
+def test_windows_uses_proactor_event_loop_policy():
+    """Windows 平台调用 _setup_windows_event_loop 后策略应为 WindowsProactorEventLoopPolicy。
+
+    Proactor 基于 IOCP，支持子进程等待；Selector 不支持子进程会抛 NotImplementedError。
+    """
     from agent import _setup_windows_event_loop
     _setup_windows_event_loop()
     assert isinstance(
         asyncio.get_event_loop_policy(),
-        asyncio.WindowsSelectorEventLoopPolicy,
+        asyncio.WindowsProactorEventLoopPolicy,
     )
+
+
+@pytest.mark.skipif(sys.platform != "win32", reason="仅 Windows 验证子进程")
+def test_windows_subprocess_works_under_proactor():
+    """Windows 上 Proactor 策略应支持 asyncio.create_subprocess_exec。
+
+    回归测试：Selector 策略下此调用抛 NotImplementedError，Proactor 下应正常。
+    """
+    from agent import _setup_windows_event_loop
+    _setup_windows_event_loop()
+
+    async def _run():
+        proc = await asyncio.create_subprocess_exec(
+            "cmd", "/c", "echo hello_from_subprocess",
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+        stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=10)
+        return stdout
+
+    stdout = asyncio.run(_run())
+    assert b"hello_from_subprocess" in stdout, f"子进程输出异常: {stdout!r}"
 
 
 def test_main_calls_setup_before_asyncio_usage():

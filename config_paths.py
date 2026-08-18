@@ -185,7 +185,7 @@ def _resolve_data_path(kioxia_path: Path, fallback_path: Path) -> Path:
       否则回退到 fallback。
     - 未设置 KIOXIA_DATA_DIR 时：_KIOXIA_BASE 默认即 ~/.ai-agent/data，
       作为数据根直接使用 kioxia_path（~/.ai-agent/data/<sub>），位置稳定，
-      与更新脚本的备份清单（~/.ai-agent\data）一致，避免数据被备份遗漏。
+      与更新脚本的备份清单（~/.ai-agent\\data）一致，避免数据被备份遗漏。
 
     修复：原逻辑用 kioxia_path.parent.exists() 判断，未设 env 时默认
     _KIOXIA_BASE=~/.ai-agent/data，会因 ~/.ai-agent/data 是否恰好存在而在

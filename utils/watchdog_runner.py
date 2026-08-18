@@ -248,10 +248,14 @@ class Watchdog:
             # 无法启动"，0.5.59 正常、0.5.62 异常、手动 --desktop 正常）。
             # cmd 是 list，Popen 会经 list2cmdline 自动给带空格的 exe 路径
             # 加引号，CreateProcess 能正确解析（0.5.59 实测正常），回退之。
+            creationflags = 0
+            if os.name == "nt":
+                creationflags = getattr(subprocess, "CREATE_NO_WINDOW", 0) or getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)
             self._proc = subprocess.Popen(
                 self.cmd,
                 cwd=self.cwd,
                 stdin=subprocess.DEVNULL,
+                creationflags=creationflags,
             )
             self.log.info("watchdog.started pid=%d", self._proc.pid)
             return True

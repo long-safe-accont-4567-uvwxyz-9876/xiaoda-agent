@@ -9,6 +9,7 @@
 import os
 import json
 import tempfile
+import time
 from pathlib import Path
 from loguru import logger
 import contextlib
@@ -42,6 +43,52 @@ def _preserve_file_mode(original_mode: int | None, new_path: Path) -> None:
             os.chmod(new_path, original_mode)
         except OSError as e:
             logger.warning(f"恢复文件权限失败 {new_path}: {e}")
+
+
+def _restrict_file_permissions_windows(path: Path) -> None:
+    """Windows: 用 icacls 限制文件为仅当前用户可读写（等价于 Unix 0600）。
+
+    os.chmod 在 Windows 上只处理只读属性位，0o600/0o700 全部被忽略且不报错，
+    导致同机其他用户仍可读取敏感文件（API key、凭证、游标等）。
+    用 icacls 设置 ACL: 移除继承权限，仅保留当前用户读写权限。
+
+    非 Windows 平台为 no-op（Unix 仍由 os.chmod 负责）。
+    icacls 失败不抛异常（降级为默认 ACL，至少 Unix 行为正确）。
+    """
+    if os.name != "nt":
+        return
+    import subprocess
+    try:
+        user = os.environ.get("USERNAME", "")
+        if not user:
+            logger.debug("restrict_file_permissions_windows: USERNAME empty, skip")
+            return
+        subprocess.run(
+            ["icacls", str(path), "/inheritance:r", "/grant:r", f"{user}:(R,W)"],
+            capture_output=True, timeout=5, check=False,
+        )
+    except Exception as e:
+        logger.debug(f"restrict_file_permissions_windows failed {path}: {e}")
+
+
+def _atomic_replace_with_retry(src: Path | str, dst: Path | str, max_retries: int = 5) -> None:
+    """os.replace with Windows PermissionError retry.
+
+    Windows 上若目标文件被其他进程占用（杀毒软件扫描、另一进程读取），
+    os.replace 抛 PermissionError。短暂退避后重试通常可成功。
+    非 Windows 平台直接 os.replace（无重试开销）。
+    """
+    if os.name != "nt":
+        os.replace(src, dst)
+        return
+    for attempt in range(max_retries):
+        try:
+            os.replace(src, dst)
+            return
+        except PermissionError:
+            if attempt == max_retries - 1:
+                raise
+            time.sleep(0.05 * (2 ** attempt))  # 50ms, 100ms, 200ms, 400ms, 800ms
 
 
 def atomic_write(target_path: str | Path, content: str | bytes,
@@ -94,8 +141,8 @@ def atomic_write(target_path: str | Path, content: str | bytes,
         if effective_mode is not None:
             os.chmod(tmp_path, effective_mode)
 
-        # 原子替换
-        os.replace(tmp_path, resolved)
+        # 原子替换（Windows 上带 PermissionError 重试）
+        _atomic_replace_with_retry(tmp_path, resolved)
         tmp_path = None
 
         logger.debug(f"原子写入完成: {resolved}")

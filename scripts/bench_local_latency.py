@@ -16,6 +16,7 @@ import os
 import sqlite3
 import statistics
 import sys
+import tempfile
 import time
 from pathlib import Path
 
@@ -103,7 +104,7 @@ def main() -> int:
     vcon = sqlite3.connect(VDB)
     vcon.enable_load_extension(True)
     sqlite_vec.load(vcon)
-    idx = NumpyBruteIndex(dim=512, base_dir="/tmp/bench_brute")
+    idx = NumpyBruteIndex(dim=512, base_dir=str(Path(tempfile.gettempdir()) / "bench_brute"))
     t0 = time.time()
     idx.load_from_db(vcon)
     print(f"[检索] numpy 索引加载(全量重建)={time.time()-t0:.1f}s stats={idx.stats['tables']}", flush=True)

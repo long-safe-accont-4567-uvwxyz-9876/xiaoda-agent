@@ -29,7 +29,8 @@ PLAIN = "sk-test-provider-key-1234567890"
 
 def test_decode_key_v1_roundtrip():
     """官方包路径：enc:v1: 密文应能解回明文。"""
-    enc = encrypt(PLAIN)
+    with patch.object(cv, "HAS_WIN32CRYPT", False):
+        enc = encrypt(PLAIN)
     assert enc.startswith("enc:v1:")
     assert _decode_key(enc) == PLAIN
 

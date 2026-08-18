@@ -17,4 +17,4 @@ Remove-Item Env:SAFE_RM_TEMP -ErrorAction SilentlyContinue
 [Environment]::SetEnvironmentVariable('SAFE_RM_PROTECTION_FLAG', $null, 'Machine')
 [Environment]::SetEnvironmentVariable('SAFE_RM_TEMP', $null, 'Machine')
 Write-Output "SAFE_RM vars cleared"
-python f:\naxida\xiaoda-agent\_api_commit.py
+python "$PSScriptRoot\agent.py"

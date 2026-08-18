@@ -331,13 +331,20 @@ def _publish_file(src: Path | None, kind: str, link: bool = False) -> str | None
     dest_dir.mkdir(parents=True, exist_ok=True)
     dest = dest_dir / src.name
     if not dest.exists():
-        try:
-            if link:
+        if link:
+            try:
                 dest.symlink_to(src.resolve())
-            else:
+            except OSError:
+                # Windows: 创建 symlink 需管理员权限，fallback 到复制
+                try:
+                    shutil.copy2(src, dest)
+                except OSError:
+                    return None
+        else:
+            try:
                 shutil.copy2(str(src), str(dest))
-        except OSError:
-            return None
+            except OSError:
+                return None
     return f"/media/{kind}/{dest.name}"
 
 

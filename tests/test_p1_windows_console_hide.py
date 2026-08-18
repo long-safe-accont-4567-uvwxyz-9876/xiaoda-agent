@@ -31,7 +31,10 @@ def test_should_hide_when_only_self_attached():
     _skip_if_not_windows()
     import agent
 
-    with patch("ctypes.windll.kernel32.GetConsoleProcessList") as mock_list:
+    # GetConsoleWindow 必须 mock：测试结果不应依赖宿主进程是否有真实控制台
+    # （CI runner / agent 环境的 python 进程 GetConsoleWindow() 可能返回 0）。
+    with patch("ctypes.windll.kernel32.GetConsoleWindow", return_value=0x1234), \
+            patch("ctypes.windll.kernel32.GetConsoleProcessList") as mock_list:
         # GetConsoleProcessList(buf, buf_size) returns count of processes attached
         # 我们让返回 1（只有本进程）
         def _side_effect(buf, size):
@@ -47,7 +50,8 @@ def test_should_not_hide_when_shared_with_parent():
     _skip_if_not_windows()
     import agent
 
-    with patch("ctypes.windll.kernel32.GetConsoleProcessList") as mock_list:
+    with patch("ctypes.windll.kernel32.GetConsoleWindow", return_value=0x1234), \
+            patch("ctypes.windll.kernel32.GetConsoleProcessList") as mock_list:
         # 返回 2 表示有 2 个进程附加（本进程 + 父进程 cmd.exe）
         def _side_effect(buf, size):
             buf[0] = 1234  # 本进程

@@ -18,6 +18,11 @@ except Exception:  # pragma: no cover - 配置缺失时退化为项目根目录
     DATA_DIR = Path(__file__).resolve().parent.parent / "data"
     DATA_DIR.mkdir(parents=True, exist_ok=True)
 
+try:
+    from utils.atomic_write import atomic_json_write
+except Exception:  # pragma: no cover
+    atomic_json_write = None  # type: ignore[assignment]
+
 
 class LearningLoop:
     """学习反馈闭环"""
@@ -72,9 +77,14 @@ class LearningLoop:
                 "constraints": list(self._active_constraints),
                 "correction_count": self._correction_count,
             }
-            tmp = self._persist_path.with_suffix(".json.tmp")
-            tmp.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
-            os.replace(tmp, self._persist_path)
+            if atomic_json_write is not None:
+                atomic_json_write(self._persist_path, data,
+                                  encoding="utf-8", indent=2, ensure_ascii=False)
+            else:
+                # fallback: 固定 tmp 方式（atomic_write 不可用时）
+                tmp = self._persist_path.with_suffix(".json.tmp")
+                tmp.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+                os.replace(tmp, self._persist_path)
         except Exception as e:
             logger.warning(f"LearningLoop.persist_failed: {e}")
 
