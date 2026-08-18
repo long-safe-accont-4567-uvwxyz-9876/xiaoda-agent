@@ -20,9 +20,10 @@ _send_streaming_reply_with_sticker._send_segment 的静默吞异常 bug。
 """
 from __future__ import annotations
 
+import os
 import sys
 from pathlib import Path
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, patch, MagicMock
 
 import pytest
 
@@ -30,11 +31,10 @@ PROJECT_ROOT = Path(__file__).parent.parent
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
+from qq_bot_adapter import AIQQBot, MAX_REPLY_LEN
 from botpy.message import C2CMessage
-
-import utils.text_utils as _text_utils
-from qq_bot_adapter import MAX_REPLY_LEN, AIQQBot
 from utils.text_utils import split_long_reply
+import utils.text_utils as _text_utils
 
 
 def _patch_continuation_hints():

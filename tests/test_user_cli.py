@@ -1,6 +1,5 @@
 """CLIUser 测试 — 每个事件实时打印。"""
 import pytest
-
 from agent_core.user_cli import CLIUser
 from core.event_bus import AgentEvent, AgentEventType
 

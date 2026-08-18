@@ -16,6 +16,7 @@
 """
 from __future__ import annotations
 
+import asyncio
 import random
 import time
 from typing import Any
@@ -23,11 +24,11 @@ from typing import Any
 import numpy as np
 from loguru import logger
 
-from core.conflict_supersession import ConflictSupersession
-from memory.bridge_memory import BridgeMemoryManager
 from memory.cognitive_memory import CognitiveMemory, MemoryEntry
-from memory.preference_discovery import PreferenceDiscovery
+from memory.bridge_memory import BridgeMemoryManager
 from memory.spreading_activation import SpreadingActivation
+from core.conflict_supersession import ConflictSupersession
+from memory.preference_discovery import PreferenceDiscovery
 from utils.free_model_backend import FreeModelBackend
 
 

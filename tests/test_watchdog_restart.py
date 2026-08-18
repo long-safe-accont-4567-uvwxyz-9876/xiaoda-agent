@@ -10,7 +10,7 @@
 import logging
 
 from utils import watchdog_runner
-from utils.watchdog_runner import _EXIT_ALREADY_RUNNING, DEFAULTS, Watchdog
+from utils.watchdog_runner import Watchdog, DEFAULTS, _EXIT_ALREADY_RUNNING
 
 
 def _silent_log():

@@ -12,11 +12,11 @@
 from __future__ import annotations
 
 import asyncio
-from typing import Any
-
+from typing import Any, Optional
 from loguru import logger
 
 from utils.free_model_backend import FreeModelBackend
+
 
 # LLM 功能节点后端切换器，供 WebUI 功能节点在「本地模型 / 远程免费模型」间切换
 _free = FreeModelBackend()

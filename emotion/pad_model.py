@@ -6,9 +6,8 @@ A: Arousal 0(平静) ~ 1(激动)
 D: Dominance 0(受控) ~ 1(掌控)
 """
 from __future__ import annotations
-
-from dataclasses import dataclass
-
+from dataclasses import dataclass, asdict
+from typing import Optional
 
 @dataclass
 class PADEmotion:

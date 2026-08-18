@@ -5,8 +5,8 @@
 - session_id: 会话标识（复用已有字段，会话级隔离）
 - agent_id: Agent 标识（xiaoda/xiaoli/xiaolian/xiaoke）
 """
-from contextvars import ContextVar, Token
 from dataclasses import dataclass
+from contextvars import ContextVar, Token
 
 
 @dataclass

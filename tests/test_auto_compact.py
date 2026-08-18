@@ -3,7 +3,6 @@
 测试 memory/context_compressor.py 新增的 auto_compact_if_needed 方法。
 """
 import pytest
-
 from memory.context_compressor import ContextCompressor
 
 

@@ -3,18 +3,17 @@
 借鉴 Hermes Agent 的凭证池机制，替代 ModelRouter 中简单的重试/降级逻辑
 """
 
+import asyncio
 import os
-import threading
 import time
-from dataclasses import dataclass
+import threading
 from enum import Enum
-
+from dataclasses import dataclass
 from loguru import logger
 
-from config import get_base_url_for_provider
-from utils.common import mask_api_key as _mask_api_key
-
 from .error_classifier import ClassifiedError, FailoverReason
+from utils.common import mask_api_key as _mask_api_key
+from config import get_base_url_for_provider
 
 
 class CredentialState(Enum):

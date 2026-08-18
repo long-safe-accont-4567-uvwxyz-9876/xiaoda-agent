@@ -1,8 +1,8 @@
-import base64
-import contextlib
 import random
 import re
+import base64
 from pathlib import Path
+import contextlib
 
 AI_PATTERNS = [
     (r'此外[，,]?\s*', ''),
@@ -518,7 +518,7 @@ def strip_reasoning(text: str) -> str:
     original_len = len(text)
     # 保存原始文本：overstrip 兜底回退用（宁可保留少量推理也不丢失正常回复）
     _raw_original = text
-
+    
     # 1. 标签包裹的推理
     text = _REASONING_TAG_PATTERN.sub('', text)
     # 1b. 孤立闭合标签：agnes 输出 "推理</thinking>回复"，无开标签，之前全是推理
@@ -533,24 +533,24 @@ def strip_reasoning(text: str) -> str:
     # 1d. 记忆/系统方括号标记泄漏清洗：[相关记忆] 等
     text = _LEAKED_MEMORY_MARKERS_PATTERN.sub('', text)
     text = _LEAKED_TOOL_BRACKET_PATTERN.sub('', text)
-
+    
     # 2. Agnes 模型推理标签
     text = _EMOTION_REASONING_PATTERN.sub('', text)
-
+    
     # 3. 第三人称引用
     text = _THIRD_PERSON_PATTERN.sub('', text)
-
+    
     # 4. 内部决策
     text = _INTERNAL_DECISION_PATTERN.sub('', text)
-
+    
     # 5. 裸文本推理行
     text = _REASONING_LINE_PATTERN.sub('', text)
-
+    
     # 6. 连续多行英文推理块
     text = _REASONING_BLOCK_PATTERN.sub('', text)
     text = _AGNES_REASONING_BLOCK.sub('', text)
     text = _EXTENDED_REASONING_BLOCK.sub('', text)
-
+    
     # 7. 中文内部独白/推理行
     text = _CHINESE_REASONING_LINE_PATTERN.sub('', text)
     # 7b. 通用短语上下文清洗：仅当同行含推理/决策上下文才删除（根治"不过考虑到"潜伏误删）
@@ -602,7 +602,7 @@ def strip_reasoning(text: str) -> str:
     text = '\n'.join(_filtered)
 
     text = text.strip()
-
+    
     # 过度截断保护 + 回退
     # P0 修复（用户反馈"回复简短/只说一半"根因）：
     # 原实现仅记录 warning 不回退，导致第 8 步激进清洗把 251 字符回复剥成 3 字符

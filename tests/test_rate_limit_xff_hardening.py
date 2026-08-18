@@ -4,6 +4,7 @@
 （无反代）即可伪造任意来源 IP，轮换绕过 per-IP 的 login 限流与 auth 的
 失败锁定。修复：仅当 socket 对端是可信代理（回环/显式可信网段）时才解析 XFF。
 """
+import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 from starlette.requests import Request

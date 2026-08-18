@@ -12,8 +12,8 @@ import asyncio
 import os
 import subprocess
 import sys
-from pathlib import Path
 from types import SimpleNamespace
+from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest

@@ -1,6 +1,6 @@
 """执行纪律层 — 危险分级 L0-L4 + 证据门禁 + 改完验证"""
-import logging
 import re
+import logging
 from enum import IntEnum
 from typing import ClassVar
 

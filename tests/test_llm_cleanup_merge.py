@@ -16,6 +16,7 @@
 7. 空 original → 'replaced'
 8. 生产回归：模拟 ID 2110 多轮拼接场景，确认不产生重复
 """
+import pytest
 
 from utils.llm_cleanup import merge_continuation
 

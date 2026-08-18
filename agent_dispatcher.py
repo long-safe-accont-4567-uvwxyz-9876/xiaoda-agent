@@ -3,32 +3,23 @@ from typing import Any
 
 from loguru import logger
 
-from agent_core.sub_agent import (  # noqa: F401
-    _RESOURCE_PATH_TOOLS,
-    DELEGATE_BLOCKED_TOOLS,
-    SUB_AGENT_EXTRA_TOOLS,
-    SUB_AGENT_MEMORY_TOOL,
-    SUB_AGENT_MESSAGE_TOOL,
-    SUB_AGENT_PROFILE_TOOLS,
-    SubAgent,
-    SubAgentConfig,
-    _is_tool_unsupported_error,
-    _read_env_key,
-    _safe_log_path,
-)
+from emotion.tts_engine import TTSEngine
+from tool_engine.tool_executor import ToolExecutor
+from tool_engine.tool_repair import ToolCallRepair
 
 # ── 拆分：tool_call_extractors + sub_agent 抽出（逐字节搬移）──
 # 同名 re-export 保持兼容（契约见 tests/test_dispatcher_split.py）。
 from agent_core.tool_call_extractors import (  # noqa: F401
-    DsmlExtractor,
-    ExtractedToolCall,
-    ResourceBackend,
-    StandardExtractor,
-    ToolCallExtractor,
+    ExtractedToolCall, ToolCallExtractor, StandardExtractor,
+    DsmlExtractor, ResourceBackend,
 )
-from emotion.tts_engine import TTSEngine
-from tool_engine.tool_executor import ToolExecutor
-from tool_engine.tool_repair import ToolCallRepair
+from agent_core.sub_agent import (  # noqa: F401
+    SubAgent, SubAgentConfig,
+    DELEGATE_BLOCKED_TOOLS, _RESOURCE_PATH_TOOLS,
+    SUB_AGENT_PROFILE_TOOLS, SUB_AGENT_MEMORY_TOOL,
+    SUB_AGENT_MESSAGE_TOOL, SUB_AGENT_EXTRA_TOOLS,
+    _safe_log_path, _read_env_key, _is_tool_unsupported_error,
+)
 
 # RouterEngine agent name → task_type 反向映射
 # 用于 classify_task 委托 RouterEngine 后保持返回格式一致（task_type 字符串）

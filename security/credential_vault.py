@@ -33,9 +33,8 @@ from pathlib import Path
 class DecryptionError(ValueError):
     """凭证解密失败（机器不匹配 / 标签验证失败 / 数据损坏）。"""
 
-import contextlib
-
 from loguru import logger
+import contextlib
 
 # ── Windows DPAPI 可选导入 ─────────────────────────────────────
 # 仅在 Windows 上尝试导入 win32crypt；Linux 上 win32crypt = None，HAS_WIN32CRYPT = False。

@@ -6,12 +6,14 @@
 - PluginManager._resolve_entrypoint_module 拒绝任意模块名，接受插件目录内相对模块
 - 真实加载: echo 插件可加载，危险 entrypoint 插件被拒绝
 """
+from pathlib import Path
 
 import pytest
 from pydantic import ValidationError
 
-from plugins.manager import PluginManager, PluginState
 from plugins.manifest import PluginManifest
+from plugins.manager import PluginManager, PluginState
+
 
 DANGEROUS_ENTRYPOINTS = [
     "os:system",

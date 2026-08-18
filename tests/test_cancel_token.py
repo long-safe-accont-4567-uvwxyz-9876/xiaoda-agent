@@ -1,9 +1,7 @@
 """CancelToken 测试 — 超时自动取消 + 主动取消。"""
 import asyncio
-
 import pytest
-
-from core.cancel_token import CancellationError, CancelToken
+from core.cancel_token import CancelToken, CancellationError
 
 
 @pytest.fixture

@@ -9,7 +9,6 @@
 import base64
 import hashlib
 import platform
-
 from loguru import logger
 
 

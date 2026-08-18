@@ -21,7 +21,8 @@ from typing import Any
 
 from loguru import logger
 
-from tool_engine.tool_registry import ToolPermission, ToolResult, register_tool
+from tool_engine.tool_registry import register_tool, ToolPermission, ToolResult
+
 
 # ── agently-cli 二进制路径解析 ──────────────────────────────────────────
 _AGENTLY_CACHE: str | None = None

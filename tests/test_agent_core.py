@@ -1,9 +1,8 @@
 """AgentCore 核心模块单元测试 —— 聚焦初始化、bootstrap、错误处理与懒加载。"""
 from __future__ import annotations
 
-from unittest.mock import AsyncMock, MagicMock, patch
-
 import pytest
+from unittest.mock import MagicMock, AsyncMock, patch
 
 
 def _make_mock_core(**overrides):

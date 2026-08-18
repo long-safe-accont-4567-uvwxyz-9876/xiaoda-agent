@@ -3,10 +3,9 @@
 风格参考 tests/test_memory_distiller.py：unittest + asyncio.run + AsyncMock。
 验证 memory/reranker.py 的 (query_hash, doc_hash) → score LRU 缓存行为。
 """
-import asyncio
 import sys
+import asyncio
 from pathlib import Path
-
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 import unittest

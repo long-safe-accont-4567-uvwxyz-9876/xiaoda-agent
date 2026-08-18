@@ -10,6 +10,7 @@
 7. 持久化：_save / _load 包含 active_emotions 和 pad 字段
 """
 import json
+import os
 
 import pytest
 

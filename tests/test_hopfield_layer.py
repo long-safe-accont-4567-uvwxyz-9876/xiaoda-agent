@@ -1,9 +1,7 @@
 # tests/test_hopfield_layer.py
 """Modern Hopfield 联想记忆测试"""
 import numpy as np
-
-from memory.hopfield_layer import HopfieldLayer
-
+from memory.hopfield_layer import HopfieldLayer, RetrievalResult
 
 def test_store_and_retrieve():
     """测试存储和检索"""

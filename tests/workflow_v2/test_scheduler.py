@@ -1,24 +1,12 @@
 # tests/workflow_v2/test_scheduler.py
-import time
-
-import aiosqlite
-import pytest
-
-from db.db_workflow import create_schema
+import pytest, time, aiosqlite
 from workflow_v2.models import (
-    EdgeSpec,
-    Idempotency,
-    NodeSpec,
-    NodeType,
-    RunStatus,
-    StepStatus,
-    WorkflowRevision,
-    WorkflowRun,
-    WorkflowRunEvent,
-    WorkflowStepRun,
+    NodeSpec, EdgeSpec, NodeType, StepStatus, RunStatus,
+    WorkflowRevision, WorkflowRun, WorkflowStepRun, WorkflowRunEvent, Idempotency,
 )
+from db.db_workflow import create_schema
 from workflow_v2.repository import WorkflowRepository
-from workflow_v2.scheduler import NodeResult, Scheduler, compute_ready
+from workflow_v2.scheduler import Scheduler, NodeResult, compute_ready
 
 
 def _rev():

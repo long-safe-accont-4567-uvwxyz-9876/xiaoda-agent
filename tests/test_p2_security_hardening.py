@@ -3,8 +3,9 @@
 覆盖:
 1. market/installer: _security_scan 检测到高危模式时阻断安装 (不再只 log)
 """
-
 import pytest
+import asyncio
+
 
 # ── market/installer: _security_scan 阻断 ───────────────────────
 
@@ -12,10 +13,9 @@ class TestSecurityScanBlock:
     """验证安全扫描检测到高危模式时阻断安装。"""
 
     def _make_installer(self):
-        import tempfile
-        from pathlib import Path
-
         from market.installer import MarketInstaller
+        from pathlib import Path
+        import tempfile
         # _security_scan 不依赖 plugins_dir/plugin_manager，用临时目录即可
         tmp = Path(tempfile.mkdtemp())
         return MarketInstaller(plugins_dir=tmp / "plugins", skills_dir=tmp / "skills")

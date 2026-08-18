@@ -3,11 +3,14 @@
 验证：当 aiosqlite 单连接上有脏事务残留时，merge_entity 能通过
 rollback + 重试恢复正常写入，不再报 "SQL logic error"。
 """
+import asyncio
 import json
 import os
 import sys
+import tempfile
 
 import aiosqlite
+import pytest
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from db.db_knowledge import KnowledgeDB

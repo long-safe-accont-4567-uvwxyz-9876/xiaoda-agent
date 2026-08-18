@@ -9,12 +9,11 @@
 4. 验证 context 被修改
 5. 验证 convergence_metrics 追踪到干预历史
 """
-
 import pytest
-
-from core.behavioral_direction import DirectionRegistry, DirectionVector
+import asyncio
 from core.behavioral_signal import BehavioralSignalStream
-from core.intervention_loop import InterventionLoop, InterventionRule
+from core.behavioral_direction import DirectionVector, DirectionRegistry
+from core.intervention_loop import InterventionRule, InterventionLoop
 
 
 @pytest.mark.asyncio

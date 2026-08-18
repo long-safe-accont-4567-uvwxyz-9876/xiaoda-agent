@@ -8,7 +8,6 @@
 import os
 import re
 from enum import Enum
-
 from loguru import logger
 
 

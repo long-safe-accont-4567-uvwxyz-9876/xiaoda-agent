@@ -4,20 +4,19 @@
 10层自检 + 自动修复: 进程/端口/DB/配置/数据目录/锁文件/端口冲突/记忆/安全/行为
 用法: xiaoda doctor [--json] [--fix]
 """
-import contextlib
+from typing import Any
 import json
+import sys
+import time
 import os
 import shutil
 import subprocess
-import sys
-import time
 from pathlib import Path
-from typing import Any
-
 from loguru import logger
 
-from utils.common import DEFAULT_WEBUI_PORT
-from utils.common import safe_int as _safe_int
+
+from utils.common import DEFAULT_WEBUI_PORT, safe_int as _safe_int
+import contextlib
 
 
 def _detect_platform() -> str:
@@ -236,18 +235,9 @@ def _register_config_checks(doc: DoctorCheck) -> None:
         doc.add_check(name, layer, check, fix)
 
 def _check_data_dirs() -> tuple:
-    from config import (
-        AGENT_STICKER_BASE,
-        DATA_DIR,
-        FILE_DIR,
-        LOG_DIR,
-        MEDIA_DIR,
-        MEMORY_STATE_DIR,
-        PLUGINS_CONFIG_DIR,
-        STICKER_DIR,
-        VOICE_REF_DIR,
-        XIAOLI_STICKER_DIR,
-    )
+    from config import (DATA_DIR, LOG_DIR, STICKER_DIR, XIAOLI_STICKER_DIR,
+                        AGENT_STICKER_BASE, FILE_DIR, MEDIA_DIR, VOICE_REF_DIR,
+                        MEMORY_STATE_DIR, PLUGINS_CONFIG_DIR)
     missing = []
     checked = [DATA_DIR, LOG_DIR, STICKER_DIR, XIAOLI_STICKER_DIR,
                AGENT_STICKER_BASE, FILE_DIR, MEDIA_DIR, VOICE_REF_DIR,
@@ -260,18 +250,9 @@ def _check_data_dirs() -> tuple:
     return True, f"All {len(checked)} data dirs exist"
 
 def _fix_data_dirs() -> None:
-    from config import (
-        AGENT_STICKER_BASE,
-        DATA_DIR,
-        FILE_DIR,
-        LOG_DIR,
-        MEDIA_DIR,
-        MEMORY_STATE_DIR,
-        PLUGINS_CONFIG_DIR,
-        STICKER_DIR,
-        VOICE_REF_DIR,
-        XIAOLI_STICKER_DIR,
-    )
+    from config import (DATA_DIR, LOG_DIR, STICKER_DIR, XIAOLI_STICKER_DIR,
+                        AGENT_STICKER_BASE, FILE_DIR, MEDIA_DIR, VOICE_REF_DIR,
+                        MEMORY_STATE_DIR, PLUGINS_CONFIG_DIR)
     for d in [DATA_DIR, LOG_DIR, STICKER_DIR, XIAOLI_STICKER_DIR,
               AGENT_STICKER_BASE, FILE_DIR, MEDIA_DIR, VOICE_REF_DIR,
               MEMORY_STATE_DIR, PLUGINS_CONFIG_DIR]:
@@ -479,7 +460,7 @@ def _fix_voice_ref_dirs() -> None:
         (VOICE_REF_DIR / agent).mkdir(parents=True, exist_ok=True)
 
 def _check_sticker_dirs() -> tuple:
-    from config import AGENT_STICKER_BASE, STICKER_DIR, XIAOLI_STICKER_DIR
+    from config import STICKER_DIR, XIAOLI_STICKER_DIR, AGENT_STICKER_BASE
     missing = []
     for name, d in [("stickers", STICKER_DIR), ("xiaoli-stickers", XIAOLI_STICKER_DIR),
                     ("agent-stickers", AGENT_STICKER_BASE)]:
@@ -490,7 +471,7 @@ def _check_sticker_dirs() -> tuple:
     return True, "All sticker dirs exist"
 
 def _fix_sticker_dirs() -> None:
-    from config import AGENT_STICKER_BASE, STICKER_DIR, XIAOLI_STICKER_DIR
+    from config import STICKER_DIR, XIAOLI_STICKER_DIR, AGENT_STICKER_BASE
     for d in [STICKER_DIR, XIAOLI_STICKER_DIR, AGENT_STICKER_BASE]:
         d.mkdir(parents=True, exist_ok=True)
 
@@ -514,7 +495,7 @@ def _register_self_heal_checks(doc: DoctorCheck) -> None:
 
 def _check_behavioral_health() -> tuple:
     try:
-        from core.behavioral_health import HealthLevel, get_behavioral_health_scorer
+        from core.behavioral_health import get_behavioral_health_scorer, HealthLevel
         scorer = get_behavioral_health_scorer()
         metrics = scorer._collect_runtime_metrics()
         if not metrics:

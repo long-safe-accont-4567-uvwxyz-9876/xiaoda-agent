@@ -10,6 +10,8 @@ import math
 import time
 from typing import Any
 
+from loguru import logger
+
 
 class SalienceScorer:
     """情绪加权 Salience 评分器

@@ -1,8 +1,8 @@
 from __future__ import annotations
 
-import asyncio
 import os
 import shutil
+import asyncio
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
@@ -12,9 +12,9 @@ import httpx
 from fastapi import APIRouter, Depends, HTTPException, Request
 from loguru import logger
 
-from config import get_base_url_for_provider, get_default_model_for_provider
-from web.routers.auth import _get_client_ip, _is_private_ip, get_current_user
+from web.routers.auth import get_current_user, _get_client_ip, _is_private_ip
 from web.schemas import Envelope
+from config import get_base_url_for_provider, get_default_model_for_provider
 
 # test-key 速率限制：每 IP 最多 10 次/分钟
 _test_key_timestamps: list[float] = []
@@ -114,7 +114,6 @@ def _is_profile_done() -> bool:
     """
     try:
         import re as _re_local
-
         from config import WORKSPACE_DIR
         user_md = WORKSPACE_DIR / "USER.md"
         if not user_md.exists():
@@ -246,7 +245,7 @@ async def get_keys() -> Any:
     import sys
     logger.info("setup.keys.called frozen={} exe={}", getattr(sys, 'frozen', False), getattr(sys, 'executable', 'N/A'))
     try:
-        from setup_wizard import OPTIONAL_KEYS, REQUIRED_KEYS, _load_env_values
+        from setup_wizard import REQUIRED_KEYS, OPTIONAL_KEYS, _load_env_values
         logger.info("setup.keys.import_ok")
     except (OSError, KeyError, ValueError, RuntimeError, TypeError) as e:
         logger.error("setup.keys.import_failed error={}", str(e))
@@ -523,7 +522,7 @@ async def _test_ollama(base_url: str) -> tuple[bool, str]:
         base_url = f"{base_url.rstrip('/')}/v1"
     # SSRF 防护：校验 URL 不指向内网/元数据服务。
     # Ollama 是本地/容器内部署，允许 localhost / 127.0.0.1 / host.docker.internal
-    from security.ssrf_guard import is_local_host, validate_url
+    from security.ssrf_guard import validate_url, is_local_host
     if not is_local_host(base_url):
         allowed, reason = validate_url(base_url)
         if not allowed:
@@ -553,7 +552,7 @@ async def _test_llama_cpp(base_url: str) -> tuple[bool, str]:
     if not _path.endswith("/v1"):
         base_url = f"{base_url.rstrip('/')}/v1"
     # SSRF 防护：llama.cpp 是本地部署，允许 localhost / 127.0.0.1 / host.docker.internal
-    from security.ssrf_guard import is_local_host, validate_url
+    from security.ssrf_guard import validate_url, is_local_host
     if not is_local_host(base_url):
         allowed, reason = validate_url(base_url)
         if not allowed:
@@ -679,12 +678,8 @@ async def save_keys(body: dict) -> Any:
     """将提供的 Key-Value 写入 .env 文件。"""
     try:
         from setup_wizard import (
-            ENV_EXAMPLE_PATH,
-            ENV_PATH,
-            REQUIRED_KEYS,
-            _load_env_values,
-            _parse_env_lines,
-            _write_env,
+            ENV_PATH, ENV_EXAMPLE_PATH, REQUIRED_KEYS,
+            _parse_env_lines, _write_env, _load_env_values,
         )
 
         updates = body.get("keys")
@@ -852,7 +847,6 @@ def _write_env_file(updates: Any, ENV_PATH: Any, ENV_EXAMPLE_PATH: Any, _parse_e
 async def _reload_env_and_cache(updates: Any, ENV_PATH: Any) -> None:
     """重新加载环境变量、清除模型发现缓存。"""
     import os
-
     from dotenv import load_dotenv
     load_dotenv(ENV_PATH, override=True)
     # 兜底：直接写入 os.environ
@@ -872,7 +866,7 @@ async def _reload_env_and_cache(updates: Any, ENV_PATH: Any) -> None:
 def _reset_credential_pool(updates: Any) -> None:
     """重置凭证池中所有 DEAD 凭证，并替换为新 Key。"""
     try:
-        from utils.credential_pool import Credential, get_credential_pool
+        from utils.credential_pool import get_credential_pool, Credential
         pool = get_credential_pool()
         _PROVIDER_KEY_MAP = {
             "SILICONFLOW_API_KEY": ("siliconflow", "https://api.siliconflow.cn/v1"),
@@ -909,7 +903,6 @@ def _reset_credential_pool(updates: Any) -> None:
 def _update_config_and_refresh_clients(updates: Any) -> None:
     """更新 config 模块变量并刷新 router/TTS/子 Agent 客户端。"""
     import os
-
     import config
     from utils.encrypted_credential import protect_credential
     config.MIMO_API_KEY = protect_credential(updates.get("MIMO_API_KEY", os.getenv("MIMO_API_KEY", "")))
@@ -1146,10 +1139,10 @@ async def _rollback_auto_registered_providers(
 
 # ── USER.md 个人资料配置 ────────────────────────────────────
 
-import platform as _platform
 import re as _re
-import socket as _socket
 import time as _time
+import platform as _platform
+import socket as _socket
 
 
 def _detect_device_info_for_profile() -> dict:
@@ -1481,6 +1474,7 @@ def _write_disclaimer_agreement(user_md_path: Path, agreed: bool) -> str:
 
     若已存在该区块则替换；否则追加到文件末尾。
     """
+    from datetime import datetime
 
     agreed_at = _get_local_now().isoformat(timespec="seconds")
     new_section = (

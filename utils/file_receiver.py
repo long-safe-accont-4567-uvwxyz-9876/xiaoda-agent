@@ -1,3 +1,4 @@
+from typing import Any, ClassVar
 import asyncio
 import ipaddress
 import os
@@ -7,8 +8,6 @@ import tempfile
 import time
 import urllib.request
 from pathlib import Path
-from typing import Any, ClassVar
-
 from loguru import logger
 
 

@@ -2,10 +2,10 @@
 
 测试 memory/recall_scheduler.py 新增的 catch_up 和 skip_on_overlap 策略。
 """
+import asyncio
 import time
-from unittest.mock import AsyncMock, MagicMock, patch
-
 import pytest
+from unittest.mock import AsyncMock, MagicMock, patch
 
 from memory.recall_scheduler import MemoryRecallScheduler
 
@@ -32,7 +32,7 @@ class TestRecallSchedulerCatchUp:
         core.memory.run_scheduled_recall = AsyncMock(return_value=5)
 
         scheduler = MemoryRecallScheduler(core, catch_up=True, skip_on_overlap=True)
-
+        
         with patch.object(scheduler, "_is_dnd", return_value=False):
             await scheduler._catchup_tick()
 
@@ -49,7 +49,7 @@ class TestRecallSchedulerCatchUp:
         core.memory.run_scheduled_recall = AsyncMock(return_value=0)
 
         scheduler = MemoryRecallScheduler(core, catch_up=True, skip_on_overlap=True)
-
+        
         await scheduler._catchup_tick()
 
         # 不应该执行回忆任务
@@ -63,7 +63,7 @@ class TestRecallSchedulerCatchUp:
         core.memory.run_scheduled_recall = AsyncMock(return_value=5)
 
         scheduler = MemoryRecallScheduler(core, catch_up=False, skip_on_overlap=True)
-
+        
         # _catchup_done 不会被设置（因为 _loop 中 catch_up=False 不会调用）
         assert not scheduler._catchup_done
 
@@ -74,7 +74,7 @@ class TestRecallSchedulerCatchUp:
         core.memory.run_scheduled_recall = AsyncMock(return_value=5)
 
         scheduler = MemoryRecallScheduler(core, catch_up=True, skip_on_overlap=True)
-
+        
         await scheduler._catchup_tick()
 
         # last_run=None 时不触发 catch-up（留给正常 tick 处理）
@@ -91,10 +91,10 @@ class TestRecallSchedulerSkipOnOverlap:
         core.memory.run_scheduled_recall = AsyncMock(return_value=5)
 
         scheduler = MemoryRecallScheduler(core, catch_up=False, skip_on_overlap=True)
-
+        
         # 模拟正在运行
         scheduler._is_running = True
-
+        
         # _should_run 返回 True，但因为 overlap guard 应该跳过
         # 注意：_tick 中先检查 _is_dnd，再检查 overlap
         # DND 检查可能放行（取决于时间），overlap 应该拦截
@@ -112,10 +112,10 @@ class TestRecallSchedulerSkipOnOverlap:
         core.memory.run_scheduled_recall = AsyncMock(return_value=5)
 
         scheduler = MemoryRecallScheduler(core, catch_up=False, skip_on_overlap=False)
-
+        
         # 模拟正在运行（但 skip_on_overlap=False）
         scheduler._is_running = True
-
+        
         with patch.object(scheduler, '_is_dnd', return_value=False):
             with patch.object(scheduler, '_should_run', new=AsyncMock(return_value=True)):
                 await scheduler._tick()
@@ -130,9 +130,9 @@ class TestRecallSchedulerSkipOnOverlap:
         core.memory.run_scheduled_recall = AsyncMock(return_value=5)
 
         scheduler = MemoryRecallScheduler(core, catch_up=False, skip_on_overlap=True)
-
+        
         await scheduler._run_recall()
-
+        
         assert scheduler._is_running is False
 
 

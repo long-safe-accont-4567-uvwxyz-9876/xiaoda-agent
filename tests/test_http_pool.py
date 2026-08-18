@@ -7,10 +7,12 @@ P2-4 加固: 所有测试在 finally 中调用 close_shared_client，避免断�
 HTTP/2 优雅降级测试：验证 h2 包未安装时 client 仍可创建（降级为 HTTP/1.1），
 防止生产环境（Windows 安装包）因缺少 h2 导致应用启动失败。
 """
+import asyncio
+import httpx
 import pytest
 
 import utils.http_pool as http_pool_mod
-from utils.http_pool import close_shared_client, get_shared_client
+from utils.http_pool import get_shared_client, close_shared_client
 
 
 @pytest.fixture(autouse=True)

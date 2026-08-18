@@ -1,20 +1,19 @@
-import asyncio
-import json
 import os
 import re
 import time
+import asyncio
+import json
 from collections import OrderedDict
-from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from typing import Any
-
-from loguru import logger
+from collections.abc import Awaitable, Callable
 from openai import AsyncOpenAI
 
+from loguru import logger
 from agent_dispatcher import AgentDispatcher
-from belief_router import BeliefRouter
-from config import AGENT_ROUTE_KEYWORDS, DATA_DIR, get_agent_display_name
 from emotion.emoji_config import get_status_msg
+from config import AGENT_ROUTE_KEYWORDS, DATA_DIR, get_agent_display_name
+from belief_router import BeliefRouter
 
 
 class RouteCache:

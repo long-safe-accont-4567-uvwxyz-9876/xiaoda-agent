@@ -4,11 +4,10 @@
 """
 import sys
 from pathlib import Path
-
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-import asyncio
 import unittest
+import asyncio
 from unittest.mock import AsyncMock, MagicMock
 
 from tool_engine.error_rule_pipeline import ErrorRulePipeline

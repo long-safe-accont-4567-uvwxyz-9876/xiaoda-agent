@@ -4,8 +4,10 @@ TDD 红阶段：验证 wechat_bot_adapter.WeChatBotAdapter 骨架接口。
 所有方法仅验证骨架行为（不抛异常 / 返回 False），不验证 iLink 协议细节。
 """
 import asyncio
+import os
 
 import pytest
+
 
 # ---------- 简单 mock 对象 ----------
 
@@ -105,7 +107,7 @@ def test_send_voice_returns_false(adapter):
 
 def test_create_wechat_bot_factory(mock_deps):
     """7. create_wechat_bot() 工厂函数返回 WeChatBotAdapter 实例"""
-    from wechat_bot_adapter import WeChatBotAdapter, create_wechat_bot
+    from wechat_bot_adapter import create_wechat_bot, WeChatBotAdapter
     bot = create_wechat_bot(
         db=mock_deps["db"],
         router=mock_deps["router"],
@@ -121,7 +123,7 @@ def test_create_wechat_bot_factory(mock_deps):
 def test_create_wechat_bot_without_env_enabled(mock_deps, monkeypatch):
     """8. WECHAT_ILINK_ENABLED 环境变量未设置时仍可创建实例"""
     monkeypatch.delenv("WECHAT_ILINK_ENABLED", raising=False)
-    from wechat_bot_adapter import WeChatBotAdapter, create_wechat_bot
+    from wechat_bot_adapter import create_wechat_bot, WeChatBotAdapter
     bot = create_wechat_bot(
         db=mock_deps["db"],
         router=mock_deps["router"],

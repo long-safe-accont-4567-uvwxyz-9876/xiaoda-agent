@@ -34,7 +34,6 @@ def _make_manager():
 async def test_unregister_is_async():
     """unregister 应是 async 方法（可 await）。"""
     import inspect
-
     from web.ws_hub import ConnectionManager
     assert inspect.iscoroutinefunction(ConnectionManager.unregister), \
         "unregister 应为 async 方法"

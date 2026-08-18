@@ -15,12 +15,12 @@ LLM / 工具永远不直接读取原始 API Key，而是通过 Broker 获取一�
 """
 from __future__ import annotations
 
-import hmac
 import secrets
 import threading
 import time
-from collections.abc import Callable
+import hmac
 from dataclasses import dataclass
+from collections.abc import Callable
 
 from loguru import logger
 

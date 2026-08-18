@@ -1,12 +1,10 @@
 """懒加载依赖模块测试"""
 import sys
 from pathlib import Path
-
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 import unittest
-
-from utils.lazy_deps import LAZY_DEPS, _spec_is_safe, ensure, is_available
+from utils.lazy_deps import ensure, is_available, _spec_is_safe, LAZY_DEPS
 
 
 class TestLazyDeps(unittest.TestCase):

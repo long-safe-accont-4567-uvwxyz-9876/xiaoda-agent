@@ -5,6 +5,7 @@
 """
 from __future__ import annotations
 
+import asyncio
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -55,7 +56,7 @@ async def test_quota_exhausted_merges_remaining():
     """
     # 这个测试用 _send_segment 闭包的实际行为验证较复杂，
     # 改为单元测试 mock 整个流式发送流程
-    from qq_bot_adapter import AIQQBot
+    from qq_bot_adapter import AIQQBot, QQ_GROUP_MAX_SEGMENTS
 
     # 构造超长文本（5 段，需要切分）
     long_text = "段1内容" * 200 + "段2内容" * 200 + "段3内容" * 200 + "段4内容" * 200 + "段5内容" * 200

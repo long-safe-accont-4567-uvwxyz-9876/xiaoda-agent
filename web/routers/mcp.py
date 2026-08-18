@@ -20,13 +20,9 @@ router = APIRouter(tags=["mcp"], dependencies=[Depends(get_current_user)])
 # 校验逻辑下沉到中性模块 security.mcp_command_policy（market 安装层同样复用），
 # 本层仅把 ValueError 包装为 HTTPException(400)，对外行为与错误文案保持一致。
 from security.mcp_command_policy import (  # noqa: E402
-    _ALLOWED_MCP_BINARIES,  # noqa: F401  契约测试断言与共享策略同源（防漂移）
-    _ENV_BLOCKED_PREFIXES,  # noqa: F401
-)
-from security.mcp_command_policy import (  # noqa: E402
+    _ALLOWED_MCP_BINARIES,
+    _ENV_BLOCKED_PREFIXES,
     validate_mcp_command as _validate_mcp_command_policy,
-)
-from security.mcp_command_policy import (  # noqa: E402
     validate_mcp_env as _validate_mcp_env_policy,
 )
 

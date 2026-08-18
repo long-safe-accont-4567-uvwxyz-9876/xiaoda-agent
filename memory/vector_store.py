@@ -1,19 +1,19 @@
-import asyncio
-import hashlib
+from typing import Any
 import json
 import os
 import sys
+import asyncio
+import hashlib
 import threading
 from collections import OrderedDict
 from pathlib import Path
-from typing import Any
-
 from loguru import logger
 
+
+from utils.common import safe_int as _safe_int
 from local_ai.integration.embedding import LocalEmbeddingService, LocalEmbeddingUnavailableError
 from local_ai.integration.reranker import LocalModelUnavailableError
 from local_ai.runtimes.base import RuntimeValidationError
-from utils.common import safe_int as _safe_int
 
 try:
     import sqlite_vec
@@ -22,7 +22,7 @@ except ImportError:
     HAS_SQLITE_VEC = False
 
 try:
-    from openai import APIConnectionError, APIStatusError, APITimeoutError, AsyncOpenAI
+    from openai import AsyncOpenAI, APITimeoutError, APIConnectionError, APIStatusError
     HAS_OPENAI = True
 except ImportError:
     HAS_OPENAI = False
@@ -51,10 +51,8 @@ except ImportError:  # pragma: no cover
 #   占用连接池资源 → 后续请求也慢 → 向量检索 1.2-8s 波动（日志铁证）。
 # read=5s 治本：embed 正常 0.5-2s，5s 覆盖+3s 余量；偶发慢 5s 快速失败，
 #   不依赖外层 cancel，从源头消除连接池污染。
-import httpx as _httpx_embed
-
 from utils.http_pool import get_shared_client as _get_embed_shared_client
-
+import httpx as _httpx_embed
 _EMBED_HTTP_TIMEOUT = _httpx_embed.Timeout(connect=15.0, read=5.0, write=10.0, pool=10.0)
 
 
@@ -490,7 +488,6 @@ class VectorStore:
 
                 # 检测文件系统类型，vfat/exfat 不支持 WAL
                 from pathlib import Path
-
                 from db.database import _detect_fs_type
                 fs_type = _detect_fs_type(Path(self._db_path))
                 is_fat = fs_type in ("vfat", "fat", "msdos", "exfat", "fat32")

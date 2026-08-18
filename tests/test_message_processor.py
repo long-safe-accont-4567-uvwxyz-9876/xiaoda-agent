@@ -3,11 +3,10 @@ from __future__ import annotations
 
 import asyncio
 import time
-from unittest.mock import AsyncMock, MagicMock, patch
-
 import pytest
+from unittest.mock import MagicMock, AsyncMock, patch, PropertyMock
 
-from agent_core._shared import DEGRADED_REPLY, RequestContext
+from agent_core._shared import DEGRADED_REPLY, ProcessResult, RequestContext
 
 
 # ── 辅助：构造最小化 mixin 宿主对象 ──
@@ -45,6 +44,7 @@ class TestRunVerificationLoopNoToolCalls:
     @pytest.mark.asyncio
     async def test_no_tool_calls_returns_clean_reply(self):
         """首轮无 tool_calls → 直接清洗回复并返回。"""
+        from agent_core.message_processor import MessageProcessorMixin
 
         proc = _make_processor()
         trace = MagicMock()
@@ -347,6 +347,7 @@ class TestDynamicEmotionThreshold:
 
     def test_high_intensity_lowers_threshold(self):
         """高强度情绪应降低阈值。"""
+        from agent_core.message_processor import MessageProcessorMixin
 
         proc = _make_processor()
         # 直接测试阈值逻辑

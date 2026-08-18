@@ -1,19 +1,11 @@
 # workflow_v2/scheduler.py
 from __future__ import annotations
-
 import time
 from dataclasses import dataclass, field
-from typing import Awaitable, Callable
-
+from typing import Any, Awaitable, Callable
 from workflow_v2.models import (
-    FailurePolicy,
-    NodeSpec,
-    NodeType,
-    RunStatus,
-    StepStatus,
-    WorkflowRevision,
-    WorkflowRunEvent,
-    WorkflowStepRun,
+    NodeSpec, WorkflowRevision, WorkflowStepRun, WorkflowRunEvent,
+    RunStatus, StepStatus, NodeType, FailurePolicy,
 )
 from workflow_v2.repository import WorkflowRepository
 

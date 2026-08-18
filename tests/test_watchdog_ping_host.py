@@ -8,8 +8,7 @@ Windows 上 http://0.0.0.0:port 的请求会失败。watchdog 探活是本地行
 必须用 loopback（127.0.0.1），与 server 监听地址解耦。
 """
 import argparse
-
-from utils.watchdog_runner import DEFAULTS, build_watchdog_config
+from utils.watchdog_runner import build_watchdog_config, DEFAULTS
 
 
 def _parse(argv: list[str]) -> argparse.Namespace:

@@ -8,9 +8,8 @@
 """
 from __future__ import annotations
 
-from unittest.mock import AsyncMock, MagicMock, patch
-
 import pytest
+from unittest.mock import AsyncMock, MagicMock, patch
 
 
 def _make_bootstrapper():
@@ -148,8 +147,7 @@ class TestMcpStartFailedLogContext:
             mock_logger.debug = lambda *a, **k: None
             with patch("config.MCP_SERVERS", {}):
                 with patch("config.WORKSPACE_DIR") as mock_ws:
-                    import json
-                    import tempfile
+                    import tempfile, json
                     from pathlib import Path
                     with tempfile.TemporaryDirectory() as td:
                         cfg_path = Path(td) / "test.json"

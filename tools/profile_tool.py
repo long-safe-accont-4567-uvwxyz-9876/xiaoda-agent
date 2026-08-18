@@ -3,9 +3,9 @@ from typing import Any
 
 from db.profile_store import ProfileField, ProfileStore
 from memory.profile_policy import ProfileCandidate, ProfilePolicy
-from memory.scope import Scope
-from memory.scope import current_scope as _current_scope
+from memory.scope import Scope, current_scope as _current_scope
 from tool_engine.tool_registry import ToolPermission, ToolResult, register_tool
+
 
 _store: ProfileStore | None = None
 _policy: ProfilePolicy | None = None

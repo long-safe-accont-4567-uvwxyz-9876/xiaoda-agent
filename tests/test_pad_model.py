@@ -9,11 +9,12 @@
 import pytest
 
 from emotion.pad_model import (
-    EMOTION_PAD_REFERENCE,
     PADEmotion,
-    blend,
+    EMOTION_PAD_REFERENCE,
     from_emotion,
+    blend,
 )
+
 
 # ── PADEmotion 数据结构 ──────────────────────────────────────
 

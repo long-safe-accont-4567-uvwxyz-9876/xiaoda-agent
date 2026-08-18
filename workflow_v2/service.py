@@ -11,7 +11,7 @@ import sqlite3
 import time
 import uuid
 
-from workflow_v2.models import RunStatus, WorkflowRun, WorkflowRunEvent
+from workflow_v2.models import WorkflowRun, WorkflowRunEvent, RunStatus
 from workflow_v2.repository import WorkflowRepository
 
 # statuses that can no longer be cancelled

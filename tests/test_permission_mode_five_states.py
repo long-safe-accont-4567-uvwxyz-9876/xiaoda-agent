@@ -2,13 +2,14 @@
 
 测试 security/permission_manager.py 新增的 DISCUSS/PLAN/INTERACTIVE/AUTO/CUSTOM 模式。
 """
+import os
 import pytest
 
 from security.permission_manager import (
-    AUTO_APPROVE_MODES,
-    READ_ONLY_MODES,
-    PermissionManager,
     PermissionMode,
+    PermissionManager,
+    READ_ONLY_MODES,
+    AUTO_APPROVE_MODES,
     get_permission_manager,
 )
 

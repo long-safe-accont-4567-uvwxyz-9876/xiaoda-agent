@@ -1,11 +1,13 @@
 """EntityExtractor 混合实体提取测试：jieba+规则快抽 → LLM 精抽"""
+import asyncio
+import pytest
 import sys
 from pathlib import Path
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock, patch, MagicMock
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from memory.entity_extractor import Entity, EntityExtractor
+from memory.entity_extractor import EntityExtractor, Entity
 
 
 class TestEntityDataclass:

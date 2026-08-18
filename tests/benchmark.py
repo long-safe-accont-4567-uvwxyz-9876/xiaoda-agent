@@ -1,11 +1,10 @@
 """小妲 Agent 性能基准测试"""
 import sys
 from pathlib import Path
-
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-import json
 import time
+import json
 
 
 def benchmark_context_compression():
@@ -100,7 +99,7 @@ def benchmark_error_classifier():
 
 def benchmark_credential_pool():
     """测试凭证池性能"""
-    from utils.credential_pool import Credential, CredentialPool
+    from utils.credential_pool import CredentialPool, Credential
 
     pool = CredentialPool()
     # 添加测试凭证
@@ -209,8 +208,7 @@ def benchmark_prompt_caching():
 def benchmark_atomic_write():
     """测试原子写入性能"""
     import tempfile
-
-    from utils.atomic_write import atomic_json_write, atomic_write
+    from utils.atomic_write import atomic_write, atomic_json_write
 
     results = {}
 
@@ -249,7 +247,7 @@ def benchmark_atomic_write():
 
 def benchmark_hooks():
     """测试钩子系统性能"""
-    from hooks import BaseHook, HookEngine, HookResult, HookType
+    from hooks import HookEngine, BaseHook, HookType, HookResult
 
     engine = HookEngine()
     results = {}

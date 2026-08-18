@@ -1,11 +1,13 @@
 from __future__ import annotations
 
 import asyncio
+from types import SimpleNamespace
+from unittest.mock import AsyncMock
 
 import pytest
 
-from web import ws_hub
 from web.media_tasks import MediaTaskQueue
+from web import ws_hub
 
 
 @pytest.mark.asyncio

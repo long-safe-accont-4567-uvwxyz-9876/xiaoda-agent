@@ -11,6 +11,8 @@
 from __future__ import annotations
 
 import copy
+import json
+import os
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -180,9 +182,8 @@ def test_config_service_no_mark_startup_complete_method():
 
 def test_config_service_no_startup_complete_field():
     """ConfigService 实例不再有 _startup_complete 字段。"""
-    import tempfile
-
     from web.config_service import ConfigService
+    import tempfile
     with tempfile.NamedTemporaryFile(suffix=".json", delete=False) as tmp:
         tmp_path = Path(tmp.name)
     try:
@@ -196,7 +197,6 @@ def test_config_service_no_startup_complete_field():
 def test_config_service_save_does_not_touch_route_table():
     """_save() 不得反向从 ROUTE_TABLE 恢复 _data（已删除该逻辑）。"""
     import inspect
-
     from web.config_service import ConfigService
     source = inspect.getsource(ConfigService._save)
     # 不应再实际导入或调用 ROUTE_TABLE（注释中提及不算）
@@ -228,7 +228,7 @@ def mock_config_service(monkeypatch):
 
 def test_set_chat_model_rolls_back_on_provider_not_registered(mock_config_service):
     """set_chat_model 在 provider 未注册时回滚 ROUTE_TABLE。"""
-    from model_router import ROUTE_TABLE, ModelRouter
+    from model_router import ModelRouter, ROUTE_TABLE
     try:
         router = ModelRouter(api_key="fake")
     except (ImportError, OSError, ValueError, RuntimeError):
@@ -360,7 +360,6 @@ def test_try_fallback_chain_uses_registry_snapshot():
     源码守护测试：确保重构落地，不会回退到旧实现。
     """
     import inspect
-
     from model_router import ModelRouter
     source = inspect.getsource(ModelRouter._try_fallback_chain)
     # 不应直接读 ROUTE_TABLE.get（应走 registry 快照）
@@ -378,7 +377,7 @@ def test_try_fallback_chain_uses_registry_snapshot():
 
 def test_fallback_chain_does_not_pollute_route_table():
     """降级链调用后 ROUTE_TABLE 全局状态不变。"""
-    from model_router import ROUTE_TABLE, ModelRouter
+    from model_router import ModelRouter, ROUTE_TABLE
     try:
         router = ModelRouter(api_key="fake")
     except (ImportError, OSError, ValueError, RuntimeError):
@@ -414,7 +413,6 @@ def test_fallback_chain_does_not_pollute_route_table():
 def test_fallback_chain_agnes_uses_snapshot():
     """agnes 降级路径也应通过 registry 快照读取 chat_agnes 配置。"""
     import inspect
-
     from model_router import ModelRouter
     source = inspect.getsource(ModelRouter._try_fallback_chain)
     # 检查 agnes_config 的赋值来源
@@ -541,7 +539,6 @@ def test_update_route_api_uses_registry():
     失败时不回滚，且持久化与内存可能不一致。新实现通过 registry.update_route 原子化。
     """
     import inspect
-
     from web.routers.models import update_route
     source = inspect.getsource(update_route)
     # 不应直接赋值修改 ROUTE_TABLE[task] 的字段（检查赋值语句，避免误匹配 final_entry["model"] 读取）
@@ -572,7 +569,8 @@ def test_update_route_api_persists_via_registry(tmp_path):
     from web.config_service import ConfigService
     cfg = ConfigService(path=overrides_file)
 
-    from model_router import ROUTE_TABLE, ModelRouter, ModelRouteRegistry
+    from model_router import ModelRouter, ROUTE_TABLE
+    from model_router import ModelRouteRegistry
     # 构造一个真实的 router 实例，registry 持有 cfg
     router_obj = ModelRouter.__new__(ModelRouter)
     router_obj._registry = ModelRouteRegistry(ROUTE_TABLE, config_service=cfg)
@@ -589,9 +587,8 @@ def test_update_route_api_persists_via_registry(tmp_path):
              patch("web.routers.models._router_of", return_value=router_obj), \
              patch("web.routers.models._audit", new_callable=AsyncMock), \
              patch("web.routers.models._broadcast_changed", new_callable=AsyncMock):
-            import asyncio
-
             from web.routers.models import update_route
+            import asyncio
             asyncio.run(update_route("chat", {
                 "model": "agnes-2.0-flash", "provider": "agnes",
                 "max_tokens": 8192, "thinking": False, "timeout": 90,

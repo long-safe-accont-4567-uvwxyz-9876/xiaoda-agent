@@ -1,9 +1,7 @@
-import json
 import os
-
+import json
 from loguru import logger
-
-from tool_engine.tool_registry import ToolPermission, ToolResult, register_tool
+from tool_engine.tool_registry import register_tool, ToolResult, ToolPermission
 from tools.web_tools_v2 import _bing_search_sync, _tavily_search_sync
 
 TAVILY_API_KEY = os.getenv("TAVILY_API_KEY", "")
@@ -30,8 +28,8 @@ def _deep_search(query: str, max_results: int = 10) -> tuple[list[dict], str]:
 def _wolfram_api_query(query: str) -> ToolResult | None:
     """使用 WolframAlpha Full Results API v2 查询，失败返回 None 以便回退。"""
     try:
-        import urllib.parse
         import urllib.request
+        import urllib.parse
         params = urllib.parse.urlencode({
             "appid": WOLFRAMALPHA_API_KEY,
             "input": query,
@@ -119,9 +117,9 @@ def wolfram_query(query: str) -> ToolResult:
 
     # 回退：web scraping
     try:
-        import re
-        import urllib.parse
         import urllib.request
+        import urllib.parse
+        import re
         url = f"https://www.wolframalpha.com/input?i={urllib.parse.quote(query)}"
         req = urllib.request.Request(url, headers={'User-Agent': 'Mozilla/5.0'})
         with urllib.request.urlopen(req, timeout=20) as resp:

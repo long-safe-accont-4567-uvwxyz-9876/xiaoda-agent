@@ -1,23 +1,21 @@
 #!/usr/bin/env python3
-import argparse
-import asyncio
-import base64
+from typing import Any
+import sys
 import json
+import asyncio
+import uuid
 import os
 import re
-import sys
-import uuid
+import base64
+import argparse
 from pathlib import Path
-from typing import Any
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from dotenv import load_dotenv
-
 load_dotenv()
 
 from utils.logging_config import setup_logging
-
 setup_logging()
 
 from loguru import logger

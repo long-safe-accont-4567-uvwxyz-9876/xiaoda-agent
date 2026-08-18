@@ -19,7 +19,7 @@ _custom_clients["agnes"]（用户通过 WebUI 注册的 agnes 客户端），
 """
 from __future__ import annotations
 
-from unittest.mock import MagicMock
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 

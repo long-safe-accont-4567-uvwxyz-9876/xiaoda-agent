@@ -8,6 +8,7 @@
 EMBED_API_KEY 在迁移本地向量模型（NPU/CPU 内置 BGE）后已改为选填，
 为空不再进入首次配置（用户需求：仅真实必填 API 参与判定）。
 """
+import os
 import setup_wizard
 
 

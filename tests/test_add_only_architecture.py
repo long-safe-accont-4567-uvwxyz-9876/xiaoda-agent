@@ -1,11 +1,10 @@
 """ADD-only 编码流程测试：原始记忆 append-only + 异步实体提取"""
 import asyncio
-import sys
 import time
-from pathlib import Path
-from unittest.mock import AsyncMock, MagicMock
-
 import pytest
+import sys
+from pathlib import Path
+from unittest.mock import AsyncMock, MagicMock, patch
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 

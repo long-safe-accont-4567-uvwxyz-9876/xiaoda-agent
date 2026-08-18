@@ -1,8 +1,8 @@
-import json
-import math
 import time
+import math
+import json
 from dataclasses import dataclass
-from typing import Any, ClassVar
+from typing import ClassVar, Any
 
 from db.profile_store import ProfileField, ProfileStore
 from memory.scope import Scope

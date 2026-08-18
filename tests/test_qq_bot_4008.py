@@ -8,6 +8,7 @@ QQ 官方错误码：
 - 4008: 超过限频 → 等待后 RESUME（session 仍有效，不应 reset）
 - 4009: session 过期 → 必须重新 IDENTIFY
 """
+import asyncio
 from types import SimpleNamespace
 
 import pytest
@@ -20,8 +21,7 @@ class _FakeBotpyLog:
 @pytest.fixture(autouse=True)
 def _stub_botpy_logging(monkeypatch):
     """stub botpy.logging.get_logger 避免 import 副作用。"""
-    import sys
-    import types
+    import sys, types
     if "botpy.logging" not in sys.modules:
         m = types.ModuleType("botpy.logging")
         m.get_logger = lambda: _FakeBotpyLog()

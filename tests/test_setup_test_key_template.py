@@ -6,9 +6,10 @@ return (bool, str)），重构为 _run_api_test 通用模板 + 各 provider 声�
 """
 from __future__ import annotations
 
-import sys
-from pathlib import Path
+import asyncio
 from unittest.mock import AsyncMock, MagicMock, patch
+from pathlib import Path
+import sys
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
@@ -70,10 +71,8 @@ async def test_test_siliconflow_401():
 @pytest.mark.asyncio
 async def test_test_timeout_mimo():
     """MiMo 超时 → (False, 超时消息)。"""
-    from unittest.mock import AsyncMock
-
     import httpx
-
+    from unittest.mock import AsyncMock
     from web.routers import setup as mod
 
     async def _timeout_post(*args, **kwargs):

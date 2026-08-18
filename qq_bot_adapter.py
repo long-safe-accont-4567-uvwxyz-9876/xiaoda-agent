@@ -1,19 +1,17 @@
+from typing import Any, NamedTuple
+import os
+import sys
 import asyncio
 import base64
 import contextvars
-import os
-import random
-import re
 import sqlite3
 import subprocess
-import sys
 import threading
 import time
+import random
+import re
 import uuid
 from pathlib import Path
-from typing import Any, NamedTuple
-
-from dotenv import load_dotenv
 
 from channel_adapter_base import (
     STREAM_C2C_MAX_SEGMENTS,
@@ -23,6 +21,7 @@ from channel_adapter_base import (
     upsert_env_file_line,
 )
 
+from dotenv import load_dotenv
 # P0 修复（Windows 安装包 QQ 离线 bug 根因）：
 # load_dotenv() 无参数时只读取 CWD/.env，Windows 安装包从 C:\Program Files\ 启动时
 # CWD 不是用户目录，而 config.py 已把 .env 放到 ~/.ai-agent/.env（frozen 模式），
@@ -36,36 +35,33 @@ except ImportError:
     load_dotenv()
 
 
-from utils.common import safe_float as _safe_float
-from utils.common import safe_int as _safe_int
+from utils.common import safe_int as _safe_int, safe_float as _safe_float
 from utils.llm_cleanup import strip_qq_face_tags
 
 # 安全加固：不再全局 monkey patch ssl.create_default_context
 # botpy 内部已使用 SSLContext() 处理 WebSocket SSL，无需全局禁用证书验证
-from utils.logging_config import setup_logging
 
+from utils.logging_config import setup_logging
 setup_logging()
+
+from loguru import logger
 
 import botpy
 from botpy.gateway import BotWebSocket
 from botpy.message import C2CMessage, GroupMessage
-from loguru import logger
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from agent_core import AgentCore, ProcessResult
 from agent_core.user_qq import QQUser
-from config import AGENT_CONFIG, get_agent_display_name
 from core.event_bus import event_bus
-from emotion.emoji_config import get_ack_message
-from emotion.nudge_engine import NudgeEngine
+from config import AGENT_CONFIG, get_agent_display_name
 from security.human_approval import (
-    HIGH_RISK_OPERATIONS,
-    ApprovalRequest,
-    ApprovalStatus,
-    IMApprovalChannel,
-    RiskLevel,
+    IMApprovalChannel, ApprovalRequest, ApprovalStatus,
+    RiskLevel, HIGH_RISK_OPERATIONS,
 )
+from emotion.nudge_engine import NudgeEngine
+from emotion.emoji_config import get_ack_message
 from utils.text_utils import encode_image_to_base64
 
 _original_is_system_event = BotWebSocket._is_system_event
@@ -143,7 +139,7 @@ async def _patched_on_closed(self, close_status_code: Any, close_msg: Any) -> An
         # 4008 限频：session 仍有效，保留 session_id 走 RESUME（不丢未 ACK 消息）
         # botpy 自带 session_interval backoff，不强行 sleep 避免与重连机制冲突
         _botpy_log.warning(
-            "[botpy] 限频(code=4008)，保留session走RESUME，等待botpy backoff重连")
+            f"[botpy] 限频(code=4008)，保留session走RESUME，等待botpy backoff重连")
     await _original_on_closed(self, close_status_code, close_msg)
 
 BotWebSocket.on_closed = _patched_on_closed
@@ -886,7 +882,7 @@ class AIQQBot(ChannelAdapterBase, botpy.Client):
                 await message.reply(content=f"{get_agent_display_name('xiaoda')}想得太入神了……能再说一次吗？🌱", msg_seq=_next_msg_seq())
             except (OSError, RuntimeError, ConnectionError) as _e:
                 logger.debug("qq_bot.c2c_timeout_reply_failed", error=str(_e))
-        except (RuntimeError, OSError, ValueError) as e:
+        except (TimeoutError, RuntimeError, OSError, ValueError) as e:
             logger.error(f"qq_bot.c2c_error: {e}")
             # P1-2: 仅在 agent 处理失败（非 QQ 网络短暂错误）时失效 session 缓存
             # RuntimeError/OSError 可能是 QQ 网络短暂错误（ACK/回复发送失败），不应清除健康缓存
@@ -1204,9 +1200,8 @@ class AIQQBot(ChannelAdapterBase, botpy.Client):
         所有中间临时文件会在方法内部清理，只保留最终成功的文件。
         调用者负责在不再需要时删除返回的临时文件。
         """
-        import tempfile
-
         from PIL import Image
+        import tempfile
 
         tmp_path: Path | None = None
 
@@ -1571,7 +1566,7 @@ class AIQQBot(ChannelAdapterBase, botpy.Client):
         取第 1 片（无标记截断，自动闭合代码块）。
         C2C 场景：保持原分片逻辑。
         """
-        from utils.text_utils import split_for_group_passive, split_long_reply
+        from utils.text_utils import split_long_reply, split_for_group_passive
 
         is_group = isinstance(message, GroupMessage)
 

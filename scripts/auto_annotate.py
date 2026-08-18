@@ -22,6 +22,7 @@ import sys
 
 import libcst as cst
 
+
 SKIP_DIRS = {'.git', '__pycache__', '.venv', 'dist', 'build', 'node_modules', 'tests', '.pytest_cache', 'frontend'}
 
 # 需要处理的目录与文件 (优先级目录)

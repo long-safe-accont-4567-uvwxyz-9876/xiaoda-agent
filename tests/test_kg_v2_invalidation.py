@@ -1,6 +1,6 @@
 """KG v2 事实超驰 + 实体演化测试。"""
 import time
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, patch
 
 import pytest
 

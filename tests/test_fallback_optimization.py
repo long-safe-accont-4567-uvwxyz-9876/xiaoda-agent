@@ -8,9 +8,10 @@
 5. 后台任务 _spawn 添加耗时监控日志
 """
 import asyncio
-from pathlib import Path
-
+import copy
 import pytest
+from unittest.mock import MagicMock, patch, AsyncMock
+from pathlib import Path
 
 PROJECT_ROOT = Path(__file__).parent.parent
 if str(PROJECT_ROOT) not in __import__("sys").path:
@@ -27,8 +28,8 @@ class TestFallbackChainSync:
         降级链精简为 chat → chat_agnes。chat 走 DEFAULT_PROVIDER，
         chat_agnes 走 agnes provider，确保主路由失败时切换到独立 provider 兜底。
         """
+        from model_router import ROUTE_TABLE, FALLBACK_ROUTE
         from config import DEFAULT_PROVIDER
-        from model_router import FALLBACK_ROUTE, ROUTE_TABLE
 
         # 模拟 chat 主路由使用 DEFAULT_PROVIDER 的场景
         original = {k: v.copy() for k, v in ROUTE_TABLE.items()}
@@ -72,8 +73,8 @@ class TestProfileLearnerFormatBug:
 
     def test_loguru_with_brace_in_message_does_not_crash(self):
         """当异常消息包含 {} 时，loguru 不应报 Replacement index 错误"""
-
         from loguru import logger
+        import io
 
         # 模拟一个包含 {} 的异常消息
         error_msg = "Replacement index 0 out of range for positional args tuple {}"
@@ -107,7 +108,7 @@ class TestBackgroundTaskTiming:
     @pytest.mark.asyncio
     async def test_spawn_logs_duration_on_completion(self):
         """_spawn 完成时应记录耗时"""
-        from core.background_tasks import _bg_tasks, _spawn
+        from core.background_tasks import _spawn, _bg_tasks
 
         _bg_tasks.clear()
         log_records = []
@@ -167,7 +168,6 @@ class TestTruncationDetection:
     def test_fast_path_logs_reply_len(self):
         """fast_path.done 日志应包含 reply_len 字段（Phase 3 后日志代码在 main_path mixin）"""
         import inspect
-
         import agent_core.mixins.main_path as main_path_mod
         source = inspect.getsource(main_path_mod)
         assert "reply_len" in source, "fast_path 日志应包含 reply_len 字段"
@@ -175,7 +175,6 @@ class TestTruncationDetection:
     def test_model_router_checks_finish_reason(self):
         """model_router 应检查 finish_reason 并记录截断告警"""
         import inspect
-
         from model_router import ModelRouter
         source = inspect.getsource(ModelRouter._handle_route_response)
         assert "finish_reason" in source, \

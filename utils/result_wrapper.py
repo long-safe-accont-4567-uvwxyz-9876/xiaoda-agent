@@ -1,8 +1,7 @@
+from typing import Any
 import json
 import os
 import re
-from typing import Any
-
 import httpx
 from loguru import logger
 

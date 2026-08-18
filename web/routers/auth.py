@@ -1,25 +1,25 @@
 from __future__ import annotations
 
-import base64
-import contextlib
+import ipaddress
+import os
+import time
+import json
 import hashlib
 import hmac
-import ipaddress
-import json
-import os
+import base64
 import secrets
-import time
 from collections import OrderedDict
 from pathlib import Path
 from threading import Lock
 from typing import Any
 
-from fastapi import APIRouter, Depends, HTTPException, Request, Response
+from fastapi import APIRouter, HTTPException, Request, Depends, Response
 from loguru import logger
 
+from web.schemas import Envelope, LoginRequest, LoginResponse, RecoverRequest, ChangePasswordRequest
 # VULN-28：XFF 信任判定统一从 rate_limit 导入（规则单源，避免两处漂移）
 from web.middleware.rate_limit import _peer_is_trusted_proxy, _trust_forwarded_for
-from web.schemas import ChangePasswordRequest, Envelope, LoginRequest, LoginResponse, RecoverRequest
+import contextlib
 
 router = APIRouter(tags=["auth"])
 
@@ -504,7 +504,7 @@ def _update_env_password(new_password: str) -> None:
 
     同时更新 os.environ，使进程内登录校验立即生效。失败时抛 RuntimeError 由调用方处理。
     """
-    from setup_wizard import ENV_PATH, _load_env_values, _parse_env_lines, _write_env
+    from setup_wizard import ENV_PATH, _parse_env_lines, _write_env, _load_env_values
     existing_lines = _parse_env_lines(ENV_PATH)
     current = _load_env_values()
     merged = dict(current)
@@ -597,7 +597,7 @@ async def change_password(req: ChangePasswordRequest, user_id: str = Depends(get
     成功后更新 .env、吊销全部 token 并签发新 token（旧 token 按滑动续期
     方式带宽限期撤销），可同时轮换找回问答。返回新 token 供前端替换本地存储。
     """
-    from security.recovery_qa import set_recovery, verify_answer
+    from security.recovery_qa import verify_answer, set_recovery
 
     current_password = os.getenv("WEBUI_PASSWORD", "")
     client_ip = _get_client_ip(request) if request is not None else "unknown"

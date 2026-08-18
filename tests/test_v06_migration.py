@@ -1,9 +1,9 @@
 # tests/test_v06_migration.py
 """v0.6.0 数据库迁移测试"""
-from pathlib import Path
-
+import asyncio
 import aiosqlite
 import pytest
+from pathlib import Path
 
 MIGRATION_SQL = Path("db/migrations/v06_cognitive.sql").read_text(encoding="utf-8")
 

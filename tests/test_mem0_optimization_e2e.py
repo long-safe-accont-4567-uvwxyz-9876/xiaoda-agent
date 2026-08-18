@@ -3,19 +3,18 @@
 流程：编码 → 提取实体 → 蒸馏 → 检索 → Entity Boost
 """
 import asyncio
-import sys
 import time
-from pathlib import Path
-from unittest.mock import AsyncMock, MagicMock
-
 import pytest
+import sys
+from pathlib import Path
+from unittest.mock import AsyncMock, MagicMock, patch
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from memory.entity_extractor import EntityExtractor
+from memory.scope import Scope
+from memory.entity_extractor import EntityExtractor, Entity
 from memory.entity_store import EntityStore
 from memory.memory_distiller import MemoryDistiller
-from memory.scope import Scope
 
 
 @pytest.fixture

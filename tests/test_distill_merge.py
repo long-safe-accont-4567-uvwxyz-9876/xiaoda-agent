@@ -1,14 +1,15 @@
 """蒸馏流程测试：merge_knowledge + _distill_to_knowledge + _update_knowledge"""
+import asyncio
+import time
+import pytest
 import sys
 from pathlib import Path
-from unittest.mock import AsyncMock
-
-import pytest
+from unittest.mock import AsyncMock, MagicMock, patch
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from memory.memory_distiller import MemoryDistiller
 from memory.scope import Scope
+from memory.memory_distiller import MemoryDistiller
 
 
 @pytest.fixture

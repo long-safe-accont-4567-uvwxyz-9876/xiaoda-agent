@@ -13,8 +13,9 @@ from fastapi.testclient import TestClient
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 from security.permission_manager import get_permission_manager
 from web.routers.auth import get_current_user
-from web.routers.workspace import _pending_cmd_decisions, register_cmd_decision_scope
-from web.routers.workspace import router as workspace_router
+from web.routers.workspace import (router as workspace_router,
+                                    register_cmd_decision_scope,
+                                    _pending_cmd_decisions)
 
 
 def D(r):

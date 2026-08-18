@@ -14,12 +14,13 @@ from __future__ import annotations
 
 import asyncio
 import json
+import re
 from typing import Any
 
 from loguru import logger
 
-from utils.common import safe_float as _safe_float
 from utils.free_model_backend import FreeModelBackend
+from utils.common import safe_float as _safe_float
 
 # 超时时间（秒）
 LLM_EMOTION_TIMEOUT = 0.5  # 500ms

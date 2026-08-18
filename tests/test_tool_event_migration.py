@@ -1,9 +1,7 @@
 """工具事件迁移到 EventBus 测试。"""
-from unittest.mock import patch
-
 import pytest
-
-from core.event_bus import AgentEvent, AgentEventType, event_bus
+from unittest.mock import AsyncMock, MagicMock, patch
+from core.event_bus import event_bus, AgentEvent, AgentEventType
 
 
 class FakeUser:

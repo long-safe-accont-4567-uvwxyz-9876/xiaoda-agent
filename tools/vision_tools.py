@@ -1,6 +1,5 @@
 from typing import Any
-
-from tool_engine.tool_registry import ToolPermission, ToolResult, register_tool
+from tool_engine.tool_registry import register_tool, ToolPermission, ToolResult
 
 _vision_service = None
 

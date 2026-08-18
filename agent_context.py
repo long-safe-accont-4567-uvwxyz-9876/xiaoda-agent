@@ -1,10 +1,10 @@
 import asyncio
-import re
 import time
-from collections.abc import Callable
+import re
 from typing import Any
-
+from collections.abc import Callable
 from loguru import logger
+
 
 # ── 记忆检索格式过滤 ──────────────────────────────────
 # 根因：用户反馈"数据库原文直接蹦出来了"。记忆检索结果直接注入 LLM 时，

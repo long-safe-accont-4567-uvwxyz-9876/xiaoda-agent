@@ -1,8 +1,8 @@
 # tests/test_structured_blackboard.py
-
 import pytest
-
-from agent_core.structured_blackboard import StructuredBlackboard
+import asyncio
+import time
+from agent_core.structured_blackboard import StructuredEntry, StructuredBlackboard
 
 
 @pytest.mark.asyncio

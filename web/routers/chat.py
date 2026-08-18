@@ -1,4 +1,5 @@
 from __future__ import annotations
+from typing import Any
 
 import asyncio
 import json
@@ -8,15 +9,14 @@ import tempfile
 import time
 import uuid
 from pathlib import Path
-from typing import Any
 
 from fastapi import APIRouter, Depends, File, HTTPException, Query, Request, UploadFile
 from fastapi.responses import PlainTextResponse
 from loguru import logger
 
-from emotion.emotion_simple import detect_emotion
+from web.schemas import Envelope, ChatRequest, SessionInfo, MessageItem, SlashCommand
 from web.routers.auth import get_current_user
-from web.schemas import ChatRequest, Envelope, MessageItem, SessionInfo, SlashCommand
+from emotion.emotion_simple import detect_emotion
 
 router = APIRouter(tags=["chat"], dependencies=[Depends(get_current_user)])
 
@@ -322,7 +322,6 @@ async def speech_to_text(file: UploadFile = File(...)) -> Any:
             # MIMO 降级路径 — sync OpenAI SDK 调用放到线程池
             def _mimo_asr() -> str:
                 from openai import OpenAI
-
                 from config import get_base_url_for_provider
                 client = OpenAI(api_key=mimo_key, base_url=get_base_url_for_provider("mimo"))
                 tmp_path = None

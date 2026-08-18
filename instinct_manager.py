@@ -1,12 +1,12 @@
-import asyncio
+import os
 import time
-
+import asyncio
+from utils.similarity import ratio as text_ratio
 from loguru import logger
 
 from db.database import DatabaseManager
 from model_router import ModelRouter
 from utils.free_model_backend import FreeModelBackend
-from utils.similarity import ratio as text_ratio
 
 # LLM 思考过程特征词 — 包含这些词的行不是有效的本能
 _LLM_THINKING_KEYWORDS = {
@@ -28,7 +28,6 @@ _PROMPT_EXAMPLE_FRAGMENTS = {
 
 # 无效本能模式（正则）— 拒绝过短、模板化、或非用户偏好类内容
 import re as _re
-
 _INVALID_INSTINCT_PATTERNS = [
     _re.compile(r"^用户行为模式"),     # 模板化标题
     _re.compile(r"^用户提问"),          # 单次行为非偏好

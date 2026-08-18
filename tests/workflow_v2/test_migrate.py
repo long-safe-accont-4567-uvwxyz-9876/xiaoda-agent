@@ -1,6 +1,6 @@
 # tests/workflow_v2/test_migrate.py
-from workflow_v2.migrate import migrate_v1
 from workflow_v2.models import NodeType
+from workflow_v2.migrate import migrate_v1
 
 
 def test_migrate_maps_types_and_chains_edges():

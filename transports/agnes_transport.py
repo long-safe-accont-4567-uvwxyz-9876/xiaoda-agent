@@ -1,12 +1,10 @@
 """Agnes Transport - 适配 Agnes AI API"""
-import asyncio
 import os
-
+import asyncio
 import httpx
-from loguru import logger
 from openai import AsyncOpenAI
-
-from transports.base import DEFAULT_MAX_TOKENS, ProviderTransport, TransportResponse
+from loguru import logger
+from transports.base import ProviderTransport, TransportResponse, DEFAULT_MAX_TOKENS
 
 # agnes API max_tokens 上限 65536，超出返回 500 invalid_request
 # 直接调用 transport.chat() 的路径（绕过 model_router._build_route_kwargs）

@@ -1,10 +1,9 @@
-import threading
 from dataclasses import dataclass
-from enum import Enum
 from typing import Any
+from enum import Enum
+import threading
 
 from loguru import logger
-
 from utils.metrics import metrics
 
 

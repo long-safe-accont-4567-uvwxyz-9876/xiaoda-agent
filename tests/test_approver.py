@@ -3,17 +3,19 @@
 测试 tool_engine/approver.py 的 ApprovalOutcome、Approver 协议、
 SessionApprover 会话级审批器，以及 ToolExecutor 的 approver 集成。
 """
+import asyncio
 import pytest
 
 from tool_engine.approver import (
-    ApprovalDecision,
     ApprovalOutcome,
     ApprovalRequest,
-    Approver,
+    ApprovalDecision,
     DefaultApprover,
     SessionApprover,
+    Approver,
 )
 from tool_engine.tool_executor import ToolExecutor
+from tool_engine.tool_registry import ToolResult
 
 
 class TestApprovalOutcome:

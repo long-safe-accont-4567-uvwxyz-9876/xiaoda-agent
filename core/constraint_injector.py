@@ -10,13 +10,11 @@ source 取值：qq_group / qq_c2c / web / cli
 
 from __future__ import annotations
 
+from typing import ClassVar
 import re
 import threading
 from pathlib import Path
-from typing import ClassVar
-
 from loguru import logger
-
 
 # 治本修复（2026-08-05 用户"治标不治本"反馈）：jieba 后台预热。
 # 根因：jieba 首次 initialize 加载词典耗时 1s（实测 1.052s），

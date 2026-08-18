@@ -19,8 +19,7 @@
 """
 import subprocess
 import sys
-
-from utils.watchdog_runner import DEFAULTS, Watchdog
+from utils.watchdog_runner import Watchdog, DEFAULTS
 
 
 class _FakeProc:

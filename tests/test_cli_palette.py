@@ -2,6 +2,7 @@
 
 直接驱动 CommandPalette 的过滤 / 激活 / 取消逻辑（不进入真实终端 App.run()）。
 """
+import pytest
 
 from cli_palette import CommandPalette, PaletteNode
 

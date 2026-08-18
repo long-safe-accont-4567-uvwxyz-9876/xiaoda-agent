@@ -9,22 +9,23 @@ import json
 import re
 import time
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import Any, TYPE_CHECKING
 
 from loguru import logger
 
-from agent_core._shared import RequestContext, _current_request_ctx
 from config import FILE_DIR, get_agent_display_name
-from core.degradation_strategy import get_degradation_strategy
+from utils.text_utils import strip_dsml, strip_reasoning, humanize
 from utils.llm_cleanup import (
     deduplicate_multi_reply,
-    strip_english_reasoning_leak,
-    strip_image_gen_leak,
-    strip_log_timestamps,
-    strip_qq_face_tags,
     strip_system_leak,
+    strip_log_timestamps,
+    strip_image_gen_leak,
+    strip_qq_face_tags,
+    strip_english_reasoning_leak,
 )
-from utils.text_utils import humanize, strip_dsml, strip_reasoning
+from core.degradation_strategy import get_degradation_strategy
+
+from agent_core._shared import _current_request_ctx, RequestContext
 
 if TYPE_CHECKING:
     from tool_engine.tool_registry import ToolResult
@@ -37,9 +38,8 @@ class ToolExecutorMixin:
                                         user_id: str = "", safe_mode: bool = False,
                                         user_input: str = "") -> ToolResult:
         """带钩子的工具执行"""
-        import time as _time
-
         from tool_engine.tool_registry import ToolResult
+        import time as _time
         _t0 = _time.time()
 
         # PreToolUse 钩子
@@ -572,7 +572,7 @@ class ToolExecutorMixin:
                 if path:
                     return clean_reply, path
                 # 3. resolve_emotion 映射（如 "crying" → SAD → "sad" 目录）
-                from emotion.emotion_enum import STICKER_FALLBACK, resolve_emotion
+                from emotion.emotion_enum import resolve_emotion, STICKER_FALLBACK
                 resolved = resolve_emotion(filename)
                 mapped = STICKER_FALLBACK.get(resolved, "")
                 if mapped:
@@ -591,7 +591,7 @@ class ToolExecutorMixin:
         _emotion_match = _re.search(r'\[emotion:([^\]]+)\]', reply)
         detected = ""
         if _emotion_match:
-            from emotion.emotion_enum import STICKER_FALLBACK, resolve_emotion
+            from emotion.emotion_enum import resolve_emotion, STICKER_FALLBACK
             emotion = resolve_emotion(_emotion_match.group(1))
             detected = STICKER_FALLBACK.get(emotion, "happy")
 

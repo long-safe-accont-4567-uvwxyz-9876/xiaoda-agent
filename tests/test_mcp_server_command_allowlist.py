@@ -4,6 +4,7 @@ from fastapi import HTTPException
 
 from web.routers.mcp import _validate_mcp_command, _validate_mcp_env
 
+
 # ── command 白名单 ────────────────────────────────────────────────
 
 @pytest.mark.parametrize("command", [

@@ -31,7 +31,7 @@ PROJ_ROOT = Path(__file__).resolve().parent.parent
 if str(PROJ_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJ_ROOT))
 
-from utils.text_utils import ends_with_valid_ending, is_reply_likely_complete
+from utils.text_utils import is_reply_likely_complete, ends_with_valid_ending
 
 
 class TestReplyLikelyComplete:

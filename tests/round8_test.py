@@ -1,10 +1,9 @@
 #!/usr/bin/env python3
 """第八轮深度测试 - 真实对话 + 数据库CRUD + Transport + Thompson Sampling"""
 import asyncio
-import os
 import sys
+import os
 import tempfile
-
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."))
 
 
@@ -199,9 +198,9 @@ async def test_transport_layer():
     print("=" * 60)
     bugs = []
 
-    from transports.agnes_transport import AgnesTransport
     from transports.base import TransportResponse
     from transports.mimo_transport import MiMoTransport
+    from transports.agnes_transport import AgnesTransport
 
     # 检查 MiMoTransport
     print("\n[1] MiMoTransport...")
@@ -417,7 +416,7 @@ async def test_hook_engine_deep():
     print("=" * 60)
     bugs = []
 
-    from hooks import BaseHook, HookEngine, HookResult, HookType
+    from hooks import HookEngine, HookType, BaseHook, HookResult
 
     engine = HookEngine()
 

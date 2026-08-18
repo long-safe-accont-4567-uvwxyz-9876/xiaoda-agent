@@ -22,7 +22,7 @@ from __future__ import annotations
 
 import sys
 from pathlib import Path
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch, MagicMock
 
 import pytest
 
@@ -30,10 +30,9 @@ PROJECT_ROOT = Path(__file__).parent.parent
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
-from botpy.message import C2CMessage, GroupMessage
-
-from config import get_agent_display_name
 from qq_bot_adapter import AIQQBot
+from botpy.message import C2CMessage, GroupMessage
+from config import get_agent_display_name
 
 _XD_NAME = get_agent_display_name("xiaoda")
 

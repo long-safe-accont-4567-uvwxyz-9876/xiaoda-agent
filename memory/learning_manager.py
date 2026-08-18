@@ -1,5 +1,4 @@
 from typing import Any
-
 from loguru import logger
 
 from db.db_learning import LearningDB

@@ -19,6 +19,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
+
 # ─────────────────────────────────────────────────────────────
 # Bug #1: agents.py _audit 不应使用不存在的 db.transaction()
 # ─────────────────────────────────────────────────────────────
@@ -107,7 +108,7 @@ def test_set_chat_model_persists_both_chat_model_and_routes_chat():
     然后 _restore_chat_model 读取 models.chat_model 覆盖 ROUTE_TABLE，
     造成用户切换的 provider 被旧 models.routes.chat 反向覆盖。
     """
-    from model_router import ROUTE_TABLE, ModelRouter
+    from model_router import ModelRouter, ROUTE_TABLE
 
     router = ModelRouter.__new__(ModelRouter)
     router._custom_clients = set()
@@ -172,7 +173,7 @@ def test_set_chat_model_routes_chat_thinking_field_is_bool():
     与 web/routers/models.py update_route 的持久化格式保持一致，
     否则 _apply_route_overrides 读取时会类型不匹配。
     """
-    from model_router import ROUTE_TABLE, ModelRouter
+    from model_router import ModelRouter, ROUTE_TABLE
 
     router = ModelRouter.__new__(ModelRouter)
     router._custom_clients = {"agnes"}
@@ -223,8 +224,8 @@ def test_restore_chat_model_catches_llm_error():
     注意：新实现不再调用 set_chat_model，此测试保留为回归守护，并 patch
     ROUTE_TABLE 防止污染全局状态（测试隔离）。
     """
-    from core.app_exception import LLMError
     from web.server import _restore_chat_model
+    from core.app_exception import LLMError
 
     cfg = MagicMock()
     cfg.get.return_value = {"provider": "custom-unknown", "model_id": "custom-model"}
@@ -352,10 +353,9 @@ def test_config_service_get_models_returns_deep_copy():
     修复：get() 对 models. 路径返回 json 深拷贝，切断引用链。
     """
     import json
-    import os
     import tempfile
+    import os
     from pathlib import Path
-
     from web.config_service import ConfigService
 
     with tempfile.NamedTemporaryFile(mode='w', suffix='.json', delete=False) as f:
@@ -397,10 +397,9 @@ def test_config_service_get_models_returns_deep_copy():
 
 def test_config_service_get_non_models_returns_reference():
     """非 models 路径不受深拷贝影响，保持原有行为（性能考虑）。"""
-    import os
     import tempfile
+    import os
     from pathlib import Path
-
     from web.config_service import ConfigService
 
     with tempfile.NamedTemporaryFile(mode='w', suffix='.json', delete=False) as f:

@@ -1,9 +1,10 @@
 """P0-01 + P0-02: FSRS forget formula fix — tests"""
 from __future__ import annotations
 
+import math
 import time
 
-from memory.fsrs_model import S_INIT, FSRSModel, MemoryPhase, MemoryState, ReinforcementSignal
+from memory.fsrs_model import FSRSModel, MemoryState, MemoryPhase, ReinforcementSignal, S_INIT
 
 
 def test_forget_decreases_stability():

@@ -8,7 +8,7 @@ import pytest
 
 from llm_gateway.transports import CompletionChunk
 from local_ai.integration.reranker import LocalModelUnavailableError
-from model_router import ModelRouter, ModelRouteRegistry
+from model_router import ModelRouteRegistry, ModelRouter
 
 
 def _sample_messages():

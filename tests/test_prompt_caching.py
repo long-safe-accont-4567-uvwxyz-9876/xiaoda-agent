@@ -1,12 +1,10 @@
 """测试 prompt_caching.py"""
 import sys
 from pathlib import Path
-
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 import unittest
-
-from utils.prompt_caching import CACHE_TTL_5M, apply_cache_control
+from utils.prompt_caching import apply_cache_control, CACHE_TTL_5M
 
 
 class TestPromptCaching(unittest.TestCase):

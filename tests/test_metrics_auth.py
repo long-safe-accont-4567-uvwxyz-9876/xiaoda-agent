@@ -19,7 +19,7 @@ import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
-from web.routers.auth import _issue_token, get_current_user
+from web.routers.auth import get_current_user, _issue_token
 from web.routers.metrics import router as metrics_router
 
 

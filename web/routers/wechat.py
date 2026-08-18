@@ -21,10 +21,10 @@ from typing import Any
 from fastapi import APIRouter, Depends, Query, Request
 from loguru import logger
 
-from ilink_client import ILinkClient
-from web.routers.auth import get_current_user
 from web.schemas import Envelope
-from wechat_bot_adapter import clear_credentials, load_credentials, save_credentials
+from web.routers.auth import get_current_user
+from ilink_client import ILinkClient
+from wechat_bot_adapter import save_credentials, load_credentials, clear_credentials
 
 # 需认证的路由：所有端点默认走 get_current_user 依赖
 router = APIRouter(tags=["wechat"], dependencies=[Depends(get_current_user)])
@@ -73,9 +73,8 @@ def _generate_qr_image_base64(data: str) -> str:
 
     返回 data URI 格式，前端可直接用 <img src="..."> 显示。
     """
-    import base64
     import io
-
+    import base64
     import qrcode
 
     qr = qrcode.QRCode(

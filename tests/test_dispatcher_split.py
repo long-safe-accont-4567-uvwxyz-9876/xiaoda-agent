@@ -18,6 +18,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 
 import pytest
 
+
 # ── tool_call_extractors ────────────────────────────────────────
 
 class TestToolCallExtractorsModule:
@@ -45,8 +46,8 @@ class TestToolCallExtractorsModule:
         "ToolCallExtractor", "ResourceBackend",
     ])
     def test_dispatcher_reexports_same_objects(self, name):
-        import agent_core.tool_call_extractors
         import agent_dispatcher
+        import agent_core.tool_call_extractors
         assert getattr(agent_dispatcher, name) is getattr(agent_core.tool_call_extractors, name)
 
 
@@ -79,8 +80,8 @@ class TestSubAgentModule:
         "_is_tool_unsupported_error",
     ])
     def test_dispatcher_reexports_same_objects(self, name):
-        import agent_core.sub_agent
         import agent_dispatcher
+        import agent_core.sub_agent
         assert getattr(agent_dispatcher, name) is getattr(agent_core.sub_agent, name)
 
     def test_j_space_hook_globals_exist(self):

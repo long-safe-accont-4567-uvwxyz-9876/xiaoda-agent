@@ -13,6 +13,7 @@ LRU 维护不变：OrderedDict + move_to_end + popitem(last=False) 上限淘汰�
 本测试聚焦 LRU 淘汰行为，用 user_openid 作为去重 key；
 REPLY_DEDUP_THRESHOLD 调高到 99.0 避免触发重试路径（重试语义由其他测试覆盖）。
 """
+import asyncio
 from collections import OrderedDict
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock

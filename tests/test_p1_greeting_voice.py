@@ -6,6 +6,7 @@ Bug: _try_greeting_shortcut 仅检查 self._voice_mode 就设 tts_pending=True�
 修复目标: 当且仅当 voice_mode + tts.available + TTS_ASYNC_MODE + is_feature_available("tts")
 全部满足时，才返回带 tts_pending/tts_text 的 ProcessResult。
 """
+import os
 from unittest.mock import MagicMock, patch
 
 import pytest

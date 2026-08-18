@@ -1,13 +1,11 @@
+from typing import Any
 import asyncio
 import time
 import uuid
-from typing import Any
-
+from tool_engine.tool_registry import register_tool, ToolPermission, ToolResult
 from loguru import logger
-
-from memory.scope import current_scope_or_default
-from tool_engine.tool_registry import ToolPermission, ToolResult, register_tool
 from utils.metrics import metrics
+from memory.scope import current_scope_or_default
 
 # 模块级 MemoryManager 单例（由 agent_core.init() 注入）
 _memory_manager = None

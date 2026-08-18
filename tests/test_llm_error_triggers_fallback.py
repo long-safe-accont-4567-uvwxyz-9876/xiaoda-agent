@@ -30,8 +30,7 @@ def _make_router() -> ModelRouter:
     _apply_caching_headers（静态方法），故只补这两个即可。
     """
     import asyncio
-
-    from model_router import ROUTE_TABLE, ModelRouteRegistry
+    from model_router import ModelRouteRegistry, ROUTE_TABLE
     router = ModelRouter.__new__(ModelRouter)
     router._cache_stats = {"total_calls": 0, "hit_tokens": 0, "miss_tokens": 0}
     # route() 走 registry.get_task_ref，需要 _registry 已初始化

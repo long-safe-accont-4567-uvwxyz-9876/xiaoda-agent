@@ -1,15 +1,13 @@
 """G15 修复：测试 query_transform LRU + TTL 缓存"""
-import asyncio
 import sys
+import asyncio
 import time
 from pathlib import Path
-
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 import unittest
 from unittest.mock import AsyncMock, patch
-
-from memory.query_transform import _CACHE_MISS, QueryTransformer
+from memory.query_transform import QueryTransformer, _CACHE_MISS
 
 
 class TestQueryTransformCache(unittest.TestCase):

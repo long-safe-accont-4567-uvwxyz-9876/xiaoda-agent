@@ -19,11 +19,11 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 import ipaddress
 
 from security.ssrf_guard import (
-    _PIN_CACHE,
-    check_ip,
-    get_pinned_ip,
-    resolve_and_pin,
     validate_url,
+    get_pinned_ip,
+    check_ip,
+    resolve_and_pin,
+    _PIN_CACHE,
 )
 
 

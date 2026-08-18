@@ -173,7 +173,7 @@ def get_config_dir() -> Path:
     return CONFIG_DIR
 
 def _resolve_data_path(kioxia_path: Path, fallback_path: Path) -> Path:
-    r"""解析数据路径，优先使用 KIOXIA 外置存储，失败时降级到 fallback。
+    """解析数据路径，优先使用 KIOXIA 外置存储，失败时降级到 fallback。
 
     规则：
     - 显式设置 KIOXIA_DATA_DIR 时：仅当外置盘已挂载（base 目录存在）才使用，

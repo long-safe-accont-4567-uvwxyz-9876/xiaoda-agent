@@ -4,7 +4,7 @@ import asyncio
 import json
 import math
 from pathlib import Path
-from typing import Any, AsyncIterator, ClassVar, Mapping, Sequence
+from typing import ClassVar, Any, AsyncIterator, Mapping, Sequence
 
 from local_ai.contracts import RuntimeKind, RuntimeProfile
 from local_ai.runtimes.base import Runtime, RuntimeDependencyError, RuntimeValidationError

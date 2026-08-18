@@ -1,13 +1,10 @@
 # tests/test_conflict_supersession.py
 """冲突超驱测试"""
 import time
-
 import numpy as np
 import pytest
-
-from core.conflict_supersession import ConflictSupersession
+from core.conflict_supersession import ConflictSupersession, ConflictPair
 from memory.cognitive_memory import MemoryEntry
-
 
 @pytest.fixture
 def cs():

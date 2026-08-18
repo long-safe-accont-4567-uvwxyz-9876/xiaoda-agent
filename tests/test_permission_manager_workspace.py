@@ -5,7 +5,7 @@ import sys
 import pytest
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
-from security.permission_manager import AuditEntry, PermissionManager
+from security.permission_manager import PermissionManager, AuditEntry
 
 
 @pytest.fixture

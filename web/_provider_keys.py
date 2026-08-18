@@ -12,8 +12,8 @@ ROUTE_EDITABLE_FIELDS 常量抽到本模块, 该模块仅依赖 config, 不依�
 from __future__ import annotations
 
 from pathlib import Path
-
 from loguru import logger
+
 
 # 路由表可编辑字段 (供 web.routers.models / web.agent_registry 等使用)
 ROUTE_EDITABLE_FIELDS = {"model", "client", "max_tokens", "thinking", "timeout"}
@@ -66,7 +66,7 @@ def _decode_key(encoded: str) -> str | None:
     # 1. 优先尝试 credential_vault 解密（识别 enc:v1: / enc:v2:dpapi: 前缀）
     if isinstance(encoded, str) and encoded.startswith(("enc:v1:", "enc:v2:dpapi:")):
         try:
-            from security.credential_vault import DecryptionError, decrypt
+            from security.credential_vault import decrypt, DecryptionError
             try:
                 return decrypt(encoded)
             except DecryptionError:

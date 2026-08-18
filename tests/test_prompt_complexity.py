@@ -249,7 +249,9 @@ async def test_size_independence():
       2. 验证复杂度分差异显著
       3. 验证结构广度/LOC 比率不同
     """
-    from memory.prompt_complexity import PromptComplexityScore, parse_prompt_spec
+    from memory.prompt_complexity import (
+        parse_prompt_spec, PromptComplexityScore
+    )
 
     print("\n=== T3: 大小独立性验证 ===")
 
@@ -341,9 +343,7 @@ async def test_hotspot_identification_and_regression():
     3. 回归: 验证现有功能未被破坏
     """
     from memory.prompt_complexity import (
-        analyze_prompt_components,
-        check_complexity_budget,
-        compute_prompt_hash,
+        analyze_prompt_components, check_complexity_budget, compute_prompt_hash,
     )
 
     print("\n=== T4: 复杂度热点识别 + 回归测试 ===")
@@ -480,12 +480,12 @@ async def test_scene_complexity_alignment():
       5. 结构化数据 (Inversion/Concentration/Mismatch) 字段正确
     """
     from memory.prompt_complexity import (
-        Inversion,
-        SceneComplexityAlignment,
-        analyze_scene_complexity_alignment,
         compute_module_complexity_map,
-        generate_alignment_report,
+        analyze_scene_complexity_alignment,
         recommend_priority_adjustment,
+        generate_alignment_report,
+        SceneComplexityAlignment,
+        Inversion,
     )
 
     print("\n=== T5: 场景排序 × 复杂度对齐分析 ===")

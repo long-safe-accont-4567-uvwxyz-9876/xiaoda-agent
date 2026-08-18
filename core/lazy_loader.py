@@ -2,9 +2,8 @@
 
 冷启动优化: 启动时只初始化核心组件, 非核心组件按需加载。
 """
-import importlib
 from typing import Any
-
+import importlib
 from loguru import logger
 
 

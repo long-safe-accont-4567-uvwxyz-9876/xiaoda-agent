@@ -1,4 +1,6 @@
 """概念图管理器单元测试"""
+import asyncio
+import json
 
 import aiosqlite
 import pytest

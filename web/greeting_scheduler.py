@@ -8,6 +8,7 @@
   被拦截的 fixed/random 问候在 DND 结束后 10 分钟内补发一次
 """
 from __future__ import annotations
+from typing import Any, ClassVar
 
 import asyncio
 import json
@@ -15,11 +16,9 @@ import os
 import random
 import time
 from datetime import datetime
-from typing import Any, ClassVar
 from zoneinfo import ZoneInfo
 
 from loguru import logger
-
 from utils.llm_cleanup import strip_thinking as _strip_thinking
 
 

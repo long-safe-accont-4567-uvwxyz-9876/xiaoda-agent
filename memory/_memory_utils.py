@@ -3,11 +3,10 @@
 memory_manager.py 通过 `from memory._memory_utils import ...` 重新导出这些名称，
 以保持 `from memory.memory_manager import X` 的向后兼容。
 """
+from typing import ClassVar
 import asyncio
 import re
 import time
-from typing import ClassVar
-
 from loguru import logger
 
 from config import get_agent_display_name

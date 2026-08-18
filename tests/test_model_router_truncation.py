@@ -174,7 +174,7 @@ async def test_finish_reason_detection_stop():
     # 验证：finish_reason="stop" 时只调用 1 次就 break
     assert call_count["continuation"] == 1, \
         f"finish_reason=stop 时应只调用 1 次 continuation，实际 {call_count['continuation']}"
-    print("✅ Task 1.2 验证通过：finish_reason=stop 时只调用 1 次就 break")
+    print(f"✅ Task 1.2 验证通过：finish_reason=stop 时只调用 1 次就 break")
 
 
 @pytest.mark.asyncio

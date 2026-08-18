@@ -1,9 +1,7 @@
 """子代理 dispatch 事件发射 + 信念反馈测试。"""
-from unittest.mock import AsyncMock, MagicMock
-
 import pytest
-
-from core.event_bus import AgentEvent, AgentEventType, event_bus
+from unittest.mock import AsyncMock, MagicMock, patch
+from core.event_bus import event_bus, AgentEvent, AgentEventType
 
 
 class FakeUser:

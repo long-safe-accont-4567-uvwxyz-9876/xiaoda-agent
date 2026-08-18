@@ -1,4 +1,5 @@
 """G7: dream scheduler 应调用 consolidate_from_db 而非 consolidate."""
+import asyncio
 from unittest.mock import AsyncMock, MagicMock, patch
 
 from core.dream_consolidation import DreamConsolidator

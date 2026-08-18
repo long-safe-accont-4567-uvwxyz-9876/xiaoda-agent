@@ -12,6 +12,7 @@
     - login 端点使用独立严格桶（RATE_LIMIT_LOGIN，默认 10/min），
       且可信主机（含回环）不豁免 login 限流
 """
+import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 

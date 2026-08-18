@@ -4,11 +4,12 @@ BUG: _summarize_after_tools 方法中使用了 get_temperature 但未导入
 NameError 被 except (TimeoutError, Exception) 静默吞掉
 导致 LLM 总结功能永远不执行 总是返回降级内容
 """
-from pathlib import Path
-from unittest.mock import AsyncMock, MagicMock
+import asyncio
+from unittest.mock import MagicMock, AsyncMock
 
 import pytest
 
+from pathlib import Path
 PROJECT_ROOT = Path(__file__).parent.parent
 if str(PROJECT_ROOT) not in __import__("sys").path:
     __import__("sys").path.insert(0, str(PROJECT_ROOT))

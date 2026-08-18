@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
-import json
 from collections.abc import Sequence
+import json
 from math import ceil, log2
 from pathlib import Path
 from time import perf_counter

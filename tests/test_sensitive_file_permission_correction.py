@@ -1,5 +1,10 @@
 """TDD 测试：存量敏感文件权限统一校正 0600（VULN-27）。"""
+import os
 import stat
+
+import pytest
+
+from pathlib import Path
 
 
 def test_correct_sensitive_file_permissions(tmp_path, monkeypatch):
@@ -11,6 +16,7 @@ def test_correct_sensitive_file_permissions(tmp_path, monkeypatch):
     assert stat.S_IMODE(sensitive.stat().st_mode) == 0o644
 
     # 调用校正函数
+    from agent import _correct_sensitive_file_permissions
     # monkeypatch 敏感文件列表，只测一个
     monkeypatch.setattr(
         "agent._correct_sensitive_file_permissions",

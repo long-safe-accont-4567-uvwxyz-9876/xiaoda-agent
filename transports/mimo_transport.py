@@ -1,11 +1,9 @@
 """MiMo Transport - 适配小米 MiMo API"""
-import asyncio
 import os
-
+import asyncio
 from openai import AsyncOpenAI
-
+from transports.base import ProviderTransport, TransportResponse, DEFAULT_MAX_TOKENS
 from config import get_base_url_for_provider
-from transports.base import DEFAULT_MAX_TOKENS, ProviderTransport, TransportResponse
 
 
 class MiMoTransport(ProviderTransport):

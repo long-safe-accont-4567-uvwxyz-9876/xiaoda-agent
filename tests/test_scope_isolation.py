@@ -1,10 +1,10 @@
 """Scope 三级隔离测试：user_id/session_id/agent_id 过滤逻辑"""
-import sys
+import asyncio
 import time
+import pytest
 from pathlib import Path
 
-import pytest
-
+import sys
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from memory.scope import Scope
@@ -64,6 +64,7 @@ class TestScopeDBIntegration:
         db = DatabaseManager(db_path)
         await db.init()
         # 插入不同 scope 的记忆 + 同步写入 FTS 索引
+        import time
         now = time.time()
         test_data = [
             (now, "alice的记忆", "alice", "xiaoli", 0),

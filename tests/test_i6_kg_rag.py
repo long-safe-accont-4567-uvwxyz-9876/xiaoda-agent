@@ -29,7 +29,6 @@ sys.path.insert(0, str(ROOT))
 async def test_search_memories_by_entities_hit():
     """按实体反查应命中带该实体标签的记忆"""
     import aiosqlite
-
     from db.db_memory import MemoryDB
     with tempfile.NamedTemporaryFile(suffix=".db", delete=False) as f:
         path = f.name
@@ -71,7 +70,6 @@ async def test_search_memories_by_entities_hit():
 async def test_search_memories_by_entities_empty():
     """空实体列表应返回空结果"""
     import aiosqlite
-
     from db.db_memory import MemoryDB
     with tempfile.NamedTemporaryFile(suffix=".db", delete=False) as f:
         path = f.name
@@ -90,7 +88,6 @@ async def test_search_memories_by_entities_empty():
 async def test_search_memories_by_entities_excludes_archived():
     """已归档记忆不应被召回"""
     import aiosqlite
-
     from db.db_memory import MemoryDB
     with tempfile.NamedTemporaryFile(suffix=".db", delete=False) as f:
         path = f.name
@@ -346,9 +343,8 @@ class TestHyDEAndIntent:
     @pytest.mark.asyncio
     async def test_hyde_degrade_without_api(self):
         """无 API Key 时 HyDE 降级"""
-        import unittest.mock
-
         from memory.query_transform import QueryTransformer
+        import unittest.mock
         with unittest.mock.patch.dict("os.environ", {}, clear=True):
             qt = QueryTransformer()
             assert not qt.available

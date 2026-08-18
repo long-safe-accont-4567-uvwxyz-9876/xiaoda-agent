@@ -5,18 +5,17 @@ SSRF 安全检查、Jina Reader 调用（mock httpx）。
 """
 import sys
 from pathlib import Path
-
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-import asyncio
 import unittest
+import asyncio
 from unittest.mock import AsyncMock, MagicMock, patch
 
 from tools.web_browse_enhanced import (
-    _extract_title_from_markdown,
-    _extract_via_jina,
-    _is_private_ip_async,
     _route_platform,
+    _extract_title_from_markdown,
+    _is_private_ip_async,
+    _extract_via_jina,
     web_browse_enhanced,
 )
 

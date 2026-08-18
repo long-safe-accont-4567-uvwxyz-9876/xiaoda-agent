@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """小妲 Agent 全功能集成测试"""
 import asyncio
-import os
 import sys
+import os
 from pathlib import Path
 
 # 项目根目录 (基于当前文件位置计算，避免硬编码绝对路径)
@@ -11,7 +11,6 @@ sys.path.insert(0, str(PROJECT_ROOT))
 os.chdir(PROJECT_ROOT)
 
 from dotenv import load_dotenv
-
 load_dotenv()
 
 results = []
@@ -144,7 +143,7 @@ async def main():
 
     # ━━━ 8. 权限管理器 ━━━
     print("\n━━━ 8. 权限管理器 ━━━")
-    from security.permission_manager import PermissionMode, get_permission_manager
+    from security.permission_manager import get_permission_manager, PermissionMode
     try:
         pm = get_permission_manager()
         record("默认 BYPASS", pm.mode == PermissionMode.BYPASS)
@@ -159,7 +158,7 @@ async def main():
 
     # ━━━ 9. Hook 系统 ━━━
     print("\n━━━ 9. Hook 系统 ━━━")
-    from hooks import BaseHook, HookResult, HookType, get_hook_engine
+    from hooks import HookType, HookResult, BaseHook, get_hook_engine
     try:
         engine = get_hook_engine()
         expected = {"pre_tool_use", "post_tool_use", "post_tool_use_failure",
@@ -212,7 +211,7 @@ async def main():
 
     # ━━━ 11. 会话存储 ━━━
     print("\n━━━ 11. 会话存储 ━━━")
-    from db.session_store import SessionSummaryEntry, fold_session_summary, summary_to_session_info
+    from db.session_store import fold_session_summary, summary_to_session_info, SessionSummaryEntry
     try:
         entry = SessionSummaryEntry(session_id="test-123", mtime=0, data={})
         new_entry = fold_session_summary(
@@ -243,8 +242,8 @@ async def main():
 
     # ━━━ 13. 安全过滤 ━━━
     print("\n━━━ 13. 安全过滤 ━━━")
-    from security.permission_manager import get_permission_manager
     from security.security import SecurityFilter
+    from security.permission_manager import get_permission_manager
     try:
         sf = SecurityFilter()
         pm = get_permission_manager()
@@ -258,7 +257,7 @@ async def main():
 
     # ━━━ 14. 沙箱 ━━━
     print("\n━━━ 14. 沙箱 ━━━")
-    from security.sandbox_config import DEFAULT_SANDBOX, check_domain_allowed
+    from security.sandbox_config import check_domain_allowed, DEFAULT_SANDBOX
     try:
         record("不限制域名", len(DEFAULT_SANDBOX.network.allowed_domains) == 0)
         record("不限制端口", len(DEFAULT_SANDBOX.network.allowed_ports) == 0)
@@ -270,7 +269,7 @@ async def main():
 
     # ━━━ 15. 进程内 MCP ━━━
     print("\n━━━ 15. 进程内 MCP ━━━")
-    from tool_engine.mcp_client import MCPManager, SdkMcpServer, create_sdk_mcp_server, sdk_tool
+    from tool_engine.mcp_client import create_sdk_mcp_server, sdk_tool, SdkMcpServer, MCPManager
     try:
         @sdk_tool("test_tool", "测试工具", {"query": str})
         async def test_handler(args):

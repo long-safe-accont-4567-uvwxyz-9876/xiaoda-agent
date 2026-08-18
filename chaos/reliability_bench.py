@@ -38,9 +38,10 @@ from loguru import logger
 # 从 chaos 内部导入，断开对 tests/ 的生产依赖
 from chaos._fault_types import (
     FaultConfig,
-    FaultType,
     SimpleFaultInjectingLLMClient,
+    FaultType,
 )
+
 
 # ============================================================
 # 数据结构

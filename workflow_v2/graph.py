@@ -1,9 +1,7 @@
 from __future__ import annotations
-
 import hashlib
 import json
-
-from workflow_v2.models import EdgeSpec, NodeSpec, NodeType
+from workflow_v2.models import NodeSpec, EdgeSpec, NodeType
 
 
 class GraphError(Exception):

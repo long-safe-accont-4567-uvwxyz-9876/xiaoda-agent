@@ -18,6 +18,7 @@ from collections import deque
 from dataclasses import dataclass
 
 
+
 @dataclass
 class SLOTarget:
     """SLO 目标"""

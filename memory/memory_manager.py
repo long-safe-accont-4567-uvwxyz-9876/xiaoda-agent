@@ -1,32 +1,31 @@
 from typing import Any
-
 from loguru import logger
 
-from config import get_agent_display_name  # noqa: F401
 from db.database import DatabaseManager
 from db.db_memory import MemoryDB
-
 # FTS5 分词工具从 db.fts_utils 导入 (打破 db <-> memory 循环); 这里 re-export
 # 保持向后兼容 (其他模块仍可 `from memory.memory_manager import _tokenize_for_fts`)
-from db.fts_utils import _tokenize_for_fts  # noqa: F401
-from memory._memory_encoder import MemoryEncoder
-from memory._memory_maintenance import MemoryMaintenance
-
-# 以下 _memory_utils re-export 仅保留有真实外部消费者（`from memory.memory_manager import X`）的符号。
-from memory._memory_utils import (  # noqa: F401
-    _normalize_for_dedupe,
-    _normalize_score,
-    _parse_temporal_query,
-    reciprocal_rank_fusion,
-    validate_memory_content,
-)
-from memory._retrieval_engine import RetrievalEngine
-
-from .fsrs_model import FSRSModel, estimate_initial_difficulty  # noqa: F401
+from db.fts_utils import _tokenize_for_fts
+from .vector_store import VectorStore
+from .fsrs_model import FSRSModel, estimate_initial_difficulty
 from .memory_distiller import MemoryDistiller
 from .query_cache import QueryCache
 from .retrieval_assessor import RetrievalAssessor
-from .vector_store import VectorStore
+from config import get_agent_display_name
+
+
+# 以下 _memory_utils re-export 仅保留有真实外部消费者（`from memory.memory_manager import X`）的符号。
+from memory._memory_utils import (
+    _parse_temporal_query,
+    reciprocal_rank_fusion,
+    _normalize_score,
+    validate_memory_content,
+    _normalize_for_dedupe,
+)
+
+from memory._retrieval_engine import RetrievalEngine
+from memory._memory_encoder import MemoryEncoder
+from memory._memory_maintenance import MemoryMaintenance
 
 
 class MemoryManager:
@@ -83,10 +82,10 @@ class MemoryManager:
         self.concept_graph = None
         self.spreading_engine = None
         try:
-            from db.db_concept import ConceptDB
             from memory.concept_graph import ConceptGraph
-            from memory.key_extractor import KeyExtractor
             from memory.spreading_activation import SpreadingActivationEngine
+            from memory.key_extractor import KeyExtractor
+            from db.db_concept import ConceptDB
             if hasattr(self, 'db') and self.db and hasattr(self.db, '_conn') and self.db._conn is not None:
                 concept_db = ConceptDB(self.db._conn)
                 self._concept_db = concept_db

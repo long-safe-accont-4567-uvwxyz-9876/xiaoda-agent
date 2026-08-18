@@ -25,7 +25,9 @@ def _dev_mode_for_smoke(tmp_path, monkeypatch):
 
 
 def test_core_imports():
-    pass
+    from agent_core import RequestContext
+    from agent_context import AgentContext
+    from config import DATA_DIR
 
 def test_request_context():
     from agent_core import RequestContext
@@ -44,14 +46,10 @@ def test_agent_context():
     assert msgs[-1]["role"] == "user"
 
 def test_tool_registry():
+    from tool_engine.tool_registry import (register_tool, to_openai_tools,
+                                            clear_tools, get_all_tool_dicts,
+                                            invalidate_schema_cache)
     import tool_engine.tool_registry as _tr
-    from tool_engine.tool_registry import (
-        clear_tools,
-        get_all_tool_dicts,
-        invalidate_schema_cache,
-        register_tool,
-        to_openai_tools,
-    )
     # 保存现有工具注册表，测试结束后恢复。
     # 原 clear_tools() 会清空全局 _tools，污染后续依赖工具注册的测试
     # （如 test_tool_executor_workspace::TestExecuteIntegration 找不到 read_file）。
@@ -69,14 +67,10 @@ def test_tool_registry():
         invalidate_schema_cache()
 
 def test_disabled_tool_filtered():
+    from tool_engine.tool_registry import (register_tool, to_openai_tools,
+                                            clear_tools, get_all_tool_dicts,
+                                            invalidate_schema_cache)
     import tool_engine.tool_registry as _tr
-    from tool_engine.tool_registry import (
-        clear_tools,
-        get_all_tool_dicts,
-        invalidate_schema_cache,
-        register_tool,
-        to_openai_tools,
-    )
     saved = get_all_tool_dicts()
     try:
         clear_tools()

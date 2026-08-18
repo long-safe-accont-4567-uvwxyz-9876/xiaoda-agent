@@ -1,10 +1,10 @@
 # tests/test_intervention_loop.py
-
 import pytest
-
-from core.behavioral_direction import DirectionRegistry, DirectionVector
+import asyncio
+import time
 from core.behavioral_signal import BehavioralSignalStream
-from core.intervention_loop import InterventionLoop, InterventionRule
+from core.behavioral_direction import DirectionVector, DirectionRegistry
+from core.intervention_loop import InterventionRule, InterventionLoop
 
 
 @pytest.mark.asyncio

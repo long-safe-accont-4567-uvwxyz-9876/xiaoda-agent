@@ -5,7 +5,7 @@
 """
 import pytest
 
-from emotion.emotion_enum import TTS_STYLE_MAP, Emotion
+from emotion.emotion_enum import Emotion, TTS_STYLE_MAP
 
 
 class TestTtsStyleRefinement:

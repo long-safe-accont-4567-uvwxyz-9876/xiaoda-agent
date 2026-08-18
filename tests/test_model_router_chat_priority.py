@@ -96,8 +96,8 @@ async def test_chat_cancels_active_background_llm_and_enters_provider(monkeypatc
 
 @pytest.mark.asyncio
 async def test_profile_insight_uses_background_llm_route(monkeypatch):
-    import core.user_profile_learner as learner_module
     from agent_core.message_processor import MessageProcessorMixin
+    import core.user_profile_learner as learner_module
 
     learner = MagicMock()
     learner.build_insight_prompt.return_value = "extract profile"

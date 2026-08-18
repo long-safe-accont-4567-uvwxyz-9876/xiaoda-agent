@@ -15,6 +15,8 @@ import sys
 from pathlib import Path
 from unittest.mock import patch
 
+import pytest
+
 # 将项目根目录加入 sys.path
 _PROJECT_ROOT = Path(__file__).resolve().parent.parent
 if str(_PROJECT_ROOT) not in sys.path:
@@ -22,6 +24,7 @@ if str(_PROJECT_ROOT) not in sys.path:
 
 import security.credential_vault as cv
 from security.credential_vault import (
+    DecryptionError,
     decrypt,
     encrypt,
     is_encrypted,

@@ -121,7 +121,6 @@ def test_restore_chat_model_fallback_preserves_route_table(monkeypatch):
 
     # 重新导入 server（确保使用 monkeypatched ROUTE_TABLE）
     import importlib
-
     import web.server as server_mod
     importlib.reload(server_mod)
 
@@ -178,7 +177,6 @@ def test_restore_chat_model_fallback_does_not_persist_mimo(monkeypatch):
     fake_core = SimpleNamespace(router=_FakeRouter())
 
     import importlib
-
     import web.server as server_mod
     importlib.reload(server_mod)
 
@@ -198,9 +196,9 @@ def test_set_chat_model_persist_catches_generic_exception(monkeypatch):
     导致用户切换的模型在重启后"神秘回退"。
     新实现：回滚所有 sync task + DEFAULT_PROVIDER，抛 LLMError。
     """
-    import config as _config_mod
     import model_router as _mr_module
     from core.app_exception import LLMError
+    import config as _config_mod
 
     # 模拟 config_service 抛 RuntimeError（在 set_chat_model 末尾被调用）
     class _BombCfg:

@@ -15,14 +15,10 @@ import json
 from dataclasses import dataclass, field
 from pathlib import Path
 from types import SimpleNamespace
-from typing import Any
+from typing import Any, Protocol, runtime_checkable
 
 from loguru import logger
 
-from agent_core.tool_call_extractors import (
-    DsmlExtractor,
-    StandardExtractor,
-)
 from config import get_agent_display_name
 from core.message import AgentMessage
 from emotion.emoji_config import get_status_msg
@@ -34,7 +30,15 @@ from tool_engine.tool_registry import to_openai_tools
 from tool_engine.tool_repair import ToolCallRepair
 from utils.credential_pool import CredentialPool
 from utils.llm_cleanup import deduplicate_multi_reply
-from utils.text_utils import humanize, strip_dsml, strip_reasoning
+from utils.text_utils import has_dsml_tool_calls, humanize, parse_dsml_tool_calls, strip_dsml, strip_reasoning
+
+from agent_core.tool_call_extractors import (
+    ExtractedToolCall,
+    ResourceBackend,
+    StandardExtractor,
+    DsmlExtractor,
+)
+
 
 # J-Space Hook: 干预闭环
 try:

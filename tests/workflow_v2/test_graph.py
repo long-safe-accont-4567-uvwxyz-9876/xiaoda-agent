@@ -1,7 +1,6 @@
 import pytest
-
-from workflow_v2.graph import GraphError, compute_content_hash, validate_graph
-from workflow_v2.models import EdgeSpec, NodeSpec, NodeType
+from workflow_v2.models import NodeSpec, EdgeSpec, NodeType
+from workflow_v2.graph import validate_graph, compute_content_hash, GraphError
 
 
 def _n(nid, ntype=NodeType.TOOL):

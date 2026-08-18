@@ -8,9 +8,10 @@ from __future__ import annotations
 
 import asyncio
 
+import pytest
 from loguru import logger
 
-from core.background_tasks import _bg_tasks, _spawn
+from core.background_tasks import _spawn, _bg_tasks
 
 
 def _attach_warning_sink() -> tuple[list[str], int]:

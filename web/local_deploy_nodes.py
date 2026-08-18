@@ -19,13 +19,8 @@ from loguru import logger
 
 # 合法后端值（下沉到 node_registry，re-export 保持兼容）
 from web.node_registry import (  # noqa: E402,F401
-    _BACKENDS,
-    _NODE_MAP,
-    NODES,
-    get_backend,
-    get_local_model,
-    set_backend,
-    valid_backend,
+    _BACKENDS, NODES, _NODE_MAP,
+    valid_backend, get_backend, set_backend, get_local_model,
 )
 
 

@@ -24,6 +24,7 @@ import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
+
 # 模拟本机回环客户端 (host, port) — 与原 web/server.py 安全约束一致
 # httpx ASGITransport 接受 client 参数指定请求来源
 _LOCALHOST_CLIENT = ("127.0.0.1", 50000)
@@ -37,8 +38,8 @@ def _make_app_with_metrics_router() -> FastAPI:
     的行为，便于在隔离环境中测试端点。
     """
     app = FastAPI()
-    from web.routers.auth import get_current_user
     from web.routers.metrics import router as metrics_router
+    from web.routers.auth import get_current_user
     app.include_router(metrics_router)
     # 本测试文件聚焦 metrics 指标内容与 localhost 访问控制，不测 token 认证
     # （认证由 test_metrics_auth.py 覆盖）。此处 override 掉认证依赖，

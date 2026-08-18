@@ -5,6 +5,7 @@
 websockets.connect(url, subprotocols=[token]) 传递 token。
 """
 import asyncio
+from unittest.mock import AsyncMock
 
 import cli_client
 

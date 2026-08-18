@@ -2,12 +2,11 @@
 
 测试 tools/skill_loader.py 的 SkillManifest 和 SkillLoader。
 """
+import pytest
 import tempfile
 from pathlib import Path
 
-import pytest
-
-from tools.skill_loader import SkillLoader, SkillManifest
+from tools.skill_loader import SkillManifest, SkillLoader
 
 
 class TestSkillManifest:

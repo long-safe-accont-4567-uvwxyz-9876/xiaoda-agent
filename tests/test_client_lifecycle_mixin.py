@@ -40,8 +40,8 @@ def test_model_router_inherits_mixin():
 
 def test_mixin_does_not_import_model_router():
     """防循环依赖：client_lifecycle 不得 import model_router"""
-
     import llm_gateway.client_lifecycle as mod
+    import sys as _sys
     assert "model_router" not in getattr(mod, "__dict__", {})
 
 
