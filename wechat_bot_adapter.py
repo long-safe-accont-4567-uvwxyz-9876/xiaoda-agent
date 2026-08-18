@@ -24,15 +24,13 @@ from typing import Any, Optional
 
 from loguru import logger
 
-from ilink_client import ILinkClient, SessionExpiredError, ILinkRetError
-
 from channel_adapter_base import (
     ChannelAdapterBase,
     clear_json_credentials,
     load_json_credentials,
     save_json_credentials,
 )
-
+from ilink_client import ILinkClient, ILinkRetError, SessionExpiredError
 
 # ============================================================================
 # 常量定义

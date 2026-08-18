@@ -22,15 +22,16 @@ LLM 按需搜索并加载完整工具定义, 避免上下文膨胀。
 - 优雅降级: embed 失败不影响 BM25 检索
 - 懒初始化: VectorIndex 首次 search 时才初始化 embed_client
 """
+import asyncio
 import math
 import os
 import re
-import asyncio
 import threading
 from collections import Counter
 from dataclasses import dataclass, field
-from loguru import logger
 from typing import Any
+
+from loguru import logger
 
 
 @dataclass

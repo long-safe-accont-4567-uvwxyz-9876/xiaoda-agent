@@ -141,7 +141,7 @@ def _launch_detached(cmd: list[str]) -> bool:
                 start_new_session=True,
             )
         return proc.poll() is None
-    except (OSError, subprocess.SubprocessError) as e:
+    except (OSError, subprocess.SubprocessError):
         logger.debug("cli_client.launch_detached_error", exc_info=True)
         return False
 

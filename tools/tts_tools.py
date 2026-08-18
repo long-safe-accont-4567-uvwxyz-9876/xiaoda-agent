@@ -8,8 +8,10 @@
 """
 
 import re
+
 from loguru import logger
-from tool_engine.tool_registry import register_tool, ToolResult, ToolPermission
+
+from tool_engine.tool_registry import ToolPermission, ToolResult, register_tool
 
 
 @register_tool(

@@ -14,14 +14,15 @@ import heapq
 import json
 import math
 import time
-from math import sqrt
 from collections import OrderedDict, defaultdict
 from collections.abc import Mapping
 from dataclasses import dataclass, field
-from utils.similarity import ratio as text_ratio
+from math import sqrt
 
 import networkx as nx
 from loguru import logger
+
+from utils.similarity import ratio as text_ratio
 
 
 class SpreadingActivationEngine:

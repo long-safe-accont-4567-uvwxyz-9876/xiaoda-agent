@@ -1,15 +1,17 @@
 """测试 atomic_write.py"""
 import sys
 from pathlib import Path
+
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-import unittest
-import os
 import json
-import tempfile
+import os
 import shutil
+import tempfile
+import unittest
 from pathlib import Path
-from utils.atomic_write import atomic_write, atomic_json_write
+
+from utils.atomic_write import atomic_json_write, atomic_write
 
 
 class TestAtomicWrite(unittest.TestCase):

@@ -19,8 +19,6 @@ import sys
 import time
 from pathlib import Path
 
-import numpy as np
-
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
@@ -125,7 +123,7 @@ def main() -> int:
     e2e = short_lat + long_lat + search_lat
     if e2e:
         mean = statistics.mean(e2e)
-        print(f"\n=== 汇总 ===", flush=True)
+        print("\n=== 汇总 ===", flush=True)
         print(f"[端到端 embed+search] mean={mean:.1f}ms "
               f"p95={sorted(e2e)[int(len(e2e)*0.95)]:.1f}ms", flush=True)
         if short_lat and long_lat:

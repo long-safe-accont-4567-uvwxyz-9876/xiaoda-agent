@@ -11,8 +11,8 @@
 from __future__ import annotations
 
 import asyncio
-import time
 import threading
+import time
 
 from loguru import logger
 

@@ -3,11 +3,11 @@
 修复目标：MCPManager.start_all 对静态配置的 command 直接 client.start()，
 绕过 _allowed_stdio_commands 白名单校验，装一个市场 MCP 即等于允许任意命令执行。
 """
-import pytest
 from unittest.mock import AsyncMock, patch
 
-from tool_engine.mcp_client import MCPManager, MCPTransportConfig
+import pytest
 
+from tool_engine.mcp_client import MCPManager, MCPTransportConfig
 
 ALLOWED = ["npx", "uvx"]
 

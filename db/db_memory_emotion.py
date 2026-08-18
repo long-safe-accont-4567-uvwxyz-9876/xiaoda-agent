@@ -1,13 +1,12 @@
 """MemoryDB 的情绪检索 + 定时回忆笔记 + FSRS 方法组 —— 拆分自 db/db_memory.py。"""
 from __future__ import annotations
 
-from typing import Any
-
 import time
+from typing import Any
 
 from loguru import logger
 
-from db.db_memory_utils import _sql_placeholders, _scope_where
+from db.db_memory_utils import _scope_where, _sql_placeholders
 
 
 class EmotionRecallMixin:

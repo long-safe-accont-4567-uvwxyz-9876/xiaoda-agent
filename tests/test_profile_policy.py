@@ -1,5 +1,6 @@
-import pytest
 import math
+
+import pytest
 
 from db.database import DatabaseManager
 from memory.profile_policy import ProfileCandidate, ProfilePolicy

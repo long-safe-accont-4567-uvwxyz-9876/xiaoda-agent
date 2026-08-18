@@ -1,10 +1,6 @@
-import asyncio
-import time
-from typing import Any
 
 import aiosqlite
 from loguru import logger
-
 
 # FTS 同步失败计数（模块级，便于外部观测/对账）。主表写入成功后 FTS 索引同步
 # 失败会导致记忆"查不到"，此前仅 debug 静默吞掉，无任何告警与计数。
@@ -22,19 +18,22 @@ def _record_fts_sync_failure(event: str, error: Exception) -> None:
     _fts_sync_failures += 1
     logger.warning(event, error=str(error), fts_sync_failures_total=_fts_sync_failures)
 
-from db.db_memory_utils import (  # noqa: E402,F401
-    compute_missing_vec_ids, _parse_entity_list, _sql_placeholders,
-    _entity_like_conditions, _rows_to_entity_results, _scope_where,
-    _rows_to_fts_results,
-)
 from db.db_memory_child import ChildChunkMixin
+from db.db_memory_distill import DistillPortraitMixin
+from db.db_memory_emotion import EmotionRecallMixin
 from db.db_memory_entity import EntityMixin
 from db.db_memory_episodic import EpisodicMixin
-from db.db_memory_search import SearchMixin
-from db.db_memory_distill import DistillPortraitMixin
 from db.db_memory_lifecycle import LifecycleMixin
-from db.db_memory_emotion import EmotionRecallMixin
-
+from db.db_memory_search import SearchMixin
+from db.db_memory_utils import (  # noqa: E402,F401
+    _entity_like_conditions,
+    _parse_entity_list,
+    _rows_to_entity_results,
+    _rows_to_fts_results,
+    _scope_where,
+    _sql_placeholders,
+    compute_missing_vec_ids,
+)
 
 
 class MemoryDB(ChildChunkMixin, EntityMixin, EpisodicMixin, SearchMixin, DistillPortraitMixin, LifecycleMixin, EmotionRecallMixin):

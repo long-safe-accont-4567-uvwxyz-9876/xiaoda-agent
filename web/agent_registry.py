@@ -7,18 +7,18 @@
   因为 SubAgent._filtered_tools() 每次对话时实时计算）
 """
 from __future__ import annotations
-from typing import Any, ClassVar
 
 import json
 import shutil
 import sys
 import time
 from pathlib import Path
+from typing import Any, ClassVar
 
 from loguru import logger
 
 # frozen 模式下使用用户目录（~/.ai-agent/data/config/agents/），避免写入 _MEIPASS 只读目录
-from config import AGENTS_CONFIG_DIR, DEFAULT_PROVIDER, MEDIA_DIR, _FALLBACK_BASE, get_agent_display_name
+from config import _FALLBACK_BASE, AGENTS_CONFIG_DIR, DEFAULT_PROVIDER, MEDIA_DIR, get_agent_display_name
 
 
 def _resolve_personality_path(pf: str) -> str | None:
@@ -56,6 +56,7 @@ def _resolve_personality_path(pf: str) -> str | None:
             return str(c)
     return None
 import config as _config
+
 AGENTS_DIR = AGENTS_CONFIG_DIR
 BUILTIN_AGENTS = {"xiaoli", "xiaolang", "xiaolian", "xiaoke"}
 
@@ -618,7 +619,7 @@ class AgentRegistry:
         # 下次读取返回空 → 前端 personality.value="" → 再次保存又写空 → 循环。
         # 改为非空才写入，杜绝误清空。
         if personality_text is not None and personality_text.strip():
-            from config import reverse_agent_name_replacements, WORKSPACE_DIR
+            from config import WORKSPACE_DIR, reverse_agent_name_replacements
             personality_text = reverse_agent_name_replacements(personality_text)
             soul_path = WORKSPACE_DIR / "SOUL.md"
             soul_path.write_text(personality_text, encoding="utf-8-sig")
@@ -836,8 +837,8 @@ class AgentRegistry:
             return base_url, api_key_env
 
         # 自定义 provider → 从 config_service 读取
-        from web.config_service import get_config_service
         from web._provider_keys import load_provider_key
+        from web.config_service import get_config_service
         cfg = get_config_service()
         record = cfg.get(f"models.providers.{provider}")
         if not record:

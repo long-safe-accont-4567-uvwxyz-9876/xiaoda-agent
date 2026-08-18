@@ -182,29 +182,47 @@ class NpuEmbeddingProvider:
                "--quiet"]
         log_path = Path(__file__).resolve().parent.parent / "logs" / "npu_embed_runner.log"
         log_path.parent.mkdir(parents=True, exist_ok=True)
-        self._stderr_f = open(log_path, "ab")
-        self._proc = subprocess.Popen(
-            cmd,
-            stdin=subprocess.PIPE,
-            stdout=subprocess.PIPE,
-            stderr=self._stderr_f,
-        )
-        # 逐块读 stdout 直到 magic，之前内容（VIPLite 版本横幅）全部丢弃；
-        # 加超时兜底：runner 初始化挂起（如 NPU 设备忙/驱动异常）时不阻塞服务
-        buf = b""
-        deadline = time.monotonic() + self._timeout_s
-        while True:
-            chunk = self._proc.stdout.read1(4096)  # type: ignore[union-attr]
-            if not chunk:
-                raise RuntimeError("runner exited before magic")
-            buf += chunk
-            idx = buf.find(MAGIC)
-            if idx >= 0:
-                self._pending = buf[idx + len(MAGIC):]
-                return
-            if time.monotonic() > deadline:
-                raise TimeoutError(
-                    f"runner magic timeout after {self._timeout_s:.0f}s")
+        try:
+            # stderr 重定向到日志文件；句柄需随子进程存活（其整个生命周期都在写入），
+            # 不能使用 with，故在失败路径与 close()/restart() 中显式回收
+            self._stderr_f = open(log_path, "ab")  # noqa: SIM115
+            self._proc = subprocess.Popen(
+                cmd,
+                stdin=subprocess.PIPE,
+                stdout=subprocess.PIPE,
+                stderr=self._stderr_f,
+            )
+            # 逐块读 stdout 直到 magic，之前内容（VIPLite 版本横幅）全部丢弃；
+            # 加超时兜底：runner 初始化挂起（如 NPU 设备忙/驱动异常）时不阻塞服务
+            buf = b""
+            deadline = time.monotonic() + self._timeout_s
+            while True:
+                chunk = self._proc.stdout.read1(4096)  # type: ignore[union-attr]
+                if not chunk:
+                    raise RuntimeError("runner exited before magic")
+                buf += chunk
+                idx = buf.find(MAGIC)
+                if idx >= 0:
+                    self._pending = buf[idx + len(MAGIC):]
+                    return
+                if time.monotonic() > deadline:
+                    raise TimeoutError(
+                        f"runner magic timeout after {self._timeout_s:.0f}s")
+        except Exception:  # noqa: BLE001
+            # 启动/握手失败（Popen 抛错或 magic 超时）时回收句柄与子进程，避免泄漏；
+            # 正常路径由 close() / restart() 负责关闭
+            try:
+                if self._proc:
+                    self._proc.kill()
+                    self._proc.wait(timeout=3)
+            except Exception:  # noqa: BLE001
+                pass
+            if self._stderr_f:
+                self._stderr_f.close()
+                self._stderr_f = None
+            self._proc = None
+            self._pending = b""
+            raise
         # (超时抛出后由 load() 捕获，Adaptive 层探测已先排除大部分无 NPU 场景)
 
     # ── 推理 ──────────────────────────────────────────────

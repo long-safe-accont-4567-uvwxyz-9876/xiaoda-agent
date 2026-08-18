@@ -3,9 +3,10 @@
 Test → Negotiate → Recover 三步自愈
 确保自愈后健康度不降, 可回滚。
 """
-from typing import Any
-from loguru import logger
 from dataclasses import dataclass
+from typing import Any
+
+from loguru import logger
 
 
 @dataclass

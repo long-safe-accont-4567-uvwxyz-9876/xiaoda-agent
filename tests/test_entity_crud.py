@@ -1,9 +1,9 @@
 """memory_entities + entity_memory_links 表 CRUD 测试"""
-import asyncio
-import time
-import pytest
 import sys
+import time
 from pathlib import Path
+
+import pytest
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 

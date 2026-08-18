@@ -71,3 +71,5 @@ xiaoda_agent.egg-info/
 # 运行时缓存（向量暴力索引 / 上下文压缩缓存）
 # 通用备份文件
 db/xp_state.json
+.scan_reports/
+.workbuddy/

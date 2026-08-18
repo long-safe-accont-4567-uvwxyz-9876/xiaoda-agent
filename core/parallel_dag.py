@@ -17,13 +17,12 @@ from __future__ import annotations
 
 import asyncio
 import time
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any
-from collections.abc import Callable
 
 from loguru import logger
-
 
 
 class NodeState(str, Enum):

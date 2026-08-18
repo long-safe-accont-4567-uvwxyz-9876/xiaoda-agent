@@ -13,7 +13,7 @@ from typing import Any
 
 from loguru import logger
 
-from tool_engine.tool_registry import register_tool, ToolPermission, ToolResult
+from tool_engine.tool_registry import ToolPermission, ToolResult, register_tool
 
 # 模块级 core 单例（由 core/bootstrap.py init 调用 bind 注入）
 _core: Any = None

@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from unittest.mock import patch
 
-from qq_bot_adapter import _parse_master_ids, _build_user_input
+from qq_bot_adapter import _build_user_input, _parse_master_ids
 
 
 def test_parse_master_ids_comma_separated():

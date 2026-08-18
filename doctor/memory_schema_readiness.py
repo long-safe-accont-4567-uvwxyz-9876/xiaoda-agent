@@ -6,7 +6,6 @@ import sqlite3
 from dataclasses import dataclass
 from pathlib import Path
 
-
 _REQUIRED_COLUMNS: dict[str, tuple[str, ...]] = {
     "episodic_memories": (
         "entities",

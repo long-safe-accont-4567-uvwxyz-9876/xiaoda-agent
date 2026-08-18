@@ -1,11 +1,13 @@
-import os
 import asyncio
+import os
 import time
 from collections import OrderedDict
 from typing import Any
+
 from loguru import logger
-from tool_engine.tool_registry import register_tool, ToolPermission, ToolResult
+
 from security.ssrf_guard import validate_url as _ssrf_validate_url
+from tool_engine.tool_registry import ToolPermission, ToolResult, register_tool
 
 # 搜索结果缓存：5分钟TTL + LRU 上限
 _search_cache: "OrderedDict[str, tuple[float, Any]]" = OrderedDict()
@@ -49,8 +51,9 @@ def _tavily_available() -> bool:
 
 def _bing_search_sync(query: str, max_results: int = 8) -> list[dict]:
     """同步抓取 Bing 搜索结果，解析标题、链接和摘要。"""
-    from lxml import html as lxml_html
     from urllib.parse import quote_plus
+
+    from lxml import html as lxml_html
 
     client = _get_primp_client()
     url = f"https://cn.bing.com/search?q={quote_plus(query)}&count={max_results}&setlang=zh-Hans"
@@ -322,8 +325,8 @@ async def get_weather(city: str) -> ToolResult:
 
         def _fetch_weather() -> Any:
             """同步请求 wttr.in 获取天气信息。"""
-            import urllib.request
             import urllib.parse
+            import urllib.request
             url = f"https://wttr.in/{urllib.parse.quote(city)}?format=3&lang=zh"
             # SSRF 防护：5步法校验 (city 为用户输入, 防注入内网地址)
             ok, reason = _ssrf_validate_url(url)

@@ -5,11 +5,8 @@
 import asyncio
 import json
 
-import pytest
-
 from ilink_client import SessionExpiredError
 from wechat_bot_adapter import WeChatBotAdapter
-
 
 # ---------------------------------------------------------------------------
 # 公共 fake
@@ -165,8 +162,8 @@ class _ActiveBotStub:
 def test_wechat_test_uses_live_state_when_active_instance(monkeypatch):
     """M2: 有活跃实例时，/wechat/test 读实时状态，不新建 ILinkClient、
     不调用 getupdates、不改写游标文件。"""
-    import wechat_bot_adapter
     import web.routers.wechat as wx
+    import wechat_bot_adapter
 
     # 若路由误建 client 则立刻炸出来（证明没走 getupdates 路径）
     def _boom(*a, **k):
@@ -190,8 +187,8 @@ def test_wechat_test_uses_live_state_when_active_instance(monkeypatch):
 
 def test_wechat_test_reports_expired_when_active_instance_expired(monkeypatch):
     """M2: 活跃实例已过期时，/wechat/test 报告失败且不走 getupdates。"""
-    import wechat_bot_adapter
     import web.routers.wechat as wx
+    import wechat_bot_adapter
 
     monkeypatch.setattr(
         wx, "ILinkClient",

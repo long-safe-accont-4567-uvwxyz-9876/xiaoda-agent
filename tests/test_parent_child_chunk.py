@@ -129,6 +129,7 @@ class TestChildChunkDB:
     async def memory_db(self, tmp_path):
         """创建临时内存数据库"""
         import aiosqlite
+
         from db.db_memory import MemoryDB
 
         db_path = str(tmp_path / "test_child.db")
@@ -632,6 +633,7 @@ class TestBackwardCompatibility:
     async def test_old_memory_without_children(self, tmp_path):
         """测试旧记忆（无子chunk）的检索兼容性"""
         import aiosqlite
+
         from db.db_memory import MemoryDB
 
         db_path = str(tmp_path / "test_compat.db")

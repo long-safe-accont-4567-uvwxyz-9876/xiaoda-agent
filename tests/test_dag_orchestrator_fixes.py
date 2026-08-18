@@ -7,11 +7,8 @@ Bug 8: ParallelAgentNode — asyncio.gather without timeout hangs forever.
 import asyncio
 from unittest.mock import AsyncMock, MagicMock
 
-import pytest
-
 from core.parallel_dag import NodeState, ToolDAG
 from task_orchestrator import ParallelAgentNode, SynthesisNode, TaskState
-
 
 # ---------------------------------------------------------------------------
 # Bug 3: DAG deadlock — SKIPPED dependencies should not block downstream nodes

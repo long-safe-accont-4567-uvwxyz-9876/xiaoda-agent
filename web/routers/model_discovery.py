@@ -8,11 +8,11 @@ from typing import Any
 from fastapi import APIRouter, Depends, Request
 from loguru import logger
 
-from web.schemas import Envelope
-from web.routers.auth import get_current_user
-from web.model_capabilities import get_capabilities
 # 缓存抽到 web._discovery_cache, 避免与 web.routers.models 互相导入
-from web._discovery_cache import _cache, _CACHE_TTL, _cache_lock
+from web._discovery_cache import _CACHE_TTL, _cache, _cache_lock
+from web.model_capabilities import get_capabilities
+from web.routers.auth import get_current_user
+from web.schemas import Envelope
 
 router = APIRouter(tags=["model-discovery"], dependencies=[Depends(get_current_user)])
 
@@ -199,6 +199,7 @@ async def _get_siliconflow_pricing() -> dict[str, dict] | None:
 
     try:
         import re as _re
+
         import httpx
         async with httpx.AsyncClient() as client:
             resp = await client.get("https://siliconflow.cn/models",
@@ -397,8 +398,8 @@ def _get_all_providers() -> list[dict]:
 
     # 从 config_service 读取所有 provider
     try:
-        from web.config_service import get_config_service
         from web._provider_keys import load_provider_key
+        from web.config_service import get_config_service
         cfg = get_config_service()
         custom = cfg.get("models.providers", {}) or {}
         # 按 order 字段升序排列；未设置 order 的排在已设置之后，按字典插入顺序

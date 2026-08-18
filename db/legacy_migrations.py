@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import sys
 import time
-from typing import ClassVar, Any
+from typing import Any, ClassVar
 
 from loguru import logger
 

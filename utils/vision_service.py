@@ -1,14 +1,14 @@
+import logging
 import os
+import subprocess
 import sys
 import time
-import logging
-import subprocess
-import numpy as np
-from pathlib import Path
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any
-from loguru import logger as _loguru_logger
 
+import numpy as np
+from loguru import logger as _loguru_logger
 
 logger = logging.getLogger("vision_service")
 
@@ -431,8 +431,8 @@ class VisionService:
     def _detect_ncnn(self, frame: Any) -> list:
         """使用 NCNN 模型执行目标检测。"""
         try:
-            import ncnn
             import cv2
+            import ncnn
 
             orig_h, orig_w = frame.shape[:2]
             img = cv2.resize(frame, (INPUT_SIZE, INPUT_SIZE))

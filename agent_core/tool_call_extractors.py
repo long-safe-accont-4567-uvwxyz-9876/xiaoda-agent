@@ -14,7 +14,6 @@ from typing import Any, Protocol, runtime_checkable
 
 from utils.text_utils import has_dsml_tool_calls, parse_dsml_tool_calls
 
-
 # ── ToolCallExtractor 统一接口 ──────────────────────────────
 
 @dataclass

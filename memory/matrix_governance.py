@@ -872,6 +872,7 @@ class ABTestRunner:
         # 真实调用 LLM 评分
         import asyncio
         import threading
+
         import prompt_builder
         scores: list[float] = []
         responses: list[str] = []

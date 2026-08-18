@@ -26,9 +26,9 @@ from agent_core._shared import (
     UserIdentity,
     _current_request_ctx,
 )
-from agent_core.shared_blackboard import SharedBlackboard
 from agent_core.conversation_session import ConversationSession
 from agent_core.principal import ChannelIdentity, Principal, PrincipalResolver
+from agent_core.shared_blackboard import SharedBlackboard
 from agent_dispatcher import AgentDispatcher
 from config import FILE_DIR, STICKER_DIR, XIAOLI_STICKER_DIR, build_system_prompt
 from core.lazy_loader import LazyLoader
@@ -106,7 +106,7 @@ class AgentCore(MessageProcessorMixin, ToolExecutorMixin, SubAgentManagerMixin):
         self._context_lock = asyncio.Lock()
         # HITL 高危操作审批接线：owner 白名单自动通过，非 owner 高危工具走审批门禁
         # （默认无推送通道时 fail-closed 超时拒绝，堵住高危工具无审批直接放行的安全缺口）。
-        from security.human_approval import get_approval_gate, HumanApprovalApprover
+        from security.human_approval import HumanApprovalApprover, get_approval_gate
         _approval_gate = get_approval_gate()
         for _owner in _owner_ids:
             _approval_gate.register_auto_approve_user(_owner)

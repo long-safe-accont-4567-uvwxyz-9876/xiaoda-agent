@@ -1,10 +1,12 @@
 """测试 tool_guardrails.py 的 ToolGuardrails"""
 import sys
 from pathlib import Path
+
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-import unittest
 import asyncio
+import unittest
+
 from tool_engine.tool_guardrails import ToolGuardrails
 
 

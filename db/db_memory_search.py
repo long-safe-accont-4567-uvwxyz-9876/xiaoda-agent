@@ -10,7 +10,7 @@ from typing import Any
 
 from loguru import logger
 
-from db.db_memory_utils import _sql_placeholders, _scope_where, _rows_to_fts_results
+from db.db_memory_utils import _rows_to_fts_results, _scope_where, _sql_placeholders
 
 
 class SearchMixin:

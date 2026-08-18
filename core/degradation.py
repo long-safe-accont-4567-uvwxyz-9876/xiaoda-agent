@@ -8,15 +8,13 @@ core.degradation_strategy.DegradationStrategy，确保行为一致。
 """
 from __future__ import annotations
 
-from loguru import logger
-
 # 延迟导入真正的实现
 from core.degradation_strategy import (
     DegradationLevel as _NewLevel,
-    DegradationStrategy,
+)
+from core.degradation_strategy import (
     get_degradation_strategy,
 )
-
 
 # ── 兼容枚举：直接复用新版 DegradationLevel，添加旧名别名 ──
 # Python 3.11 不允许继承已有成员的 Enum，改为模块级常量别名

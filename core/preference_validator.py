@@ -12,6 +12,7 @@ I9: 验证 L1→L2→L3→L4 偏好管线的数据流和 prompt 注入,
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+
 from loguru import logger
 
 
@@ -93,9 +94,9 @@ class PreferenceValidator:
     async def check_pipeline_flow(self) -> bool:
         """管线联动: PreferencePipeline.process_correction 是否同时写入 L1+L3"""
         try:
-            from core.preference_pipeline import get_preference_pipeline
-            from core.learning_loop import get_learning_loop
             from core.learning_feedback import get_learning_feedback_loop
+            from core.learning_loop import get_learning_loop
+            from core.preference_pipeline import get_preference_pipeline
 
             pipeline = get_preference_pipeline()
             loop = get_learning_loop()

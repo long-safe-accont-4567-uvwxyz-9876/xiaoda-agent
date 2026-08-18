@@ -1,6 +1,6 @@
 """G6: recovery_orchestrator audit_log 上限测试."""
-import asyncio
 from collections import deque
+
 from core.recovery_orchestrator import RecoveryOrchestrator
 
 

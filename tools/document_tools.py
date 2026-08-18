@@ -1,8 +1,8 @@
 import os
 from pathlib import Path
-from tool_engine.tool_registry import register_tool, ToolPermission, ToolResult
-from tools.file_tools_v2 import _validate_path
 
+from tool_engine.tool_registry import ToolPermission, ToolResult, register_tool
+from tools.file_tools_v2 import _validate_path
 
 
 def _read_pdf(path: str) -> ToolResult:

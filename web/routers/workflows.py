@@ -5,16 +5,16 @@
 供 prompt_builder.load_skills() 注入 system prompt。
 """
 from __future__ import annotations
-from typing import Any
 
 import json
 import re
+from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 from loguru import logger
 
-from web.schemas import Envelope
 from web.routers.auth import get_current_user
+from web.schemas import Envelope
 
 router = APIRouter(tags=["workflows"], dependencies=[Depends(get_current_user)])
 

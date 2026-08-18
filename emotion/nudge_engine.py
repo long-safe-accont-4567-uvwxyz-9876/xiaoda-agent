@@ -1,17 +1,18 @@
-from typing import Any, ClassVar
 import asyncio
+import contextlib
 import os
 import re
 import time
 from datetime import datetime
+from typing import Any, ClassVar
 from zoneinfo import ZoneInfo
+
 from loguru import logger
 
-from db.db_analytics import AnalyticsDB
-from utils.llm_cleanup import strip_thinking as _strip_thinking
-from utils.free_model_backend import FreeModelBackend
 from config import get_agent_display_name, get_temperature
-import contextlib
+from db.db_analytics import AnalyticsDB
+from utils.free_model_backend import FreeModelBackend
+from utils.llm_cleanup import strip_thinking as _strip_thinking
 
 
 def _get_local_now() -> datetime:

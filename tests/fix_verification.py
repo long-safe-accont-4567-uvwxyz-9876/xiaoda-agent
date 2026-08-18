@@ -1,11 +1,12 @@
 """Bug 修复验证测试"""
-import sys
-import os
 import asyncio
+import os
+import sys
 from pathlib import Path
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from dotenv import load_dotenv
+
 load_dotenv()
 
 # 项目根目录 (基于当前文件位置计算，避免硬编码绝对路径)
@@ -104,8 +105,8 @@ async def main():
 
     # ---- Agnes 工具回归 ----
     print("\n[Agnes 回归] 无 Key 降级")
-    from tools.agnes_tools import agnes_image_generate, agnes_video_generate
     import tools.agnes_tools as at
+    from tools.agnes_tools import agnes_image_generate, agnes_video_generate
     original_key = at.AGNES_API_KEY
     at.AGNES_API_KEY = ""
 

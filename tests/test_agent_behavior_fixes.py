@@ -5,12 +5,8 @@ Issue 2: 人设和任务混杂 — 工具总结prompt需要分离工具状态和
 Issue 3: 上下文恢复能力弱 — 需要失败状态保存和恢复机制
 Issue 4: 工具链结果表达混乱 — 总结prompt需要结构化表达约束
 """
-import asyncio
 import time
-from unittest.mock import MagicMock, AsyncMock, patch
 from pathlib import Path
-
-import pytest
 
 PROJECT_ROOT = Path(__file__).parent.parent
 if str(PROJECT_ROOT) not in __import__("sys").path:
@@ -47,6 +43,7 @@ def test_get_current_time_tool_uses_zoneinfo():
     修复: 统一使用 ZoneInfo.
     """
     import inspect
+
     from tools import code_tools_v2
 
     source = inspect.getsource(code_tools_v2.get_current_time)
@@ -57,8 +54,8 @@ def test_get_current_time_tool_uses_zoneinfo():
 def test_get_current_time_respects_nudge_timezone():
     """get_current_time 工具应支持 NUDGE_TIMEZONE 环境变量."""
     import os
-    from zoneinfo import ZoneInfo
     from datetime import datetime
+    from zoneinfo import ZoneInfo
 
     old_tz = os.environ.get("NUDGE_TIMEZONE")
     try:
@@ -87,6 +84,7 @@ def test_main_agent_summarize_prompt_has_structure():
     修复: prompt 应要求先说明执行了什么操作, 再描述结果.
     """
     import inspect
+
     from tool_engine.tool_call_handler import ToolCallHandler
 
     source = inspect.getsource(ToolCallHandler._summarize_results)
@@ -101,6 +99,7 @@ def test_main_agent_summarize_prompt_has_structure():
 def test_sub_agent_summarize_prompt_has_structure():
     """子Agent的 _summarize_after_tools prompt 应包含结构化表达约束."""
     import inspect
+
     from agent_dispatcher import SubAgent
 
     source = inspect.getsource(SubAgent._summarize_after_tools)

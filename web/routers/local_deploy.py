@@ -5,20 +5,20 @@ WebUI 侧边栏"本地部署"页：选择向量嵌入引擎——远程 API（�
 页面下方展示启动/运行日志。
 """
 from __future__ import annotations
+
+import asyncio
+import os
 import platform
 import re
 import time
 from typing import Any
 
-import asyncio
-import os
-
 from fastapi import APIRouter, Depends, HTTPException, Request
 from loguru import logger
 
-from web.schemas import Envelope
-from web.routers.auth import get_current_user
 from web.config_service import get_config_service
+from web.routers.auth import get_current_user
+from web.schemas import Envelope
 
 router = APIRouter(tags=["local-deploy"], dependencies=[Depends(get_current_user)])
 

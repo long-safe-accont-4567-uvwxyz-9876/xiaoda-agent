@@ -1,5 +1,15 @@
 from .models import (  # noqa: F401
-    RunStatus, StepStatus, NodeType, JoinStrategy, FailurePolicy,
-    NodeSpec, EdgeSpec, RetryPolicy, WorkflowRevision, WorkflowDefinition,
-    WorkflowRun, WorkflowStepRun, WorkflowRunEvent,
+    EdgeSpec,
+    FailurePolicy,
+    JoinStrategy,
+    NodeSpec,
+    NodeType,
+    RetryPolicy,
+    RunStatus,
+    StepStatus,
+    WorkflowDefinition,
+    WorkflowRevision,
+    WorkflowRun,
+    WorkflowRunEvent,
+    WorkflowStepRun,
 )

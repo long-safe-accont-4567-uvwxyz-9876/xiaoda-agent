@@ -1,21 +1,22 @@
-from typing import Any
-import json
 import asyncio
+import json
 import time
 from pathlib import Path
-from openai import AsyncOpenAI
+from typing import Any
 
 from loguru import logger
-from tool_engine.tool_registry import to_openai_tools
+from openai import AsyncOpenAI
+
+from core.message import AgentMessage
+from emotion.tts_engine import TTSEngine
 from tool_engine.tool_executor import ToolExecutor, ToolResult
+from tool_engine.tool_registry import to_openai_tools
 from tool_engine.tool_repair import ToolCallRepair
 from utils.text_utils import has_dsml_tool_calls, parse_dsml_tool_calls, strip_dsml
-from emotion.tts_engine import TTSEngine
-from core.message import AgentMessage
 
 
 def _get_providers() -> list[dict]:
-    from config import DEFAULT_PROVIDER, get_provider_config, MODEL_NAME
+    from config import DEFAULT_PROVIDER, MODEL_NAME, get_provider_config
     cfg = get_provider_config(DEFAULT_PROVIDER)
     return [
         {

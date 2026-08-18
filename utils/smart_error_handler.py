@@ -4,9 +4,10 @@
 """
 
 import re
-from loguru import logger
 from dataclasses import dataclass
 from typing import Any
+
+from loguru import logger
 
 
 @dataclass

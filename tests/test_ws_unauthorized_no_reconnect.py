@@ -10,7 +10,6 @@ from unittest.mock import AsyncMock, patch
 
 from web.ws_hub import websocket_endpoint
 
-
 ROOT = Path(__file__).parents[1]
 
 

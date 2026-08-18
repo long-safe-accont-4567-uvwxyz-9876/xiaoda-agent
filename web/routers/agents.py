@@ -1,17 +1,17 @@
 from __future__ import annotations
-from typing import Any
 
 import base64
 import json
 import re
 import time
 from pathlib import Path
+from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 from loguru import logger
 
-from web.schemas import Envelope
 from web.routers.auth import get_current_user
+from web.schemas import Envelope
 
 router = APIRouter(tags=["agents"])
 
@@ -190,7 +190,7 @@ async def set_personality(name: str, body: dict, request: Request, _user: str = 
     text = body.get("personality", "")
     # 主体小妲特殊处理：人格写入 SOUL.md，build_system_prompt 按 mtime 自动失效缓存
     if name == "xiaoda":
-        from config import reverse_agent_name_replacements, WORKSPACE_DIR
+        from config import WORKSPACE_DIR, reverse_agent_name_replacements
         text = reverse_agent_name_replacements(text)
         soul_path = WORKSPACE_DIR / "SOUL.md"
         soul_path.write_text(text, encoding="utf-8-sig")
@@ -212,9 +212,9 @@ async def get_agent_names(_user: str = Depends(get_current_user)) -> Any:
     只使用中文显示名 (display_name)，不使用英文显示名。
     """
     from config import (
-        get_all_deprecated_names,
-        get_agent_display_name,
         agent_names,
+        get_agent_display_name,
+        get_all_deprecated_names,
     )
 
     def _best_display(agent_key: str) -> str | None:

@@ -5,7 +5,6 @@
 修复后 Tavily 优先、Bing 兜底。本测试用 mock 数据验证该优先级逻辑在复杂关键词下稳定。
 """
 import asyncio
-import os
 
 import pytest
 

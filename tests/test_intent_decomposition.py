@@ -1,6 +1,7 @@
 # tests/test_intent_decomposition.py
 import pytest
-from core.intent_decomposition import IntentFactor, DecomposedOutput, IntentDecomposer
+
+from core.intent_decomposition import IntentDecomposer
 
 
 @pytest.mark.asyncio

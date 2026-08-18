@@ -14,8 +14,7 @@ from typing import Any
 
 from loguru import logger
 
-from memory.knowledge_graph import KnowledgeGraph, _clean_json_response, _repair_json, _normalize_json_keys
-
+from memory.knowledge_graph import KnowledgeGraph, _clean_json_response, _normalize_json_keys, _repair_json
 
 ENTITY_EXTRACT_PROMPT_V2 = """从以下对话摘要中提取关键实体和关系，只提取最显著的3-5个。
 

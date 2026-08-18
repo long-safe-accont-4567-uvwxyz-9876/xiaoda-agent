@@ -44,6 +44,7 @@ def test_entity_extract_prompt_v1_has_valid_json_example():
     """
     import json
     import re
+
     from memory.knowledge_graph import ENTITY_EXTRACT_PROMPT
 
     # 匹配单层花括号（无嵌套）且含 entities + relations 的 JSON 示例
@@ -119,6 +120,7 @@ def test_contradiction_prompt_no_double_braces():
 def test_contradiction_prompt_has_valid_json_instruction():
     """CONTRADICTION_PROMPT 应输出合法的 JSON 指令（CodeRabbit F2: 用 json.loads 验证）。"""
     import json
+
     from memory.knowledge_graph_v2 import CONTRADICTION_PROMPT
 
     # 应包含 {"contradicted_indices": ...} 而不是 {{...}}

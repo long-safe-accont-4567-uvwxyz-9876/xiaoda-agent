@@ -11,7 +11,6 @@ from __future__ import annotations
 
 from web.model_capabilities import BUILTIN_CAPABILITIES
 
-
 # 已知的模型ID前缀错误映射（错误前缀 → 正确前缀）
 # 用于检测用户输入的常见错误
 _KNOWN_PREFIX_FIXES: dict[str, str] = {

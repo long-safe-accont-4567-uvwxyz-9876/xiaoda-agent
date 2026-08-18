@@ -1,13 +1,15 @@
 """测试 credential_pool.py 的 CredentialPool"""
 import sys
 from pathlib import Path
+
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-import unittest
 import asyncio
 import time
+import unittest
 from unittest.mock import patch
-from utils.credential_pool import CredentialPool, Credential, CredentialState, EXHAUSTED_COOLDOWN
+
+from utils.credential_pool import EXHAUSTED_COOLDOWN, Credential, CredentialPool, CredentialState
 from utils.error_classifier import ClassifiedError, FailoverReason, RecoveryAction
 
 

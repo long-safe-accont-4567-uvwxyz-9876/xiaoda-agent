@@ -1,9 +1,9 @@
 """失败触发器单元测试"""
-import pytest
 from unittest.mock import AsyncMock, MagicMock
 
-from core.failure_trigger import FailureContext, FailureTrigger
+import pytest
 
+from core.failure_trigger import FailureContext, FailureTrigger
 
 # ── FailureContext 默认值 ──
 

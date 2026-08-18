@@ -342,7 +342,6 @@ class RouterEngine:
     async def _classify_sub_agent_with_llm(self, user_input: str,
                                             timeout: float = 15.0) -> str | None:
         """调用 LLM 判断子代理路由。返回 agent 名称或 None（失败时）。"""
-        import asyncio
         import os
         try:
             import httpx

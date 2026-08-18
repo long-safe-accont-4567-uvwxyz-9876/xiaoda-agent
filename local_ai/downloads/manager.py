@@ -327,6 +327,7 @@ class DownloadManager:
           （BaseException）中断官方下载线程，外层转成 CancellationError。
         """
         import os as _os
+
         from huggingface_hub import hf_hub_download
 
         _os.environ.setdefault("HF_ENDPOINT", "https://hf-mirror.com")

@@ -4,29 +4,28 @@
 所有检索逻辑通过 self._mm 访问依赖与状态，保证与重构前行为完全一致，
 同时避免 `memory_manager` 的反向 import（循环依赖）。
 """
-from typing import Any, NamedTuple
 import asyncio
-import time
 import datetime as _datetime
+import time
+from typing import Any, NamedTuple
+
 from loguru import logger
 
 from core.background_tasks import _spawn
 from local_ai.integration.errors import is_structured_local_unavailable
-
 from memory._memory_utils import (
-    _stage_log,
-    _parse_temporal_query,
-    _extract_topic_keywords,
-    _extract_entities,
     _char_bigrams,
+    _extract_topic_keywords,
     _natural_time_desc,
-    _normalize_for_dedupe,
     _normalize_score,
+    _parse_temporal_query,
+    _stage_log,
     reciprocal_rank_fusion,
 )
-from .fsrs_model import MemoryState, MemoryPhase, ReinforcementSignal, S_INIT
 from memory._retrieval_engine_entity import EntityKgBoostMixin
 from memory._retrieval_engine_meta import MemoryMetadataMixin
+
+from .fsrs_model import S_INIT, MemoryPhase, MemoryState, ReinforcementSignal
 
 
 class RecallChannels(NamedTuple):
@@ -1417,7 +1416,6 @@ class RetrievalEngine(EntityKgBoostMixin, MemoryMetadataMixin):
         修复：conv_user_id 非空时按 user_id 过滤，仅返回当前用户的对话。
               conv_user_id 为空时保留原行为（向后兼容，但不应在新代码中使用）。
         """
-        import time as _time
         try:
             # P0 修复：按 conv_user_id 过滤，防止跨用户对话泄露
             raw = await self._mm.memory.get_conversations_by_time_range(

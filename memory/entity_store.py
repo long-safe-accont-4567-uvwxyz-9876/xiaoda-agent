@@ -9,11 +9,11 @@
 """
 import time
 from typing import Any
+
 from loguru import logger
 
 from memory.entity_extractor import Entity
 from memory.scope import Scope
-
 
 # Entity Boost 权重（与 mem0 原版一致）
 ENTITY_BOOST_WEIGHT = 0.5

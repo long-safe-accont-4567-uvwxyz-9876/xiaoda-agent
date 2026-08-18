@@ -1,17 +1,17 @@
-from typing import Any
-from collections.abc import AsyncIterator
 import asyncio
 import hashlib
 import os
 import sys
+from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager, suppress
 from pathlib import Path
-
-from core.app_exception import LLMError
+from typing import Any
 
 from fastapi import FastAPI
 from fastapi.staticfiles import StaticFiles
 from loguru import logger
+
+from core.app_exception import LLMError
 
 # Ensure project root is in path
 sys.path.insert(0, str(Path(__file__).parent.parent))
@@ -19,8 +19,8 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 
 async def _apply_model_overrides(core: Any, provider_service: Any | None = None) -> None:
     """重启后恢复：自定义 provider 注册 + 路由表覆盖。"""
-    from web.config_service import get_config_service
     from model_router import ROUTE_TABLE
+    from web.config_service import get_config_service
 
     logger.info("webui._apply_model_overrides_start")
     cfg = get_config_service()
@@ -216,7 +216,7 @@ def _restore_chat_model(cfg: Any, core: Any) -> None:
         return
     provider = chat_model["provider"]
     model_id = chat_model["model_id"]
-    from model_router import ModelRouteRegistry, ROUTE_TABLE
+    from model_router import ROUTE_TABLE, ModelRouteRegistry
     # 测试场景 core.router 可能是 MagicMock，用临时 registry；生产用真实实例
     registry = getattr(core.router, '_registry', None)
     if not isinstance(registry, ModelRouteRegistry):
@@ -250,8 +250,8 @@ def _restore_chat_model(cfg: Any, core: Any) -> None:
             provider, model_id, str(e)
         )
         try:
-            from config import get_default_model_for_provider
             import config as _config_mod
+            from config import get_default_model_for_provider
             fallback_provider = _config_mod.DEFAULT_PROVIDER or "mimo"
             fallback_model = get_default_model_for_provider(fallback_provider)
             if not fallback_model:
@@ -293,8 +293,8 @@ def _restore_chat_model(cfg: Any, core: Any) -> None:
 
 async def _start_user_mcp_servers(core: Any) -> None:
     """启动 WebUI 管理的 MCP server。"""
-    from web.config_service import get_config_service
     from tool_engine.mcp_client import MCPClient
+    from web.config_service import get_config_service
     cfg = get_config_service()
     for name, rec in (cfg.get("mcp", {}) or {}).items():
         if not isinstance(rec, dict) or not rec.get("enabled", True):
@@ -378,8 +378,8 @@ async def _init_mail_poller(core: Any, config_service: Any) -> tuple[str, Any]:
 async def _start_services(app: Any, core: Any) -> None:
     """启动正常模式下的所有服务组件（PluginManager、MediaTaskQueue、GreetingScheduler、QQ Bot）。"""
     from web.config_service import get_config_service
-    from web.media_tasks import MediaTaskQueue
     from web.greeting_scheduler import GreetingScheduler
+    from web.media_tasks import MediaTaskQueue
     from web.routers.tools import apply_tool_overrides
     from web.ws_hub import manager, start_media_cleanup
 
@@ -545,7 +545,7 @@ async def _ensure_wechat_bot_task(app: FastAPI) -> None:
     用户可在设置页重新扫码登录。
     """
     try:
-        from wechat_bot_adapter import WeChatBotAdapter, CREDENTIALS_PATH
+        from wechat_bot_adapter import CREDENTIALS_PATH, WeChatBotAdapter
         if not CREDENTIALS_PATH.exists():
             return
         core = app.state.core
@@ -663,6 +663,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[Any]:
 async def _prewarm_connections() -> None:
     """预热 agnes + embed HTTP 连接（治本修复 2026-08-05）。"""
     import os as _os
+
     import httpx as _httpx
     # 预热 agnes
     try:
@@ -731,8 +732,8 @@ async def _prewarm_local_singletons(core: Any) -> None:
 
 async def _restore_local_node_instances(core: Any) -> None:
     try:
-        from web.local_deploy_nodes import restore_local_instances
         from web.config_service import get_config_service
+        from web.local_deploy_nodes import restore_local_instances
         await restore_local_instances(core, get_config_service())
         logger.info("local_deploy.instances_restored")
     except Exception as _e:
@@ -741,10 +742,13 @@ async def _restore_local_node_instances(core: Any) -> None:
 
 async def _restore_generative_backends(core: Any, app: FastAPI) -> None:
     try:
-        from web.local_deploy_nodes import (
-            NODES, apply_to_runtime, get_backend, get_local_model,
-        )
         from web.config_service import get_config_service
+        from web.local_deploy_nodes import (
+            NODES,
+            apply_to_runtime,
+            get_backend,
+            get_local_model,
+        )
         _cfg = get_config_service()
         for _node in NODES:
             if _node.get("kind") != "generative":
@@ -771,10 +775,10 @@ async def _local_ai_health_loop(instances: Any) -> None:
 async def _init_lifespan_resources(app: FastAPI) -> tuple[Any, bool]:
     """初始化 core、配置服务与 agent registry, 返回 (core, owns_core)"""
     from agent_core import AgentCore
+    from config import get_provider_catalog
+    from llm_gateway.provider_service import ProviderService
     from web.agent_registry import AgentRegistry
     from web.config_service import get_config_service
-    from llm_gateway.provider_service import ProviderService
-    from config import get_provider_catalog
     from web.routers.local_ai import initialize_local_ai_services
     from web.ws_hub import manager
 
@@ -861,8 +865,8 @@ def _has_any_provider_credential() -> bool:
     # 3. 自定义 provider：复用 config_service 已加载的 providers 配置 +
     #    load_provider_key 读取凭证文件，不新写 JSON 解析
     try:
-        from web.config_service import get_config_service
         from web._provider_keys import load_provider_key
+        from web.config_service import get_config_service
         cfg = get_config_service()
         for pid in (cfg.get("models.providers", {}) or {}):
             if pid in ("ollama", "llama.cpp"):
@@ -1000,6 +1004,7 @@ def create_app() -> FastAPI:
     @app.middleware("http")
     async def _allow_frame_embed(request: Any, call_next: Any) -> Any:
         import time as _time
+
         from utils.trace_context import new_trace_id
         _trace_id = new_trace_id()
         _start = _time.monotonic()
@@ -1054,30 +1059,32 @@ def create_app() -> FastAPI:
     from web.error_handler import register_error_handlers
     register_error_handlers(app)
 
+    from web.routers.agents import router as agents_router
     from web.routers.auth import router as auth_router
     from web.routers.chat import router as chat_router
-    from web.routers.system import router as system_router, public_router as system_public_router
-    from web.routers.agents import router as agents_router
-    from web.routers.models import router as models_router
-    from web.routers.providers import router as providers_router
-    from web.routers.tools import router as tools_router
-    from web.routers.mcp import router as mcp_router
-    from web.routers.insight import router as insight_router
-    from web.routers.schedule import router as schedule_router
-    from web.routers.media import router as media_router
     from web.routers.health import router as health_router
-    from web.routers.plugins import router as plugins_router
-    from web.routers.setup import router as setup_router
-    from web.routers.model_discovery import router as model_discovery_router
-    from web.routers.market import router as market_router
+    from web.routers.insight import router as insight_router
+    from web.routers.local_ai import router as local_ai_router
+    from web.routers.local_ai_storage import router as local_ai_storage_router
+    from web.routers.local_deploy import router as local_deploy_router
     from web.routers.mail_manage import router as mail_manage_router
+    from web.routers.market import router as market_router
+    from web.routers.mcp import router as mcp_router
+    from web.routers.media import router as media_router
+    from web.routers.model_discovery import router as model_discovery_router
+    from web.routers.models import router as models_router
+    from web.routers.plugins import router as plugins_router
+    from web.routers.providers import router as providers_router
+    from web.routers.schedule import router as schedule_router
+    from web.routers.setup import router as setup_router
+    from web.routers.system import public_router as system_public_router
+    from web.routers.system import router as system_router
+    from web.routers.tools import router as tools_router
+    from web.routers.wechat import public_router as wechat_public_router
+    from web.routers.wechat import router as wechat_router
     from web.routers.workflows import router as workflows_router
     from web.routers.workflows_v2 import router as workflows_v2_router
     from web.routers.workspace import router as workspace_router
-    from web.routers.wechat import router as wechat_router, public_router as wechat_public_router
-    from web.routers.local_ai import router as local_ai_router
-    from web.routers.local_deploy import router as local_deploy_router
-    from web.routers.local_ai_storage import router as local_ai_storage_router
 
     for r in (auth_router, chat_router, system_router, agents_router,
               models_router, providers_router, tools_router, mcp_router, insight_router,

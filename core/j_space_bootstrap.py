@@ -8,12 +8,13 @@ J-Space 架构优化启动初始化。
 3. InterventionLoop 注册默认规则
 """
 from loguru import logger
-from config import ENABLE_J_SPACE_HOOKS, DIRECTION_REGISTRY_PATH, SIGNAL_STREAM_MAX_HISTORY
-from core.behavioral_signal import BehavioralSignalStream
-from core.behavioral_direction import DirectionVector, DirectionRegistry
-from core.intervention_loop import InterventionRule, InterventionLoop
+
 from agent_core.structured_blackboard import StructuredBlackboard
+from config import DIRECTION_REGISTRY_PATH, ENABLE_J_SPACE_HOOKS, SIGNAL_STREAM_MAX_HISTORY
+from core.behavioral_direction import DirectionRegistry, DirectionVector
+from core.behavioral_signal import BehavioralSignalStream
 from core.enhanced_router import EnhancedBeliefRouter
+from core.intervention_loop import InterventionLoop, InterventionRule
 
 
 def _create_default_directions() -> list[DirectionVector]:

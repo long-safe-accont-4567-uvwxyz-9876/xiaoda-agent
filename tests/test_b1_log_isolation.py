@@ -9,13 +9,11 @@
 修复方案：在 setup_logging() 中检测 TEST_MODE 环境变量，测试模式下跳过文件 sink。
 """
 import os
-import sys
 from pathlib import Path
 from unittest import mock
 
 import pytest
 from loguru import logger
-
 
 # ── 辅助函数 ──────────────────────────────────────────────
 
@@ -109,8 +107,8 @@ class TestSetupLoggingTestMode:
 
     def test_test_mode_does_not_create_log_files(self, tmp_path):
         """TEST_MODE=true 时不应在生产日志目录创建/追加日志文件。"""
-        from utils.logging_config import setup_logging
         from config import LOG_DIR
+        from utils.logging_config import setup_logging
 
         # 记录测试前的日志文件状态
         log_dir = Path(LOG_DIR)

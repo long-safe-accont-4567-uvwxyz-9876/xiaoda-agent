@@ -75,6 +75,7 @@ async def test_async_compat_exponential_backoff():
 @pytest.mark.asyncio
 async def test_tiered_cache_l1_hit():
     import gc
+
     from core.tiered_cache import TieredCache
     with tempfile.TemporaryDirectory() as td:
         cache = TieredCache(
@@ -93,7 +94,8 @@ async def test_tiered_cache_l1_hit():
 @pytest.mark.asyncio
 async def test_tiered_cache_l2_backfill():
     import gc
-    from core.tiered_cache import TieredCache, L1MemoryCache
+
+    from core.tiered_cache import L1MemoryCache, TieredCache
     with tempfile.TemporaryDirectory() as td:
         cache = TieredCache(
             cache_dir=Path(td) / "L2",
@@ -114,6 +116,7 @@ async def test_tiered_cache_l2_backfill():
 @pytest.mark.asyncio
 async def test_tiered_cache_invalidate():
     import gc
+
     from core.tiered_cache import TieredCache
     with tempfile.TemporaryDirectory() as td:
         cache = TieredCache(
@@ -186,7 +189,7 @@ async def test_dag_fallback_on_failure():
 
 @pytest.mark.asyncio
 async def test_dag_skip_downstream():
-    from core.parallel_dag import ToolDAG, NodeState
+    from core.parallel_dag import NodeState, ToolDAG
     dag = ToolDAG()
 
     async def fail_task():
@@ -227,7 +230,7 @@ def test_metacog_anticipate():
 
 
 def test_metacog_detect_repetition():
-    from core.metacognition_lite import MetacognitionLite, DriftType
+    from core.metacognition_lite import DriftType, MetacognitionLite
     mc = MetacognitionLite()
     mc.anticipate("test query")
     mc.monitor("same output", confidence=0.8)
@@ -247,7 +250,7 @@ def test_metacog_reflect_quality():
 
 
 def test_metacog_regulate_actions():
-    from core.metacognition_lite import MetacognitionLite, DriftType
+    from core.metacognition_lite import DriftType, MetacognitionLite
     mc = MetacognitionLite()
     mc.state.drift_type = DriftType.REPETITION
     action = mc.regulate()
@@ -278,8 +281,7 @@ def test_agent_r_reflect_generates_memory():
 
 
 def test_agent_r_apply_revision():
-    from core.agent_r_reflection import (AgentRReflector, TrajectoryStep,
-                                            TrajectoryType)
+    from core.agent_r_reflection import AgentRReflector, TrajectoryStep, TrajectoryType
     r = AgentRReflector()
     r.record_step("a", "ok")
     r.record_step("b", "fail", success=False, error="404")
@@ -303,7 +305,7 @@ def test_agent_r_get_lessons_for_prompt():
 # ============================================================
 
 def test_slo_availability_calculation():
-    from core.slo_tracker import SLOTracker, SLOTarget, SLOMeasurement
+    from core.slo_tracker import SLOMeasurement, SLOTarget, SLOTracker
     t = SLOTracker(SLOTarget())
     for _ in range(9):
         t.record(SLOMeasurement(timestamp=time.time(), success=True, latency_ms=100))
@@ -313,7 +315,7 @@ def test_slo_availability_calculation():
 
 
 def test_slo_burn_rate():
-    from core.slo_tracker import SLOTracker, SLOTarget, SLOMeasurement
+    from core.slo_tracker import SLOMeasurement, SLOTarget, SLOTracker
     t = SLOTracker(SLOTarget(availability=0.99))
     # 全部失败, burn_rate 应该很高
     for _ in range(10):
@@ -396,7 +398,7 @@ async def test_dream_consolidate_merge_similar():
 
 @pytest.mark.asyncio
 async def test_self_diag_run_checks():
-    from core.self_diagnostic import SelfDiagnostic, ReportLevel
+    from core.self_diagnostic import ReportLevel, SelfDiagnostic
     diag = SelfDiagnostic()
     # 不依赖真实 SLO, 直接注入检查
     triggered = []
@@ -458,8 +460,7 @@ async def test_recovery_fallback():
 
 @pytest.mark.asyncio
 async def test_recovery_escalate_to_human():
-    from core.recovery_orchestrator import (RecoveryOrchestrator,
-                                              RecoveryLevel)
+    from core.recovery_orchestrator import RecoveryLevel, RecoveryOrchestrator
     orch = RecoveryOrchestrator()
 
     async def fail():
@@ -540,6 +541,7 @@ def test_config_reloader_callback():
 @pytest.mark.asyncio
 async def test_migrator_idempotent_column_add():
     import aiosqlite
+
     from db.idempotent_migrator import IdempotentMigrator
     with tempfile.NamedTemporaryFile(suffix=".db", delete=False) as f:
         path = f.name
@@ -561,6 +563,7 @@ async def test_migrator_idempotent_column_add():
 @pytest.mark.asyncio
 async def test_migrator_apply_idempotent():
     import aiosqlite
+
     from db.idempotent_migrator import IdempotentMigrator
     with tempfile.NamedTemporaryFile(suffix=".db", delete=False) as f:
         path = f.name
@@ -588,6 +591,7 @@ async def test_migrator_apply_idempotent():
 @pytest.mark.asyncio
 async def test_episodic_limiter_enforce():
     import aiosqlite
+
     from memory.episodic_limiter import EpisodicLimiter
 
     class FakeDB:
@@ -636,7 +640,7 @@ async def test_episodic_limiter_enforce():
 # ============================================================
 
 def test_anomaly_detector_baseline():
-    from security.anomaly_detector import (AnomalyDetector, BehaviorEvent)
+    from security.anomaly_detector import AnomalyDetector, BehaviorEvent
     det = AnomalyDetector()
     # 训练基线 (10 个正常事件)
     for _ in range(15):
@@ -651,7 +655,7 @@ def test_anomaly_detector_baseline():
 
 
 def test_anomaly_detector_off_hours():
-    from security.anomaly_detector import (AnomalyDetector, BehaviorEvent)
+    from security.anomaly_detector import AnomalyDetector, BehaviorEvent
     det = AnomalyDetector()
     # 凌晨事件 (3:00)
     event = BehaviorEvent(user_id="u1", action="search",
@@ -667,8 +671,7 @@ def test_anomaly_detector_off_hours():
 
 @pytest.mark.asyncio
 async def test_approval_auto_approve_owner():
-    from security.human_approval import (HumanApprovalGate, ApprovalStatus,
-                                            RiskLevel)
+    from security.human_approval import ApprovalStatus, HumanApprovalGate, RiskLevel
     gate = HumanApprovalGate()
     gate.register_auto_approve_user("owner")
     req = await gate.request(
@@ -680,8 +683,7 @@ async def test_approval_auto_approve_owner():
 
 @pytest.mark.asyncio
 async def test_approval_wait_and_decide():
-    from security.human_approval import (HumanApprovalGate, ApprovalStatus,
-                                            RiskLevel)
+    from security.human_approval import ApprovalStatus, HumanApprovalGate, RiskLevel
     gate = HumanApprovalGate(default_timeout=2.0)
 
     async def decide_later(req_id):
@@ -700,8 +702,7 @@ async def test_approval_wait_and_decide():
 
 @pytest.mark.asyncio
 async def test_approval_timeout():
-    from security.human_approval import (HumanApprovalGate, ApprovalStatus,
-                                            RiskLevel)
+    from security.human_approval import ApprovalStatus, HumanApprovalGate, RiskLevel
     gate = HumanApprovalGate(default_timeout=0.3)
     req = await gate.request(
         user_id="u1", operation="restart_service",
@@ -726,8 +727,8 @@ def test_approval_is_high_risk():
 @pytest.mark.asyncio
 async def test_metacog_with_agent_r_integration():
     """A2 + A3 集成: 元认知检测到漂移, 触发 Agent-R 反思"""
-    from core.metacognition_lite import MetacognitionLite, DriftType
     from core.agent_r_reflection import AgentRReflector
+    from core.metacognition_lite import DriftType, MetacognitionLite
 
     mc = MetacognitionLite()
     reflector = AgentRReflector()
@@ -748,8 +749,8 @@ async def test_metacog_with_agent_r_integration():
 @pytest.mark.asyncio
 async def test_full_pipeline_slo_to_sla():
     """Q3 + Q5 集成: SLO 测量值导出到 SLA Prometheus 格式"""
-    from core.slo_tracker import SLOTracker, SLOTarget, SLOMeasurement
     from core.sla_exporter import SLAExporter
+    from core.slo_tracker import SLOMeasurement, SLOTarget, SLOTracker
 
     slo = SLOTracker(SLOTarget())
     exp = SLAExporter()

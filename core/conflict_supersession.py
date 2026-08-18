@@ -11,7 +11,6 @@
 from __future__ import annotations
 
 import re
-import time
 from dataclasses import dataclass
 from typing import Any
 

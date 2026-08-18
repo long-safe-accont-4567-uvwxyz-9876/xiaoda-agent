@@ -159,8 +159,8 @@ async def test_memory_manager_retrieve_returns_kg_v2_results(tmp_path):
     Issue C1: 早期返回路径 bypass KG v2 — 当 FTS/Vec/KG v1/子chunk 都无结果,
     仅 KG v2 有事实时, 早期返回会导致空结果。此测试验证修复后 KG v2 事实能正确露出。
     """
-    from memory.memory_manager import MemoryManager
     from memory.kg_search import KGSearchEngine
+    from memory.memory_manager import MemoryManager
 
     manager = DatabaseManager(tmp_path / "mm_kg_v2.db")
     await manager.init()
@@ -214,8 +214,8 @@ async def test_memory_manager_kg_v2_merged_with_other_channels(tmp_path):
     Issue I1: reranker 路径中 [:k] 切片会丢弃全部 kg_v2_items。
     此测试在有 FTS 结果 + KG v2 结果的场景下, 验证两者都被返回。
     """
-    from memory.memory_manager import MemoryManager
     from memory.kg_search import KGSearchEngine
+    from memory.memory_manager import MemoryManager
 
     manager = DatabaseManager(tmp_path / "mm_merge.db")
     await manager.init()

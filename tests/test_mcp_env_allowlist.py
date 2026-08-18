@@ -8,9 +8,8 @@ ENV / ZDOTDIR / PERL5OPT / RUBYOPT / GODEBUG / GIT_* / JAVA_TOOL_OPTIONS 等
 import pytest
 from fastapi import HTTPException
 
-from security.mcp_command_policy import validate_mcp_env, _ENV_BLOCKED_PREFIXES
+from security.mcp_command_policy import _ENV_BLOCKED_PREFIXES, validate_mcp_env
 from web.routers.mcp import _validate_mcp_env
-
 
 # ── 新增前缀的代表性危险键（每个前缀至少一个）───────────────────
 

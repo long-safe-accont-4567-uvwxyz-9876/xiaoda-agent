@@ -4,22 +4,23 @@
 所有编码逻辑通过 self._mm 访问依赖与状态，保证与重构前行为完全一致，
 同时避免 `memory_manager` 的反向 import（循环依赖）。
 """
-from typing import Any
 import asyncio
 import re
 import time
+from typing import Any
+
 from loguru import logger
 
+from config import get_agent_display_name
 from core.background_tasks import _bg_tasks, _spawn
-
 from memory._memory_utils import (
-    _log_task_exception,
-    validate_memory_content,
     RuleBasedMemoryExtractor,
     _char_bigrams,
+    _log_task_exception,
+    validate_memory_content,
 )
-from .fsrs_model import estimate_initial_difficulty, S_INIT
-from config import get_agent_display_name
+
+from .fsrs_model import S_INIT, estimate_initial_difficulty
 
 
 class MemoryEncoder:
@@ -665,6 +666,7 @@ class MemoryEncoder:
             [{content, embed_content, chunk_type, weight, overlap_hash}, ...]
         """
         import hashlib
+
         import config as _cfg
 
         overlap_chars = getattr(_cfg, 'CHILD_CHUNK_OVERLAP_CHARS', 30)

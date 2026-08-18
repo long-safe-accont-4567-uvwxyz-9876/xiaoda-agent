@@ -1,10 +1,13 @@
 # tests/test_bridge_memory.py
 """桥接记忆测试"""
 import time
+
 import numpy as np
 import pytest
-from memory.bridge_memory import BridgeMemory, BridgeMemoryManager
+
+from memory.bridge_memory import BridgeMemoryManager
 from memory.cognitive_memory import MemoryEntry
+
 
 @pytest.fixture
 def manager():

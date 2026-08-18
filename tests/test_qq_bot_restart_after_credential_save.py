@@ -17,7 +17,6 @@ os.environ，qq_bot_adapter 模块级 APP_ID/APP_SECRET（import 时一次性
 5. ENABLE_QQ_BOT=false 时不启动
 """
 import asyncio
-import os
 import sys
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch

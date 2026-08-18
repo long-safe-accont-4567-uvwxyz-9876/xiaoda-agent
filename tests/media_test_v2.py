@@ -1,12 +1,13 @@
 """TTS + 表情包 + 图片/视频生成 综合测试 v2"""
-import sys
+import asyncio
 import os
 import random
-import asyncio
+import sys
 from pathlib import Path
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from dotenv import load_dotenv
+
 load_dotenv()
 
 # 项目根目录 (基于当前文件位置计算，避免硬编码绝对路径)
@@ -42,8 +43,8 @@ def test_sticker_integration():
     print("Part 1: 表情包集成流程测试")
     print("=" * 60)
 
-    from emotion.sticker_manager import StickerManager
     from emotion.emotion_simple import detect_emotion
+    from emotion.sticker_manager import StickerManager
 
     # 1.1 真实表情包目录
     sticker_dir = _resolve_sticker_dir("xiaoda")
@@ -161,10 +162,9 @@ async def test_agnes_tools():
 
     # 2.2 图片生成工具 - 无 Key 降级测试
     print("\n[2.2] 图片生成工具 - 无 Key 降级测试:")
-    from tools.agnes_tools import agnes_image_generate, agnes_video_generate
-
     # 保存原始 Key
     import tools.agnes_tools as at
+    from tools.agnes_tools import agnes_image_generate, agnes_video_generate
     original_key = at.AGNES_API_KEY
     at.AGNES_API_KEY = ""
 
@@ -308,8 +308,8 @@ async def test_agent_integration():
 
     # 3.4 TTS 情绪标签与 EMOTION_STYLE_MAP 一致性
     print("\n[3.4] TTS 情绪标签一致性:")
-    from emotion.tts_engine import EMOTION_STYLE_MAP
     from emotion.sticker_manager import StickerManager
+    from emotion.tts_engine import EMOTION_STYLE_MAP
     sm = StickerManager(_resolve_sticker_dir("xiaoda"))
 
     tts_emotions = set(EMOTION_STYLE_MAP.keys())

@@ -6,11 +6,8 @@
 """
 from unittest.mock import patch
 
-import pytest
-
 from emotion.emotion_simple import detect_emotion
 from web.routers.chat import _infer_emotion
-
 
 # ── detect_emotion 集成验证 ───────────────────────────────────
 

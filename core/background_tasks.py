@@ -18,21 +18,21 @@ import contextvars
 import json
 import sqlite3
 import time
-from typing import Any, TYPE_CHECKING, ClassVar
+from typing import TYPE_CHECKING, Any, ClassVar
 
 from loguru import logger
 
+from core.self_wake import SelfWakeManager, get_self_wake_manager
 from utils.metrics import metrics
-from core.self_wake import SelfWakeManager, WakeTrigger, get_self_wake_manager
 
 if TYPE_CHECKING:
+    from agent_context import AgentContext
     from db.database import DatabaseManager
+    from emotion.portrait_manager import PortraitManager
+    from instinct_manager import InstinctManager
+    from memory.learning_manager import LearningManager
     from memory.memory_manager import MemoryManager
     from memory.notebook_manager import NotebookManager
-    from emotion.portrait_manager import PortraitManager
-    from memory.learning_manager import LearningManager
-    from instinct_manager import InstinctManager
-    from agent_context import AgentContext
 
 # 全局后台任务集合，用于跟踪和清理
 _bg_tasks: set[asyncio.Task] = set()
@@ -556,8 +556,9 @@ class BackgroundTaskManager:
             _vec = getattr(self.memory, "vec", None)
             if _vec is None or not getattr(_vec, "enabled", False):
                 return
-            from core.dream_engine_v2 import get_dream_engine_v2, get_cognitive_memory
             import numpy as np
+
+            from core.dream_engine_v2 import get_cognitive_memory, get_dream_engine_v2
             cog = get_cognitive_memory()
             # 首次加载：从 DB 读记忆并计算 embedding 填充 CognitiveMemory
             if cog.episodic_size() == 0:

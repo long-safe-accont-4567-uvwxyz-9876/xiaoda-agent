@@ -1,16 +1,16 @@
 """定时与问候路由（R10）：问候计划 CRUD、DND、立即试发、历史。"""
 from __future__ import annotations
-from typing import Any
 
 import json
 import re
 import time
+from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from loguru import logger
 
-from web.schemas import Envelope
 from web.routers.auth import get_current_user
+from web.schemas import Envelope
 
 router = APIRouter(tags=["schedule"], dependencies=[Depends(get_current_user)])
 

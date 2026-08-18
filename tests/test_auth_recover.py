@@ -12,8 +12,8 @@ import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
-from web.routers import auth
 import security.recovery_qa as rqa
+from web.routers import auth
 
 
 @pytest.fixture

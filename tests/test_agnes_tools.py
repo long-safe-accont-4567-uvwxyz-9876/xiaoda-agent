@@ -1,6 +1,7 @@
 """Agnes AI 工具测试"""
 import sys
 from pathlib import Path
+
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 import unittest
@@ -14,6 +15,7 @@ class TestAgnesImageTool(unittest.TestCase):
         with patch.dict('os.environ', {'AGNES_API_KEY': ''}):
             # 需要重新导入以获取新的环境变量值
             import importlib
+
             import tools.agnes_tools
             importlib.reload(tools.agnes_tools)
             # 获取注册的处理函数

@@ -1,10 +1,11 @@
 """验证 Agent 能力感知"""
-import sys
 import os
+import sys
 from pathlib import Path
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from dotenv import load_dotenv
+
 load_dotenv()
 
 # 项目根目录 (基于当前文件位置计算，避免硬编码绝对路径)
@@ -14,6 +15,7 @@ print("=== Agent 能力感知验证 ===\n")
 
 # 1. 系统提示包含新能力
 from config import build_system_prompt
+
 prompt = build_system_prompt()
 checks = [
     ("语音合成", "语音合成" in prompt or "TTS" in prompt),
@@ -37,6 +39,7 @@ print(f"  通过: {ok}/{len(checks)}")
 
 # 2. 工具注册
 from tool_engine.tool_registry import to_openai_tools
+
 tools = to_openai_tools()
 tool_names = [t["function"]["name"] for t in tools]
 print(f"\n[2] 已注册工具 ({len(tool_names)} 个):")
@@ -99,6 +102,7 @@ for name, result in soul_checks:
 # 7. 模拟用户命令 -> 工具调用映射
 print("\n[6] 用户命令 -> 工具调用映射:")
 from agent_core import AgentCore
+
 core = AgentCore()
 mappings = [
     ("画一张猫", "agnes_image_generate"),

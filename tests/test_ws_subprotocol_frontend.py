@@ -1,7 +1,6 @@
 """前端契约：WsClient 用 WebSocket 子协议传递 token，URL 不再拼 ?token=。"""
 from pathlib import Path
 
-
 ROOT = Path(__file__).parents[1]
 
 

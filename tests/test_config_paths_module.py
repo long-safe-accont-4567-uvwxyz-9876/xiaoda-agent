@@ -20,7 +20,6 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 
 import pytest
 
-
 # ── 1/2. 独立导入 + re-export 同对象 ─────────────────────────────
 
 def test_config_paths_imports_standalone():
@@ -53,7 +52,6 @@ def test_config_reexports_same_objects(name):
 
 def test_dotenv_loaded_on_config_import(monkeypatch):
     """config 导入链上 dotenv(ENV_PATH) 已执行（.env 中已定义的变量进 os.environ）"""
-    import config
     import config_paths
     # 从 .env 文件读取一个键，验证导入后可见（用 ENV_PATH 解析而非硬编码键名）
     env_text = Path(config_paths.ENV_PATH).read_text(encoding="utf-8", errors="ignore") \

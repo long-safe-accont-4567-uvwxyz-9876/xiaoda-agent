@@ -6,10 +6,8 @@
 - "开心"/"高兴"/"难过" 等基础情绪词判定不受影响
 - 多种否定前缀（不/没/别）均生效
 """
-import pytest
 
 from emotion.emotion_simple import detect_emotion
-
 
 # ── 否定组合不应误判为喜悦 ──────────────────────────────────
 

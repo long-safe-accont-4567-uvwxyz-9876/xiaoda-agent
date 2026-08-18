@@ -4,14 +4,16 @@
 优先级 2：Jina Reader 通用 Markdown 提取
 优先级 3：原有 primp + html2text（tools.web_browse_tools.web_browse）
 """
-import re
 import asyncio
+import re
+
 import httpx
 from loguru import logger
-from tool_engine.tool_registry import register_tool, ToolPermission, ToolResult
+
 from config import JINA_API_KEY
-from security.ssrf_guard import validate_url as _ssrf_validate_url
 from core.degradation_strategy import get_degradation_strategy
+from security.ssrf_guard import validate_url as _ssrf_validate_url
+from tool_engine.tool_registry import ToolPermission, ToolResult, register_tool
 
 _PLATFORM_EXTRACTORS = {
     "zhihu.com": "_extract_zhihu",

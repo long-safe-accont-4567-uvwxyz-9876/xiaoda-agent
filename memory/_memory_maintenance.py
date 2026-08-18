@@ -4,9 +4,10 @@
 所有维护/调度/回忆逻辑通过 self._mm 访问依赖与状态，保证与重构前行为完全一致，
 同时避免 `memory_manager` 的反向 import（循环依赖）。
 """
-from typing import Any
 import asyncio
 import time
+from typing import Any
+
 from loguru import logger
 
 from db.db_memory import compute_missing_vec_ids

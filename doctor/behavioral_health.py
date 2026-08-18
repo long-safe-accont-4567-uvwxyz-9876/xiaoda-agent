@@ -4,8 +4,9 @@
 检测 zombie 状态: 端口在监听但响应全 error
 """
 import time
-from dataclasses import dataclass
 from collections import deque
+from dataclasses import dataclass
+
 from loguru import logger
 
 

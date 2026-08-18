@@ -227,7 +227,6 @@ class TestGoatSkipsCwdWall:
 # ── ③ 熔断器不把用户决策失败计入工具故障 ───────────────────────
 class TestCircuitBreakerSkipsUserDecision:
     def test_real_failure_counts(self):
-        from agent_core._shared import _current_request_ctx
         from core.circuit_breaker import CircuitBreaker, CognitiveState
         cb = CircuitBreaker()
         st = CognitiveState()

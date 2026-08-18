@@ -1,10 +1,12 @@
-from typing import ClassVar
-import re
 import json
 import random
+import re
 from pathlib import Path
+from typing import ClassVar
+
 from loguru import logger
-from .emotion_enum import Emotion, resolve_emotion, STICKER_FALLBACK, is_unified
+
+from .emotion_enum import STICKER_FALLBACK, Emotion, is_unified, resolve_emotion
 
 
 class StickerManager:

@@ -1,9 +1,9 @@
 # tests/test_behavioral_direction.py
-import pytest
-import tempfile
 import os
+import tempfile
 from pathlib import Path
-from core.behavioral_direction import DirectionVector, DirectionRegistry
+
+from core.behavioral_direction import DirectionRegistry, DirectionVector
 
 
 def test_direction_vector_creation():

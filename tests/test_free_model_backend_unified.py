@@ -10,11 +10,8 @@
 契约：4 个完整复制者（instinct/error_rule/kg/distiller）委托后行为不变——
     off → 禁用；local → 备份 key 走本地；api/auto → 恢复 key 走免费。
 """
-import os
-import pytest
 
 from utils.free_model_backend import FreeModelBackend
-
 
 # ── FreeModelBackend 新契约 ───────────────────────────────────
 

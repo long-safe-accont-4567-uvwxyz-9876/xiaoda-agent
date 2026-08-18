@@ -1,8 +1,6 @@
 """KG v2 向量存储 + 混合检索测试。"""
-import asyncio
-import json
 import time
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock
 
 import pytest
 
@@ -17,9 +15,10 @@ def mock_vec_store():
         import sqlite_vec
     except ImportError:
         pytest.skip("sqlite_vec not available")
-    from memory.vector_store import VectorStore
-    import tempfile
     import os
+    import tempfile
+
+    from memory.vector_store import VectorStore
 
     fd, path = tempfile.mkstemp(suffix=".db")
     os.close(fd)

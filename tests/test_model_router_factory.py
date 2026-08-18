@@ -6,7 +6,7 @@ router._try_fallback_chain（私有跨模块依赖）。Phase 0 补齐工厂并�
 """
 import pytest
 
-from model_router import get_model_router, ModelRouter
+from model_router import ModelRouter, get_model_router
 
 
 def test_get_model_router_returns_singleton():

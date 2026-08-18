@@ -161,7 +161,7 @@ class SessionApprover:
         if command and (request.tool_name, command) in self._allowed_commands:
             return ApprovalDecision(
                 outcome=ApprovalOutcome.ALWAYS_COMMAND,
-                reason=f"command already approved for session",
+                reason="command already approved for session",
             )
         # 委托内层审批器
         decision = await self._inner.approve(request)

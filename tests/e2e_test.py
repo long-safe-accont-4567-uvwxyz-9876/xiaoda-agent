@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
 """Agent 端到端测试"""
 import asyncio
-import sys
 import os
+import sys
+
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."))
 
 async def test_agent_e2e():
@@ -156,7 +157,8 @@ async def test_agent_e2e():
     print('[12] 测试原子写入...')
     try:
         import tempfile
-        from utils.atomic_write import atomic_write, atomic_json_write
+
+        from utils.atomic_write import atomic_json_write, atomic_write
         with tempfile.TemporaryDirectory() as td:
             test_path = os.path.join(td, "test.txt")
             atomic_write(test_path, "hello world")

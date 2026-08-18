@@ -1,9 +1,11 @@
 """A5 修复：测试 UserProfileLearner 的 format string 注入修复"""
 import sys
 from pathlib import Path
+
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 import unittest
+
 from core.user_profile_learner import UserProfileLearner
 
 

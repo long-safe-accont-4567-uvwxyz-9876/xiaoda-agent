@@ -5,20 +5,21 @@ and registers them into the existing tool_registry.
 """
 
 import asyncio
+import contextlib
 import json
 import os
 import shutil
 import sys
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
-from collections.abc import Awaitable, Callable
 
 from loguru import logger
 
 import tool_engine.tool_registry as _tool_registry_mod
+
 from .tool_registry import ToolPermission, ToolResult
-import contextlib
 
 
 def _resolve_command_path(command: str) -> str:

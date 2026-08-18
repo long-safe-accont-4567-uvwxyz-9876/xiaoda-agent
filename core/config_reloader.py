@@ -24,15 +24,15 @@ import hashlib
 import json
 import threading
 import time
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any
-from collections.abc import Callable
 
 from loguru import logger
 
 try:
+    from watchdog.events import FileSystemEvent, FileSystemEventHandler
     from watchdog.observers import Observer
-    from watchdog.events import FileSystemEventHandler, FileSystemEvent
     _HAS_WATCHDOG = True
 except ImportError:
     _HAS_WATCHDOG = False

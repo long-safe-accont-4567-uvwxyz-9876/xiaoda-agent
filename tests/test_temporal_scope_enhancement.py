@@ -1,16 +1,15 @@
 """时间感知增强测试：_try_temporal_search 加入 scope 过滤 + EntityStore last_seen 更新"""
-import asyncio
-import time
-import pytest
 import sys
+import time
 from pathlib import Path
-from unittest.mock import AsyncMock, MagicMock
+
+import pytest
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from memory.scope import Scope
 from memory.entity_extractor import Entity
 from memory.entity_store import EntityStore, compute_entity_boost
+from memory.scope import Scope
 
 
 @pytest.fixture

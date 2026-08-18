@@ -8,14 +8,11 @@ GrowthNarrative / MailPoller）通过 asyncio.gather 并行初始化，且单点
 from __future__ import annotations
 
 import asyncio
-import os
 import sys
 import time
 import types
 from pathlib import Path
 from typing import Any
-
-import pytest
 
 PROJECT_ROOT = Path(__file__).parent.parent
 if str(PROJECT_ROOT) not in sys.path:

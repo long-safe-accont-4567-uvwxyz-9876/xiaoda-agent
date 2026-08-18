@@ -1,10 +1,16 @@
 import time
-import pytest
+
 import aiosqlite
-from workflow_v2.models import (
-    WorkflowRun, WorkflowStepRun, WorkflowRunEvent, RunStatus, StepStatus,
-)
+import pytest
+
 from db.db_workflow import create_schema
+from workflow_v2.models import (
+    RunStatus,
+    StepStatus,
+    WorkflowRun,
+    WorkflowRunEvent,
+    WorkflowStepRun,
+)
 from workflow_v2.repository import WorkflowRepository
 
 

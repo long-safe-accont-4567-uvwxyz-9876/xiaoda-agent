@@ -14,10 +14,10 @@ Run:
 """
 from __future__ import annotations
 
+import asyncio
 import os
 import sys
 import time
-import asyncio
 from pathlib import Path
 
 import pytest
@@ -30,7 +30,9 @@ pytestmark = pytest.mark.asyncio
 async def test_l2_golden_dataset():
     """L2: Golden Dataset 完整性验证."""
     from memory.matrix_governance import (
-        get_golden_dataset, get_golden_case, LLM_JUDGE_RUBRIC,
+        LLM_JUDGE_RUBRIC,
+        get_golden_case,
+        get_golden_dataset,
     )
 
     print("\n=== L2: Golden Dataset 完整性 ===")
@@ -100,10 +102,14 @@ async def test_l2_golden_dataset():
 async def test_l3_auto_optimizer():
     """L3: 自动优化器 — dry-run / 快照 / 回滚 / diff 计算."""
     import copy
+
     import prompt_builder
     from memory.matrix_governance import (
-        auto_optimize_matrix, save_snapshot, rollback_snapshot, list_snapshots,
+        auto_optimize_matrix,
         compute_matrix_diff,
+        list_snapshots,
+        rollback_snapshot,
+        save_snapshot,
     )
 
     print("\n=== L3: 自动优化器 ===")
@@ -175,9 +181,13 @@ async def test_l3_auto_optimizer():
 async def test_l4_ab_test():
     """L4: A/B 测试 — matched pairs / bootstrap CI / shadow 模式."""
     import copy
+
     import prompt_builder
     from memory.matrix_governance import (
-        ABTestRunner, _bootstrap_ci, _matched_pair_test, ABTestReport,
+        ABTestReport,
+        ABTestRunner,
+        _bootstrap_ci,
+        _matched_pair_test,
     )
 
     print("\n=== L4: A/B 测试 ===")
@@ -260,10 +270,14 @@ async def test_l4_ab_test():
 async def test_l5_health_evaluation():
     """L5: 效果验证 — 4 指标 / 回滚阈值 / 自动回滚."""
     import copy
+
     import prompt_builder
     from memory.matrix_governance import (
-        evaluate_matrix_health, capture_baseline, rollback_if_degraded,
-        ROLLBACK_THRESHOLDS, MatrixHealthReport,
+        ROLLBACK_THRESHOLDS,
+        MatrixHealthReport,
+        capture_baseline,
+        evaluate_matrix_health,
+        rollback_if_degraded,
     )
 
     print("\n=== L5: 效果验证 ===")
@@ -340,6 +354,7 @@ async def test_l5_health_evaluation():
 async def test_e2e_full_loop():
     """E2E: 完整闭环 — optimize_and_validate 入口."""
     import copy
+
     import prompt_builder
     from memory.matrix_governance import optimize_and_validate
 
@@ -395,9 +410,11 @@ async def test_l6_llm_judge_injection():
       5. report.llm_judge_avg_score 字段被填充
     """
     import copy
+
     import prompt_builder
     from memory.matrix_governance import (
-        ABTestRunner, ABTestReport,
+        ABTestReport,
+        ABTestRunner,
     )
 
     print("\n=== L6: LLM-as-Judge 注入 ===")

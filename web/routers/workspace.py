@@ -8,16 +8,15 @@
 from __future__ import annotations
 
 import os
-import uuid
 from datetime import datetime
 
 from fastapi import APIRouter, Depends, HTTPException
 from loguru import logger
 from pydantic import BaseModel
 
-from security.permission_manager import get_permission_manager, AuditEntry
-from web.schemas import Envelope
+from security.permission_manager import get_permission_manager
 from web.routers.auth import get_current_user
+from web.schemas import Envelope
 
 router = APIRouter(prefix="/workspace", tags=["workspace"], dependencies=[Depends(get_current_user)])
 

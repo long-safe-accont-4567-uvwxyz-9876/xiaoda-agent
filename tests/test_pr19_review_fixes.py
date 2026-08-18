@@ -11,7 +11,6 @@ from pathlib import Path
 import config
 from web.routers import setup
 
-
 # ── config._migrate_old_data ─────────────────────────────
 
 

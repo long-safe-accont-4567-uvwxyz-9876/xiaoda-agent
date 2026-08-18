@@ -95,5 +95,5 @@ def test_sticker_exact_filename_still_works(tmp_path):
 
 def test_resolve_emotion_crying_alias():
     """crying → Emotion.SAD 别名"""
-    from emotion.emotion_enum import resolve_emotion, Emotion
+    from emotion.emotion_enum import Emotion, resolve_emotion
     assert resolve_emotion("crying") == Emotion.SAD

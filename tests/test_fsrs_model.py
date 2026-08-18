@@ -1,15 +1,11 @@
 import math
 import time
 
-import pytest
-
 from memory.fsrs_model import (
     BUFFER_DAYS,
     D_INIT,
-    D_MEAN,
     DREAM_THRESHOLD,
     FORGET_THRESHOLD,
-    MEAN_REVERT,
     R_ARCHIVE,
     S_INIT,
     S_PERMANENT,

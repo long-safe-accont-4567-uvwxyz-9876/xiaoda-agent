@@ -1,21 +1,22 @@
-from typing import Any, ClassVar
 import asyncio
+import inspect
 import json
 import time
-import inspect
 from concurrent.futures import ThreadPoolExecutor
+from typing import Any, ClassVar
+
 from loguru import logger
 
-from .tool_registry import get_tool, ToolResult, resolve_tool_func
+from utils.metrics import metrics
+
 from .approver import (
-    Approver,
-    DefaultApprover,
-    SessionApprover,
-    ApprovalRequest,
     ApprovalDecision,
     ApprovalOutcome,
+    ApprovalRequest,
+    Approver,
+    DefaultApprover,
 )
-from utils.metrics import metrics
+from .tool_registry import ToolResult, get_tool, resolve_tool_func
 
 # 敏感参数关键词，匹配到的参数值会被屏蔽
 _SENSITIVE_KEYS = {'key', 'token', 'password', 'secret', 'api_key', 'credential'}
@@ -462,8 +463,9 @@ class ToolExecutor:
         返回 None 表示放行；返回字符串为拒绝原因；
         返回 "__NEEDS_CONFIRMATION__:<command>" 表示需用户确认（由 execute 转换）。
         """
-        from security.permission_manager import get_permission_manager, AuditEntry
         from datetime import datetime as _dt
+
+        from security.permission_manager import AuditEntry, get_permission_manager
         pm = get_permission_manager()
 
         # 文件工具：路径必须在 cwd 内

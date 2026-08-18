@@ -1,9 +1,10 @@
 # tests/test_salience.py
 """SalienceScorer 情绪加权评分测试"""
 import time
-import math
 from dataclasses import dataclass
+
 from memory.salience import SalienceScorer
+
 
 @dataclass
 class MockEntry:

@@ -4,9 +4,10 @@
 验证降级策略和错误恢复是否正确触发。
 """
 import random
-from loguru import logger
 from dataclasses import dataclass
 from enum import Enum
+
+from loguru import logger
 
 
 class FaultType(Enum):
