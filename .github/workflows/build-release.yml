@@ -745,6 +745,9 @@ jobs:
       # 部分 async/pytest-asyncio 测试在 CI 环境失败（本地同版本全绿）。
       - run: pip install -r requirements.lock -q
       - run: pip install pytest pytest-asyncio pytest-timeout
+      # requirements.lock 不含 prompt_toolkit（pyproject.toml dependencies 里有），
+      # test_cli_menu/test_cli_palette 等测试 import prompt_toolkit，缺失则收集报错。
+      - run: pip install prompt_toolkit
       # 创建测试环境：大量测试依赖 ~/.ai-agent/ 下的 agent 配置与 workspace 模板，
       # 缺失则启动时找不到配置导致测试失败/超时（ci-tests.yml 有此步骤，本地因
       # 已有 ~/.ai-agent/ 故全绿）。与 ci-tests.yml 的 Create test environment 对齐。
