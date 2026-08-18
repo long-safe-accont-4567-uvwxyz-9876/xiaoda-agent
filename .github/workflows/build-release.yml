@@ -740,6 +740,16 @@ jobs:
         with:
           python-version: '3.11'
           cache: pip
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+      # test_frontend_local_ai_contracts 等测试需要 esbuild 打包前端模块，
+      # test job 不构建前端但需要 node_modules。CI Tests workflow 不跑这些测试
+      # （continue-on-error + critical 子集），Build & Release test job 跑全集需要。
+      - name: Install frontend deps for tests
+        working-directory: web/frontend
+        run: npm install
       # 用 requirements.lock 锁定版本：与 ci-tests.yml 对齐，避免 requirements.txt
       # 版本范围解析到与 onnxruntime-genai ABI 不兼容的新版 onnxruntime，导致
       # 部分 async/pytest-asyncio 测试在 CI 环境失败（本地同版本全绿）。
