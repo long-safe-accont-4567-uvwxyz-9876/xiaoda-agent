@@ -145,6 +145,11 @@ jobs:
           pip install -r requirements.lock -q
           pip install ".[local-ai]"
           pip install fastapi uvicorn[standard] websockets python-multipart sse-starlette httpx Pillow numpy rich python-dotenv loguru openai aiosqlite pydantic jieba pyyaml pilk pywebview
+          # onnxruntime-genai 0.15.2 声明 Requires: onnxruntime（无版本约束），
+          # 上面的 pip install ".[local-ai]" 可能触发 pip 把 onnxruntime 从 lock 的
+          # 1.28.0 升级到最新版，导致 native lib ABI 不匹配、frozen exe 加载 genai so
+          # 失败。最后强制 pin 回实测兼容版本。
+          pip install "onnxruntime==1.28.0" "onnxruntime-genai==0.15.2"
 
       - name: Verify pilk installed (SILK codec for voice messages)
         shell: python
@@ -332,18 +337,27 @@ jobs:
             exit 1
           fi
           ls -lh "$ORT_GENAI"
+          echo "--- file 类型确认 ---"
+          file "$ORT_GENAI" || true
           SMOKE_DIR="$RUNNER_TEMP/local-ai-smoke"
           python scripts/create_ort_genai_smoke_model.py "$SMOKE_DIR"
           # smoke 失败时输出诊断信息（native lib 依赖、ldd 结果），便于定位
           # frozen exe 在 CI Linux 加载 genai so 失败的根因
-          if ! "$EXE" local-ai-smoke "$SMOKE_DIR"; then
-            echo "=== smoke 失败，诊断 native lib 依赖 ==="
+          echo "=== 运行 smoke 测试 ==="
+          "$EXE" local-ai-smoke "$SMOKE_DIR" 2>&1 | tee /tmp/smoke_output.txt
+          SMOKE_EXIT=${PIPESTATUS[0]}
+          if [ "$SMOKE_EXIT" -ne 0 ]; then
+            echo "=== smoke 失败（exit=$SMOKE_EXIT），诊断 native lib 依赖 ==="
             echo "--- genai so 依赖链 (ldd) ---"
-            ldd "$ORT_GENAI" 2>&1 | head -20 || true
+            ldd "$ORT_GENAI" 2>&1 | head -30 || true
             echo "--- onnxruntime so 依赖链 (ldd) ---"
-            find dist/xiaoda-agent -name "libonnxruntime.so*" -exec ldd {} \; 2>&1 | head -20 || true
+            find dist/xiaoda-agent -name "libonnxruntime.so*" -exec sh -c 'echo ">>> $1"; ldd "$1" 2>&1 | head -20' _ {} \; || true
             echo "--- dist 内 genai 相关文件 ---"
-            find dist/xiaoda-agent -iname "*genai*" 2>/dev/null | head -20 || true
+            find dist/xiaoda-agent -iname "*genai*" 2>/dev/null | head -30 || true
+            echo "--- dist 内 onnxruntime 相关文件 ---"
+            find dist/xiaoda-agent -iname "*onnxruntime*" 2>/dev/null | head -30 || true
+            echo "--- 完整 smoke stderr ---"
+            cat /tmp/smoke_output.txt
             exit 1
           fi
 
