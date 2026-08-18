@@ -54,11 +54,13 @@ def test_dotenv_loaded_on_config_import(monkeypatch):
     """config 导入链上 dotenv(ENV_PATH) 已执行（.env 中已定义的变量进 os.environ）"""
     import config_paths
     # 从 .env 文件读取一个键，验证导入后可见（用 ENV_PATH 解析而非硬编码键名）
-    env_text = Path(config_paths.ENV_PATH).read_text(encoding="utf-8", errors="ignore") \
-        if Path(config_paths.ENV_PATH).exists() else ""
+    env_path = Path(config_paths.ENV_PATH)
+    env_text = env_path.read_text(encoding="utf-8", errors="ignore") \
+        if env_path.exists() else ""
     defined_keys = [ln.split("=")[0].strip() for ln in env_text.splitlines()
                     if "=" in ln and not ln.strip().startswith("#") and ln.split("=")[0].strip()]
-    assert defined_keys, ".env 为空时本用例无意义，跳过断言也可"
+    if not defined_keys:
+        pytest.skip(".env 不存在或为空（CI 环境无 .env），本用例无意义")
     for key in defined_keys[:5]:
         assert key in os.environ, f".env 中的 {key} 应已进入 os.environ"
 

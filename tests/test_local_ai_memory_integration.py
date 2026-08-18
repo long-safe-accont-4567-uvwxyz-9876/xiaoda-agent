@@ -448,19 +448,31 @@ async def test_embedding_singleflight_accepts_same_text_after_cancelled_generati
     runtime.embed_entered = threading.Event()
     runtime.embed_release = threading.Event()
 
-    leader = asyncio.create_task(vector_store.embed(["retry"]))
-    assert await asyncio.to_thread(runtime.embed_entered.wait, 1)
-    waiter = asyncio.create_task(vector_store.embed(["retry"]))
-    await asyncio.sleep(0)
-    leader.cancel()
-    await asyncio.sleep(0)
-    assert not leader.done()
-    runtime.embed_release.set()
-    results = await asyncio.gather(leader, waiter, return_exceptions=True)
-    assert all(isinstance(result, asyncio.CancelledError) for result in results)
+    # 消除 selection_key 的 await 让出点：_embed_one 调用
+    # await self._local_provider.selection_key()（内含 await _resolve_runtime 等多次让出）。
+    # waiter 在这些让出点让出时 leader 可能被 cancel 导致 inflight 已清理，
+    # waiter 查不到 inflight 而独立发起新 embed。patch 为固定值避免让出，
+    # leader 和 waiter 用同一 key 才能共享 inflight。
+    import unittest.mock as _mock
+    with _mock.patch.object(
+        services.embedding, "selection_key", new=_mock.AsyncMock(return_value="test-fixed")
+    ):
+        leader = asyncio.create_task(vector_store.embed(["retry"]))
+        assert await asyncio.to_thread(runtime.embed_entered.wait, 1)
+        waiter = asyncio.create_task(vector_store.embed(["retry"]))
+        # selection_key 已 patch 为无让出，sleep(0) 足够让 waiter 到达 shield(inflight)
+        await asyncio.sleep(0)
+        leader.cancel()
+        await asyncio.sleep(0)
+        assert not leader.done()
+        runtime.embed_release.set()
+        results = await asyncio.gather(leader, waiter, return_exceptions=True)
+        assert all(isinstance(result, asyncio.CancelledError) for result in results)
 
     runtime.embed_entered = None
     runtime.embed_release = None
+    # 退出 mock 后重试：此时 inflight 已清理，selection_key 重新解析，
+    # embed 正常完成。mock 外的 embed_calls 仍是 leader 那次 + 这次重试 = 2 次。
     assert await asyncio.wait_for(vector_store.embed(["retry"]), 1) == [[1.0]]
     assert runtime.embed_calls == [["retry"], ["retry"]]
     assert vector_store._inflight == {}

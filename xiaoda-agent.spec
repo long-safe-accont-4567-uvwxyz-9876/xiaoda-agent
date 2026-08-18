@@ -528,7 +528,10 @@ excludes = [
     'unittest',
     'test',
     'tests',
-    'setuptools',
+    # 注意：不要 exclude 'setuptools'。pkg_resources 是 setuptools 的一部分，
+    # PyInstaller 的 pyi_rth_pkgres.py runtime hook 在启动时自动执行 import pkg_resources，
+    # 新版 pkg_resources 依赖 jaraco 模块。exclude setuptools 会导致 jaraco 缺失，
+    # frozen exe 启动时 ModuleNotFoundError: No module named 'jaraco'（CI Linux 复现）。
     'pip',
     # 注意：不要 exclude 'wheel'。PyInstaller 的 setuptools hook 会给
     # setuptools._vendor.wheel 建别名到 wheel，若 wheel 被 exclude 会抛
