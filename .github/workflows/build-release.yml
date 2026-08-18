@@ -46,7 +46,11 @@ jobs:
             libgcc-s1 \
             libglib2.0-0 \
             libssl3 \
-            zlib1g
+            zlib1g \
+            libnuma1 \
+            libgomp1 \
+            libatomic1 \
+            librt
 
       - name: Set up Python 3.11
         uses: actions/setup-python@v5
@@ -715,7 +719,11 @@ jobs:
             libgcc-s1 \
             libglib2.0-0 \
             libssl3 \
-            zlib1g
+            zlib1g \
+            libnuma1 \
+            libgomp1 \
+            libatomic1 \
+            librt
       - uses: actions/setup-python@v5
         with:
           python-version: '3.11'
