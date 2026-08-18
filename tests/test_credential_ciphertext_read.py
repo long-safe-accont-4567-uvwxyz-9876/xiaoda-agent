@@ -10,6 +10,7 @@ from __future__ import annotations
 import os
 import sys
 from pathlib import Path
+from unittest.mock import patch
 
 import pytest
 
@@ -17,6 +18,7 @@ _PROJECT_ROOT = Path(__file__).resolve().parent.parent
 if str(_PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(_PROJECT_ROOT))
 
+import security.credential_vault as cv
 from security.credential_vault import encrypt
 from model_router import _resolve_provider_key
 
@@ -36,7 +38,8 @@ def _clean_env():
 
 def test_resolve_provider_key_decrypts_ciphertext():
     """密文场景：env 里是 enc:v1: 密文时，应返回明文，而非密文。"""
-    enc = encrypt(PLAIN)
+    with patch.object(cv, "HAS_WIN32CRYPT", False):
+        enc = encrypt(PLAIN)
     assert enc.startswith("enc:v1:")
     os.environ["MIMO_API_KEY"] = enc
     assert _resolve_provider_key("MIMO_API_KEY") == PLAIN
