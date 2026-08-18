@@ -52,13 +52,14 @@ class QueryTransformer:
     TRANSFORM_CACHE_TTL = 600  # 10 分钟（秒）
 
     def __init__(self, router: Any | None=None, api_key: str = "", base_url: str = "",
-                 model: str = "", backend: str = "auto") -> None:
-        # backend: auto=有 key 用 API；local=走本地模型；api=强制 API；off=禁用
+                 model: str = "", backend: str = "api") -> None:
+        # backend: local=走本地模型；api=硅基流动免费模型；off=禁用（无 auto）
         self._router = router
         self._api_key = api_key or os.getenv("SILICONFLOW_API_KEY", "") or os.getenv("EMBED_API_KEY", "")
         self._base_url = base_url or "https://api.siliconflow.cn/v1"
         self._model = model or os.getenv("QUERY_TRANSFORM_MODEL", "THUDM/GLM-4-9B-0414")
-        self._backend = backend if backend in ("auto", "local", "api", "off") else "auto"
+        backend = "api" if backend == "auto" else backend
+        self._backend = backend if backend in ("local", "api", "off") else "api"
         self._local_model = None  # 功能节点独立选择的本地模型（None=全局共享）
         if self._backend == "off":
             self._available = False
@@ -74,8 +75,9 @@ class QueryTransformer:
         self._hyde_cache: OrderedDict[str, tuple[str | None, float]] = OrderedDict()
 
     def set_backend(self, backend: str, local_model: str | None = None) -> None:
-        """热更新后端选择（auto/local/api/off）。"""
-        if backend not in ("auto", "local", "api", "off"):
+        """热更新后端选择（local/api/off；历史值 auto 按 api）。"""
+        backend = "api" if backend == "auto" else backend
+        if backend not in ("local", "api", "off"):
             return
         self._backend = backend
         if local_model is not None:

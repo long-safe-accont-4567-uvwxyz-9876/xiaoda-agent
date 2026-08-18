@@ -715,6 +715,8 @@ async def test_bootstrap_uses_bundled_embedding_without_managed_selection(monkey
     )
 
     assert await services.embedding.embed(["hello"]) == [[5.0]]
+    # managed reranker 默认 local；无选中实例时显式切 api 走 remote fallback
+    services.reranker.set_backend("api")
     assert await services.reranker.score("q", ["a"]) == [0.0]
 
 
@@ -948,10 +950,109 @@ async def test_child_chunk_insert_is_compensated_when_vector_write_fails():
 
 @pytest.mark.asyncio
 async def test_hybrid_reranker_uses_remote_when_no_local_instance_is_selected():
+    # managed 默认 local；无选中实例 -> 显式切 api 才走 remote fallback
+    remote = LocalRerankerService(FakeRerankerRuntime())
+    service = LocalRerankerService.managed(FakeInstanceManager(), remote)
+    service.set_backend("api")
+
+    assert await service.score("q", ["a", "b"]) == [0.0, 1.0]
+
+
+@pytest.mark.asyncio
+async def test_local_backend_reports_unavailable_when_no_local_instance_selected():
+    # local 后端无选中实例 -> 结构化不可用，不静默回退云端
     remote = LocalRerankerService(FakeRerankerRuntime())
     service = LocalRerankerService.managed(FakeInstanceManager(), remote)
 
-    assert await service.score("q", ["a", "b"]) == [0.0, 1.0]
+    with pytest.raises(LocalRerankerUnavailableError):
+        await service.score("q", ["a"])
+    assert remote.calls == [] if hasattr(remote, "calls") else True
+
+
+class FakeApiRerankerFallback:
+    """模拟 memory.reranker.Reranker：只有 async rerank()，无 score()。
+
+    真实装配（core/bootstrap.py）把 SiliconFlow API 客户端作为 fallback
+    传入 LocalRerankerService；曾因 fallback 路径硬调 .score() 必然
+    AttributeError（生产日志 memory.rerank_failed 高频出现）。
+    """
+
+    def __init__(self) -> None:
+        self.calls: list[tuple[str, list[str]]] = []
+
+    @property
+    def available(self) -> bool:
+        return True
+
+    async def rerank(self, query, documents, top_n=5, return_documents=True):
+        self.calls.append((query, documents))
+        # 按文档长度给分（index 1 > 2 > 0），验证按 index 映射回输入顺序
+        ranked = sorted(
+            (
+                {"index": 1, "relevance_score": 2.0},
+                {"index": 2, "relevance_score": 1.0},
+                {"index": 0, "relevance_score": 0.5},
+            ),
+            key=lambda item: item["relevance_score"],
+            reverse=True,
+        )
+        # 只保留输入范围内且不超过 top_n 的项（真实 API 不会返回越界 index）
+        ranked = [item for item in ranked if item["index"] < len(documents)]
+        return ranked[: min(top_n, len(documents))]
+
+
+@pytest.mark.asyncio
+async def test_api_fallback_without_score_adapts_via_rerank():
+    """api 后端（无本地实例）-> fallback 只有 rerank() 时按 index 映射回输入顺序。"""
+    fallback = FakeApiRerankerFallback()
+    service = LocalRerankerService.managed(FakeInstanceManager(), fallback)
+    service.set_backend("api")
+
+    assert await service.score("q", ["a", "b", "c"]) == [0.5, 2.0, 1.0]
+    assert fallback.calls == [("q", ["a", "b", "c"])]
+
+
+@pytest.mark.asyncio
+async def test_api_backend_mode_uses_rerank_only_fallback():
+    """显式 api 后端同样走 rerank() 适配。"""
+    fallback = FakeApiRerankerFallback()
+    service = LocalRerankerService(None, fallback=fallback, backend="api")
+
+    assert await service.score("q", ["a", "b"]) == [0.5, 2.0]
+
+
+@pytest.mark.asyncio
+async def test_reranker_auto_backend_value_maps_to_api():
+    # 历史值 auto 已取消：构造/set_backend 一律按 api 处理
+    fallback = FakeApiRerankerFallback()
+    service = LocalRerankerService(None, fallback=fallback, backend="auto")
+    assert service._backend == "api"
+    service.set_backend("auto")
+    assert service._backend == "api"
+    assert await service.score("q", ["a"]) == [0.5]
+
+
+@pytest.mark.asyncio
+async def test_local_backend_without_local_selection_raises_unavailable():
+    """local 后端无本地实例 -> 结构化不可用，不静默回退云端。"""
+    fallback = FakeApiRerankerFallback()
+    service = LocalRerankerService.managed(FakeInstanceManager(), fallback)
+    service.set_backend("local")
+
+    with pytest.raises(LocalRerankerUnavailableError):
+        await service.score("q", ["a"])
+    assert fallback.calls == []
+
+
+@pytest.mark.asyncio
+async def test_fallback_without_score_or_rerank_reports_unavailable():
+    class _Bare:
+        available = True
+
+    service = LocalRerankerService(None, fallback=_Bare(), backend="api")
+
+    with pytest.raises(LocalRerankerUnavailableError):
+        await service.score("q", ["a"])
 
 
 @pytest.mark.asyncio

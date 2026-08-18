@@ -74,7 +74,14 @@ class TestFreeModelBackendContract:
     def test_invalid_backend_ignored(self):
         backend = FreeModelBackend()
         backend.set_backend("bogus")
-        assert backend.backend == "auto"
+        assert backend.backend == "api"
+
+    def test_auto_backend_alias_maps_to_api(self):
+        # 历史值 auto 已取消：一律按 api（硅基流动免费模型）处理
+        backend = FreeModelBackend(backend="auto")
+        assert backend.backend == "api"
+        backend.set_backend("auto")
+        assert backend.backend == "api"
 
 
 # ── 4 个完整复制者委托后行为不变 ──────────────────────────────

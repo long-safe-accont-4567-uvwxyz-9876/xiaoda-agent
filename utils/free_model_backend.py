@@ -1,9 +1,9 @@
 """LLM 功能节点后端切换器 —— 供内在世界各 LLM 调用点复用。
 
-backend 语义（与 web.local_deploy_nodes 的 generative 节点一致）：
-- local：走本地部署的对话模型（local-ort transport → LocalChatService，全局共享一个实例）
-- api/auto：走远程免费模型（硅基流动），调用方失败时降级主 LLM
-- off：关闭（不调用任何后端）
+backend 语义（与 web.node_registry / 前端按钮一致，无 auto）：
+- local：走本地部署的对话模型（local-ort transport -> LocalChatService，全局共享一个实例）
+- api：走远程免费模型（硅基流动），调用方失败时降级主 LLM
+- off：关闭（不调用任何后端）；历史值 auto 一律按 api 处理
 
 设计目标：让内在世界（情绪/画像/梦境/成长/回忆/蒸馏/本能等）的 LLM 调用点
 都能在 WebUI 上选择「本地模型」vs「远程免费模型」，复用同一套切换逻辑，
@@ -23,7 +23,9 @@ from utils.http_pool import get_shared_client
 DEFAULT_FREE_MODEL = "THUDM/GLM-4-9B-0414"  # 非思考模型，避免思考碎片污染结构化输出
 DEFAULT_BASE_URL = "https://api.siliconflow.cn/v1"
 
-_VALID_BACKENDS = ("auto", "local", "api", "off")
+_VALID_BACKENDS = ("local", "api", "off")
+# 历史值 auto 一律按 api 处理（节点后端已取消 auto，与前端按钮对齐）
+_BACKEND_ALIASES = {"auto": "api"}
 
 
 class FreeModelBackend:
@@ -31,7 +33,7 @@ class FreeModelBackend:
 
     def __init__(self, model: str = DEFAULT_FREE_MODEL,
                  base_url: str = DEFAULT_BASE_URL,
-                 backend: str = "auto") -> None:
+                 backend: str = "api") -> None:
         self._model = model
         # distiller 历史行为：允许 SILICONFLOW_BASE_URL env 覆盖默认端点
         self._base_url = os.getenv("SILICONFLOW_BASE_URL", base_url)
@@ -39,17 +41,19 @@ class FreeModelBackend:
         self._backup_key = ""
         self._router = None
         self._local_model = None
-        self._backend = backend if backend in _VALID_BACKENDS else "auto"
+        backend = _BACKEND_ALIASES.get(backend, backend)
+        self._backend = backend if backend in _VALID_BACKENDS else "api"
         if self._backend in ("local", "off"):
             # 启动即 local：暂存 key，禁用免费模型，走本地模型 / 关闭
             self._backup_key = self._api_key
             self._api_key = ""
 
     def set_backend(self, backend: str, local_model: str | None = None) -> None:
-        """热切换后端。local=本地模型；api/auto=免费模型；off=关闭。
+        """热切换后端。local=本地模型；api=免费模型；off=关闭（历史值 auto 按 api）。
 
         local_model 指定该功能节点独立选择的本地模型（None=全局共享）。
         """
+        backend = _BACKEND_ALIASES.get(backend, backend)
         if backend not in _VALID_BACKENDS:
             return
         self._backend = backend

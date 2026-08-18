@@ -15,11 +15,10 @@ from local_ai.integration.errors import (
 class LocalRerankerService:
     """本地重排服务：在本地模型（local_ai 实例）与远程 API 之间按 backend 选择。
 
-    backend ∈ auto / local / api / off：
-    - auto: 有本地实例选择 → 本地；否则回退远程 fallback
+    backend ∈ local / api / off（与前端按钮对齐，无 auto；历史值 auto 按 api）：
     - local: 强制本地（无本地实例时抛 LocalRerankerUnavailableError）
-    - api:  强制远程 fallback（无 fallback 或不可用时抛错）
-    - off:  禁用（任何调用抛 LocalRerankerUnavailableError）
+    - api:   强制远程 fallback（无 fallback 或不可用时抛错）
+    - off:   禁用（任何调用抛 LocalRerankerUnavailableError）
     """
 
     def __init__(
@@ -29,23 +28,31 @@ class LocalRerankerService:
         unavailable_error: Exception | None = None,
         instance_manager: Any = None,
         fallback: Any = None,
-        backend: str = "auto",
+        backend: str | None = None,
     ) -> None:
         self._runtime = runtime
         self._unavailable_error = unavailable_error
         self._instance_manager = instance_manager
         self._fallback = fallback
-        self._backend = backend if backend in ("auto", "local", "api", "off") else "auto"
+        # 默认后端按构造形态推断：managed（有 instance_manager）默认 api；
+        # 直连（仅传 runtime，无管理器/fallback）默认 local——直接用该 runtime。
+        if backend is None:
+            backend = "api" if instance_manager is not None else "local"
+        backend = "api" if backend == "auto" else backend
+        self._backend = backend if backend in ("local", "api", "off") else "api"
 
     def set_backend(self, backend: str) -> None:
-        """热更新后端选择（auto/local/api/off）。"""
-        if backend in ("auto", "local", "api", "off"):
+        """热更新后端选择（local/api/off；历史值 auto 按 api）。"""
+        backend = "api" if backend == "auto" else backend
+        if backend in ("local", "api", "off"):
             self._backend = backend
             logger.info("reranker.service_backend_set backend={}", backend)
 
     @classmethod
     def managed(cls, instance_manager: Any, fallback: Any) -> LocalRerankerService:
-        return cls(None, instance_manager=instance_manager, fallback=fallback)
+        # managed 形态默认 local：有实例管理器即优先用选中的本地实例；
+        # bootstrap.py 会紧接 set_backend(get_backend(...)) 用配置值覆盖。
+        return cls(None, instance_manager=instance_manager, fallback=fallback, backend="local")
 
     @property
     def available(self) -> bool:
@@ -53,16 +60,9 @@ class LocalRerankerService:
             return False
         if self._backend == "api":
             return bool(self._fallback and self._fallback.available)
-        if self._backend == "local":
-            return self._local_selection_available()
+        # local：有管理器看选中实例；直连形态看 runtime 健康
         if self._instance_manager is not None:
-            from local_ai.contracts import ModelPurpose
-
-            identity = self._instance_manager.selection_identity(ModelPurpose.RERANKER)
-            if identity is not None:
-                checker = getattr(self._instance_manager, "selection_available", None)
-                return bool(checker is not None and checker(ModelPurpose.RERANKER))
-            return bool(self._fallback and self._fallback.available)
+            return self._local_selection_available()
         health = getattr(self._runtime, "health", None)
         return bool(health is not None and health())
 
@@ -85,29 +85,30 @@ class LocalRerankerService:
         if self._backend == "api":
             if self._fallback is None or not self._fallback.available:
                 raise LocalRerankerUnavailableError("reranker api backend unavailable")
-            return await self._fallback.score(query, documents)
-        if self._backend == "local":
-            return await self._score_local(query, documents)
-        if self._instance_manager is not None:
-            from local_ai.contracts import ModelPurpose
-
-            identity = self._instance_manager.selection_identity(ModelPurpose.RERANKER)
-            if identity is None:
-                if self._fallback is None or not self._fallback.available:
-                    raise LocalRerankerUnavailableError("no local reranker model is selected")
-                return await self._fallback.score(query, documents)
-            return await self._score_local(query, documents)
-        if not self.available:
-            raise LocalRerankerUnavailableError("selected local reranker model is unavailable")
-        scores = await run_worker_to_completion(self._runtime.score, query, documents)
-        if len(scores) != len(documents):
-            raise RuntimeError(
-                f"local reranker returned {len(scores)} scores for {len(documents)} documents"
-            )
-        return scores
+            return await self._score_via_fallback(query, documents)
+        # local：强制本地实例，不可用即抛错（不静默回退云端）
+        return await self._score_local(query, documents)
 
     async def _score_local(self, query: str, documents: list[str]) -> list[float]:
-        """通过 local_ai 实例管理器获取本地 reranker 运行时打分。"""
+        """通过 local_ai 实例管理器获取本地 reranker 运行时打分。
+
+        直连形态（构造时直接传 runtime、无实例管理器）直接用该 runtime。
+        """
+        if self._instance_manager is None:
+            runtime = self._runtime
+            if runtime is None:
+                raise LocalRerankerUnavailableError("no local reranker runtime")
+            health = getattr(runtime, "health", None)
+            if health is not None and not health():
+                raise LocalRerankerUnavailableError(
+                    "selected local reranker model is unavailable"
+                )
+            scores = await run_worker_to_completion(runtime.score, query, documents)
+            if len(scores) != len(documents):
+                raise RuntimeError(
+                    f"local reranker returned {len(scores)} scores for {len(documents)} documents"
+                )
+            return scores
         from local_ai.contracts import ModelPurpose
 
         identity = self._instance_manager.selection_identity(ModelPurpose.RERANKER)
@@ -145,6 +146,44 @@ class LocalRerankerService:
         finally:
             if binding is not None:
                 self._instance_manager.release_runtime(*binding)
+
+    async def _score_via_fallback(self, query: str, documents: list[str]) -> list[float]:
+        """通过 fallback 打分，兼容 score() 与 rerank() 两种接口。
+
+        fallback 可能是本地 runtime 适配器（有同步 score(query, docs) ->
+        list[float]，走 worker 线程执行），也可能是远程 API 客户端（如
+        memory.reranker.Reranker，只有 async rerank(query, docs, top_n) ->
+        按分数排序的 [{index, relevance_score}]）。对后者取回全量分数后按
+        index 映射回输入顺序，保证返回值与 documents 同序。
+        """
+        import inspect
+
+        score_method = getattr(self._fallback, "score", None)
+        if score_method is not None:
+            if inspect.iscoroutinefunction(score_method):
+                scores = await score_method(query, documents)
+            else:
+                scores = await run_worker_to_completion(score_method, query, documents)
+        else:
+            rerank_method = getattr(self._fallback, "rerank", None)
+            if rerank_method is None:
+                raise LocalRerankerUnavailableError(
+                    "fallback reranker exposes neither score() nor rerank()"
+                )
+            ranked = await rerank_method(query, documents, top_n=len(documents))
+            scores = [0.0] * len(documents)
+            for item in ranked:
+                index = item.get("index")
+                if index is None or not 0 <= index < len(documents):
+                    raise LocalRerankerUnavailableError(
+                        f"fallback reranker returned invalid index {index!r}"
+                    )
+                scores[index] = float(item.get("relevance_score", 0.0))
+        if len(scores) != len(documents):
+            raise RuntimeError(
+                f"local reranker returned {len(scores)} scores for {len(documents)} documents"
+            )
+        return scores
 
     async def rerank(
         self,

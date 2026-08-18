@@ -13,7 +13,11 @@ from typing import Any
 from loguru import logger
 
 
-_BACKENDS = ("auto", "local", "api", "off")
+# 节点后端只有三种（与前端按钮对齐，无 auto）：
+#   local = 本地模型；api = 硅基流动免费模型；off = 关闭。
+# 存量配置里的 "auto"（历史值：有本地用本地否则 API）读取时映射为 "api"。
+_BACKENDS = ("local", "api", "off")
+_BACKEND_ALIASES = {"auto": "api"}
 
 # 节点注册表：kind=encoder 编码型（本地有专有模型）/ generative 生成型（本地=对话小模型）
 NODES: list[dict[str, Any]] = [
@@ -176,7 +180,10 @@ def valid_backend(value: str) -> bool:
 
 
 def get_backend(cfg: Any, node_id: str) -> str:
-    """读取节点当前配置的后端值（默认 auto；asr 默认 api）。"""
+    """读取节点当前配置的后端值（默认 api；asr 默认 api）。
+
+    历史值 "auto" 映射为 "api"（后端选择已取消 auto，只剩 local/api/off）。
+    """
     if node_id not in _NODE_MAP:
         raise ValueError(f"unknown model node: {node_id}")
     try:
@@ -186,6 +193,7 @@ def get_backend(cfg: Any, node_id: str) -> str:
         ).strip().lower()
     except Exception:  # noqa: BLE001
         value = _NODE_MAP[node_id]["default"]
+    value = _BACKEND_ALIASES.get(value, value)
     return value if valid_backend(value) else _NODE_MAP[node_id]["default"]
 
 
@@ -198,6 +206,7 @@ def set_backend(cfg: Any, node_id: str, backend: str, local_model: str | None = 
     if node_id not in _NODE_MAP:
         raise ValueError(f"unknown model node: {node_id}")
     backend = str(backend or "").strip().lower()
+    backend = _BACKEND_ALIASES.get(backend, backend)
     if not valid_backend(backend):
         raise ValueError(f"invalid backend: {backend!r}, must be one of {list(_BACKENDS)}")
     cfg.set(f"local_deploy.nodes.{node_id}", backend)
