@@ -2,8 +2,8 @@
   "name": "xiaolian",
   "display_name": "小涟",
   "display_name_en": "Xiaolian",
-  "provider": "agnes",
-  "model": "agnes-2.0-flash",
+  "provider": "mimo",
+  "model": "",
   "personality_file": "xiaolian_personality.md",
   "voice_ref": null,
   "excluded_tools": [
@@ -55,8 +55,8 @@
     "shell_command",
     "write_file"
   ],
-  "base_url": "https://apihub.agnes-ai.cn/v1",
-  "api_key_env": "AGNES_API_KEY",
+  "base_url": "",
+  "api_key_env": "MIMO_API_KEY",
   "capabilities": [
     "search",
     "lookup",

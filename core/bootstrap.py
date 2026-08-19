@@ -750,6 +750,7 @@ class AgentCoreBootstrapper:
             capabilities=["chat", "play", "fun"],
             route_description="日常聊天、玩耍、轻松有趣的对话",
             sticker_dir=str(XIAOLI_STICKER_DIR),
+            wallpaper=_load_persisted("xiaoli").get("wallpaper") or "",
         )
         await core.dispatcher.register(xiaoli_config)
         xiaolang_config = SubAgentConfig(
@@ -766,6 +767,7 @@ class AgentCoreBootstrapper:
             route_description="编程、代码编写、调试、技术问题、硬件控制、系统运维、开发辅助",
             # 默认关闭 git/github MCP：首次安装不再自动启用（需在 WebUI 权限矩阵按需开启）
             mcp_servers=[],
+            wallpaper=_load_persisted("xiaolang").get("wallpaper") or "",
         )
         await core.dispatcher.register(xiaolang_config)
         xiaolian_config = SubAgentConfig(
@@ -780,6 +782,7 @@ class AgentCoreBootstrapper:
             api_key_env=_resolved_api_key_env("xiaolian"),
             capabilities=["search", "lookup", "query", "explore", "discover"],
             route_description="搜索信息、查询资料、探索发现",
+            wallpaper=_load_persisted("xiaolian").get("wallpaper") or "",
         )
         await core.dispatcher.register(xiaolian_config)
         xiaoke_config = SubAgentConfig(
@@ -794,6 +797,7 @@ class AgentCoreBootstrapper:
             api_key_env=_resolved_api_key_env("xiaoke"),
             capabilities=["research", "analysis", "study", "academic"],
             route_description="研究分析、学术思考、深度解读",
+            wallpaper=_load_persisted("xiaoke").get("wallpaper") or "",
         )
         await core.dispatcher.register(xiaoke_config)
 

@@ -2,16 +2,16 @@
   "name": "xiaolang",
   "display_name": "小狼",
   "display_name_en": "Xiaolang",
-  "provider": "agnes",
-  "model": "agnes-2.0-flash",
+  "provider": "mimo",
+  "model": "",
   "personality_file": "xiaolang_personality.md",
   "voice_ref": null,
   "excluded_tools": [
     "call_xiaoda",
     "call_xiaoli"
   ],
-  "base_url": "https://apihub.agnes-ai.cn/v1",
-  "api_key_env": "AGNES_API_KEY",
+  "base_url": "",
+  "api_key_env": "MIMO_API_KEY",
   "capabilities": [
     "coding",
     "debug",

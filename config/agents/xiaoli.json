@@ -2,8 +2,8 @@
   "name": "xiaoli",
   "display_name": "小莉",
   "display_name_en": "Xiaoli",
-  "provider": "siliconflow",
-  "model": "deepseek-ai/DeepSeek-V4-Pro",
+  "provider": "mimo",
+  "model": "",
   "personality_file": "xiaoli_personality.md",
   "voice_ref": "xiaoli/xiaoli",
   "excluded_tools": [
@@ -56,8 +56,8 @@
     "wolfram_query",
     "write_file"
   ],
-  "base_url": "https://api.siliconflow.cn/v1",
-  "api_key_env": "SILICONFLOW_API_KEY",
+  "base_url": "",
+  "api_key_env": "MIMO_API_KEY",
   "capabilities": [
     "chat",
     "play",

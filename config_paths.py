@@ -58,7 +58,12 @@ def get_env_path() -> Path:
 
 
 ENV_PATH = get_env_path()
-load_dotenv(ENV_PATH, override=True)
+# 关键（2026-08-19）：override=False —— .env 仅作为默认值填充，不覆盖已存在的
+# 系统/命令行环境变量。此前 override=True 会用项目根 .env 里写死的
+# KIOXIA_DATA_DIR=/mnt/usb2/nahida-data 强制覆盖外部环境变量，导致换机器部署时
+# 无法用环境变量指定数据盘，且本机 U 盘路径被锁死。改为 False 后：系统环境变量
+# 优先，.env 仅兜底（未设环境变量时才生效），兼顾本机特殊 U 盘与可移植部署。
+load_dotenv(ENV_PATH, override=False)
 
 # 确保 PyInstaller 打包后 HTTPS 请求能找到 CA 证书
 # certifi 的 cacert.pem 必须被正确打包，否则所有 API 请求都会因 SSL 错误失败
@@ -201,17 +206,30 @@ def _resolve_data_path(kioxia_path: Path, fallback_path: Path) -> Path:
             return _ensure_fallback(fallback_path)
     try:
         kioxia_path.mkdir(parents=True, exist_ok=True)
-        # 运行时只读检测：尝试写入临时文件验证文件系统是否可写
-        # 修复：FAT 文件系统错误导致 remount 只读时，os.access(W_OK) 仍返回 True
-        # 因此需要实际写入测试文件
+        # 运行时只读检测：尝试写入临时文件并读回，验证文件系统是否可写。
+        # 修复：FAT 文件系统错误导致 remount 只读时，os.access(W_OK) 仍返回 True，
+        # 因此需要实际写入测试文件。
+        # 关键修复（2026-08-19）：探针删除（unlink）可能被外部 safe-delete 拦截器
+        # 拦截（如 CodeBuddy 的 genie-trash 会尝试移到 /mnt/usb2/.Trash-1000，而该
+        # 回收站目录权限拒绝 → 抛 OSError）。此异常与"文件系统只读"无关，绝不能因此
+        # 误判外置盘不可写而回退 fallback（曾导致 U 盘向量库/媒体目录全部静默回退到
+        # 系统盘，用户数据失效）。判定可写性只看"能写入 + 能读回"，删除探针失败忽略。
         _probe = kioxia_path / ".write_probe"
         try:
             _probe.write_text("probe", encoding="utf-8")
-            _probe.unlink(missing_ok=True)
+            # 读回验证写入确实落盘（区分真正的只读 FS：写入不报错但读回为空/旧内容）
+            if _probe.read_text(encoding="utf-8") != "probe":
+                raise OSError("write not persisted")
             logger.debug("config.data_path_writable path=%s", kioxia_path)
         except (OSError, PermissionError):
             logger.warning("config.data_path_readonly path=%s", kioxia_path)
             raise OSError(f"Filesystem is read-only: {kioxia_path}") from None
+        finally:
+            # 删除探针：即便被 safe-delete 拦截抛错也忽略，不影响可写性结论
+            try:
+                _probe.unlink(missing_ok=True)
+            except (OSError, PermissionError):
+                logger.debug("config.data_path_probe_cleanup_skipped path=%s", kioxia_path)
         return kioxia_path
     except (OSError, PermissionError):
         logger.debug("config.data_path_resolve_failed", exc_info=True)
@@ -490,8 +508,11 @@ XIAOLI_STICKER_DIR.mkdir(parents=True, exist_ok=True)
 AGENT_STICKER_BASE = Path.home() / ".ai-agent" / "agent-stickers"
 AGENT_STICKER_BASE.mkdir(parents=True, exist_ok=True)
 FILE_DIR = _resolve_data_path(_KIOXIA_BASE / "files", _FALLBACK_BASE / "files")
-# 媒体目录（用户上传图片、生成的 TTS/图片/视频、壁纸等可写资源）
-MEDIA_DIR = _resolve_data_path(_KIOXIA_BASE / "media", _FALLBACK_BASE / "media")
+# 媒体目录（用户上传图片、生成的 TTS/图片/视频、壁纸等可写资源）。
+# 固定系统盘用户目录，不参与 _resolve_data_path 的 U 盘分支：壁纸/小图资源仅 5 张、
+# 体积极小，与 U 盘解耦（U 盘只承载向量库 db/files 等大体积数据）。与 STICKER_DIR /
+# VOICE_REF_DIR / CONFIG_DIR 同构，使用 Path.home()/.ai-agent 体系，非硬编码绝对路径。
+MEDIA_DIR = Path.home() / ".ai-agent" / "media"
 # 参考音频目录（用户上传的 TTS 参考音频，按 agent 分子目录）——每次 TTS 热读，迁系统盘
 VOICE_REF_DIR = Path.home() / ".ai-agent" / "voice_refs"
 VOICE_REF_DIR.mkdir(parents=True, exist_ok=True)
