@@ -19,7 +19,7 @@ const navItems = [
   { icon: 'flow', labelKey: 'nav.workflows', route: '/workflows' },
   { icon: 'plugins', labelKey: 'nav.plugins', route: '/settings/plugins' },
   { icon: 'insight', labelKey: 'nav.insight', route: '/insight' },
-  { icon: 'chip', labelKey: 'nav.retrieval', route: '/retrieval' },
+  { icon: 'search', labelKey: 'nav.retrieval', route: '/retrieval' },
   { icon: 'schedule', labelKey: 'nav.schedule', route: '/schedule' },
   { icon: 'mail', labelKey: 'nav.mail', route: '/settings/mail' },
   { icon: 'media', labelKey: 'nav.media', route: '/media' },

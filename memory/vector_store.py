@@ -246,6 +246,11 @@ class VectorStore:
         self._selected_local_service = embedding_service is not None
         self._initialized = False
         self._closed = False
+        # 自动重建状态：维度不匹配时由 _init_db_sync 置 True，init() 异步触发重建
+        self._needs_rebuild = False
+        self._rebuild_from_dims = 0
+        self._rebuild_to_dims = 0
+        self._rebuild_in_progress = False
         self._lock = threading.Lock()
         self._embed_client = None
         self._vec_conn = None
@@ -373,6 +378,8 @@ class VectorStore:
                 if provider is not None:
                     self._local_provider = provider
                     logger.info("vector_store.embed_mode_switched mode=local")
+                    # 切换后检测维度变化：local provider 维度可同步获取
+                    self._check_dimension_after_switch()
                 else:
                     logger.warning("vector_store.embed_mode_switch_failed mode=local")
             else:
@@ -380,9 +387,59 @@ class VectorStore:
                 if client is not None:
                     self._embed_client = client
                     logger.info("vector_store.embed_mode_switched mode=remote")
+                    # remote 模式维度需首次 API 调用才知道，这里不检测，
+                    # 由后续 embed 时 _validate_dimension / init 自动检测
                 else:
                     logger.warning("vector_store.embed_mode_switch_failed mode=remote")
             return self.embed_engine_status()
+
+    def _check_dimension_after_switch(self) -> None:
+        """切换 embed 引擎后检测维度变化，不匹配则触发异步自动重建。
+
+        仅 local 模式可同步获取 provider 维度；remote 模式靠 embed 时自动检测。
+        """
+        if self._rebuild_in_progress or self._needs_rebuild:
+            return  # 已在重建或已标记
+        if not self._vec_conn:
+            return  # 未初始化，无需检测
+        # 获取新引擎的目标维度
+        target_dims = 0
+        if self._embed_mode == "local" and self._local_provider is not None:
+            try:
+                # 懒加载 provider 以拿到真实维度
+                if not getattr(self._local_provider, "ready", False):
+                    self._local_provider.load()
+                target_dims = getattr(self._local_provider, "dimensions", 0) or 0
+            except Exception:  # noqa: BLE001
+                return
+        if target_dims <= 0:
+            return  # 无法确定目标维度，跳过
+        # 读取现有表维度
+        try:
+            row = self._vec_conn.execute(
+                "SELECT embedding FROM memories_vec LIMIT 1"
+            ).fetchone()
+            if row is None or row[0] is None:
+                return  # 空表，无需重建
+            raw = row[0]
+            existing_dims = len(raw) // 4 if isinstance(raw, (bytes, bytearray)) else 0
+            if existing_dims > 0 and existing_dims != target_dims:
+                self._needs_rebuild = True
+                self._rebuild_from_dims = existing_dims
+                self._rebuild_to_dims = target_dims
+                logger.warning(
+                    "vector_store.dimension_mismatch_after_switch "
+                    "existing={} target={} hint=auto rebuild triggered",
+                    existing_dims, target_dims,
+                )
+                # 尝试异步触发重建（有事件循环时）
+                try:
+                    asyncio.create_task(self._auto_rebuild())
+                except RuntimeError:
+                    # 无事件循环（同步上下文），由下次 init() 触发
+                    logger.debug("vector_store.rebuild_deferred_no_loop")
+        except Exception as e:  # noqa: BLE001
+            logger.debug("vector_store.dimension_check_after_switch_failed error={}", str(e))
 
     def start_local_engine(self) -> dict:
         """启动本地 embedding 引擎：确保 local 模式 + 预加载模型（含 NPU 探测）。
@@ -495,6 +552,129 @@ class VectorStore:
                 logger.warning("vector_store.brute_init_failed error={}", str(e))
                 self._brute = None
 
+        # 维度不匹配自动重建：_init_db_sync 检测到表维度≠模型维度时置 _needs_rebuild
+        # 异步触发重建（不阻塞 init 返回），重建完成后重新初始化向量库连接。
+        if self._needs_rebuild and not self._rebuild_in_progress:
+            asyncio.create_task(self._auto_rebuild())
+
+    async def _auto_rebuild(self) -> None:
+        """维度不匹配时自动重建向量库（异步后台执行）。
+
+        触发时机：
+        1. init() 启动时检测到表维度≠当前模型维度
+        2. set_embed_mode() 切换模型后维度变化
+
+        实现方式：调用现有重建脚本（scripts/rebuild_vec_local.py 或
+        rebuild_vec_remote.py）作为子进程执行。脚本负责：
+        - 备份旧库 → 读 agent.db 文本源 → 重新向量化 → 重建 4 张表 → 原子替换
+        重建完成后本方法重新初始化向量库连接，使新维度立即生效。
+
+        安全保障：
+        - _rebuild_in_progress 标记防止并发重建
+        - 重建期间向量检索不可用（INSERT 会失败，search 返回空）
+        - 旧库已备份（.bak-<ts>），失败可回滚
+        """
+        if self._rebuild_in_progress:
+            return
+        self._rebuild_in_progress = True
+        from_dims = self._rebuild_from_dims
+        to_dims = self._rebuild_to_dims
+        mode = self._embed_mode
+        logger.info(
+            "vector_store.auto_rebuild_start from={} to={} mode={}",
+            from_dims, to_dims, mode,
+        )
+        try:
+            # 选择重建脚本：local 用本地模型，remote 用远程 API
+            script_name = "rebuild_vec_local.py" if mode == "local" else "rebuild_vec_remote.py"
+            script_path = str(Path(__file__).resolve().parent.parent / "scripts" / script_name)
+            if not Path(script_path).exists():
+                logger.error("vector_store.auto_rebuild_script_missing path={}", script_path)
+                return
+
+            # 关闭当前向量库连接（脚本要替换文件）
+            await self._close_vec_conn_for_rebuild()
+
+            # 调用重建脚本（子进程）
+            import subprocess
+            cmd = [sys.executable, script_path]
+            # remote 模式传入 API 配置
+            if mode == "remote":
+                api_key = self._embed_api_key or os.getenv("SILICONFLOW_API_KEY", "")
+                base_url = self._embed_base_url or "https://api.siliconflow.cn/v1"
+                model = self._embed_model or "BAAI/bge-m3"
+                cmd.extend(["--model", model, "--base-url", base_url, "--api-key", api_key])
+
+            logger.info("vector_store.auto_rebuild_running cmd={}", " ".join(cmd[:2]))
+            result = await asyncio.to_thread(
+                subprocess.run, cmd,
+                capture_output=True, text=True, timeout=3600,
+            )
+            if result.returncode != 0:
+                logger.error(
+                    "vector_store.auto_rebuild_failed rc={} stderr={}",
+                    result.returncode, (result.stderr or "")[:500],
+                )
+                return
+            logger.info(
+                "vector_store.auto_rebuild_done stdout_tail={}",
+                (result.stdout or "")[-300:],
+            )
+
+            # 重建成功：更新维度并重新初始化
+            self._dimensions = to_dims
+            self._needs_rebuild = False
+            self._rebuild_from_dims = 0
+            self._rebuild_to_dims = 0
+            # 清理 numpy 暴力索引缓存（维度已变，旧索引无效）
+            if self._brute is not None:
+                try:
+                    self._brute.close()
+                except Exception:  # noqa: BLE001
+                    pass
+                self._brute = None
+            brute_dir = Path(self._db_path).parent / (Path(self._db_path).stem + "_brute")
+            if brute_dir.exists():
+                import shutil
+                shutil.rmtree(brute_dir, ignore_errors=True)
+            # 重新初始化向量库连接（新维度）
+            self._closed = False
+            self._vec_conn, is_fat = await asyncio.to_thread(self._init_db_sync)
+            # 重新加载 numpy 暴力索引
+            if self._brute_enabled:
+                from memory.numpy_index import NumpyBruteIndex
+                base_dir = Path(self._db_path).parent / (Path(self._db_path).stem + "_brute")
+                self._brute_base_dir = str(base_dir)
+                self._brute = NumpyBruteIndex(dim=self._dimensions, base_dir=base_dir)
+                try:
+                    await asyncio.to_thread(self._load_brute_sync)
+                    if self._brute.ready:
+                        logger.info("vector_store.brute_ready_after_rebuild")
+                    else:
+                        self._brute = None
+                except Exception as e:  # noqa: BLE001
+                    logger.warning("vector_store.brute_init_after_rebuild_failed error={}", str(e))
+                    self._brute = None
+            logger.info(
+                "vector_store.auto_rebuild_complete new_dims={} mode={}",
+                self._dimensions, mode,
+            )
+        except Exception as e:  # noqa: BLE001
+            logger.exception("vector_store.auto_rebuild_error error={}", str(e))
+        finally:
+            self._rebuild_in_progress = False
+
+    async def _close_vec_conn_for_rebuild(self) -> None:
+        """重建前关闭向量库连接（释放文件锁，让脚本能替换文件）。"""
+        with self._lock:
+            if self._vec_conn:
+                try:
+                    self._vec_conn.close()
+                except Exception:  # noqa: BLE001
+                    logger.debug("vector_store.rebuild_close_conn_failed", exc_info=True)
+                self._vec_conn = None
+            self._initialized = False
+
     def _init_db_sync(self) -> tuple[Any, bool]:
         """在后台线程中初始化 SQLite 数据库，加载 sqlite_vec 扩展并创建向量虚拟表。"""
         import sqlite3
@@ -556,10 +736,11 @@ class VectorStore:
                     # 固化检测到的维度，避免并发首 INSERT 竞态
                     self._dimensions = dims
 
-                # local 模式：表已存在但维度与本地模型不一致（如 1024→512）时，
-                # 不能原地改表结构，INSERT 会静默失败。检测到不匹配直接报错，
-                # 由迁移脚本（scripts/rebuild_vec_local.py）重建表并重新向量化。
-                if self._embed_mode == "local" and self._local_provider is not None and not self._dimensions_explicit:
+                # 维度不匹配检测（local/remote 均适用）：
+                # vec0 虚拟表结构无法原地改维度，INSERT 会静默失败。检测到不匹配时
+                # 不再直接 raise（旧实现要求手动跑脚本），而是记录重建标记，
+                # 由 init() 异步触发自动重建（调用 scripts/rebuild_vec_*.py）。
+                if not self._dimensions_explicit:
                     try:
                         row = conn.execute(
                             "SELECT embedding FROM memories_vec LIMIT 1"
@@ -570,10 +751,16 @@ class VectorStore:
                                 existing_dims = len(raw) // 4
                             else:
                                 existing_dims = dims
-                            if existing_dims != dims:
-                                raise RuntimeError(
-                                    f"memories_vec dims={existing_dims} != local embed dims={dims}；"
-                                    "请先运行 scripts/rebuild_vec_local.py 重建向量库"
+                            if existing_dims != dims and existing_dims > 0:
+                                # 记录重建标记：init() 检测到后异步触发自动重建
+                                self._needs_rebuild = True
+                                self._rebuild_from_dims = existing_dims
+                                self._rebuild_to_dims = dims
+                                logger.warning(
+                                    "vector_store.dimension_mismatch_needs_rebuild "
+                                    "existing={} target={} mode={} "
+                                    "hint=auto rebuild will be triggered",
+                                    existing_dims, dims, self._embed_mode,
                                 )
                     except sqlite3.OperationalError:
                         logger.debug("vector_store.memories_vec_table_missing_create", exc_info=True)  # 表不存在（首次初始化），正常创建
