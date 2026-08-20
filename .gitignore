@@ -24,7 +24,6 @@ _run.bat
 # === Trae IDE junk (Unicode private-use chars in filenames) ===
 cription*
 ion to*
-?????*
 
 # === Build artifacts ===
 build/
