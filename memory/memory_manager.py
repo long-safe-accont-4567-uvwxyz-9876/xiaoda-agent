@@ -346,9 +346,10 @@ class MemoryManager:
         return await self._retrieval._apply_entity_boost(query, candidates, scope)
 
     async def _hybrid_fts_search_scoped(self, query: str, k: int,
-                                         scope: Any, is_raw: int | None) -> list[dict]:
+                                         scope: Any, is_raw: int | None,
+                                         rewritten_query: str | None = None) -> list[dict]:
         return await self._retrieval._hybrid_fts_search_scoped(
-            query, k, scope, is_raw)
+            query, k, scope, is_raw, rewritten_query=rewritten_query)
 
     async def _distill_to_knowledge(self, raw_id: int, summary: str,
                                      scope: Any, importance: float = 0.5,

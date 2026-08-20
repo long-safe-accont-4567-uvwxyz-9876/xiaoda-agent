@@ -60,12 +60,14 @@ class TestVectorRecallDistanceFilter:
         results = await mm._hybrid_vec_search("Python 配置数据库连接", k=10)
 
         # P0-2 软降权契约：distance > RAG_VEC_MAX_DISTANCE 的向量不再被向量通道硬丢弃，
-        # 而是降权保留（乘 RAG_VEC_SOFT_PENALTY=0.3），交给下游 final_score 兜底过滤。
-        # 这里 distance>=1.5 → sim=(1-distance)*0.3 <= 0 → 被 max(0,...) 截为 0，
-        # 即远距离向量被降到最低分（而非美化成高分），下游仍不会返回给用户。
+        # 而是降权保留（乘 RAG_VEC_SOFT_PENALTY），交给下游 final_score 兜底过滤。
+        # P0-3 修复后：超阈值向量使用 (1 - dist/(max_dist*1.2)) * penalty 公式，
+        # 确保 sim > 0（即使 dist 略超 max_dist），Reranker 可正常排序。
+        # 远距离向量（dist=1.5 >> max_dist=1.15）的 sim 极低（≈0.006），
+        # 不会影响排序，且会被 RAG_MIN_FINAL_SCORE 过滤。
         assert results, "软降权后向量通道仍返回候选（交给 final_score 兜底）"
         for r in results:
-            assert r["score"] == 0.0, f"远距离向量应被降权到 0，但 score={r['score']}"
+            assert r["score"] < 0.05, f"远距离向量应被降权到极低分，但 score={r['score']}"
 
     @pytest.mark.asyncio
     async def test_close_vectors_kept(self):
@@ -108,15 +110,18 @@ class TestVectorRecallDistanceFilter:
 
         results = await mm._hybrid_vec_search("query", k=10)
 
-        # P0-2 软降权契约：4 条都进入向量通道候选，但 303/304（distance>1.0）被降权到 score=0，
-        # 301/302（distance<1.0）保持正常相关分。下游 final_score 会过滤掉降权项。
-        # 这里验证：相关项保留且高分，无关项被降到最低分（而非被向量通道硬丢弃）。
+        # P0-2 软降权契约：4 条都进入向量通道候选，但 303/304（distance>1.15）被降权，
+        # 301/302（distance<1.15）保持正常相关分。下游 final_score 会过滤掉降权项。
+        # P0-3 修复后：超阈值向量使用 (1 - dist/(max_dist*1.2)) * penalty 公式，
+        # 产生极低但非零的分数（如 dist=1.4 → sim≈0.013），Reranker 可正常排序。
         assert len(results) == 4, f"软降权后 4 条都进入候选，实际 {len(results)} 条"
         by_id = {r["id"]: r for r in results}
         assert by_id[301]["score"] > 0.0, "相关向量 301 应保持正分"
         assert by_id[302]["score"] > 0.0, "相关向量 302 应保持正分"
-        assert by_id[303]["score"] == 0.0, f"无关向量 303 应被降权到 0，实际 {by_id[303]['score']}"
-        assert by_id[304]["score"] == 0.0, f"无关向量 304 应被降权到 0，实际 {by_id[304]['score']}"
+        assert by_id[303]["score"] < 0.05, f"无关向量 303 应被降权到极低分，实际 {by_id[303]['score']}"
+        assert by_id[304]["score"] < 0.05, f"无关向量 304 应被降权到极低分，实际 {by_id[304]['score']}"
+        # 相关项分数应远高于无关项
+        assert by_id[301]["score"] > by_id[303]["score"] * 10, "相关项分数应远高于无关项"
 
 
 class TestRRFFusionQualityFloor:

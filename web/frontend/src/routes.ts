@@ -37,6 +37,7 @@ export const routes: RouteRecordRaw[] = [
       { path: 'settings/plugins', name: 'plugins', component: () => import('./views/PluginsView.vue') },
       { path: 'settings/mail', name: 'mail', component: () => import('./views/MailView.vue') },
       { path: 'settings/system', name: 'settings', component: () => import('./views/SettingsView.vue') },
+      { path: 'retrieval', name: 'retrieval', component: () => import('./views/RetrievalView.vue') },
       { path: 'workflows', name: 'workflows', component: () => import('./views/WorkflowView.vue') },
       { path: 'disclaimer', name: 'disclaimer', component: () => import('./views/DisclaimerView.vue') },
       { path: 'sponsor', name: 'sponsor', component: () => import('./views/SponsorView.vue') },

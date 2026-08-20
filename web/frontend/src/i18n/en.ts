@@ -65,6 +65,7 @@ export default {
     workflows: 'Workflows',
     plugins: 'Plugins',
     insight: 'Inner World',
+    retrieval: 'Retrieval',
     schedule: 'Schedule',
     mail: 'Mail',
     media: 'Media Studio',

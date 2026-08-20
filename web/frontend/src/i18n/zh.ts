@@ -65,6 +65,7 @@ export default {
     workflows: '工作流',
     plugins: '插件管理',
     insight: '内在世界',
+    retrieval: '检索配置',
     schedule: '定时与问候',
     mail: '邮箱管理',
     media: '媒体工坊',

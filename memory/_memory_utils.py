@@ -132,6 +132,12 @@ def _parse_temporal_query(query: str) -> tuple[float, float] | None:
     4. 绝对日期+时间范围：7月15号早上7点到8点/7月15号7点到9点
 
     无时间词返回 None。
+
+    P0 修复：混合查询（含时间词+实质内容）不再短路走 temporal_search。
+    根因："我最近在写什么后端代码"含"最近"被误判为纯时间查询，跳过 RRF+Reranker，
+    导致 final_score=0.0000 且召回质量极差。只有纯时间查询（如"昨天发生了什么"）
+    才走 temporal_search 短路；混合查询走正常语义检索，时间词作为 metadata selector
+    参与过滤（在 _build_metadata_selectors 中处理）。
     """
     now = _datetime.datetime.now(_datetime.UTC).astimezone()
 
@@ -190,6 +196,7 @@ def _parse_temporal_query(query: str) -> tuple[float, float] | None:
             return start.timestamp(), end.timestamp()
 
     # ── 4. 纯相对时间词（原有逻辑）──
+    _temporal_match = None
     for pattern, offset_days, span_days in _TEMPORAL_PATTERNS:
         if pattern.search(query):
             start_date = (now - _datetime.timedelta(days=offset_days + span_days - 1)).replace(
@@ -198,8 +205,30 @@ def _parse_temporal_query(query: str) -> tuple[float, float] | None:
             end_date = (now - _datetime.timedelta(days=offset_days - 1)).replace(
                 hour=0, minute=0, second=0, microsecond=0
             ) if offset_days > 0 else now
-            return start_date.timestamp(), end_date.timestamp()
-    return None
+            _temporal_match = (start_date.timestamp(), end_date.timestamp())
+            break
+
+    # ── 5. 混合查询检测 ──
+    # P0 修复："我最近在写什么后端代码"含"最近"被误判为纯时间查询，
+    # 跳过 RRF+Reranker 导致 final_score=0.0000 且召回质量极差。
+    # 判定规则：去掉时间词后剩余有效内容长度 > 4 → 混合查询 → 返回 None
+    # 纯时间查询如"最近发生了什么"去掉"最近"后只剩"发生了什么"（4字），判定为纯时间。
+    # 混合查询如"我最近在写什么后端代码"去掉"最近"后剩"我在写什么后端代码"（9字），判定为混合。
+    if _temporal_match is not None:
+        stripped = query
+        for pattern, _, _ in _TEMPORAL_PATTERNS:
+            stripped = pattern.sub("", stripped)
+        stripped = stripped.strip()
+        effective_len = 0
+        for ch in stripped:
+            if '\u4e00' <= ch <= '\u9fff' or '\u3400' <= ch <= '\u4dbf':
+                effective_len += 2
+            elif ch.isalnum():
+                effective_len += 1
+        if effective_len > 8:
+            return None
+
+    return _temporal_match
 
 
 def _collect_parsed_dates(query: str, now: _datetime.datetime) -> list[_datetime.datetime]:
@@ -374,7 +403,8 @@ def _extract_topic_keywords(query: str, top_n: int = 2) -> list[str]:
 
 
 def reciprocal_rank_fusion(ranked_lists: list[list[str]], *, k: int = 60, limit: int = 10,
-                           weights: list[float] | None = None) -> list[tuple[str, float]]:
+                           weights: list[float] | None = None,
+                           rank_penalty: float = 1.0) -> list[tuple[str, float]]:
     """Reciprocal Rank Fusion: 多路排序融合算法
 
     Args:
@@ -384,6 +414,11 @@ def reciprocal_rank_fusion(ranked_lists: list[list[str]], *, k: int = 60, limit:
         weights: 各通道权重 (长度须与 ranked_lists 一致)。
             None 或全等值时退化为等权 RRF (向后兼容)。
             空列表通道不参与融合, 自动置零 (空通道熔断)。
+        rank_penalty: 排名惩罚指数 p (RRF rank_penalty)。
+            p=1.0 退化为标准 RRF (向后兼容)。
+            p>1 放大头部 rank 优势——rank 1 的候选相对 rank N 的得分差距被指数级拉开，
+            解决 bge-large 下语义近邻与干扰项 L2 距离极接近 (0.95 vs 1.10)、
+            线性 RRF 无法区分导致语义近邻被挤出 top-k 的问题。
     """
     scores: dict[str, float] = {}
     for i, ranked in enumerate(ranked_lists):
@@ -391,7 +426,7 @@ def reciprocal_rank_fusion(ranked_lists: list[list[str]], *, k: int = 60, limit:
             continue  # 空通道自动跳过, 不稀释有效候选
         w = weights[i] if weights and i < len(weights) else 1.0
         for rank, item_id in enumerate(ranked, start=1):
-            scores[item_id] = scores.get(item_id, 0.0) + w * 1.0 / (k + rank)
+            scores[item_id] = scores.get(item_id, 0.0) + w * 1.0 / ((k + rank) ** rank_penalty)
     return sorted(scores.items(), key=lambda x: x[1], reverse=True)[:limit]
 
 

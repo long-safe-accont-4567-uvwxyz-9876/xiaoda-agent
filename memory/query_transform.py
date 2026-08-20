@@ -203,8 +203,10 @@ class QueryTransformer:
             return cached
 
         prompt = f"""将以下用户查询改写为更适合文档检索的关键词查询。
-保持语义不变，去除口语化表达，补充必要的上下文信息。
-只输出改写后的查询，不要解释。
+要求：
+1. 保留核心语义，去除口语化表达
+2. 推断可能的关联关键词并补充（如"饮食偏好"补充"香菜 豆浆 川菜 咖啡"，"后端代码"补充"Python FastAPI SQLAlchemy Docker"）
+3. 只输出改写后的查询，不要解释
 
 原始查询: {original_query}
 对话上下文: {context[-200:] if context else '无'}

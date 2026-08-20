@@ -17,10 +17,8 @@ from memory._memory_utils import (
     _stage_log,
     _parse_temporal_query,
     _extract_topic_keywords,
-    _extract_entities,
     _char_bigrams,
     _natural_time_desc,
-    _normalize_for_dedupe,
     _normalize_score,
     reciprocal_rank_fusion,
 )
@@ -482,8 +480,10 @@ class RetrievalEngine(EntityKgBoostMixin, MemoryMetadataMixin):
         try:
             import config as _cfg
             warm_vec_weight = getattr(_cfg, "MEMORY_WARM_VEC_WEIGHT", 0.6)
+            rank_penalty = getattr(_cfg, "RAG_RRF_RANK_PENALTY", 1.0)
         except (ImportError, AttributeError):
             warm_vec_weight = 0.6
+            rank_penalty = 1.0
         # 温用户: 向量低权重 (default 0.6:1.0); 热用户: 均衡 (1.0:1.0)
         # P0-2 调整：0.2→0.6，避免温用户期间语义召回被过度压制导致"记不住"
         if is_warm:
@@ -496,7 +496,7 @@ class RetrievalEngine(EntityKgBoostMixin, MemoryMetadataMixin):
             fts_weight, vec_weight)
         fused = reciprocal_rank_fusion(
             ranked_lists, limit=rerank_limit,
-            weights=weights,
+            weights=weights, rank_penalty=rank_penalty,
         )
 
         # 按 RRF 排序获取完整记录（合并所有通道候选）
@@ -700,12 +700,23 @@ class RetrievalEngine(EntityKgBoostMixin, MemoryMetadataMixin):
                     # 与绝对阈值过滤配合时分数失真。绝对距离 0~1.0 映射相似度 1.0~0.0，
                     # 与 RAG_MIN_FINAL_SCORE / RRF 的分数语义对齐。
                     # P0-2: 硬阈值改软降权。distance > _max_distance 不再丢弃，
-                    # 而是降权保留（乘 0.3），避免语义查询整体偏远时向量通道空转。
+                    # 而是降权保留，避免语义查询整体偏远时向量通道空转。
                     # Reranker 仍可判定相关性，噪声由 final_score 最低分过滤兜底。
-                    sim = max(0.0, 1.0 - distance)
-                    if distance > _max_distance:
+                    # P0-3 修复：原实现 sim = max(0, 1-dist) * penalty，当 dist>1.0 时
+                    # sim=0，乘以任何 penalty 仍为 0，降权系数完全无效！
+                    # 诊断："饮食偏好"→"不吃香菜" dist=1.19，sim=0，Reranker 无法捞回。
+                    # 修复：超阈值时使用 (1 - dist/max_dist*1.2) * penalty 公式，
+                    # 确保 sim > 0（即使 dist 略超 max_dist），Reranker 可正常排序。
+                    if distance <= _max_distance:
+                        sim = max(0.0, 1.0 - distance)
+                    else:
                         _demoted_count += 1
-                        sim = sim * _soft_penalty  # 软降权不丢弃
+                        # 超阈值软降权：用 (1 - dist/(max_dist*1.2)) * penalty
+                        # 确保在 dist 略超 max_dist 时 sim 仍为正数。
+                        # 例：max_dist=1.15, dist=1.19, penalty=0.5:
+                        #   sim = (1 - 1.19/1.38) * 0.5 = (1-0.862) * 0.5 = 0.069
+                        # Reranker 可基于此非零分排序，而非一律 0 分无法区分。
+                        sim = max(0.01, (1.0 - distance / (_max_distance * 1.2))) * _soft_penalty
                     mem["score"] = sim
                     items.append(mem)
             if _demoted_count > 0:
@@ -1284,10 +1295,18 @@ class RetrievalEngine(EntityKgBoostMixin, MemoryMetadataMixin):
                     queries, k, scope=scope)
                 _stage_log("multi_query_search", __st, query)
         else:
-            # 单查询直接混合检索（与包装层行为一致：use_reranker/use_kg 默认 True，
-            # 闲聊型查询同样走全量 Reranker + KG + CRAG，保证主战场记忆检索质量）
+            # 单查询直接混合检索
+            # 修复：使用 queries[0]（改写后查询）而非原始 query。
+            # 根因：QUERY_EXPAND_COUNT=0 时 _transform_queries 返回 [rewritten]，
+            # 但原代码用原始 query 调 retrieve_memories_hybrid，导致改写结果被丢弃，
+            # FTS 无法利用改写后的关键词（如"后端代码"→"编程 Python FastAPI"）。
+            # queries[0] 在改写关闭/降级时等于原始 query，行为向后兼容。
+            # 注：不做双查询并行检索（原查询+改写查询同时跑），因为：
+            # 1. 候选池翻倍 = 另一种查询扩展，引入噪声破坏精确率
+            # 2. FTS 改写查询补充已在 _hybrid_fts_search_scoped 中实现，更精准
+            # 3. 向量通道用改写查询 embed，语义覆盖已足够
             all_results = await self._mm.retrieve_memories_hybrid(
-                query, k=k, scope=scope)
+                queries[0], k=k, scope=scope)
         return all_results
 
     async def _score_and_rank_results(self, query: str, results: list[dict],
@@ -1453,7 +1472,6 @@ class RetrievalEngine(EntityKgBoostMixin, MemoryMetadataMixin):
         修复：conv_user_id 非空时按 user_id 过滤，仅返回当前用户的对话。
               conv_user_id 为空时保留原行为（向后兼容，但不应在新代码中使用）。
         """
-        import time as _time
         try:
             # P0 修复：按 conv_user_id 过滤，防止跨用户对话泄露
             raw = await self._mm.memory.get_conversations_by_time_range(
@@ -2007,15 +2025,19 @@ class RetrievalEngine(EntityKgBoostMixin, MemoryMetadataMixin):
             r["kg_boost"] = kg_boost
             r["importance_score"] = importance
             r["recency_boost"] = recency
-            # 统一评分公式: rerank 0.45 + R 0.15 + recency 0.15 + kg 0.1 + importance 0.15
-            # P0-1 调整：R 权重 0.25→0.15（effective_score 已不再含 R，避免衰减过狠）
-            # rerank 0.4→0.45（相关性权重提升），importance 0.1→0.15（重要记忆保底）
+            # 统一评分公式：从 config 读取权重，WebUI 可实时调整
+            # 默认: rerank=0.60, R=0.10, recency=0.10, kg=0.10, importance=0.10
+            # bench_memory_recall_vec 实测最优：rerank 主导排序，importance 仅微调
+            _w_rerank = getattr(config, 'RAG_RERANK_WEIGHT', 0.60)
+            _w_kg = getattr(config, 'RAG_KG_WEIGHT', 0.10)
+            _w_importance = getattr(config, 'RAG_IMPORTANCE_WEIGHT', 0.10)
+            _w_residual = max(0.0, 1.0 - _w_rerank - _w_kg - _w_importance) / 3.0
             r["final_score"] = (
-                rerank_score * 0.45     # Reranker 精排分数
-                + R * 0.15              # FSRS-DSR Retrievability（衰减单次计入）
-                + recency * 0.15        # 时间新鲜度加成
-                + kg_boost * 0.1        # KG 增强分数
-                + importance * 0.15     # 记忆重要性
+                rerank_score * _w_rerank
+                + R * _w_residual
+                + recency * _w_residual
+                + kg_boost * _w_kg
+                + importance * _w_importance
             )
 
     async def _apply_topic_trigger(self, query: str, results: list[dict],
@@ -2123,4 +2145,3 @@ class RetrievalEngine(EntityKgBoostMixin, MemoryMetadataMixin):
             logger.debug("memory.batch_touched", count=len(mem_ids))
         except Exception as e:
             logger.warning("memory.batch_touch_error", error=str(e))
-

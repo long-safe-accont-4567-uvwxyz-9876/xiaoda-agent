@@ -100,7 +100,15 @@ class SearchMixin:
     async def _search_fts_impl(self, query: str, limit: int, scope: Any | None,
                                is_raw: int | None, event_label: str) -> list[dict]:
         from db.fts_utils import _build_fts_query
-        fts_query = _build_fts_query(query)
+        try:
+            import config as _cfg
+            _drop_single = getattr(_cfg, "FTS_DROP_CJK_SINGLE", False)
+            _filter_stop = getattr(_cfg, "FTS_CJK_STOP_WORDS_FILTER", False)
+        except (ImportError, AttributeError):
+            _drop_single = False
+            _filter_stop = False
+        fts_query = _build_fts_query(query, drop_cjk_single=_drop_single,
+                                     filter_stop_words=_filter_stop)
         if not fts_query:
             return []
         try:

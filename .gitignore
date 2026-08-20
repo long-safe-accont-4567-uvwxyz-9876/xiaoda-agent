@@ -1,75 +1,106 @@
 
+# === Assets (keep .gitkeep) ===
 assets/stickers/*
 !assets/stickers/.gitkeep
 assets/voice_refs/*
 !assets/voice_refs/.gitkeep
+
+# === Backup files ===
 *.bak
 *.bak-*
+
+# === Logs ===
+*.log
+logs/
 botpy.log.*
+
+# === Temporary / diagnostic files ===
+_diag_*.txt
+_cleanup*.py
+_cleanup_result.txt
+_run.ps1
+_run.bat
+
+# === Trae IDE junk (Unicode private-use chars in filenames) ===
+cription*
+ion to*
+?????*
+
+# === Build artifacts ===
 build/
-# Build artifacts
+dist/
+*.egg-info/
+xiaoda_agent.egg-info/
+
+# === Config / secrets ===
 config/credential_salt.bin
 config/webui_overrides.json
 credentials/
-data/
-*.db
-db/agent_vec_brute/
-db/ccr_cache/
-.dbg/
-*.db-shm
-*.db-wal
-dist/
-.DS_Store
 .env
 .env.*~
 .env.*.bak
 .env.bak-*
 .env.prod
 *.key
-*.log
-logs/
-<MagicMock*
+*.secret
+
+# === Data / runtime ===
+data/
+*.db
+*.db-shm
+*.db-wal
+*.sqlite
+*.sqlite3
+db/agent_vec_brute/
+db/ccr_cache/
+db/xp_state.json
+state/
+.dbg/
 market/.cache
 /media/
 models/*.nb
-node_modules/
-npu/a733_npu_driver/
-# NPU 运行时备份文件
 nul
+
+# === Python cache ===
 *.pyc
-__pycache__/
 *.pyo
-scripts/npu/*.bak-*
-*.secret
-*.sqlite
-*.sqlite3
-state/
-.superpowers/
-.superpowers-skills
-_test.py
-tests/benchmark_results.json
-Thumbs.db
-.trae/
-.venv/
+__pycache__/
+.ruff_cache/
+.pytest_cache/
+
+# === Node / Frontend ===
+node_modules/
 !web/dist/
 !web/dist/**
+web/frontend/tsconfig.tsbuildinfo
 web/frontend/public/assets/wallpapers/*
 !web/frontend/public/assets/wallpapers/xiaoda.jpg
 !web/frontend/public/assets/wallpapers/xiaoke.jpg
 !web/frontend/public/assets/wallpapers/xiaolang.jpg
 !web/frontend/public/assets/wallpapers/xiaolian.jpg
 !web/frontend/public/assets/wallpapers/xiaoli.jpg
-web/frontend/tsconfig.tsbuildinfo
 web/media/
 web/public/images/wallpapers/*
-.worktrees/
-xiaoda_agent.egg-info/
-# 临时/构建产物
-# 测试泄漏到仓库根目录的 mock 产物（MagicMock 的 db_path 残留）
-# 第三方 NPU 驱动调研材料（独立 git 仓库，不入库）
-# 调试脚本（不提交到生产）
-# 运行时缓存（向量暴力索引 / 上下文压缩缓存）
-# 通用备份文件
-db/xp_state.json
+
+# === IDE / tool junk ===
+.DS_Store
+Thumbs.db
+.trae/
+.venv/
+.vscode/
+.superpowers/
+.superpowers-skills
 .scan_reports/
 .workbuddy/
+.zcode/
+.worktrees/
+.auto_update
+<MagicMock*
+
+# === NPU ===
+npu/a733_npu_driver/
+scripts/npu/*.bak-*
+
+# === Test artifacts ===
+_test.py
+tests/benchmark_results.json

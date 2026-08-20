@@ -115,14 +115,46 @@ class EntityKgBoostMixin:
             return candidates
 
     async def _hybrid_fts_search_scoped(self, query: str, k: int,
-                                         scope: Any, is_raw: int | None) -> list[dict]:
-        """FTS 检索 + scope 过滤（mem0 SPEC 优化）"""
+                                         scope: Any, is_raw: int | None,
+                                         rewritten_query: str | None = None) -> list[dict]:
+        """FTS 检索 + scope 过滤 + 改写查询补充检索
+
+        当 QueryTransformer 可用时，额外用改写后的查询做一次 FTS 检索，
+        合并去重后返回。这解决了"饮食偏好"无法 FTS 命中"香菜/豆浆"的问题：
+        改写后查询包含推断的关联关键词，FTS 可直接匹配。
+
+        Args:
+            rewritten_query: 外部已改写的查询（避免重复调 LLM）。None 时内部改写。
+        """
         if not self._mm.memory:
             return []
         try:
-            return await self._mm.memory.search_memories_fts_scoped(
+            primary_results = await self._mm.memory.search_memories_fts_scoped(
                 query, scope=scope, limit=k * 2, is_raw=is_raw
             )
+
+            # FTS 改写查询补充：用改写后的查询做补充 FTS 检索
+            # 仅当 QueryTransformer 可用且改写结果与原查询不同时执行
+            if self._mm._query_transformer and self._mm._query_transformer.available:
+                try:
+                    _rewritten = rewritten_query
+                    if _rewritten is None:
+                        _rewritten = await self._mm._query_transformer.rewrite_query(query, "")
+                    if _rewritten and _rewritten != query:
+                        rewritten_results = await self._mm.memory.search_memories_fts_scoped(
+                            _rewritten, scope=scope, limit=k, is_raw=is_raw
+                        )
+                        if rewritten_results:
+                            # 合并去重：改写查询结果补充原查询未命中的记忆
+                            seen_ids = {r.get("id") for r in primary_results}
+                            for r in rewritten_results:
+                                if r.get("id") not in seen_ids:
+                                    seen_ids.add(r.get("id"))
+                                    primary_results.append(r)
+                except Exception as e:
+                    logger.debug("memory.fts_rewrite_supplement_failed", error=str(e))
+
+            return primary_results
         except Exception as e:
             logger.warning("memory.fts_scoped_search_failed", error=str(e))
             return []

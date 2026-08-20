@@ -169,13 +169,37 @@ def _safe_positive_float(env_val: str | None, default: float) -> float:
 
 RERANKER_OVERSAMPLE_RATIO = _safe_int(os.getenv("RERANKER_OVERSAMPLE_RATIO"), 3)
 
+# RRF rank_penalty：排名惩罚指数（解决 bge-large 下语义近邻与干扰项 L2 距离极接近、
+# 线性 RRF 无法区分导致语义近邻被挤出 top-k 的问题）。p=1.0 为标准 RRF（向后兼容）。
+# p>1 放大头部 rank 优势。默认 1.0：经 bench 量化后再决定是否上调。
+RAG_RRF_RANK_PENALTY = _safe_float(os.getenv("RAG_RRF_RANK_PENALTY"), 1.0)
+
+# FTS CJK 单字降噪：开启后，长查询（含 len>=2 多字词）丢弃 CJK 单字 token。
+# 诊断证实单字噪声真实存在（"我"OR 匹配几乎所有记忆），但 A/B 量化证明降噪
+# 严重负向（Recall 78.1%->25.0%）：语义改写查询（"我的联系方式是多少"）记忆
+# 字面不含多字词（"手机号"），单字匹配是其 FTS 通道唯一命中兜底，降噪即摧毁。
+# 默认 false 且不建议开启；保留开关供未来配合"查询重写"（rewrite_query 已有）
+# 场景下再量化。
+FTS_DROP_CJK_SINGLE = os.getenv("FTS_DROP_CJK_SINGLE", "false").lower() in ("1", "true", "yes")
+
+# FTS CJK 停用词过滤：比 FTS_DROP_CJK_SINGLE 更精准的降噪策略。
+# 只过滤已知高频无意义单字（我/的/了/是/在/有/和/不 等），保留有区分度的单字
+# （叫/吃/写/喝 等）。FTS_DROP_CJK_SINGLE 删所有单字导致 Recall 78.1%→25.0%，
+# 停用词方案避免此问题。
+# 实测（bge-large + reranker, k=8）：停用词过滤 Recall 85.4% vs 无过滤 87.5%，
+# 轻微负向（-2.1%），因"我的证件号码"等查询中"我"被过滤后 FTS 信号减弱。
+# 配合查询改写（rewrite_query）后停用词过滤可能更安全——改写后查询已含具体关键词，
+# 不再依赖"我"做 FTS 兜底。默认 false，留开关供后续配合改写再量化。
+FTS_CJK_STOP_WORDS_FILTER = os.getenv("FTS_CJK_STOP_WORDS_FILTER", "false").lower() in ("1", "true", "yes")
+
 # Query Transform
 QUERY_TRANSFORM_ENABLED = os.getenv("QUERY_TRANSFORM_ENABLED", "true").lower() in ("1", "true", "yes")
 QUERY_EXPAND_COUNT = _safe_int(os.getenv("QUERY_EXPAND_COUNT"), 0)  # 默认关闭多查询扩展（实测不好用），rewrite_query 仍保留
-# HyDE（假设文档嵌入）：开启时生成假设答案文档，与原查询向量混合检索，提升语义召回率。
-# 默认开启（HYDE_ENABLED=true）：向量通道在 _hybrid_vec_search 中单独使用 HyDE，
-# 生成失败返回 None 自动降级为原始查询检索，不影响主路径。
-HYDE_ENABLED = os.getenv("HYDE_ENABLED", "true").lower() in ("1", "true", "yes")
+# HyDE（假设文档嵌入）：开启时生成假设答案文档，与原查询向量混合检索。
+# 默认关闭（HYDE_ENABLED=false）：远程实测 Recall@5 从 78.1% 降至 53.1%（-25%），
+# 假设文档噪声大于收益，与多查询扩展结论一致。
+# 环境变量 HYDE_ENABLED=true 可重新启用，后续换更贴合数据/调参(alpha)可再量化。
+HYDE_ENABLED = os.getenv("HYDE_ENABLED", "false").lower() in ("1", "true", "yes")
 # 检索扩散开关：False=精准检索（搜什么就是什么，跳过 expand_query 和 _spreading_recall）
 # True=扩散检索（向后兼容，生成额外查询目标 + 概念图扩散）
 # 默认开启：配合 Reranker 精排兜底，扩散召回的结果可被交叉编码器过滤，
@@ -252,15 +276,18 @@ ERROR_RULE_STRICT_MODE = os.getenv("ERROR_RULE_STRICT_MODE", "true").lower() in 
 # P6: 增量上下文构建与 Prompt Caching —— 开启后拆分系统提示稳定段/动态段并标记缓存
 PROMPT_CACHING_ENABLED = os.getenv("PROMPT_CACHING_ENABLED", "false").lower() in ("1", "true", "yes")
 
-# RAG Fusion Weights
-RAG_RERANK_WEIGHT = _safe_float(os.getenv("RAG_RERANK_WEIGHT"), 0.65)
-RAG_KG_WEIGHT = _safe_float(os.getenv("RAG_KG_WEIGHT"), 0.15)
-RAG_IMPORTANCE_WEIGHT = _safe_float(os.getenv("RAG_IMPORTANCE_WEIGHT"), 0.20)
+# RAG Fusion Weights（与 _compute_final_scores 评分公式对齐）
+# bench_memory_recall_vec 实测最优：rerank=0.60 主导排序，importance=0.10 仅微调
+# 原配置 rerank=0.65/importance=0.20 导致高重要性但不相关的记忆挤掉相关记忆
+RAG_RERANK_WEIGHT = _safe_float(os.getenv("RAG_RERANK_WEIGHT"), 0.60)
+RAG_KG_WEIGHT = _safe_float(os.getenv("RAG_KG_WEIGHT"), 0.10)
+RAG_IMPORTANCE_WEIGHT = _safe_float(os.getenv("RAG_IMPORTANCE_WEIGHT"), 0.10)
 
 # RAG 候选集大小（每路召回 Top-N，RRF 融合后送 Reranker 的数量）
-# 扩大候选池让 Reranker 有更多选择空间，从 100→150（每路），Reranker 限额从 50→80
-RAG_RECALL_LIMIT = _safe_int(os.getenv("RAG_RECALL_LIMIT"), 150)  # 默认150：扩大候选池，让Reranker有更大选择空间
-RAG_RERANK_LIMIT = _safe_int(os.getenv("RAG_RERANK_LIMIT"), 80)   # 默认80：Reranker精排候选上限，配合扩大召回池
+# 120: 七路并行每路120条=最多840条候选，多数路返回不到120条，足够覆盖有效候选
+# 过大(150)浪费排序开销，RRF融合后截到rerank_limit送Reranker
+RAG_RECALL_LIMIT = _safe_int(os.getenv("RAG_RECALL_LIMIT"), 120)
+RAG_RERANK_LIMIT = _safe_int(os.getenv("RAG_RERANK_LIMIT"), 60)
 
 # RAG 最低相关分过滤：final_score 低于此值的结果被视为噪声丢弃
 # 根因（bench_rag_e2e 实测）：技术型 query 在向量库无精确命中时，RRF 融合会
@@ -272,14 +299,22 @@ RAG_MIN_FINAL_SCORE = _safe_float(os.getenv("RAG_MIN_FINAL_SCORE"), 0.08)
 # 根因（TDD test_rag_quality_root_fix 诊断）：原 _hybrid_vec_search 用相对归一化
 # (1 - distance/max_dist) 美化距离，即使最远的向量也接近 1.0 高分，导致
 # Python query 召回亲密内容。改用绝对 L2 距离阈值，distance > 此值的向量
-# 直接丢弃，不进入 RRF 融合。
-# bge-m3 输出已 L2 归一化，distance 范围 0~2：
-#   < 0.8 = 相关, 0.8-1.0 = 弱相关, > 1.0 = 基本无关
-# 默认 1.2：适度放宽软降权阈值，让远距候选不被过度压制，给 Reranker 更多候选空间。
-# 降级后 score 仍会被 RAG_MIN_FINAL_SCORE 过滤（0.08），不影响最终输出质量。
-# 若希望严格过滤噪声，设 RAG_VEC_MAX_DISTANCE=1.0。
-RAG_VEC_MAX_DISTANCE = _safe_float(os.getenv("RAG_VEC_MAX_DISTANCE"), 1.2)
-RAG_VEC_SOFT_PENALTY = _safe_float(os.getenv("RAG_VEC_SOFT_PENALTY"), 0.3)  # P0-2: 超阈值降权系数
+# 软降权保留（乘 RAG_VEC_SOFT_PENALTY），不直接丢弃，给 Reranker 更多候选空间。
+# bge-large-zh-v1.5 输出已 L2 归一化，distance 范围 0~2：
+#   < 0.8 = 相关, 0.8-1.0 = 弱相关, 1.0-1.2 = 语义相关但词汇不同, > 1.2 = 基本无关
+# 诊断（bge-large + reranker）："饮食偏好"→"不吃香菜" dist=1.19,
+# "后端代码"→"Docker/JWT" dist=1.01-1.09，这些语义相关但词汇不同的记忆
+# 在阈值 1.0 下被软降权到 0.3，分数过低无法被 Reranker 捞回。
+# 默认 1.15：让 1.0-1.15 区间的弱相关向量不被降权，1.15+ 的仍降权。
+# 降权后 score 仍会被 RAG_MIN_FINAL_SCORE 过滤（0.08），不影响最终输出质量。
+RAG_VEC_MAX_DISTANCE = _safe_float(os.getenv("RAG_VEC_MAX_DISTANCE"), 1.15)
+# P0-2: 超阈值降权系数。0.3 过低导致语义相关但词汇不同的记忆被过度压制。
+# 诊断："饮食偏好"→"不吃香菜" dist=1.19, 降权后 sim=(1-1.19)*0.3=-0.057→0，
+# Reranker 完全无法捞回。提高到 0.5：sim=(1-1.19)*0.5=-0.095→0，仍为 0。
+# 但 1.15-1.19 区间的记忆（如"川菜馆" dist=1.193）在阈值 1.15 下降权：
+# sim=(1-1.193)*0.5=-0.097→0，仍不够。需配合 RAG_VEC_MAX_DISTANCE=1.15 使用，
+# 让 dist<1.15 的不被降权，dist>=1.15 的降权系数 0.5 比 0.3 更温和。
+RAG_VEC_SOFT_PENALTY = _safe_float(os.getenv("RAG_VEC_SOFT_PENALTY"), 0.6)
 
 # ── 记忆/情绪阈值 (可环境变量覆盖) ──
 # 情绪触发安慰记忆检索的强度阈值 (0.0~1.0)
