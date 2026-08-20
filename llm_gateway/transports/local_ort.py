@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from typing import Any, AsyncIterator, Callable
+from loguru import logger
 
 from llm_gateway.contracts import ProviderCapabilities
 from llm_gateway.transports.base import (

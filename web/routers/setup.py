@@ -349,7 +349,7 @@ async def _test_get_with_bearer(key_value: str, url: str, name: str,
         return False, f"{name} API 请求超时"
     except (httpx.HTTPError, OSError, RuntimeError, ValueError) as e:
         return False, f"{name} API 请求失败: {e}"
-    except Exception:
+    except Exception as e:
         logger.exception("setup._test_get_with_bearer.unexpected_error")
         return False, f"{name} API 请求失败: {e}"
 
@@ -377,7 +377,7 @@ async def _test_mimo(key_value: str) -> tuple[bool, str]:
         return False, "MiMo API 请求超时"
     except (httpx.HTTPError, OSError, RuntimeError, ValueError) as e:
         return False, f"MiMo API 请求失败: {e}"
-    except Exception:
+    except Exception as e:
         logger.exception("setup._test_mimo.unexpected_error")
         return False, f"MiMo API 请求失败: {e}"
 
@@ -404,7 +404,7 @@ async def _test_qqbot(app_id: str, app_secret: str) -> tuple[bool, str]:
         return False, "QQ Bot API 请求超时"
     except (httpx.HTTPError, OSError, RuntimeError, ValueError) as e:
         return False, f"QQ Bot API 请求失败: {e}"
-    except Exception:
+    except Exception as e:
         logger.exception("setup._test_qqbot.unexpected_error")
         return False, f"QQ Bot API 请求失败: {e}"
 
@@ -432,7 +432,7 @@ async def _test_siliconflow(key_value: str) -> tuple[bool, str]:
         return False, "SiliconFlow API 请求超时"
     except (httpx.HTTPError, OSError, RuntimeError, ValueError) as e:
         return False, f"SiliconFlow API 请求失败: {e}"
-    except Exception:
+    except Exception as e:
         logger.exception("setup._test_siliconflow.unexpected_error")
         return False, f"SiliconFlow API 请求失败: {e}"
 
@@ -485,7 +485,7 @@ async def _test_wolframalpha(key_value: str) -> tuple[bool, str]:
         return False, "WolframAlpha API 请求超时"
     except (httpx.HTTPError, OSError, RuntimeError, ValueError) as e:
         return False, f"WolframAlpha API 请求失败: {e}"
-    except Exception:
+    except Exception as e:
         logger.exception("setup._test_wolframalpha.unexpected_error")
         return False, f"WolframAlpha API 请求失败: {e}"
 
@@ -516,7 +516,7 @@ async def _test_tavily(key_value: str) -> tuple[bool, str]:
         return False, "Tavily API 请求超时"
     except (httpx.HTTPError, OSError, RuntimeError, ValueError) as e:
         return False, f"Tavily API 请求失败: {e}"
-    except Exception:
+    except Exception as e:
         logger.exception("setup._test_tavily.unexpected_error")
         return False, f"Tavily API 请求失败: {e}"
 
@@ -542,7 +542,7 @@ async def _test_github(key_value: str) -> tuple[bool, str]:
         return False, "GitHub API 请求超时"
     except (httpx.HTTPError, OSError, RuntimeError, ValueError) as e:
         return False, f"GitHub API 请求失败: {e}"
-    except Exception:
+    except Exception as e:
         logger.exception("setup._test_github.unexpected_error")
         return False, f"GitHub API 请求失败: {e}"
 
@@ -576,7 +576,7 @@ async def _test_ollama(base_url: str) -> tuple[bool, str]:
         return False, "Ollama 连接超时"
     except (httpx.HTTPError, OSError, RuntimeError, ValueError) as e:
         return False, f"Ollama 请求失败: {e}"
-    except Exception:
+    except Exception as e:
         logger.exception("setup._test_ollama.unexpected_error")
         return False, f"Ollama 请求失败: {e}"
 
@@ -609,7 +609,7 @@ async def _test_llama_cpp(base_url: str) -> tuple[bool, str]:
         return False, "llama.cpp 连接超时"
     except (httpx.HTTPError, OSError, RuntimeError, ValueError) as e:
         return False, f"llama.cpp 请求失败: {e}"
-    except Exception:
+    except Exception as e:
         logger.exception("setup._test_llama_cpp.unexpected_error")
         return False, f"llama.cpp 请求失败: {e}"
 

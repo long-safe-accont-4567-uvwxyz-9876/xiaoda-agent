@@ -7,7 +7,7 @@ if sys.platform == "win32":
         try:
             _stream.reconfigure(encoding="utf-8", errors="replace")
         except (AttributeError, ValueError):
-            logger.debug("cli.stream_reconfigure_skipped")
+            pass
 
 import time
 import random
