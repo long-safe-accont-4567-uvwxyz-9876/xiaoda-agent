@@ -242,7 +242,7 @@ def _restore_chat_model(cfg: Any, core: Any) -> None:
             logger.warning("webui.chat_model_restore_route_failed error={}", str(route_err))
         core.router._current_chat_model = {"provider": provider, "model_id": model_id}
         logger.info("webui.chat_model_restored provider={} model={}", provider, model_id)
-    except Exception as e:
+    except (ImportError, KeyError, ValueError, OSError, LLMError) as e:
         # 关键：失败时不覆盖持久化，仅内存回退所有 sync task 到默认 provider
         logger.warning(
             "webui.chat_model_restore_failed provider={} model={} "
@@ -285,8 +285,8 @@ def _restore_chat_model(cfg: Any, core: Any) -> None:
             }
             logger.info("webui.chat_model_fallback_in_memory provider={} model={} tasks={}",
                         fallback_provider, fallback_model, _sync_tasks)
-        except Exception as inner_e:
-            # CodeRabbit Nit: 内层 except 改 Exception，防止 metadata I/O/JSON 解析失败逃逸
+        except (ImportError, KeyError, AttributeError, OSError, ValueError) as inner_e:
+            # CodeRabbit Nit: 内层 except 改具体类型，防止 metadata I/O/JSON 解析失败逃逸
             # 导致 WebUI 启动崩溃（原只捕 ImportError/KeyError/AttributeError）
             logger.error("webui.set_chat_model_fallback_error error={}", str(inner_e))
 
@@ -568,7 +568,7 @@ async def _ensure_wechat_bot_task(app: FastAPI) -> None:
                 "webui.wechat_bot_auto_start_not_ready connected={} has_poller={}",
                 connected, poller is not None,
             )
-    except Exception as e:
+    except (RuntimeError, OSError, ConnectionError, ImportError) as e:
         logger.warning(
             "webui.wechat_bot_auto_start_failed error={} type={}",
             str(e)[:200], type(e).__name__,
@@ -633,7 +633,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[Any]:
         from core.background_tasks import start_event_loop_watchdog, stop_event_loop_watchdog
         start_event_loop_watchdog()
         _stop_watchdog = stop_event_loop_watchdog
-    except Exception as e:
+    except (ImportError, RuntimeError) as e:
         logger.warning("webui.watchdog_start_failed error={}", str(e))
 
     # 周期刷新运行实例健康状态：设备热插拔/失联后自动降级 degraded/device_unavailable，
@@ -644,7 +644,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[Any]:
         _instances = getattr(core, "local_ai_instances", None)
         if _instances is not None:
             app.state.local_ai_health_task = _spawn_bg(_local_ai_health_loop(_instances))
-    except Exception as e:
+    except (ImportError, RuntimeError, OSError) as e:
         logger.warning("webui.local_ai_health_loop_start_failed error={}", str(e))
 
     yield
@@ -653,7 +653,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[Any]:
     if _stop_watchdog is not None:
         try:
             _stop_watchdog()
-        except Exception as e:
+        except (RuntimeError, OSError) as e:
             logger.warning("webui.stop_watchdog_failed error={}", str(e))
 
     logger.info("webui.lifespan.shutdown")
@@ -671,7 +671,7 @@ async def _prewarm_connections() -> None:
         _c = _get_agnes_http_client()
         await _c.head(_agnes_url, timeout=_httpx.Timeout(10.0))
         logger.info("agnes.prewarm_done")
-    except Exception as _e:
+    except (ImportError, OSError, RuntimeError, TimeoutError) as _e:
         logger.debug("agnes.prewarm_failed: {}", _e)
     # 预热 embed (siliconflow)
     try:
@@ -680,7 +680,7 @@ async def _prewarm_connections() -> None:
         _c2 = _get_sc()
         await _c2.head(_embed_url, timeout=_httpx.Timeout(10.0))
         logger.info("embed.prewarm_done")
-    except Exception as _e:
+    except (ImportError, OSError, RuntimeError, TimeoutError) as _e:
         logger.debug("embed.prewarm_failed: {}", _e)
 
 
@@ -694,7 +694,7 @@ async def _prewarm_local_singletons(core: Any) -> None:
             # 触发 _load() 加载到内存
             await _aio.to_thread(lambda: _xp.get_state("prewarm"))
             logger.info("xp.prewarm_done")
-        except Exception as _e:
+        except (ImportError, OSError, RuntimeError) as _e:
             logger.debug("xp.prewarm_failed: {}", _e)
     async def _warm_mental():
         try:
@@ -703,14 +703,14 @@ async def _prewarm_local_singletons(core: Any) -> None:
             # 触发 _load_or_init() 加载到内存
             await _aio.to_thread(lambda: _mgr.state)
             logger.info("mental.prewarm_done")
-        except Exception as _e:
+        except (ImportError, OSError, RuntimeError) as _e:
             logger.debug("mental.prewarm_failed: {}", _e)
     async def _warm_constraint():
         try:
             from core.constraint_injector import search_constraint_lessons
             await _aio.to_thread(search_constraint_lessons, "预热", top_k=1)
             logger.info("constraint.prewarm_done")
-        except Exception as _e:
+        except (ImportError, OSError, RuntimeError) as _e:
             logger.debug("constraint.prewarm_failed: {}", _e)
     # 治本修复（2026-08-08）：预热本地 NPU/CPU embedding provider。
     async def _warm_local_embed():
@@ -723,7 +723,7 @@ async def _prewarm_local_singletons(core: Any) -> None:
                 logger.info("local_embed.prewarm_done")
             else:
                 logger.debug("local_embed.prewarm_not_ready status={}", status)
-        except Exception as _e:
+        except (ImportError, OSError, RuntimeError) as _e:
             logger.debug("local_embed.prewarm_failed: {}", _e)
     await _aio.gather(_warm_xp(), _warm_mental(), _warm_constraint(),
                       _warm_local_embed())
@@ -735,7 +735,7 @@ async def _restore_local_node_instances(core: Any) -> None:
         from web.config_service import get_config_service
         await restore_local_instances(core, get_config_service())
         logger.info("local_deploy.instances_restored")
-    except Exception as _e:
+    except (ImportError, RuntimeError, OSError, ValueError) as _e:
         logger.warning("local_deploy.instances_restore_failed error={}", _e)
 
 
@@ -754,7 +754,7 @@ async def _restore_generative_backends(core: Any, app: FastAPI) -> None:
             _local_model = get_local_model(_cfg, _node_id) or None
             apply_to_runtime(core, None, _node_id, _backend, app=app, local_model=_local_model)
         logger.info("local_deploy.generative_backends_restored")
-    except Exception as _e:
+    except (ImportError, KeyError, RuntimeError, OSError, ValueError) as _e:
         logger.warning("local_deploy.generative_backends_restore_failed error={}", _e)
 
 
@@ -764,7 +764,7 @@ async def _local_ai_health_loop(instances: Any) -> None:
         await _aio.sleep(60)
         try:
             await instances.refresh_health()
-        except Exception as _e:
+        except (RuntimeError, OSError) as _e:
             logger.debug("local_ai.health_refresh_failed error={}", _e)
 
 
@@ -818,10 +818,12 @@ def _resolve_env_api_key() -> str:
             if _os.path.exists(ENV_EXAMPLE_PATH):
                 import shutil as _shutil
                 _shutil.copy2(ENV_EXAMPLE_PATH, _env_path)
+                _os.chmod(_env_path, 0o600)
                 logger.info("webui.env_created_from_example")
             else:
                 with open(_env_path, "w", encoding="utf-8") as _f:
                     _f.write("")
+                _os.chmod(_env_path, 0o600)
                 logger.info("webui.env_created_empty")
         except (OSError, PermissionError) as _e:
             logger.warning("webui.env_create_failed error={}", str(_e))
@@ -939,7 +941,7 @@ async def _shutdown_lifespan(app: FastAPI, core: Any, owns_core: bool) -> None:
             try:
                 await obj.stop()
             except (RuntimeError, OSError):
-                logger.debug(f"server.{attr}_stop_error", exc_info=True)
+                logger.debug("server.{}_stop_error", attr, exc_info=True)
     # 停止微信长轮询（避免 poller/ILinkClient 在 graceful shutdown 期间无人管理）
     wechat_bot = getattr(app.state, "wechat_bot", None)
     if wechat_bot is not None:
@@ -975,18 +977,15 @@ def _warn_unresolvable_web_master() -> None:
     )
 
 
-def create_app() -> FastAPI:
-    # 动态读取版本号，不再硬编码
+def _read_version() -> str:
     try:
         from pathlib import Path as _P
-        _ver = (_P(__file__).resolve().parent.parent / "VERSION").read_text().strip()
+        return (_P(__file__).resolve().parent.parent / "VERSION").read_text(encoding="utf-8").strip()
     except (OSError, ValueError):
-        _ver = "0.4.95"
-    app = FastAPI(title="Xiaoda Agent WebUI", version=_ver, lifespan=lifespan)
+        return "0.4.95"
 
-    # 速率限制中间件（三级: 全局/用户/写端点, 防 DDoS/滥用）
-    # 在路由之前注册, 尽早拦截超限请求; 限制值可通过环境变量覆盖
-    # F7: 令牌桶状态持久化到 SQLite, 进程重启后恢复 (避免重启即放行)
+
+def _add_rate_limit_middleware(app: FastAPI) -> None:
     from web.middleware.rate_limit import RateLimitMiddleware
     try:
         from config import DATA_DIR
@@ -996,7 +995,8 @@ def create_app() -> FastAPI:
         _rate_limit_db = str(Path(__file__).parent.parent / "data" / "rate_limit_buckets.sqlite")
     app.add_middleware(RateLimitMiddleware, persist_path=_rate_limit_db)
 
-    # 允许 splash HTTP 服务器嵌入 WebUI（iframe 预加载无缝衔接）
+
+def _add_security_and_sla_middleware(app: FastAPI) -> None:
     @app.middleware("http")
     async def _allow_frame_embed(request: Any, call_next: Any) -> Any:
         import time as _time
@@ -1006,22 +1006,12 @@ def create_app() -> FastAPI:
         response = await call_next(request)
         _elapsed = _time.monotonic() - _start
         _sla = getattr(app.state, "sla_exporter", None)
-        # 跳过 /metrics 自身，避免抓取指标时污染监控数据
         if _sla and request.url.path != "/metrics":
             _sla.inc_request(request.url.path, str(response.status_code))
             _sla.observe_latency(request.url.path, _elapsed)
             if response.status_code >= 400:
                 _sla.inc_error(f"http_{response.status_code}", request.url.path)
         response.headers["X-Trace-Id"] = _trace_id
-        # CodeRabbit 安全修复：frame-ancestors 收紧到 splash 实际端口。
-        # splash HTTP 服务固定绑定 127.0.0.1:18089（agent.py:_start_splash_server），
-        # 原 :* 通配允许任意本地端口 iframe，存在本地 clickjacking 风险。
-        # 现仅允许 'self' + splash 源（127.0.0.1:18089 / localhost:18089）。
-        # P2：CSP 补全 —— 原来只有 frame-ancestors，XSS 一旦发生无 script-src
-        # 兜底。SPA 资源全部来自 self（Vite 构建产物，无内联 <script>）；
-        # style 允许 unsafe-inline（Vue 组件样式注入需要）；
-        # img/media 允许 data:/blob:（前端本地预览生成物）；
-        # connect 允许 ws/wss（/ws 主通道）。
         response.headers["Content-Security-Policy"] = (
             "default-src 'self'; "
             "script-src 'self'; "
@@ -1037,23 +1027,18 @@ def create_app() -> FastAPI:
         response.headers["X-XSS-Protection"] = "1; mode=block"
         response.headers["Strict-Transport-Security"] = "max-age=31536000; includeSubDomains"
         response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
-        # 滑动续期：get_current_user 在 request.state 上设置了新 token 时写入响应头
         new_token = getattr(request.state, "new_token", None)
         if new_token:
             response.headers["X-New-Token"] = new_token
             new_expiry = getattr(request.state, "new_expiry", 0)
             if new_expiry:
                 response.headers["X-New-Token-Expiry"] = str(int(new_expiry))
-            # VULN-29：续期同时刷新 media cookie，避免 7 天后 cookie 过期
-            # 而主 token 仍有效导致的媒体访问 401
             from web.routers.auth import set_media_cookie
             set_media_cookie(response, new_token, float(new_expiry or 0))
         return response
 
-    # Q1: 注册统一异常处理器（AppException -> 结构化 error_code; 未捕获异常 -> E_SYS999）
-    from web.error_handler import register_error_handlers
-    register_error_handlers(app)
 
+def _register_routes(app: FastAPI) -> None:
     from web.routers.auth import router as auth_router
     from web.routers.chat import router as chat_router
     from web.routers.system import router as system_router, public_router as system_public_router
@@ -1091,35 +1076,20 @@ def create_app() -> FastAPI:
     from web.ws_hub import router as ws_router
     app.include_router(ws_router)
 
-    from core.sla_exporter import get_sla_exporter
-    _sla = get_sla_exporter()
-    app.state.sla_exporter = _sla
 
-    # Prometheus /metrics 端点 (P1-4): 三层优先级控制注册
-    # 优先级 (高 -> 低):
-    #   1. 环境变量 METRICS_ENABLED (CI / 容器编排场景, 强制覆盖)
-    #   2. config_service.observability.metrics_enabled (用户在 webui_overrides.json 修改)
-    #   3. 默认 True (开箱即用)
-    # - 任一层级关闭时不注册路由 -> /metrics 返回 404
-    # - 由 web/routers/metrics.py 提供, 桥接 utils/metrics.py + 进程级默认指标
+def _register_metrics_if_enabled(app: FastAPI) -> None:
     metrics_enabled_env = os.getenv("METRICS_ENABLED")
     if metrics_enabled_env is not None:
-        # 环境变量优先级最高 (CI / 部署场景强制覆盖)
         metrics_enabled = metrics_enabled_env.lower() in ("true", "1", "yes")
-        logger.info(
-            "webui.metrics_endpoint_env_override enabled={}", metrics_enabled
-        )
+        logger.info("webui.metrics_endpoint_env_override enabled={}", metrics_enabled)
     else:
-        # 未设环境变量时, 读 config_service 的 observability.metrics_enabled
-        # 让用户通过 WebUI 开关即时控制 (无需手动保存, config_service 原子写盘 + 热生效)
         try:
             from web.config_service import get_config_service
             cfg = get_config_service()
             metrics_enabled = bool(
                 cfg.get("observability.metrics_enabled", True)
             )
-        except Exception as e:
-            # config_service 异常时 fail-open (保留默认开启), 不阻塞 server 启动
+        except (ImportError, ValueError, RuntimeError, OSError) as e:
             logger.warning("webui.metrics_endpoint_config_read_failed err={}", e)
             metrics_enabled = True
         logger.info("webui.metrics_endpoint_config enabled={}", metrics_enabled)
@@ -1130,16 +1100,14 @@ def create_app() -> FastAPI:
     else:
         logger.info("webui.metrics_endpoint_disabled")
 
-    # 媒体目录使用用户数据目录，避免写入 _MEIPASS 只读目录
+
+def _mount_static_files(app: FastAPI) -> None:
     try:
         from config import MEDIA_DIR
         media_dir = MEDIA_DIR
     except ImportError:
         media_dir = Path(__file__).parent / "media"
     media_dir.mkdir(parents=True, exist_ok=True)
-    # follow_symlink：表情包等媒体是指向外置盘的符号链接
-    # 壁纸等媒体文件禁强缓存，确保换图后浏览器不使用旧缓存
-    # VULN-29：/media 必须带 token 才能访问（TTS 语音/生成图片/用户上传属私密数据）
     from web.media_auth import AuthStaticFiles
     app.mount("/media", AuthStaticFiles(directory=str(media_dir), follow_symlink=True),
               name="media")
@@ -1148,9 +1116,24 @@ def create_app() -> FastAPI:
     if dist_dir.exists():
         app.mount("/", NoCacheHTMLStaticFiles(directory=str(dist_dir), html=True), name="spa")
 
-    # 注册全局 app 引用，供 web.app_ref.get_app() 使用（setup 保存 / probes 探测依赖）。
-    # 之前从未调用 set_app，导致 get_app() 恒返回 None，保存设置时
-    # `get_app().state.provider_service` 抛 "'NoneType' object has no attribute 'state'"。
+
+def create_app() -> FastAPI:
+    app = FastAPI(title="Xiaoda Agent WebUI", version=_read_version(), lifespan=lifespan)
+
+    _add_rate_limit_middleware(app)
+    _add_security_and_sla_middleware(app)
+
+    from web.error_handler import register_error_handlers
+    register_error_handlers(app)
+
+    _register_routes(app)
+
+    from core.sla_exporter import get_sla_exporter
+    app.state.sla_exporter = get_sla_exporter()
+
+    _register_metrics_if_enabled(app)
+    _mount_static_files(app)
+
     from web.app_ref import set_app
     set_app(app)
 

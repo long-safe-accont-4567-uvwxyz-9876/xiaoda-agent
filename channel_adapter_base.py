@@ -32,6 +32,7 @@
 """
 from __future__ import annotations
 
+import contextlib
 import json
 import os
 import time
@@ -42,7 +43,13 @@ from loguru import logger
 
 try:
     from utils.atomic_write import atomic_write, _restrict_file_permissions_windows
-except Exception:  # pragma: no cover
+except (ImportError, AttributeError):
+    atomic_write = None  # type: ignore[assignment]
+    def _restrict_file_permissions_windows(path):  # type: ignore[no-redef]
+        return
+
+except Exception:
+    logger.exception(".channel_adapter_base.unexpected")
     atomic_write = None  # type: ignore[assignment]
     def _restrict_file_permissions_windows(path):  # type: ignore[no-redef]
         return
@@ -52,11 +59,186 @@ STREAM_C2C_MAX_SEGMENTS = 4
 STREAM_GROUP_MAX_SEGMENTS = 4
 
 
-class ChannelAdapterBase:
-    """IM 通道适配器共享基类（消息去重语义层）。"""
+# ---------------------------------------------------------------------------
+# 流式回复分片工具（A2：从 qq_bot_adapter 逐字节下沉，QQ/微信共用）
+# 模块级函数，供 qq_bot_streaming / wechat_bot_adapter 等直接 import。
+# ---------------------------------------------------------------------------
 
-    # 消息去重缓存 TTL：1 小时。仅做 msg_id 级去重（同一 msg_id 的精确重复才拦截），
-    # 不做内容级去重（用户主动重发的内容不拦截）。
+def _split_text_by_bytes(text: str, byte_limit: int = 7800) -> list[str]:
+    """按字节上限分割文本，每段不超过 byte_limit 字节。
+
+    P1-6 修复：C2C 流式第 4 段合并后可能远超 QQ API 8000 字节上限，
+    合并后需调用本方法按字节再分割，逐片发送。
+
+    - 短文本（≤ byte_limit 字节）返回单片
+    - 长文本按字节上限切片，优先在换行处切分
+    - 闭合截断处未结束的 markdown 代码块（```）
+
+    Args:
+        text: 原始文本
+        byte_limit: 字节上限，默认 7800（留 200 字节余量给 8000 字节 QQ API 上限）
+
+    Returns:
+        分割后的文本段列表（每段 ≤ byte_limit 字节）
+    """
+    if not text:
+        return []
+    encoded = text.encode('utf-8')
+    if len(encoded) <= byte_limit:
+        return [text]
+
+    from utils.text_utils import _find_char_boundary
+
+    segments: list[str] = []
+    remaining = text
+    while remaining:
+        encoded = remaining.encode('utf-8')
+        if len(encoded) <= byte_limit:
+            segments.append(remaining)
+            break
+
+        safe_limit = int(byte_limit * 0.9)
+        target_chars = _find_char_boundary(remaining, safe_limit)
+        search_end = min(len(remaining), target_chars + 100)
+        best_pos = remaining.rfind('\n', max(0, target_chars - 200), search_end)
+        if best_pos == -1 or best_pos < target_chars // 2:
+            best_pos = target_chars
+
+        chunk = remaining[:best_pos]
+        while len((chunk.rstrip() + ('\n```' if chunk.count('```') % 2 else '')).encode('utf-8')) > byte_limit:
+            best_pos -= 1
+            chunk = remaining[:best_pos]
+        tail = remaining[best_pos:]
+        if chunk.count('```') % 2 != 0:
+            chunk = chunk.rstrip() + '\n```'
+            tail = '```\n' + tail
+        remaining = tail
+        segments.append(chunk)
+
+    return segments
+
+
+def _adjust_boundary_for_code_block(text: str, start: int, end: int) -> int:
+    """若切片点位于 markdown 代码块内部，向后调整到代码块结束。
+
+    通过统计 [start, end) 范围内的 ``` 数量判断是否在代码块内部。
+    若为奇数，表示切片点在代码块内部，需要向后查找下一个 ``` 并调整到其后。
+
+    Args:
+        text: 完整文本
+        start: 当前段起始位置
+        end: 原始切片点
+
+    Returns:
+        调整后的切片点
+    """
+    segment = text[start:end]
+    fence_count = segment.count('```')
+    if fence_count % 2 == 0:
+        return end
+    next_fence = text.find('```', end)
+    if next_fence == -1:
+        return len(text)
+    new_end = next_fence + 3
+    if new_end - start > 6000:
+        return end
+    return new_end
+
+
+def _adjust_boundary_for_url(text: str, start: int, end: int) -> int:
+    """若切片点位于 URL 中间，向后调整到 URL 结束。
+
+    在 end 之前的窗口内查找最近的 http:// 或 https://，
+    若 URL 延伸到 end 之后，则将 end 调整到 URL 结束位置。
+
+    Args:
+        text: 完整文本
+        start: 当前段起始位置
+        end: 原始切片点
+
+    Returns:
+        调整后的切片点
+    """
+    if end >= len(text):
+        return end
+    search_start = max(0, end - 200)
+    last_http = text.rfind('http://', search_start, end)
+    last_https = text.rfind('https://', search_start, end)
+    url_start = max(last_http, last_https)
+    if url_start == -1:
+        return end
+    url_end = end
+    stop_chars = set(' \t\n\r，。；！？「」『』（）()【】[]<>「」')
+    while url_end < len(text) and text[url_end] not in stop_chars:
+        url_end += 1
+    if url_end - start > 6000:
+        return end
+    return url_end if url_end > end else end
+
+
+def _split_text_for_streaming(text: str, chunk_size: int = 300) -> list[str]:
+    """将文本切片为流式发送的段。
+
+    - 短回复（< 400 字符）返回单片
+    - 长回复按 chunk_size 切片，避免切断 markdown 代码块和 URL
+    - chunk_size 默认 300，建议范围 200-400
+
+    Args:
+        text: 原始文本
+        chunk_size: 每片字符数，默认 300
+
+    Returns:
+        切片后的文本段列表
+    """
+    if not text:
+        return []
+    if len(text) < 400:
+        return [text]
+
+    segments: list[str] = []
+    pos = 0
+    text_len = len(text)
+    while pos < text_len:
+        end = min(pos + chunk_size, text_len)
+        if end >= text_len:
+            segments.append(text[pos:])
+            break
+        end = _adjust_boundary_for_code_block(text, pos, end)
+        end = _adjust_boundary_for_url(text, pos, end)
+        if end <= pos:
+            end = min(pos + chunk_size, text_len)
+        segments.append(text[pos:end])
+        pos = end
+    return segments
+
+
+def _cap_stream_segments(segments: list[str], is_group: bool,
+                         resplit_event: str, capped_event: str) -> list[str]:
+    """按被动回复配额截断流式分片，超出的尾部合并到最后一片。
+
+    C2C 合并后按字节上限重切（避免单条超 QQ API 8000 字节上限）；
+    群聊走 split_for_group_passive，每段 ≤4000 字节，最多 4 片不会触发本分支。
+    """
+    max_segs = STREAM_GROUP_MAX_SEGMENTS if is_group else STREAM_C2C_MAX_SEGMENTS
+    if len(segments) <= max_segs:
+        return segments
+    original_segment_count = len(segments)
+    merged_tail = "".join(segments[max_segs - 1:])
+    if not is_group:
+        resplit = _split_text_by_bytes(merged_tail, 7800)
+        segments = segments[:max_segs - 1] + resplit
+        logger.info(resplit_event + " original={} final={} max_segs={}",
+                    original_segment_count, len(segments), max_segs)
+    else:
+        segments = segments[:max_segs - 1] + [merged_tail]
+        logger.info(capped_event + " original={} capped={}",
+                    original_segment_count, max_segs)
+    return segments
+
+
+class ChannelAdapterBase:
+    """IM 通道适配器共享基类（消息去重语义层 + 流式分片委托）。"""
+
     _MSG_ID_TTL = 3600
 
     def _init_dedup_state(self) -> None:
@@ -65,199 +247,27 @@ class ChannelAdapterBase:
         消息去重缓存：msg_id → 时间戳，保留最近 1 小时。
         """
         self._processed_msg_ids: dict[str, float] = {}
-        self._MSG_ID_TTL = 3600  # 1 小时
+        self._MSG_ID_TTL = 3600
 
     def _is_duplicate_msg(self, msg_id: str) -> bool:
         now = time.time()
-        # 清理过期项
         expired = [k for k, ts in self._processed_msg_ids.items() if now - ts > self._MSG_ID_TTL]
         for k in expired:
             del self._processed_msg_ids[k]
-        # 检查重复
         if msg_id in self._processed_msg_ids:
             return True
         self._processed_msg_ids[msg_id] = now
         return False
 
-    # ------------------------------------------------------------------
-    # 流式回复分片工具（A2：从 qq_bot_adapter 逐字节下沉，QQ/微信共用）
-    # ------------------------------------------------------------------
-
     def _split_text_by_bytes(self, text: str, byte_limit: int = 7800) -> list[str]:
-        """按字节上限分割文本，每段不超过 byte_limit 字节。
-
-        P1-6 修复：C2C 流式第 4 段合并后可能远超 QQ API 8000 字节上限，
-        合并后需调用本方法按字节再分割，逐片发送。
-
-        - 短文本（≤ byte_limit 字节）返回单片
-        - 长文本按字节上限切片，优先在换行处切分
-        - 闭合截断处未结束的 markdown 代码块（```）
-
-        Args:
-            text: 原始文本
-            byte_limit: 字节上限，默认 7800（留 200 字节余量给 8000 字节 QQ API 上限）
-
-        Returns:
-            分割后的文本段列表（每段 ≤ byte_limit 字节）
-        """
-        if not text:
-            return []
-        encoded = text.encode('utf-8')
-        if len(encoded) <= byte_limit:
-            return [text]
-
-        from utils.text_utils import _find_char_boundary
-
-        segments: list[str] = []
-        remaining = text
-        while remaining:
-            encoded = remaining.encode('utf-8')
-            if len(encoded) <= byte_limit:
-                segments.append(remaining)
-                break
-
-            # 留 10% 余量避免边界字符是多字节字符
-            safe_limit = int(byte_limit * 0.9)
-            target_chars = _find_char_boundary(remaining, safe_limit)
-            # 优先在换行处切分（向前查找，找到的换行符包含在当前段）
-            search_end = min(len(remaining), target_chars + 100)
-            best_pos = remaining.rfind('\n', max(0, target_chars - 200), search_end)
-            if best_pos == -1 or best_pos < target_chars // 2:
-                best_pos = target_chars
-
-            chunk = remaining[:best_pos]
-            while len((chunk.rstrip() + ('\n```' if chunk.count('```') % 2 else '')).encode('utf-8')) > byte_limit:
-                best_pos -= 1
-                chunk = remaining[:best_pos]
-            tail = remaining[best_pos:]
-            if chunk.count('```') % 2 != 0:
-                chunk = chunk.rstrip() + '\n```'
-                tail = '```\n' + tail
-            remaining = tail
-            segments.append(chunk)
-
-        return segments
+        return _split_text_by_bytes(text, byte_limit)
 
     def _split_text_for_streaming(self, text: str, chunk_size: int = 300) -> list[str]:
-        """将文本切片为流式发送的段。
-
-        - 短回复（< 400 字符）返回单片
-        - 长回复按 chunk_size 切片，避免切断 markdown 代码块和 URL
-        - chunk_size 默认 300，建议范围 200-400
-
-        Args:
-            text: 原始文本
-            chunk_size: 每片字符数，默认 300
-
-        Returns:
-            切片后的文本段列表
-        """
-        if not text:
-            return []
-        if len(text) < 400:
-            return [text]
-
-        segments: list[str] = []
-        pos = 0
-        text_len = len(text)
-        while pos < text_len:
-            end = min(pos + chunk_size, text_len)
-            if end >= text_len:
-                segments.append(text[pos:])
-                break
-            # 调整切片点：避免切断代码块和 URL
-            end = self._adjust_boundary_for_code_block(text, pos, end)
-            end = self._adjust_boundary_for_url(text, pos, end)
-            # 防止零长度段或回退
-            if end <= pos:
-                end = min(pos + chunk_size, text_len)
-            segments.append(text[pos:end])
-            pos = end
-        return segments
-
-    def _adjust_boundary_for_code_block(self, text: str, start: int, end: int) -> int:
-        """若切片点位于 markdown 代码块内部，向后调整到代码块结束。
-
-        通过统计 [start, end) 范围内的 ``` 数量判断是否在代码块内部。
-        若为奇数，表示切片点在代码块内部，需要向后查找下一个 ``` 并调整到其后。
-
-        Args:
-            text: 完整文本
-            start: 当前段起始位置
-            end: 原始切片点
-
-        Returns:
-            调整后的切片点
-        """
-        segment = text[start:end]
-        fence_count = segment.count('```')
-        if fence_count % 2 == 0:
-            return end  # 不在代码块内
-        # 在代码块内，找到下一个 ```
-        next_fence = text.find('```', end)
-        if next_fence == -1:
-            return len(text)  # 没有闭合，剩余全部作为一段
-        new_end = next_fence + 3
-        # 防止单段过大（超过 6000 字符则放弃调整）
-        if new_end - start > 6000:
-            return end
-        return new_end
-
-    def _adjust_boundary_for_url(self, text: str, start: int, end: int) -> int:
-        """若切片点位于 URL 中间，向后调整到 URL 结束。
-
-        在 end 之前的窗口内查找最近的 http:// 或 https://，
-        若 URL 延伸到 end 之后，则将 end 调整到 URL 结束位置。
-
-        Args:
-            text: 完整文本
-            start: 当前段起始位置
-            end: 原始切片点
-
-        Returns:
-            调整后的切片点
-        """
-        if end >= len(text):
-            return end
-        # 在 end 之前的窗口内查找最近的 http:// 或 https://
-        search_start = max(0, end - 200)
-        last_http = text.rfind('http://', search_start, end)
-        last_https = text.rfind('https://', search_start, end)
-        url_start = max(last_http, last_https)
-        if url_start == -1:
-            return end
-        # URL 结束位置：第一个空白或中英文标点
-        url_end = end
-        stop_chars = set(' \t\n\r，。；！？「」『』（）()【】[]<>「」')
-        while url_end < len(text) and text[url_end] not in stop_chars:
-            url_end += 1
-        # 防止单段过大
-        if url_end - start > 6000:
-            return end
-        return url_end if url_end > end else end
+        return _split_text_for_streaming(text, chunk_size)
 
     def _cap_stream_segments(self, segments: list[str], is_group: bool,
                              resplit_event: str, capped_event: str) -> list[str]:
-        """按被动回复配额截断流式分片，超出的尾部合并到最后一片。
-
-        C2C 合并后按字节上限重切（避免单条超 QQ API 8000 字节上限）；
-        群聊走 split_for_group_passive，每段 ≤4000 字节，最多 4 片不会触发本分支。
-        """
-        max_segs = STREAM_GROUP_MAX_SEGMENTS if is_group else STREAM_C2C_MAX_SEGMENTS
-        if len(segments) <= max_segs:
-            return segments
-        original_segment_count = len(segments)
-        merged_tail = "".join(segments[max_segs - 1:])
-        if not is_group:
-            resplit = self._split_text_by_bytes(merged_tail, 7800)
-            segments = segments[:max_segs - 1] + resplit
-            logger.info(resplit_event + " original={} final={} max_segs={}",
-                        original_segment_count, len(segments), max_segs)
-        else:
-            segments = segments[:max_segs - 1] + [merged_tail]
-            logger.info(capped_event + " original={} capped={}",
-                        original_segment_count, max_segs)
-        return segments
+        return _cap_stream_segments(segments, is_group, resplit_event, capped_event)
 
 
 # ---------------------------------------------------------------------------
@@ -308,12 +318,12 @@ def save_json_credentials(
             try:
                 if cursor_path.exists():
                     cursor_path.unlink()
-                    logger.info(f"{event}.stale_cursor_cleared path={{}}", cursor_path)
+                    logger.info("{}.stale_cursor_cleared path={}", event, cursor_path)
             except Exception as ce:
-                logger.warning(f"{event}.cursor_clear_failed error={{}}", str(ce)[:120])
-        logger.info(f"{event}.credentials_saved path={{}}", path)
+                logger.warning("{}.cursor_clear_failed error={}", event, str(ce)[:120])
+        logger.info("{}.credentials_saved path={}", event, path)
     except Exception as e:
-        logger.error(f"{event}.credentials_save_failed error={{}}", str(e)[:200])
+        logger.error("{}.credentials_save_failed error={}", event, str(e)[:200])
         raise
 
 
@@ -334,19 +344,19 @@ def load_json_credentials(
         凭证字典，或 None（文件不存在 / 内容非 dict / 损坏 / 缺少必需键）
     """
     if not path.exists():
-        logger.debug(f"{event}.credentials_not_found path={{}}", path)
+        logger.debug("{}.credentials_not_found path={}", event, path)
         return None
     try:
         data = json.loads(path.read_text(encoding="utf-8"))
         if not isinstance(data, dict):
-            logger.debug(f"{event}.credentials_invalid_format path={{}}", path)
+            logger.debug("{}.credentials_invalid_format path={}", event, path)
             return None
         if required_key and not data.get(required_key, ""):
-            logger.debug(f"{event}.credentials_missing_key path={{}} key={required_key}", path)
+            logger.debug("{}.credentials_missing_key path={} key={}", event, path, required_key)
             return None
         return data
     except Exception as e:
-        logger.error(f"{event}.credentials_load_failed error={{}}", str(e)[:200])
+        logger.error("{}.credentials_load_failed error={}", event, str(e)[:200])
         return None
 
 
@@ -360,11 +370,11 @@ def clear_json_credentials(path: Path, *, event: str = "channel_adapter") -> Non
     try:
         if path.exists():
             path.unlink()
-            logger.info(f"{event}.credentials_cleared path={{}}", path)
+            logger.info("{}.credentials_cleared path={}", event, path)
         else:
-            logger.debug(f"{event}.credentials_clear_missing path={{}}", path)
+            logger.debug("{}.credentials_clear_missing path={}", event, path)
     except Exception as e:
-        logger.warning(f"{event}.credentials_clear_failed error={{}}", str(e)[:200])
+        logger.warning("{}.credentials_clear_failed error={}", event, str(e)[:200])
 
 
 # ---------------------------------------------------------------------------
@@ -386,6 +396,8 @@ def upsert_env_file_line(env_path: Path, key: str, value: str) -> None:
     """
     if not env_path.exists():
         env_path.write_text(f"{key}={value}\n", encoding="utf-8-sig")
+        with contextlib.suppress(OSError):
+            env_path.chmod(0o600)
     else:
         lines = env_path.read_text(encoding="utf-8-sig").splitlines(keepends=True)
         found = False
@@ -397,6 +409,8 @@ def upsert_env_file_line(env_path: Path, key: str, value: str) -> None:
         if not found:
             lines.append(f"\n{key}={value}\n")
         env_path.write_text("".join(lines), encoding="utf-8-sig")
+        with contextlib.suppress(OSError):
+            env_path.chmod(0o600)
 
 
 def parse_env_csv(var: str) -> list[str]:
