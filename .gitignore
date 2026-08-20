@@ -29,6 +29,7 @@ ion to*
 build/
 dist/
 *.egg-info/
+BUILD_INFO.json
 xiaoda_agent.egg-info/
 
 # === Config / secrets ===
