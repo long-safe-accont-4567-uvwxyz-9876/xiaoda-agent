@@ -34,7 +34,10 @@ def is_allowed_download_url(url: str) -> bool:
         return False
     try:
         parsed = urlparse(url)
+    except (ImportError, OSError, RuntimeError, ValueError):
+        return False
     except Exception:
+        logger.exception(".market.url_policy.is_allowed_download_url_unexpected")
         return False
     if parsed.scheme not in ("http", "https"):
         return False

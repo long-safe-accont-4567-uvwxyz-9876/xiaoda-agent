@@ -120,9 +120,11 @@ class ReplyDedupMixin:
                 recent.append(r)
         recent = recent[:1]
 
-        logger.info(f"reply.dedup_probe | user={_user_id[:24]} | "
-                    f"mem_cnt={len(mem_recent)} | db_cnt={len(db_recent)} | "
-                    f"merged_cnt={len(recent)} | reply_preview={reply[:40]}")
+        logger.info("reply.dedup_probe | user={} | "
+                    "mem_cnt={} | db_cnt={} | "
+                    "merged_cnt={} | reply_preview={}",
+                    _user_id[:24], len(mem_recent), len(db_recent),
+                    len(recent), reply[:40])
 
         # 无历史回复，直接记录并返回
         if not recent:
@@ -134,8 +136,9 @@ class ReplyDedupMixin:
 
         # 计算与最近回复的最大相似度
         max_sim = max(text_ratio(reply, r) for r in recent)
-        logger.info(f"reply.dedup_check | user={_user_id[:20]} | "
-                    f"max_sim={max_sim:.1f} | merged_cnt={len(recent)}")
+        logger.info("reply.dedup_check | user={} | "
+                    "max_sim={:.1f} | merged_cnt={}",
+                    _user_id[:20], max_sim, len(recent))
 
         if max_sim < self.REPLY_DEDUP_THRESHOLD:
             # 不重复，记录并返回（保持最近 N 条）

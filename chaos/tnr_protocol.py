@@ -287,7 +287,7 @@ class TNRProtocol:
             return result
         self._fault_active = True
         self._current_fault_type = fault_type
-        logger.debug(f"TNR.inject_fault type={fault_type}")
+        logger.debug("TNR.inject_fault type={}", fault_type)
         return True
 
     def _remove_fault(self, fault_type: str) -> bool:
@@ -301,7 +301,7 @@ class TNRProtocol:
             return result
         self._fault_active = False
         self._current_fault_type = None
-        logger.debug(f"TNR.remove_fault type={fault_type}")
+        logger.debug("TNR.remove_fault type={}", fault_type)
         return True
 
     def _detect_anomaly(
@@ -340,7 +340,7 @@ class TNRProtocol:
         """
         t0 = time.time()
         report = TNRReport(fault_type=fault_type)
-        logger.info(f"TNR.start fault_type={fault_type}")
+        logger.info("TNR.start fault_type={}", fault_type)
 
         # ── 阶段 1: TEST ──
         # 记录故障前健康度 → 注入故障 → 检测异常
@@ -576,7 +576,7 @@ class TNRProtocol:
             ),
         }
         self._alerts.append(alert)
-        logger.warning(f"TNR.alert: {alert['message']}")
+        logger.warning("TNR.alert: {}", alert['message'])
 
         # 保持降级: 若当前已恢复到 L0, 主动降级到 L1
         if self._degradation_strategy.current_level <= DegradationLevel.L0_NORMAL:

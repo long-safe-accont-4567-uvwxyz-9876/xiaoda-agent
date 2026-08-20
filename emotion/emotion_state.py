@@ -18,7 +18,12 @@ from loguru import logger
 
 try:
     from utils.atomic_write import atomic_write
-except Exception:  # pragma: no cover
+except (ImportError, AttributeError):
+    atomic_write = None  # type: ignore[assignment]
+
+
+except Exception:
+    logger.exception(".emotion.emotion_state.unexpected")
     atomic_write = None  # type: ignore[assignment]
 
 
@@ -241,7 +246,7 @@ class EmotionState:
                 try:
                     atomic_write(self._persist_path, payload, encoding="utf-8")
                 except Exception as e:
-                    logger.warning(f"EmotionState.save_failed: {e}")
+                    logger.warning("EmotionState.save_failed: {}", e)
             else:
                 self._persist_path.write_text(payload, encoding="utf-8")
 
@@ -265,7 +270,7 @@ class EmotionState:
                 self._current = data.get("current", "neutral")
                 self._intensity = data.get("intensity", 0.0)
                 self._last_update = data.get("last_update", time.time())
-                self._history = [(t, e, i) for t, e, i in data.get("history", [])]
+                self._history = [(t, e, i) for t, e, i in data.get("history", [])][-20:]
                 # 兼容旧格式（float）和新格式（[intensity, timestamp]）
                 raw_active = data.get("active_emotions", {})
                 self._active_emotions = {}

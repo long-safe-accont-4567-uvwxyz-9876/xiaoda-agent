@@ -23,7 +23,7 @@ import contextlib
 
 try:
     from utils.atomic_write import atomic_json_write
-except Exception:  # pragma: no cover
+except (ImportError, OSError):  # pragma: no cover
     atomic_json_write = None  # type: ignore[assignment]
 
 router = APIRouter(tags=["auth"])
@@ -150,6 +150,8 @@ def _increment_token_epoch() -> int:
         path = _get_token_epoch_path()
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(str(_token_epoch), encoding="utf-8")
+        with contextlib.suppress(OSError):
+            path.chmod(0o600)
         return _token_epoch
 
 
@@ -162,8 +164,13 @@ def _extract_expiry(token: str) -> float:
             return float(parts[0])
         legacy_parts = decoded.rsplit(".", 2)
         return float(legacy_parts[0]) if len(legacy_parts) == 3 else 0.0
-    except Exception as exc:
+    except (ValueError, IndexError, TypeError) as exc:
         logger.debug("auth.extract_expiry_failed: {}", exc, exc_info=True)
+        return 0.0
+
+
+    except Exception as exc:
+        logger.exception("auth._extract_expiry.unexpected_error")
         return 0.0
 
 
@@ -188,9 +195,11 @@ def _revoke_token(token: str, grace_seconds: float = 0.0) -> None:
                     data = {"revoked": []}
                 if not isinstance(data.get("revoked"), list):
                     data["revoked"] = []
-            except Exception as exc:
+            except (json.JSONDecodeError, OSError, ValueError) as exc:
                 logger.debug("auth.revoke_json_parse_failed: {}", exc, exc_info=True)
                 data = {"revoked": []}
+            except Exception as exc:
+                logger.exception("auth._revoke_token.unexpected_error")
         if token not in data["revoked"]:
             data["revoked"].append(token)
         # 清理已过期的 revoked token（节省空间）
@@ -201,16 +210,27 @@ def _revoke_token(token: str, grace_seconds: float = 0.0) -> None:
             _revoked_grace[token] = _now() + grace_seconds
         else:
             _revoked_grace.pop(token, None)
+        # 清理已过期的宽限期条目（防长期运行后 _revoked_grace 无限增长）
+        _now_ts = _now()
+        expired_grace = [k for k, v in _revoked_grace.items() if v <= _now_ts]
+        for k in expired_grace:
+            _revoked_grace.pop(k, None)
         try:
             path.parent.mkdir(parents=True, exist_ok=True)
             if atomic_json_write is not None:
                 atomic_json_write(
-                    path, data, encoding="utf-8", ensure_ascii=False,
+                    path, data, mode=0o600, encoding="utf-8", ensure_ascii=False,
                 )
             else:
                 path.write_text(json.dumps(data, ensure_ascii=False), encoding="utf-8")
-        except Exception as e:
+                with contextlib.suppress(OSError):
+                    path.chmod(0o600)
+        except (OSError, TypeError, ValueError) as e:
             logger.warning("auth.revoke_save_failed error={}", str(e))
+
+
+        except Exception as e:
+            logger.exception("auth._revoke_token.unexpected_error")
 
 
 def _is_revoked(token: str) -> bool:
@@ -236,8 +256,13 @@ def _is_revoked(token: str) -> bool:
                 # 宽限期已过，惰性清理避免无限增长
                 _revoked_grace.pop(token, None)
             return True
-    except Exception as exc:
+    except (json.JSONDecodeError, OSError, ValueError) as exc:
         logger.debug("auth.is_revoked_json_parse_failed: {}", exc, exc_info=True)
+        return False
+
+
+    except Exception as exc:
+        logger.exception("auth._is_revoked.unexpected_error")
         return False
 
 
@@ -291,8 +316,13 @@ def _validate_token(token: str) -> bool:
             while len(_tokens) > _TOKENS_MAX_SIZE:
                 _tokens.popitem(last=False)
         return True
-    except Exception as exc:
+    except (ValueError, KeyError, TypeError, OSError) as exc:
         logger.debug("auth.validate_token_failed: {}", exc, exc_info=True)
+        return False
+
+
+    except Exception as exc:
+        logger.exception("auth._validate_token.unexpected_error")
         return False
 
 
@@ -401,8 +431,10 @@ async def get_current_user(request: Request) -> str:
             request.state.new_token = new_token
             request.state.new_expiry = new_expiry
             logger.info("auth.token_renewed old_expiry={} new_expiry={}", int(expiry), int(new_expiry))
-    except Exception as e:
+    except (ValueError, KeyError, TypeError, OSError) as e:
         logger.debug("auth.renew_check_failed error={}", str(e))
+    except Exception as e:
+        logger.exception("auth.get_current_user.unexpected_error")
     return "webui"
 
 
@@ -505,8 +537,12 @@ async def _audit_auth_event(request: Request, action: str, detail: str) -> None:
             return
         await core.db.insert_audit_log(action, "webui", detail)
         await core.db.commit()
-    except Exception as exc:
+    except (OSError, RuntimeError, ValueError) as exc:
         logger.debug("auth.audit_log_failed error={}", str(exc))
+
+
+    except Exception as exc:
+        logger.exception("auth._audit_auth_event.unexpected_error")
 
 
 def _update_env_password(new_password: str) -> None:
@@ -582,10 +618,13 @@ async def recover(req: RecoverRequest, request: Request, response: Response = No
 
     try:
         _update_env_password(req.new_password)
-    except Exception as exc:
+    except (OSError, ValueError, RuntimeError) as exc:
         logger.error("auth.recover_env_update_failed error={}", str(exc))
         raise HTTPException(500, "更新密码配置失败") from None
 
+    except Exception as exc:
+        logger.exception("auth.recover.unexpected_error")
+        raise HTTPException(500, "更新密码配置失败") from None
     # 成功：清除该 IP 的失败计数
     with _rate_limit_lock:
         _rate_limit.pop(client_ip, None)
@@ -635,10 +674,13 @@ async def change_password(req: ChangePasswordRequest, user_id: str = Depends(get
 
     try:
         _update_env_password(req.new_password)
-    except Exception as exc:
+    except (OSError, ValueError, RuntimeError) as exc:
         logger.error("auth.change_password_env_update_failed error={}", str(exc))
         raise HTTPException(500, "更新密码配置失败") from None
 
+    except Exception as exc:
+        logger.exception("auth.change_password.unexpected_error")
+        raise HTTPException(500, "更新密码配置失败") from None
     # 密码写入成功后轮换问答（若请求携带新问答）
     if new_question and new_answer:
         try:

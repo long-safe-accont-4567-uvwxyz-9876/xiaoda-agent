@@ -40,6 +40,8 @@ async def get_public_wallpaper(request: Request) -> Any:
             return Envelope(data={"wallpaper": main["wallpaper"]})
     except (OSError, KeyError, ValueError, RuntimeError, TypeError) as e:
         logger.debug("agents.public_wallpaper_failed: {}", e)
+    except Exception as e:
+        logger.exception("agents.get_public_wallpaper.unexpected_error")
     return Envelope(data={"wallpaper": ""})
 
 
@@ -48,8 +50,10 @@ async def _audit(request: Request, action: str, detail: str) -> None:
     try:
         await core.db.insert_audit_log(f"webui.agents.{action}", "webui", detail)
         await core.db.commit()
-    except Exception as exc:
+    except (OSError, RuntimeError, ValueError) as exc:
         logger.debug("agents.audit_failed: {}", exc, exc_info=True)
+    except Exception as exc:
+        logger.exception("agents._audit.unexpected_error")
 
 
 @router.get("/agents", response_model=Envelope[list[dict]])
@@ -71,6 +75,9 @@ async def create_agent(body: dict, request: Request, _user: str = Depends(get_cu
     try:
         data = await _registry(request).create(body)
     except (ValueError, KeyError) as e:
+        raise HTTPException(400, str(e)) from None
+    except Exception as e:
+        logger.exception("agents.create_agent.unexpected_error")
         raise HTTPException(400, str(e)) from None
     await _audit(request, "create", data["name"])
     return Envelope(data=data)
@@ -99,12 +106,16 @@ async def update_agent(name: str, body: dict, request: Request, _user: str = Dep
                         sub_agent.reload_personality()
         except (OSError, KeyError, ValueError, RuntimeError, TypeError) as exc:
             logger.debug("agents.reload_personality_failed: {}", exc, exc_info=True)
+        except Exception as exc:
+            logger.exception("agents.update_agent.unexpected_error")
     # 通知所有标签页刷新（display_name 等变更需全局联动）
     try:
         from web.ws_hub import manager
         await manager.broadcast({"type": "config_changed", "domain": "agents"})
     except (OSError, KeyError, ValueError, RuntimeError, TypeError) as exc:
         logger.debug("agents.broadcast_failed: {}", exc, exc_info=True)
+    except Exception as exc:
+        logger.exception("agents.update_agent.unexpected_error")
     return Envelope(data=data)
 
 
@@ -116,6 +127,9 @@ async def delete_agent(name: str, request: Request, _user: str = Depends(get_cur
     try:
         await _registry(request).delete(name)
     except (ValueError, KeyError) as e:
+        raise HTTPException(400, str(e)) from None
+    except Exception as e:
+        logger.exception("agents.delete_agent.unexpected_error")
         raise HTTPException(400, str(e)) from None
     await _audit(request, "delete", name)
     return Envelope(data={"deleted": name})
@@ -171,6 +185,8 @@ async def set_permissions(name: str, body: dict, request: Request, _user: str = 
         await manager.broadcast({"type": "config_changed", "domain": "agents"})
     except (OSError, KeyError, ValueError, RuntimeError, TypeError) as exc:
         logger.debug("agents.broadcast_failed: {}", exc, exc_info=True)
+    except Exception as exc:
+        logger.exception("agents.set_permissions.unexpected_error")
     return Envelope(data=data)
 
 
@@ -268,6 +284,9 @@ async def upload_wallpaper(name: str, body: dict, request: Request, _user: str =
     except (OSError, KeyError, ValueError, RuntimeError, TypeError) as exc:
         logger.debug("agents.base64_decode_failed: {}", exc, exc_info=True)
         raise HTTPException(400, "base64 解码失败") from None
+    except Exception as exc:
+        logger.exception("agents.upload_wallpaper.unexpected_error")
+        raise HTTPException(400, "base64 解码失败") from None
     if len(raw) > 8 * 1024 * 1024:
         raise HTTPException(400, "图片不能超过 8MB")
     _WALLPAPER_DIR.mkdir(parents=True, exist_ok=True)
@@ -291,6 +310,9 @@ async def upload_wallpaper(name: str, body: dict, request: Request, _user: str =
             get_config_service().set("ui.main_wallpaper", url)
         except (OSError, KeyError, ValueError, RuntimeError, TypeError) as exc:
             logger.warning("agents.wallpaper_config_save_failed: {}", exc)
+            raise HTTPException(500, "壁纸配置保存失败，请检查磁盘空间") from exc
+        except Exception as exc:
+            logger.exception("agents.upload_wallpaper.unexpected_error")
             raise HTTPException(500, "壁纸配置保存失败，请检查磁盘空间") from exc
         from web.agent_registry import MAIN_AGENT_META
         MAIN_AGENT_META["wallpaper"] = url
@@ -336,6 +358,10 @@ async def test_agent(name: str, request: Request, _user: str = Depends(get_curre
         })
     except (OSError, KeyError, ValueError, RuntimeError, TypeError) as e:
         logger.warning("webui.agent_test_failed name={} error={}", name, str(e))
+        return Envelope(data={"ok": False, "elapsed_ms": int((time.time() - t0) * 1000),
+                              "reply": "", "error": str(e)[:200]})
+    except Exception as e:
+        logger.exception("agents.test_agent.unexpected_error")
         return Envelope(data={"ok": False, "elapsed_ms": int((time.time() - t0) * 1000),
                               "reply": "", "error": str(e)[:200]})
 
@@ -384,7 +410,8 @@ async def list_stickers(name: str, request: Request, _user: str = Depends(get_cu
             descriptions = json.loads(desc_file.read_text(encoding="utf-8"))
         except (OSError, PermissionError, FileNotFoundError) as exc:
             logger.debug("agents.sticker_desc_parse_failed: {}", exc, exc_info=True)
-
+        except Exception as exc:
+            logger.exception("agents.list_stickers.unexpected_error")
     stickers = []
     for emo_dir in sorted(sticker_dir.iterdir()):
         if not emo_dir.is_dir():
@@ -488,6 +515,8 @@ async def upload_sticker(
             descriptions = json.loads(desc_file.read_text(encoding="utf-8"))
         except (OSError, PermissionError, FileNotFoundError) as exc:
             logger.debug("agents.sticker_desc_parse_failed: {}", exc, exc_info=True)
+        except Exception as exc:
+            logger.exception("agents.unknown.unexpected_error")
     descriptions[filename] = description
     desc_file.write_text(json.dumps(descriptions, ensure_ascii=False, indent=2), encoding="utf-8")
 
@@ -502,6 +531,8 @@ async def upload_sticker(
     except (OSError, KeyError, ValueError, RuntimeError, TypeError) as exc:
         logger.debug("agents.sticker_reload_failed: {}", exc, exc_info=True)
 
+    except Exception as exc:
+        logger.exception("agents.unknown.unexpected_error")
     await _audit(request, "sticker_upload", json.dumps({"agent": name, "file": filename}, ensure_ascii=False))
 
     return Envelope(data={
@@ -549,6 +580,8 @@ async def delete_sticker(
         except (OSError, PermissionError, FileNotFoundError) as exc:
             logger.debug("agents.sticker_desc_update_failed: {}", exc, exc_info=True)
 
+        except Exception as exc:
+            logger.exception("agents.delete_sticker.unexpected_error")
     # 热重载缓存
     try:
         core = request.app.state.core
@@ -560,6 +593,8 @@ async def delete_sticker(
     except (OSError, KeyError, ValueError, RuntimeError, TypeError) as exc:
         logger.debug("agents.sticker_reload_failed: {}", exc, exc_info=True)
 
+    except Exception as exc:
+        logger.exception("agents.unknown.unexpected_error")
     await _audit(request, "sticker_delete", json.dumps({"agent": name, "file": filename}, ensure_ascii=False))
     return Envelope(data={"deleted": filename})
 
@@ -591,4 +626,6 @@ async def set_agent_model(name: str, body: dict, request: Request, _user: str = 
         await manager.broadcast({"type": "config_changed", "domain": "agents"})
     except (OSError, KeyError, ValueError, RuntimeError, TypeError) as exc:
         logger.debug("agents.broadcast_failed: {}", exc, exc_info=True)
+    except Exception as exc:
+        logger.exception("agents.set_agent_model.unexpected_error")
     return Envelope(data=data)

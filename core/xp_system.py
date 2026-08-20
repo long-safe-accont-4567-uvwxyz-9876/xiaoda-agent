@@ -30,13 +30,20 @@ from loguru import logger
 # 延迟导入 DATA_DIR, 避免 config 模块在测试中导入失败时影响本模块
 try:
     from config import DATA_DIR
-except Exception:  # pragma: no cover - 配置缺失时退化为项目根目录
+except (ImportError, AttributeError):
+    DATA_DIR = Path(__file__).resolve().parent.parent / "data"
+    DATA_DIR.mkdir(parents=True, exist_ok=True)
+except Exception:
+    logger.exception(".core.xp_system.unexpected")
     DATA_DIR = Path(__file__).resolve().parent.parent / "data"
     DATA_DIR.mkdir(parents=True, exist_ok=True)
 
 try:
     from utils.atomic_write import atomic_json_write
-except Exception:  # pragma: no cover
+except (ImportError, AttributeError):
+    atomic_json_write = None  # type: ignore[assignment]
+except Exception:
+    logger.exception(".core.xp_system.unexpected")
     atomic_json_write = None  # type: ignore[assignment]
 
 
@@ -248,7 +255,7 @@ def _push_levelup_event(user_id: str, old_level: XPLevel,
     try:
         from web.ws_hub import manager  # 延迟导入, 避免循环依赖
     except Exception as e:  # pragma: no cover - WS 不可用时降级
-        logger.debug(f"XPSystem.push_levelup.ws_unavailable: {e}")
+        logger.debug("XPSystem.push_levelup.ws_unavailable: {}", e)
         return
 
     event = {
@@ -316,10 +323,10 @@ class XPSystem:
                 for uid, state in users.items()
             }
             logger.info(
-                f"XPSystem.load path={self._state_path} users={len(self._states)}"
+                "XPSystem.load path={} users={}", self._state_path, len(self._states)
             )
         except (json.JSONDecodeError, KeyError, ValueError, TypeError) as e:
-            logger.warning(f"XPSystem.load corrupted: {e}")
+            logger.warning("XPSystem.load corrupted: {}", e)
             self._states = {}
 
     def _save(self) -> None:
@@ -342,7 +349,7 @@ class XPSystem:
                     json.dump(data, f, ensure_ascii=False, indent=2)
                 os.replace(tmp, self._state_path)
         except Exception as e:
-            logger.warning(f"XPSystem.save_failed: {e}")
+            logger.warning("XPSystem.save_failed: {}", e)
 
     # ── 状态访问 ────────────────────────────────────────────
 
@@ -373,7 +380,7 @@ class XPSystem:
         )
         for uid, _ in sorted_states[:evict_count]:
             self._states.pop(uid, None)
-        logger.info(f"XPSystem.evicted count={evict_count} remaining={len(self._states)}")
+        logger.info("XPSystem.evicted count={} remaining={}", evict_count, len(self._states))
 
     # ── 加 XP 入口 ──────────────────────────────────────────
 
@@ -520,7 +527,7 @@ def _persona_config_path() -> Path:
         from config import get_config_dir
         return get_config_dir() / "persona_levels.yaml"
     except Exception:
-        logger.debug("xp_system.persona_config_path_fallback: {}", exc_info=True)
+        logger.debug("xp_system.persona_config_path_fallback", exc_info=True)
         return Path(__file__).resolve().parent.parent / "config" / "persona_levels.yaml"
 
 
@@ -539,10 +546,10 @@ def _load_persona_config() -> dict:
             with open(path, encoding="utf-8") as f:
                 data = yaml.safe_load(f) or {}
             _PERSONA_CONFIG_CACHE = data
-            logger.info(f"XPSystem.load_persona path={path} levels={len(data)}")
+            logger.info("XPSystem.load_persona path={} levels={}", path, len(data))
             return _PERSONA_CONFIG_CACHE
     except Exception as e:  # pragma: no cover - YAML 加载失败回退默认
-        logger.warning(f"XPSystem.load_persona_failed: {e}")
+        logger.warning("XPSystem.load_persona_failed: {}", e)
     _PERSONA_CONFIG_CACHE = dict(_DEFAULT_PERSONA)
     return _PERSONA_CONFIG_CACHE
 

@@ -125,13 +125,13 @@ class ToolExecutor:
         try:
             from web.ws_hub import current_session_id
             session_id = current_session_id()
-        except Exception:
+        except (ImportError, RuntimeError):
             session_id = ""
         # 登记发起会话到决策记录（confirm_cmd 身份校验依据）
         try:
             from web.routers.workspace import register_cmd_decision_scope
             register_cmd_decision_scope(req_id, session_id)
-        except Exception as _e:
+        except (ImportError, RuntimeError, ValueError) as _e:
             logger.debug("tool_executor.cmd_scope_register_failed", error=str(_e))
         logger.info("tool_executor.needs_confirmation",
                     tool=tool_name, command=cmd[:200], request_id=req_id,
@@ -150,14 +150,14 @@ class ToolExecutor:
                 await _ws_manager.send_to_session(session_id, payload)
             else:
                 await _ws_manager.broadcast(payload)
-        except Exception as _e:
+        except (RuntimeError, OSError, ConnectionError) as _e:
             logger.warning("tool_executor.cmd_confirm_push_failed", error=str(_e))
         # 异步等待用户决策（最多 CMD_CONFIRM_TIMEOUT 秒），期间不阻塞事件循环
         deadline = time.time() + self._cmd_confirm_timeout
         while time.time() < deadline:
             try:
                 decision = await self._get_cmd_decision(req_id)
-            except Exception as _e:
+            except (RuntimeError, KeyError, ValueError) as _e:
                 logger.warning("tool_executor.cmd_decision_lookup_failed", error=str(_e))
                 decision = None
             if decision is not None:
@@ -169,7 +169,7 @@ class ToolExecutor:
         try:
             from web.routers.workspace import discard_cmd_decision_scope
             discard_cmd_decision_scope(req_id)
-        except Exception as _e:
+        except (ImportError, RuntimeError, ValueError) as _e:
             logger.debug("tool_executor.cmd_scope_discard_failed", error=str(_e))
         logger.warning("tool_executor.cmd_confirm_timeout", tool=tool_name)
         return "timeout"
@@ -266,7 +266,7 @@ class ToolExecutor:
         )
         try:
             approval_decision = await self._approver.approve(approval_req)
-        except Exception as e:
+        except (RuntimeError, ValueError, OSError) as e:
             logger.warning("tool_executor.approver_error", tool=tool_name, error=str(e))
             # Fail-closed：高风险工具（EXECUTE 权限，如 shell_command）approver 异常时拒绝，
             # 避免审批器故障导致危险操作放行；低/中风险工具放行以保证可用性。
@@ -336,8 +336,8 @@ class ToolExecutor:
                 error=result.error or "",
                 duration=duration,
             )
-        except Exception as _e:
-            logger.debug(f"tool_executor.learning_feedback_failed: {_e}")
+        except (RuntimeError, OSError, ValueError) as _e:
+            logger.debug("tool_executor.learning_feedback_failed: {}", _e)
 
         if self.db:
             await self._write_audit_log(tool_name, arguments, result, user_id)
@@ -604,7 +604,7 @@ class ToolExecutor:
             return ToolResult.fail(
                 f"工具「{tool_name}」执行超时（{timeout}s），请稍后再试"
             )
-        except Exception as e:
+        except (RuntimeError, OSError, ValueError, TimeoutError, KeyError) as e:
             logger.error("tool_executor.error", tool=tool_name, error=str(e))
             error_type = type(e).__name__
             return ToolResult.fail(f"出了一点小问题……等会儿再试试好不好？ [{error_type}]")
@@ -624,5 +624,5 @@ class ToolExecutor:
                     "error": result.error[:200] if result.error else "",
                 }, ensure_ascii=False),
             )
-        except Exception as e:
+        except (OSError, RuntimeError, ValueError) as e:
             logger.warning("tool_executor.audit_log_failed", error=str(e))

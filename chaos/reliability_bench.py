@@ -204,12 +204,12 @@ class ReliabilityBench:
         for name in names:
             handler = self._scenarios.get(name)
             if handler is None:
-                logger.warning(f"ReliabilityBench: 未知场景 {name}, 跳过")
+                logger.warning("ReliabilityBench: 未知场景 {}, 跳过", name)
                 continue
             try:
                 result = await handler()
             except Exception as e:
-                logger.error(f"ReliabilityBench 场景 {name} 异常: {e!r}")
+                logger.error("ReliabilityBench 场景 {} 异常: {!r}", name, e)
                 result = ScenarioResult(
                     name=name, passed=False,
                     details={"error": f"{type(e).__name__}: {e}"},
@@ -406,7 +406,7 @@ class ReliabilityBench:
             try:
                 fallback = degraded_reply(reason)
             except Exception as e:
-                logger.debug(f"degraded_reply 异常: {e!r}")
+                logger.debug("degraded_reply 异常: {!r}", e)
                 fallback = None
             if fallback:
                 return (

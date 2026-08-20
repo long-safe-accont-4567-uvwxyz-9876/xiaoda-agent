@@ -61,7 +61,7 @@ def _bing_search_sync(query: str, max_results: int = 8) -> list[dict]:
         return []
     try:
         resp = client.get(url, headers={"Accept-Language": "zh-CN,zh;q=0.9,en;q=0.8"})
-    except Exception as e:
+    except (RuntimeError, OSError, ConnectionError, ValueError) as e:
         logger.warning("bing.request_failed query={} error={}", query[:40], repr(e)[:200])
         return []
 
@@ -194,7 +194,7 @@ async def _do_search(query: str, max_results: int = 8,
                 _tavily_search_sync, query, max_results, "basic", True)
             if results:
                 return _dedup_results(results), "Tavily新闻", answer
-        except Exception as e:
+        except (RuntimeError, OSError, ConnectionError, ValueError) as e:
             logger.warning("tavily.news_failed error={}", repr(e)[:150])
 
     # 2. Tavily basic 优先（质量高、带AI摘要，中文专有名词比 Bing 准）
@@ -204,7 +204,7 @@ async def _do_search(query: str, max_results: int = 8,
                 _tavily_search_sync, query, max_results, "basic", False)
             if results:
                 return _dedup_results(results), "Tavily", answer
-        except Exception as e:
+        except (RuntimeError, OSError, ConnectionError, ValueError) as e:
             logger.warning("tavily.primary_failed error={}", repr(e)[:150])
 
     # 3. Bing 抓取（免费兜底）
@@ -296,7 +296,7 @@ async def web_search(query: str) -> ToolResult:
             _search_cache.popitem(last=False)
 
         return result
-    except Exception as e:
+    except (RuntimeError, OSError, ValueError, ConnectionError) as e:
         return ToolResult.fail(f"搜索错误: {e!s}")
 
 
@@ -335,5 +335,5 @@ async def get_weather(city: str) -> ToolResult:
 
         result = await asyncio.to_thread(_fetch_weather)
         return ToolResult.ok(f"🌤️ {result}")
-    except Exception as e:
+    except (RuntimeError, OSError, ValueError, ConnectionError) as e:
         return ToolResult.fail(f"获取天气失败: {e!s}")

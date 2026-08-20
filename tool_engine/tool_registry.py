@@ -274,7 +274,10 @@ def resolve_tool_func(tool: dict) -> tuple[Any, str]:
     try:
         module = importlib.import_module(tool["module_path"])
         func = getattr(module, tool["func_name"])
+    except (ImportError, OSError, RuntimeError, ValueError) as e:
+        return None, f"加载工具实现失败 ({tool.get('name')}): {e}"
     except Exception as e:
+        logger.exception(".tool_engine.tool_registry.resolve_tool_func_unexpected")
         return None, f"加载工具实现失败 ({tool.get('name')}): {e}"
     tool["func"] = func
     tool["_lazy"] = False

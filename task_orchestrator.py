@@ -679,7 +679,13 @@ class ParallelAgentNode:
             if self._belief_router:
                 await self._belief_router.update_belief(target, False)
             return {"agent": target, "display_name": display_name, "reply": f"{display_name}处理超时", "error": True}
+        except (ImportError, OSError, RuntimeError, ValueError) as e:
+            if self._belief_router:
+                await self._belief_router.update_belief(target, False)
+            return {"agent": target, "display_name": display_name, "reply": f"{display_name}处理出错: {e}", "error": True}
+
         except Exception as e:
+            logger.exception(".task_orchestrator.execute_single_unexpected")
             if self._belief_router:
                 await self._belief_router.update_belief(target, False)
             return {"agent": target, "display_name": display_name, "reply": f"{display_name}处理出错: {e}", "error": True}
@@ -730,7 +736,11 @@ class ParallelAgentNode:
                 if t.done() and not t.cancelled():
                     try:
                         results.append(t.result())
+                    except (ImportError, OSError, RuntimeError, ValueError) as e:
+                        results.append(e)
+
                     except Exception as e:
+                        logger.exception(".task_orchestrator.unexpected")
                         results.append(e)
 
         intermediate = []

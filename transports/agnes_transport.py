@@ -80,7 +80,7 @@ async def close_agnes_shared_client() -> None:
         try:
             await _agnes_http_client.aclose()
         except Exception as e:
-            logger.warning("agnes_transport.close_shared_client_failed error={}", str(e))
+            logger.warning("agnes_transport.close_shared_client_failed error={}", str(e), exc_info=True)
     _agnes_http_client = None
 
 

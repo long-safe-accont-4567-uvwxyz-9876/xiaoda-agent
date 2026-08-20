@@ -156,7 +156,7 @@ class PortraitManager:
                 logger.warning("portrait.json_parse_failed", preview=raw[:100])
                 data = {}
         except Exception:
-            logger.warning("portrait.json_parse_failed", preview=raw[:100])
+            logger.warning("portrait.json_parse_failed", preview=raw[:100], exc_info=True)
             data = {}
 
         portrait_val = data.get("portrait", "")

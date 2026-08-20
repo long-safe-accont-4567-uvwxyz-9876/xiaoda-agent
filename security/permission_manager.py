@@ -383,11 +383,11 @@ class PermissionManager:
             # 只读类威胁（查看信息、查询数据）在 DEV 模式下直接放行
             readonly_keywords = ["info_disclosure", "read_only", "query", "inspect"]
             if any(kw in threat_type.lower() for kw in readonly_keywords):
-                logger.info(f"[DEV_MODE] 只读操作放行: {threat_type} (置信度={confidence:.2f})")
+                logger.info("[DEV_MODE] 只读操作放行: {} (置信度={:.2f})", threat_type, confidence)
                 return "allow"
             # 其他 block 威胁降级为 warn
             if base_action == "block":
-                logger.warning(f"[DEV_MODE] 安全威胁降级为 warn: {threat_type} (置信度={confidence:.2f})")
+                logger.warning("[DEV_MODE] 安全威胁降级为 warn: {} (置信度={:.2f})", threat_type, confidence)
                 return "warn"
 
         # STRICT 模式：warn 也升级为 block
@@ -592,7 +592,10 @@ def _permission_file_path() -> str:
     try:
         from config import get_config_dir
         return str(get_config_dir() / "permission_mode.json")
+    except (ImportError, AttributeError):
+        return ""
     except Exception:
+        logger.exception(".security.permission_manager._permission_file_path_unexpected")
         return ""
 
 
@@ -635,7 +638,7 @@ def _clear_persisted_mode() -> None:
         import os as _os
         _os.remove(path)
     except FileNotFoundError:
-        pass  # 幂等删除：文件本就不存在
+        logger.debug("permission_manager.persist_file_absent path={}", path)
     except Exception as e:
         logger.debug("permission_manager.persist_clear_failed path=%s err=%s", path, e)
 

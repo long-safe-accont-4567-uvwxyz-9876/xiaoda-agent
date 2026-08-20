@@ -204,7 +204,7 @@ class CostTrackingMixin:
                 logger.info("prompt_cache.stats requests={} cached_tokens={}",
                             self._request_count, self._cached_tokens_total)
         except (KeyError, ValueError, OSError) as e:
-            logger.debug(f"缓存统计追踪失败: {e}")
+            logger.debug("缓存统计追踪失败: {}", e)
 
     def _check_cache_health(self) -> None:
         now = time.time()

@@ -964,7 +964,11 @@ class SubAgentManagerMixin:
             if not reply.choices:
                 return xiaoli_result
             return reply.choices[0].message.content.strip() if reply.choices[0].message.content else xiaoli_result
+        except (ImportError, OSError, RuntimeError, ValueError):
+            return xiaoli_result
+
         except Exception:
+            logger.exception(".agent_core.sub_agent_manager._rephrase_as_xiaoda_unexpected")
             return xiaoli_result
 
     async def _notify_status(self, message: str) -> None:
@@ -995,7 +999,10 @@ class SubAgentManagerMixin:
             if isinstance(reply, str):
                 return reply.strip()
             return reply.choices[0].message.content.strip() if reply.choices[0].message.content else f"{get_agent_display_name('xiaoda')}姐姐说让她想想..."
+        except (ImportError, OSError, RuntimeError, ValueError):
+            return f"{get_agent_display_name('xiaoda')}姐姐现在有点忙，等会儿再问她吧！"
         except Exception:
+            logger.exception(".agent_core.sub_agent_manager._xiaoda_delegate_for_xiaoli_unexpected")
             return f"{get_agent_display_name('xiaoda')}姐姐现在有点忙，等会儿再问她吧！"
         finally:
             if _ctx:

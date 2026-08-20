@@ -477,7 +477,7 @@ class SlashCommandHandler:
                 lines.append("📊 负载: Windows 平台不支持")
             else:
                 try:
-                    with open("/sys/class/thermal/thermal_zone0/temp") as f:
+                    with open("/sys/class/thermal/thermal_zone0/temp", encoding="utf-8") as f:
                         temp_c = int(f.read().strip()) / 1000
                     temp_icon = "🔥⚠️" if temp_c > 80 else "🌡️"
                     lines.append(f"{temp_icon} CPU温度: {temp_c:.1f}°C")
@@ -485,14 +485,14 @@ class SlashCommandHandler:
                     logger.debug("slash.hw.temp_read_failed", error=str(e))
                     lines.append("🌡️ CPU温度: 无法读取")
                 try:
-                    with open("/sys/devices/system/cpu/cpu0/cpufreq/scaling_cur_freq") as f:
+                    with open("/sys/devices/system/cpu/cpu0/cpufreq/scaling_cur_freq", encoding="utf-8") as f:
                         freq_khz = int(f.read().strip())
                     lines.append(f"⚡ CPU频率: {freq_khz // 1000} MHz")
                 except (OSError, ValueError) as e:
                     logger.debug("slash.hw.freq_read_failed", error=str(e))
                     lines.append("⚡ CPU频率: 无法读取")
                 try:
-                    with open("/proc/meminfo") as f:
+                    with open("/proc/meminfo", encoding="utf-8") as f:
                         meminfo = f.read()
                     mem_total = int(next(line for line in meminfo.split('\n') if 'MemTotal' in line).split()[1])
                     mem_avail = int(next(line for line in meminfo.split('\n') if 'MemAvailable' in line).split()[1])
@@ -504,7 +504,7 @@ class SlashCommandHandler:
                     logger.debug("slash.hw.mem_read_failed", error=str(e))
                     lines.append("💾 内存: 无法读取")
                 try:
-                    with open("/proc/loadavg") as f:
+                    with open("/proc/loadavg", encoding="utf-8") as f:
                         load = f.read().strip().split()[:3]
                     lines.append(f"📊 负载: {' '.join(load)}")
                 except (OSError, ValueError) as e:
@@ -692,7 +692,10 @@ class SlashCommandHandler:
                 for k in timer_keys[:5]:
                     info = snapshot[k]
                     lines.append(f"  · {k[6:]}: avg={info['avg']}s p95={info['p95']}s n={info['samples']}")
+        except (ImportError, OSError, RuntimeError, ValueError) as e:
+            lines.append(f"📊 指标: 读取失败 ({str(e)[:50]})")
         except Exception as e:
+            logger.exception(".slash_commands._cmd_debug_unexpected")
             lines.append(f"📊 指标: 读取失败 ({str(e)[:50]})")
         # Router state
         if self._router:

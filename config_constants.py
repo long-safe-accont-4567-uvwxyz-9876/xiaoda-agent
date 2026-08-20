@@ -52,7 +52,7 @@ def get_secret(name: str, default: str = "") -> str:
     try:
         return credential_vault.decrypt(value)
     except credential_vault.DecryptionError as e:
-        logger.warning(f"config.decrypt_failed: {name} ({e})")
+        logger.warning("config.decrypt_failed: {} ({})", name, e)
         return default
 
 
@@ -171,7 +171,11 @@ RERANKER_OVERSAMPLE_RATIO = _safe_int(os.getenv("RERANKER_OVERSAMPLE_RATIO"), 3)
 
 # Query Transform
 QUERY_TRANSFORM_ENABLED = os.getenv("QUERY_TRANSFORM_ENABLED", "true").lower() in ("1", "true", "yes")
-QUERY_EXPAND_COUNT = _safe_int(os.getenv("QUERY_EXPAND_COUNT"), 2)
+QUERY_EXPAND_COUNT = _safe_int(os.getenv("QUERY_EXPAND_COUNT"), 0)  # 默认关闭多查询扩展（实测不好用），rewrite_query 仍保留
+# HyDE（假设文档嵌入）：开启时生成假设答案文档，与原查询向量混合检索。
+# 默认关闭（HYDE_ENABLED=false）：避免查询变换跑偏（同多查询扩展教训），
+# 且每次检索多一次 LLM 调用（生成假设文档）有延迟成本。接入但可量化、可关闭。
+HYDE_ENABLED = os.getenv("HYDE_ENABLED", "false").lower() in ("1", "true", "yes")
 # 检索扩散开关：False=精准检索（搜什么就是什么，跳过 expand_query 和 _spreading_recall）
 # True=扩散检索（向后兼容，生成额外查询目标 + 概念图扩散）
 # 默认 False：与艾宾浩斯遗忘曲线协调，避免找回应被衰减归档的低 importance 记忆
@@ -253,14 +257,14 @@ RAG_KG_WEIGHT = _safe_float(os.getenv("RAG_KG_WEIGHT"), 0.15)
 RAG_IMPORTANCE_WEIGHT = _safe_float(os.getenv("RAG_IMPORTANCE_WEIGHT"), 0.20)
 
 # RAG 候选集大小（每路召回 Top-N，RRF 融合后送 Reranker 的数量）
-RAG_RECALL_LIMIT = _safe_int(os.getenv("RAG_RECALL_LIMIT"), 50)
+RAG_RECALL_LIMIT = _safe_int(os.getenv("RAG_RECALL_LIMIT"), 100)  # P0-1: 50→100，扩大每路召回候选池
 RAG_RERANK_LIMIT = _safe_int(os.getenv("RAG_RERANK_LIMIT"), 50)
 
 # RAG 最低相关分过滤：final_score 低于此值的结果被视为噪声丢弃
 # 根因（bench_rag_e2e 实测）：技术型 query 在向量库无精确命中时，RRF 融合会
 # 返回 score 0.007-0.07 的完全无关结果（如 Python query 返回亲密内容），
 # 污染上下文。闲聊型 query 天然宽松不过滤，非闲聊型按此阈值过滤。
-RAG_MIN_FINAL_SCORE = _safe_float(os.getenv("RAG_MIN_FINAL_SCORE"), 0.15)
+RAG_MIN_FINAL_SCORE = _safe_float(os.getenv("RAG_MIN_FINAL_SCORE"), 0.08)
 
 # RAG 向量召回绝对距离阈值（治本：源头过滤不相关向量）
 # 根因（TDD test_rag_quality_root_fix 诊断）：原 _hybrid_vec_search 用相对归一化
@@ -271,6 +275,7 @@ RAG_MIN_FINAL_SCORE = _safe_float(os.getenv("RAG_MIN_FINAL_SCORE"), 0.15)
 #   < 0.8 = 相关, 0.8-1.0 = 弱相关, > 1.0 = 基本无关
 # 默认 1.0：严格过滤，宁可返回空也不注入噪声（用户核心诉求）
 RAG_VEC_MAX_DISTANCE = _safe_float(os.getenv("RAG_VEC_MAX_DISTANCE"), 1.0)
+RAG_VEC_SOFT_PENALTY = _safe_float(os.getenv("RAG_VEC_SOFT_PENALTY"), 0.3)  # P0-2: 超阈值降权系数
 
 # ── 记忆/情绪阈值 (可环境变量覆盖) ──
 # 情绪触发安慰记忆检索的强度阈值 (0.0~1.0)
@@ -283,7 +288,7 @@ SCENE_STICKINESS_THRESHOLD = _safe_float(os.getenv("SCENE_STICKINESS_THRESHOLD")
 MEMORY_COLD_MAX = _safe_int(os.getenv("MEMORY_COLD_MAX"), 0)
 MEMORY_WARM_MAX = _safe_int(os.getenv("MEMORY_WARM_MAX"), 10)
 # 温用户向量融合权重 (0.0~1.0): 冷=0.0, 温=0.2, 热=0.5(均衡)
-MEMORY_WARM_VEC_WEIGHT = _safe_float(os.getenv("MEMORY_WARM_VEC_WEIGHT"), 0.2)
+MEMORY_WARM_VEC_WEIGHT = _safe_float(os.getenv("MEMORY_WARM_VEC_WEIGHT"), 0.6)
 
 # ── P3 记忆蒸馏压缩配置 ──
 MAX_EPISODIC_MEMORIES = _safe_int(os.getenv("MAX_EPISODIC_MEMORIES"), 200)

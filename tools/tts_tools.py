@@ -63,8 +63,8 @@ async def synthesize_voice(text: str, emotion: str = "") -> ToolResult:
         from core.degradation_strategy import get_degradation_strategy
         if not get_degradation_strategy().is_feature_available("tts"):
             return ToolResult.fail("TTS 功能当前处于降级模式，暂时不可用")
-    except Exception:
-        pass  # 降级策略检查失败不阻塞，让 TTS 引擎自行判断
+    except (ImportError, RuntimeError, OSError):
+        logger.debug("tts.degradation_check_skipped")
 
     try:
         audio_path = await tts.synthesize_xiaoda(text, emotion=emotion)
@@ -79,5 +79,5 @@ async def synthesize_voice(text: str, emotion: str = "") -> ToolResult:
                      audio_path=str(audio_path))
         return ToolResult.ok(f"语音已生成（{len(text)}字），将随回复一起发送给用户")
     except Exception as e:
-        logger.error("tts.tool_synthesize_failed error={}", str(e))
+        logger.error("tts.tool_synthesize_failed error={}", str(e), exc_info=True)
         return ToolResult.fail(f"语音合成失败: {e}")

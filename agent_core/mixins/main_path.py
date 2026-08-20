@@ -54,7 +54,7 @@ class MainPathMixin:
         logger.info("pipeline.memory.done proc_id={} elapsed_ms={} emotion={}",
                     _proc_id, _mp_memory_ms, emotion_label)
         if _mp_memory_ms > 3000:
-            logger.warning(f"agent.stage_slow stage=memory_retrieval elapsed_ms={_mp_memory_ms}")
+            logger.warning("agent.stage_slow stage=memory_retrieval elapsed_ms={}", _mp_memory_ms)
 
         # 消息构建阶段
         _mp_t1 = time.time()
@@ -65,7 +65,7 @@ class MainPathMixin:
         logger.info("pipeline.build_msg.done proc_id={} elapsed_ms={} msg_count={} tool_count={}",
                     _proc_id, _mp_build_ms, len(messages), len(tools) if tools else 0)
         if _mp_build_ms > 2000:
-            logger.warning(f"agent.stage_slow stage=build_messages elapsed_ms={_mp_build_ms}")
+            logger.warning("agent.stage_slow stage=build_messages elapsed_ms={}", _mp_build_ms)
 
         # 任务类型解析与熔断器检查
         _mp_t1b = time.time()
@@ -91,7 +91,7 @@ class MainPathMixin:
                     _proc_id, _mp_llm_ms, len(reply) if reply else 0,
                     len(tool_results) if tool_results else 0)
         if _mp_llm_ms > 5000:
-            logger.warning(f"agent.stage_slow stage=llm_verify elapsed_ms={_mp_llm_ms} memory_ms={_mp_memory_ms} build_ms={_mp_build_ms}")
+            logger.warning("agent.stage_slow stage=llm_verify elapsed_ms={} memory_ms={} build_ms={}", _mp_llm_ms, _mp_memory_ms, _mp_build_ms)
 
         # 后处理阶段（含媒体提取与隐私扫描）
         _mp_t3 = time.time()
@@ -127,7 +127,7 @@ class MainPathMixin:
                 _spawn(self._run_emotion_llm_background(
                     user_input, getattr(ctx, "user_id", "")), timeout=2.0)
         except Exception:
-            logger.debug("emotion.llm_spawn_failed")
+            logger.debug("emotion.llm_spawn_failed", exc_info=True)
         emotion_hint = build_emotion_hint(emotion)
         self.context.emotion_hint = emotion_hint
         ctx.last_user_emotion = emotion.get("primary", "")
@@ -169,7 +169,7 @@ class MainPathMixin:
                 logger.debug("emotion.llm_background_updated",
                              primary=llm_emotion.get("primary"))
         except Exception:
-            logger.debug("emotion.llm_background_failed")
+            logger.debug("emotion.llm_background_failed", exc_info=True)
 
     async def _build_main_messages(self, user_input: Any, is_master: Any, image_data: Any,
                                      clean_input: Any, emotion: Any,
@@ -419,7 +419,7 @@ class MainPathMixin:
                         import config as _cfg
                         _base_threshold = float(getattr(_cfg, "EMOTION_TRIGGER_THRESHOLD", 0.5))
                     except (ImportError, ValueError, TypeError):
-                        pass
+                        logger.debug("main_path.emotion_threshold_config_fallback")
                     _emo_threshold = self._dynamic_emotion_threshold(
                         user_input, emotion, _base_threshold
                     )
@@ -729,7 +729,7 @@ class MainPathMixin:
                     )
                     reply = error_reply if error_reply and len(error_reply) > 50 else DEGRADED_REPLY
                 except Exception as e:
-                    logger.debug(f"agent.error_handler_fallback: {e}")
+                    logger.debug("agent.error_handler_fallback: {}", e)
                     reply = DEGRADED_REPLY
             else:
                 try:
@@ -739,6 +739,6 @@ class MainPathMixin:
                     )
                     reply = self._clean_reply(result) if isinstance(result, str) else DEGRADED_REPLY
                 except Exception as e:
-                    logger.debug(f"agent.flash_fallback: {e}")
+                    logger.debug("agent.flash_fallback: {}", e)
                     reply = DEGRADED_REPLY
         return reply, tool_results

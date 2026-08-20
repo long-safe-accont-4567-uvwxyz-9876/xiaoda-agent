@@ -50,15 +50,17 @@ def _write_sources(root: Path, version: str = "0.5.28", *, pyproject: str | None
                    dot_version: str | None = None, package_json: str | None = None,
                    version_file: str | None = None) -> None:
     """在 root 下创建 4 源文件，缺省值都 = version，可单独覆盖."""
-    (root / "VERSION").write_text(version_file if version_file is not None else version)
+    (root / "VERSION").write_text(version_file if version_file is not None else version, encoding="utf-8")
     (root / "pyproject.toml").write_text(
-        PYPROJECT_TEMPLATE.format(version=pyproject if pyproject is not None else version)
+        PYPROJECT_TEMPLATE.format(version=pyproject if pyproject is not None else version),
+        encoding="utf-8",
     )
-    (root / ".version").write_text(dot_version if dot_version is not None else version)
+    (root / ".version").write_text(dot_version if dot_version is not None else version, encoding="utf-8")
     pkg_root = root / "web" / "frontend"
     pkg_root.mkdir(parents=True, exist_ok=True)
     (pkg_root / "package.json").write_text(
-        PACKAGE_JSON_TEMPLATE.format(version=package_json if package_json is not None else version)
+        PACKAGE_JSON_TEMPLATE.format(version=package_json if package_json is not None else version),
+        encoding="utf-8",
     )
 
 
@@ -145,7 +147,7 @@ def test_fix_mode_syncs_pyproject(tmp_path, capsys):
     rc = check_version_sync.main(["--fix", "--root", str(tmp_path)])
     assert rc == 0
     # pyproject.toml 现在应该 = 0.5.28
-    pyproject_content = (tmp_path / "pyproject.toml").read_text()
+    pyproject_content = (tmp_path / "pyproject.toml").read_text(encoding="utf-8")
     assert 'version = "0.5.28"' in pyproject_content
     # 其他结构保留
     assert "[build-system]" in pyproject_content
@@ -158,7 +160,7 @@ def test_fix_mode_syncs_dot_version(tmp_path, capsys):
     _write_sources(tmp_path, "0.5.28", dot_version="0.4.0")
     rc = check_version_sync.main(["--fix", "--root", str(tmp_path)])
     assert rc == 0
-    assert (tmp_path / ".version").read_text().strip() == "0.5.28"
+    assert (tmp_path / ".version").read_text(encoding="utf-8").strip() == "0.5.28"
     out = capsys.readouterr().out
     assert ".version" in out
 
@@ -167,7 +169,7 @@ def test_fix_mode_syncs_package_json(tmp_path, capsys):
     _write_sources(tmp_path, "0.5.28", package_json="9.9.9")
     rc = check_version_sync.main(["--fix", "--root", str(tmp_path)])
     assert rc == 0
-    pkg = json.loads((tmp_path / "web" / "frontend" / "package.json").read_text())
+    pkg = json.loads((tmp_path / "web" / "frontend" / "package.json").read_text(encoding="utf-8"))
     assert pkg["version"] == "0.5.28"
     # 其他字段保留
     assert pkg["name"] == "xiaoda-frontend"
@@ -202,11 +204,11 @@ def test_fix_mode_when_already_in_sync_does_not_modify(tmp_path, capsys):
 
 def test_missing_version_file_returns_nonzero(capsys, tmp_path):
     # 只创建其他 3 个文件
-    (tmp_path / "pyproject.toml").write_text(PYPROJECT_TEMPLATE.format(version="0.5.28"))
-    (tmp_path / ".version").write_text("0.5.28")
+    (tmp_path / "pyproject.toml").write_text(PYPROJECT_TEMPLATE.format(version="0.5.28"), encoding="utf-8")
+    (tmp_path / ".version").write_text("0.5.28", encoding="utf-8")
     pkg_root = tmp_path / "web" / "frontend"
     pkg_root.mkdir(parents=True)
-    (pkg_root / "package.json").write_text(PACKAGE_JSON_TEMPLATE.format(version="0.5.28"))
+    (pkg_root / "package.json").write_text(PACKAGE_JSON_TEMPLATE.format(version="0.5.28"), encoding="utf-8")
     rc = check_version_sync.main(["--ci", "--root", str(tmp_path)])
     assert rc != 0
     out = capsys.readouterr().out
@@ -244,19 +246,19 @@ def test_missing_package_json_returns_nonzero(capsys, tmp_path):
 
 def test_read_version_file_strips_whitespace(tmp_path):
     p = tmp_path / "VERSION"
-    p.write_text("  0.5.28\n\n")
+    p.write_text("  0.5.28\n\n", encoding="utf-8")
     assert check_version_sync.read_plain_version(p) == "0.5.28"
 
 
 def test_read_pyproject_version_extracts_version(tmp_path):
     p = tmp_path / "pyproject.toml"
-    p.write_text(PYPROJECT_TEMPLATE.format(version="1.2.3"))
+    p.write_text(PYPROJECT_TEMPLATE.format(version="1.2.3"), encoding="utf-8")
     assert check_version_sync.read_pyproject_version(p) == "1.2.3"
 
 
 def test_read_package_json_version_extracts_version(tmp_path):
     p = tmp_path / "package.json"
-    p.write_text(PACKAGE_JSON_TEMPLATE.format(version="3.4.5"))
+    p.write_text(PACKAGE_JSON_TEMPLATE.format(version="3.4.5"), encoding="utf-8")
     assert check_version_sync.read_package_json_version(p) == "3.4.5"
 
 

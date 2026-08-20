@@ -11,7 +11,10 @@ from loguru import logger
 
 try:
     from utils.atomic_write import atomic_write
+except ImportError:  # pragma: no cover
+    atomic_write = None  # type: ignore[assignment]
 except Exception:  # pragma: no cover
+    logger.exception("vector_store.atomic_write_import_unexpected")
     atomic_write = None  # type: ignore[assignment]
 
 
@@ -327,7 +330,10 @@ class VectorStore:
         if provider is not None:
             try:
                 running = bool(getattr(provider, "ready", False))
+            except (AttributeError, RuntimeError):  # noqa: BLE001
+                running = False
             except Exception:  # noqa: BLE001
+                logger.exception("vector_store.embed_ready_check_unexpected")
                 running = False
         return {
             "mode": self._embed_mode,
@@ -590,12 +596,23 @@ class VectorStore:
                 """)
                 conn.commit()
                 return conn, is_fat
-            except Exception:
+            except (ImportError, OSError, RuntimeError):
                 # 修复资源泄漏：sqlite_vec.load 失败时必须 close 连接
                 try:
                     conn.close()
-                except Exception:
+                except (OSError, RuntimeError):
                     logger.warning("vector_store.conn_close_failed_during_load", exc_info=True)
+                except Exception:
+                    logger.exception("vector_store.conn_close_unexpected_during_load")
+                raise
+            except Exception:
+                logger.exception("vector_store.vec_init_unexpected")
+                try:
+                    conn.close()
+                except (OSError, RuntimeError):
+                    logger.warning("vector_store.conn_close_failed_during_load", exc_info=True)
+                except Exception:
+                    logger.exception("vector_store.conn_close_unexpected_during_load")
                 raise
 
 
@@ -706,7 +723,10 @@ class VectorStore:
                 return []
             except RuntimeValidationError:
                 raise
+            except (OSError, RuntimeError, ValueError):
+                return []
             except Exception:
+                logger.exception("vector_store.embed_inflight_unexpected")
                 return []
 
         future = asyncio.get_running_loop().create_future()
@@ -853,7 +873,7 @@ class VectorStore:
                     try:
                         self._vec_conn.execute("DELETE FROM memories_vec WHERE rowid=?", [row_id])
                     except Exception as e:
-                        logger.debug(f"vector_store upsert 删除旧记录失败(rowid={row_id}): {e}")
+                        logger.debug("vector_store upsert 删除旧记录失败(rowid={}): {}", row_id, e)
                     self._vec_conn.execute(
                         "INSERT INTO memories_vec(rowid, embedding) VALUES (?, vec_f32(?))",
                         [row_id, vec_json],
@@ -1056,7 +1076,7 @@ class VectorStore:
                         try:
                             conn.execute("DELETE FROM memories_vec WHERE rowid=?", [row_id])
                         except Exception as e:
-                            logger.debug(f"vector_store batch_upsert 删除旧记录失败(rowid={row_id}): {e}")
+                            logger.debug("vector_store batch_upsert 删除旧记录失败(rowid={}): {}", row_id, e)
                         try:
                             conn.execute(
                                 "INSERT INTO memories_vec(rowid, embedding) VALUES (?, vec_f32(?))",

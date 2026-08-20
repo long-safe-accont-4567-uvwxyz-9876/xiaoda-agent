@@ -107,8 +107,8 @@ class ConflictSupersession:
                             new_numeric_tokens=numeric_tokens_map[new.id],
                         ))
 
-        logger.info(f"ConflictSupersession.detect: found {len(conflicts)} conflicts "
-                     f"from {n} memories")
+        logger.info("ConflictSupersession.detect: found {} conflicts from {} memories",
+                     len(conflicts), n)
         return conflicts
 
     async def apply_supersession(self, conflicts: list[ConflictPair]) -> int:
@@ -129,8 +129,10 @@ class ConflictSupersession:
         for conflict in conflicts:
             # TODO(v0.7): wire to DB — mark old_memory status=SUPERSEDED,
             #   write memory_revisions row, add type=supersedes edge
-            logger.debug(f"Supersede: old={conflict.old_memory_id} → new={conflict.new_memory_id} "
-                         f"sim={conflict.similarity:.3f} diff_tokens={conflict.old_numeric_tokens ^ conflict.new_numeric_tokens}")
+            logger.debug("Supersede: old={} → new={} sim={:.3f} diff_tokens={}",
+                         conflict.old_memory_id, conflict.new_memory_id,
+                         conflict.similarity,
+                         conflict.old_numeric_tokens ^ conflict.new_numeric_tokens)
             count += 1
         return count
 

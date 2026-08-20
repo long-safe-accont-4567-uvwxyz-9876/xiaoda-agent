@@ -45,7 +45,7 @@ class BehavioralSignalStream:
                 for ev in list(self._subscribers[signal_type]):
                     ev.set()
         except Exception as e:
-            logger.warning(f"behavioral_signal.emit_failed: {e}")
+            logger.warning("behavioral_signal.emit_failed: {}", e)
 
     async def subscribe(self, signal_type: str) -> asyncio.Event:
         """订阅特定信号类型 — 对齐 shared_blackboard.subscribe()
@@ -76,6 +76,8 @@ class BehavioralSignalStream:
         if not entries:
             return 0.0
         values = [e.value for e in entries]
+        if not values:
+            return 0.0
         if strategy == "max_of_means":
             return max(values)
         elif strategy == "mean_of_means":

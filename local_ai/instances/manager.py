@@ -105,6 +105,17 @@ class InstanceManager:
                 return None
             return self._instances.get(instance_id)
 
+    def _register_instance(self, instance: ModelInstance, runtime: Any, installed: Any) -> None:
+        with self._state_lock:
+            self._instances[instance.id] = instance
+            self._runtimes[instance.id] = runtime
+            self._model_instances[instance.model_id] = instance.id
+            self._instance_purposes[instance.id] = installed.purpose
+            self._selected_instances[installed.purpose] = instance.id
+            self._selection_generations[installed.purpose] = (
+                self._selection_generations.get(installed.purpose, 0) + 1
+            )
+
     async def start(
         self,
         model_id: str,
@@ -143,15 +154,7 @@ class InstanceManager:
                     started_at=now,
                     updated_at=now,
                 )
-                with self._state_lock:
-                    self._instances[instance.id] = instance
-                    self._runtimes[instance.id] = runtime
-                    self._model_instances[model_id] = instance.id
-                    self._instance_purposes[instance.id] = installed.purpose
-                    self._selected_instances[installed.purpose] = instance.id
-                    self._selection_generations[installed.purpose] = (
-                        self._selection_generations.get(installed.purpose, 0) + 1
-                    )
+                self._register_instance(instance, runtime, installed)
                 return instance
             except BaseException as start_error:
                 try:
@@ -303,7 +306,11 @@ class InstanceManager:
                 result["tokens_per_second"] = round(tokens / elapsed, 1)
             else:
                 result["error"] = f"unsupported benchmark purpose: {purpose.value}"
-        except Exception as error:  # noqa: BLE001
+        except (OSError, RuntimeError, ValueError) as error:
+            result["ok"] = False
+            result["error"] = str(error)
+        except Exception as error:
+            logger.exception("instance_manager._benchmark_runtime.unexpected_error")
             result["ok"] = False
             result["error"] = str(error)
         return result
@@ -497,42 +504,64 @@ class InstanceManager:
             # 已完成的失败 task 并重新执行。
             pass
 
+    async def _stop_all_instances(self) -> list[Exception]:
+        errors: list[Exception] = []
+        for lock in tuple(self._model_locks.values()):
+            async with lock:
+                pass
+        with self._state_lock:
+            instances = tuple(self._instances.values())
+        for instance in instances:
+            lock = self._model_locks.setdefault(instance.model_id, asyncio.Lock())
+            async with lock:
+                with self._state_lock:
+                    current = self._instances.get(instance.id)
+                if current is None:
+                    continue
+                try:
+                    await self._stop_locked(current)
+                except (OSError, RuntimeError) as error:
+                    logger.warning("instance_manager.stop_locked_failed id={} error={}", current.id if hasattr(current, 'id') else '?', str(error)[:200])
+                    errors.append(error)
+                except Exception as error:
+                    logger.exception("instance_manager._shutdown.stop_locked_unexpected id={}", current.id if hasattr(current, 'id') else '?')
+                    errors.append(error)
+        return errors
+
+    async def _cleanup_pending(self) -> list[Exception]:
+        errors: list[Exception] = []
+        await self._await_lifecycle_tasks()
+        with self._state_lock:
+            pending_cleanup = tuple(self._pending_cleanup.items())
+        for cleanup_id, (model_id, runtime) in pending_cleanup:
+            try:
+                await self._run_sync(model_id, runtime.stop)
+            except (OSError, RuntimeError) as error:
+                logger.warning("instance_manager.cleanup_stop_failed id={} error={}", cleanup_id, str(error)[:200])
+                errors.append(error)
+            except Exception as error:
+                logger.exception("instance_manager._shutdown.cleanup_stop_unexpected id={}", cleanup_id)
+                errors.append(error)
+            else:
+                with self._state_lock:
+                    self._pending_cleanup.pop(cleanup_id, None)
+        return errors
+
     async def _shutdown(self) -> None:
         errors: list[Exception] = []
         try:
-            for lock in tuple(self._model_locks.values()):
-                await lock.acquire()
-                lock.release()
-            with self._state_lock:
-                instances = tuple(self._instances.values())
-            for instance in instances:
-                lock = self._model_locks.setdefault(instance.model_id, asyncio.Lock())
-                async with lock:
-                    with self._state_lock:
-                        current = self._instances.get(instance.id)
-                    if current is None:
-                        continue
-                    try:
-                        await self._stop_locked(current)
-                    except Exception as error:
-                        errors.append(error)
-            await self._await_lifecycle_tasks()
-            with self._state_lock:
-                pending_cleanup = tuple(self._pending_cleanup.items())
-            for cleanup_id, (model_id, runtime) in pending_cleanup:
-                try:
-                    await self._run_sync(model_id, runtime.stop)
-                except Exception as error:
-                    errors.append(error)
-                else:
-                    with self._state_lock:
-                        self._pending_cleanup.pop(cleanup_id, None)
+            errors.extend(await self._stop_all_instances())
+            errors.extend(await self._cleanup_pending())
             with self._state_lock:
                 can_close_database = not self._instances and not self._pending_cleanup
             if can_close_database and self._database is not None and self._owns_database and not self._database_closed:
                 try:
                     await self._database.close()
+                except (OSError, RuntimeError) as error:
+                    logger.warning("instance_manager.db_close_failed error={}", str(error)[:200])
+                    errors.append(error)
                 except Exception as error:
+                    logger.exception("instance_manager._shutdown.db_close_unexpected")
                     errors.append(error)
                 else:
                     self._database_closed = True
@@ -628,7 +657,12 @@ class InstanceManager:
                         raise
                     return result
                 cancelled = True
+            except (ImportError, OSError, RuntimeError, ValueError):
+                if cancelled and propagate_cancel:
+                    raise asyncio.CancelledError from None
+                raise
             except Exception:
+                logger.exception(".local_ai.instances.manager._await_completion_unexpected")
                 if cancelled and propagate_cancel:
                     raise asyncio.CancelledError from None
                 raise

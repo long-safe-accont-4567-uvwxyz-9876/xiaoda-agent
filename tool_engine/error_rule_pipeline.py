@@ -138,7 +138,7 @@ class ErrorRulePipeline:
 
             # 写入数据库
             return await self._save_rule(tool_name, pattern, rule_text, now)
-        except Exception as e:
+        except (RuntimeError, ValueError, OSError) as e:
             logger.warning("error_rule.extract_failed", error=str(e))
             return None
 
@@ -189,7 +189,7 @@ class ErrorRulePipeline:
                     task_type="memory_encoding", messages=messages,
                     temperature=0.3, max_tokens=512,
                 )
-            except Exception as e:
+            except (RuntimeError, OSError, ValueError, TimeoutError) as e:
                 logger.warning("error_rule.extract_llm_failed", error=str(e))
                 return None
         return result
@@ -277,7 +277,7 @@ class ErrorRulePipeline:
                 if all(tok in args_str for tok in tokens):
                     matched.append(rule)
             return matched
-        except Exception as e:
+        except (RuntimeError, OSError, ValueError) as e:
             logger.warning("error_rule.query_failed", error=str(e))
             return []
 
@@ -291,6 +291,6 @@ class ErrorRulePipeline:
                 (rule_id,),
             )
             await self.db._conn.commit()
-        except Exception as e:
+        except (OSError, RuntimeError, ValueError) as e:
             logger.warning("error_rule.increment_failed",
                            rule_id=rule_id, error=str(e))

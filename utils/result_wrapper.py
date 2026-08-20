@@ -60,7 +60,7 @@ class ResultWrapper:
             response.raise_for_status()
             data = response.json()
             return data.get("choices", [{}])[0].get("message", {}).get("content", "")
-        except Exception as e:
+        except (RuntimeError, OSError, ValueError, ConnectionError) as e:
             logger.warning("result_wrapper.free_model_failed", error=str(e))
             return None
 
@@ -128,7 +128,7 @@ class ResultWrapper:
                 return compacted
 
             return result_text[:int(len(result_text) * RESULT_CAP_TOKENS / original_tokens)]
-        except Exception as e:
+        except (RuntimeError, ValueError, OSError) as e:
             logger.warning("tool.compaction_failed", tool=tool_name, error=str(e)[:120])
             return result_text[:int(len(result_text) * RESULT_CAP_TOKENS / original_tokens)]
 

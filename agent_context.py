@@ -127,6 +127,7 @@ class AgentContext:
     MAX_COMPRESS_ROUNDS = 5        # 最大压缩轮数
     MAX_COMPRESSED_SUMMARY_LEN = 6000
     MAX_PRE_COMPRESSED_BUFFER = 200
+    MAX_PER_USER_CONTEXTS = 50
 
     def __init__(self, system_prompt: str = "", system_prompt_loader: Callable[..., str] | None = None,
                  router: Any | None=None, security_filter: Any | None=None) -> None:
@@ -200,6 +201,14 @@ class AgentContext:
                 self._user_histories[self._current_user_id] = list(self.history)
                 self._user_summaries[self._current_user_id] = self._compressed_summary
                 self._user_buffers[self._current_user_id] = list(self._pre_compressed_buffer)
+            # 淘汰超限用户上下文（FIFO：按首次出现顺序淘汰最旧的）
+            overflow = len(self._user_histories) - self.MAX_PER_USER_CONTEXTS
+            if overflow > 0:
+                evict_keys = list(self._user_histories.keys())[:overflow]
+                for k in evict_keys:
+                    self._user_histories.pop(k, None)
+                    self._user_summaries.pop(k, None)
+                    self._user_buffers.pop(k, None)
             # 加载目标用户上下文（含压缩暂存区）
             self.history = list(self._user_histories.get(user_id, []))
             self._compressed_summary = self._user_summaries.get(user_id, "")
@@ -540,7 +549,10 @@ class AgentContext:
         tz_name = os.getenv("NUDGE_TIMEZONE", "Asia/Shanghai")
         try:
             tz = ZoneInfo(tz_name)
+        except (KeyError, ImportError):
+            tz = ZoneInfo("Asia/Shanghai")
         except Exception:
+            logger.exception("agent_context.zoneinfo_unexpected tz={}", tz_name)
             tz = ZoneInfo("Asia/Shanghai")
         now = datetime.now(tz)
         # Python weekday(): Monday=0, Sunday=6
@@ -873,7 +885,10 @@ class AgentContext:
                 try:
                     from config import get_agent_display_name as _gdn
                     _display = _gdn(_msg_agent)
+                except (ImportError, AttributeError, ValueError):
+                    _display = _msg_agent
                 except Exception:
+                    logger.exception("agent_context.agent_display_name_unexpected agent={}", _msg_agent)
                     _display = _msg_agent
                 _content = f"<previous_agent_reply agent=\"{_msg_agent}\" name=\"{_display}\">{_content}</previous_agent_reply>"
             m = {"role": msg["role"], "content": _content}
@@ -934,7 +949,11 @@ class AgentContext:
                 rows = await db.get_conversations_readonly(
                     start_ts=_now - 86400, end_ts=_now, user_id=user_id, limit=50
                 )
+            except (OSError, RuntimeError, ValueError):
+                # 降级：时间范围查询失败时回退到最近 10 条
+                rows = await db.memory.get_recent_conversations(limit=10, user_id=user_id) if user_id else await db.memory.get_recent_conversations(limit=10)
             except Exception:
+                logger.exception("agent_context.conversation_query_unexpected user={}", user_id)
                 # 降级：时间范围查询失败时回退到最近 10 条
                 rows = await db.memory.get_recent_conversations(limit=10, user_id=user_id) if user_id else await db.memory.get_recent_conversations(limit=10)
             if not rows:
@@ -1026,7 +1045,7 @@ class AgentContext:
             try:
                 xiaoda_prompt = self._system_prompt_loader(address_term=self.current_address_term)
             except Exception as e:
-                logger.warning(f"加载小妲系统提示词失败: {e}")
+                logger.warning("加载小妲系统提示词失败: {}", e)
         if not xiaoda_prompt:
             xiaoda_prompt = "你是小妲，须弥的草神。"
         return xiaoda_prompt

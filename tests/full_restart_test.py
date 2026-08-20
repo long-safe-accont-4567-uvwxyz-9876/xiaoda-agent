@@ -670,7 +670,7 @@ async def phase7_concurrent_edge():
             async def write_file(i):
                 path = os.path.join(td, f"file_{i}.txt")
                 atomic_write(path, f"content_{i}")
-                with open(path) as f:
+                with open(path, encoding="utf-8") as f:
                     return f.read() == f"content_{i}"
 
             results = await asyncio.gather(*[write_file(i) for i in range(20)])

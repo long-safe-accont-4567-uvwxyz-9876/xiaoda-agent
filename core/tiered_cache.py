@@ -176,7 +176,7 @@ class L2FileCache:
             self._hits += 1
             return data["value"]
         except Exception:
-            logger.debug("tiered_cache.L2_get_read_error: {}", exc_info=True)
+            logger.debug("tiered_cache.L2_get_read_error", exc_info=True)
             self._misses += 1
             return None
 
@@ -209,7 +209,7 @@ class L2FileCache:
                     if data.get("expires_at", 0) < now:
                         f.unlink(missing_ok=True)
                 except Exception:
-                    logger.debug("tiered_cache.L2_evict_read_error: {}", exc_info=True)
+                    logger.debug("tiered_cache.L2_evict_read_error", exc_info=True)
                     f.unlink(missing_ok=True)
             # 2. 如仍超限，按修改时间淘汰最旧的
             files = list(self._dir.rglob("*.json"))
@@ -220,9 +220,9 @@ class L2FileCache:
                     try:
                         f.unlink(missing_ok=True)
                     except Exception:
-                        logger.debug("tiered_cache.L2_evict_unlink_error: {}", exc_info=True)
+                        logger.debug("tiered_cache.L2_evict_unlink_error", exc_info=True)
         except Exception:
-            logger.debug("tiered_cache.L2_evict_failed: {}", exc_info=True)
+            logger.debug("tiered_cache.L2_evict_failed", exc_info=True)
 
     def invalidate(self, prefix: str = "") -> int:
         """按前缀失效缓存文件.
@@ -241,7 +241,7 @@ class L2FileCache:
                 p.unlink()
                 n += 1
             except Exception:
-                logger.debug("tiered_cache.L2_invalidate_unlink_error: {}", exc_info=True)
+                logger.debug("tiered_cache.L2_invalidate_unlink_error", exc_info=True)
         return n
 
     def stats(self) -> dict:
@@ -354,7 +354,7 @@ class L3SQLiteCache:
                     )
                 self._conn.commit()
         except Exception:
-            logger.debug("tiered_cache.L3_evict_failed: {}", exc_info=True)
+            logger.debug("tiered_cache.L3_evict_failed", exc_info=True)
 
     def invalidate(self, prefix: str = "") -> int:
         """按前缀失效缓存.

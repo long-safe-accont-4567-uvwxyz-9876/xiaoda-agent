@@ -115,5 +115,8 @@ class LearningManager:
                     lines.append(f"· {summary[:100]}")
 
             return "\n".join(lines)
+        except (ImportError, OSError, RuntimeError, ValueError):
+            return ""
         except Exception:
+            logger.exception(".memory.learning_manager.get_system_prompt_additions_unexpected")
             return ""

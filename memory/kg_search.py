@@ -116,7 +116,7 @@ class KGSearchEngine:
                     })
             return results
         except Exception as e:
-            logger.debug("kg_search.semantic_failed", error=str(e))
+            logger.debug("kg_search.semantic_failed", error=str(e), exc_info=True)
             return []
 
     async def _fulltext_search(self, query: str, k: int) -> list[dict]:

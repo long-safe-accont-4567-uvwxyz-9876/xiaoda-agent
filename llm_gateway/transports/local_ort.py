@@ -62,7 +62,11 @@ class LocalOrtTransport(ProviderTransport):
             async for text in self._runtime.stream(request.messages, self._options(request), context):
                 yield CompletionChunk(text=str(text), model=self.default_model)
             yield CompletionChunk(model=self.default_model, finish_reason="stop")
+        except (OSError, RuntimeError, ValueError) as error:
+            raise TransportError("stream request failed") from error
+
         except Exception as error:
+            logger.exception(".llm_gateway.transports.local_ort.stream_unexpected")
             raise TransportError("stream request failed") from error
 
     async def health_check(self):

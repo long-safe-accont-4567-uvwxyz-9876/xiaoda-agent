@@ -68,8 +68,10 @@ class DoctorCheck:
                         passed += 1
                         self._fixes_applied.append(f"{layer}/{name}")
                     except Exception as e:
+                        logger.exception("doctor.auto_fix_failed")
                         detail = f"{detail} (fix failed: {e})"
             except Exception as e:
+                logger.exception("doctor.check_error")
                 ok, status, detail = False, "error", str(e)
 
             self._results.append({
@@ -129,11 +131,14 @@ def _register_process_checks(doc: DoctorCheck) -> None:
         s.settimeout(1)
         try:
             s.bind(("0.0.0.0", 0))
-            s.close()
             return True, "Port binding available"
-        except Exception:
-            s.close()
+        except OSError:
             return False, "Port binding failed"
+        except Exception:
+            logger.exception("doctor.port_bind_unexpected")
+            return False, "Port binding failed"
+        finally:
+            s.close()
 
     doc.add_check("Port Available", "L2-Network", _check_port)
 
@@ -161,6 +166,7 @@ def _check_db_integrity() -> tuple:
             return True, "DB integrity OK"
         return False, f"DB integrity check failed: {result[0]}"
     except Exception as e:
+        logger.exception("doctor.db_integrity_check_error")
         return False, f"DB integrity check error: {e}"
 
 def _fix_db_integrity() -> None:
@@ -296,7 +302,10 @@ def _check_disk_space() -> tuple:
         try:
             usage = shutil.disk_usage(str(DATA_DIR))
             free_gb = usage.free / (1024 ** 3)
+        except (OSError, ValueError):
+            return True, "Disk space check skipped (unsupported)"
         except Exception:
+            logger.exception("doctor.disk_space_check_unexpected")
             return True, "Disk space check skipped (unsupported)"
     if free_gb < 0.5:
         return False, f"Low disk space: {free_gb:.1f} GB free"
@@ -309,7 +318,10 @@ def _check_web_dist() -> tuple:
             dist_dir = base / "web" / "dist"
         else:
             dist_dir = Path(__file__).resolve().parent.parent / "web" / "dist"
+    except (AttributeError, OSError):
+        dist_dir = Path(__file__).resolve().parent.parent / "web" / "dist"
     except Exception:
+        logger.exception("doctor.web_dist_path_unexpected")
         dist_dir = Path(__file__).resolve().parent.parent / "web" / "dist"
     if not dist_dir.exists():
         return False, f"web/dist not found at {dist_dir}"
@@ -326,7 +338,10 @@ def _check_writable() -> tuple:
         test_file.write_text("ok")
         test_file.unlink()
         return True, f"DATA_DIR writable ({DATA_DIR})"
+    except (OSError, PermissionError) as e:
+        return False, f"DATA_DIR not writable: {e}"
     except Exception as e:
+        logger.exception("doctor.writable_check_unexpected")
         return False, f"DATA_DIR not writable: {e}"
 
 
@@ -380,11 +395,11 @@ def _check_port_conflict() -> tuple:
     s.settimeout(1)
     try:
         s.bind(("127.0.0.1", port))
-        s.close()
         return True, f"Port {port} available"
     except OSError:
-        s.close()
         return False, f"Port {port} in use by another process"
+    finally:
+        s.close()
 
 def _fix_port_conflict() -> None:
     port_str = os.getenv("WEBUI_PORT", str(DEFAULT_WEBUI_PORT))
@@ -535,7 +550,10 @@ def _check_behavioral_health() -> tuple:
                           f"(factors={len(score.factors)})")
         return False, (f"BHS: level={score.level.name} score={score.score}/5 "
                       f"recommendations={len(score.recommendations)}")
+    except (ImportError, AttributeError, RuntimeError, ValueError) as e:
+        return False, f"BHS check failed: {e}"
     except Exception as e:
+        logger.exception("doctor.bhs_check_unexpected")
         return False, f"BHS check failed: {e}"
 
 def _check_zombie_processes() -> tuple:
@@ -549,7 +567,10 @@ def _check_zombie_processes() -> tuple:
             return True, f"No zombie processes (monitored={det.get_status()['monitored_count']})"
         names = ", ".join(f"{z.name}(pid={z.pid})" for z in zombies[:3])
         return False, f"Detected {len(zombies)} zombie(s): {names}"
+    except (ImportError, AttributeError, RuntimeError, ValueError) as e:
+        return False, f"Zombie check failed: {e}"
     except Exception as e:
+        logger.exception("doctor.zombie_check_unexpected")
         return False, f"Zombie check failed: {e}"
 
 

@@ -109,9 +109,10 @@ def _security_check(item: MarketItem, content: bytes = b"") -> SecurityCheckResu
                 result.risk_level = "medium"
                 break
 
-    except Exception as exc:
+    except (ValueError, TypeError, OSError) as exc:
         logger.debug("market.security_check_decode_failed: {}", exc, exc_info=True)
-
+    except Exception:
+        logger.exception("market.unknown.unexpected_error")
     if result.warnings and result.risk_level == "high":
         result.passed = False
 
@@ -213,10 +214,11 @@ async def install_plugin(req: InstallRequest, request: Request) -> Any:
             await plugin_manager.load(item.id)
             await plugin_manager.enable(item.id)
             result["auto_enabled"] = True
-        except Exception as e:
+        except (OSError, RuntimeError, ValueError, ImportError) as e:
             logger.warning("market.auto_enable_failed", id=item.id, error=str(e))
             result["auto_enabled"] = False
-
+        except Exception:
+            logger.exception("market.unknown.unexpected_error")
     return Envelope(data=result)
 
 

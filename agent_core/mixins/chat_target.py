@@ -25,7 +25,10 @@ class ChatTargetMixin:
                 decision = await self._router_engine.decide_with_llm(user_input, user_id)
             else:
                 decision = self._router_engine.decide(user_input, user_id)
+        except (ImportError, OSError, RuntimeError, ValueError):
+            decision = self._router_engine.decide(user_input, user_id)
         except Exception:
+            logger.exception(".agent_core.mixins.chat_target._parse_chat_target_unexpected")
             decision = self._router_engine.decide(user_input, user_id)
         if decision.agent_names:
             async with self._chat_target_lock:

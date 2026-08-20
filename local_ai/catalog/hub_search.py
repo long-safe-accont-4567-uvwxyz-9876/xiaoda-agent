@@ -14,6 +14,8 @@ from typing import Any
 
 import httpx
 
+from loguru import logger
+
 from local_ai.catalog.modelscope import _check_ssrf
 
 # SSRF 白名单：仅允许这些固定镜像主机（用户输入不参与 host 决定）
@@ -130,7 +132,11 @@ def search_hf_mirror(
             if query.strip():
                 kwargs["search"] = query.strip()
             models = api.list_models(**kwargs)
-        except Exception as error:  # noqa: BLE001
+        except (OSError, RuntimeError, ConnectionError, ValueError) as error:
+            logger.warning("hub_search.hf_mirror_failed error={}", str(error)[:200])
+            raise HubSearchError(f"hf-mirror search failed: {error}") from error
+        except Exception as error:
+            logger.exception("hub_search.search_hf_mirror.unexpected_error")
             raise HubSearchError(f"hf-mirror search failed: {error}") from error
         results = []
         for item in models:
@@ -201,6 +207,32 @@ def _modelscope_revision(repository: str) -> str | None:
     return None
 
 
+def _parse_modelscope_item(item: dict[str, Any], category: str) -> dict[str, Any] | None:
+    model_id = item.get("id")
+    if not isinstance(model_id, str) or not model_id.strip():
+        return None
+    tasks = item.get("tasks")
+    tags = item.get("tags")
+    pipeline_tag = tasks[0] if isinstance(tasks, list) and tasks and isinstance(tasks[0], str) else None
+    item_category = _categorize(pipeline_tag)
+    if category == "all" and item_category == "chat":
+        return None
+    if category != "all" and item_category != category:
+        return None
+    return {
+        "id": model_id.strip(),
+        "source": "modelscope",
+        "name": item.get("display_name") if isinstance(item.get("display_name"), str) else model_id.strip(),
+        "downloads": int(item.get("downloads") or 0),
+        "likes": int(item.get("likes") or 0),
+        "revision": None,
+        "pipeline_tag": pipeline_tag,
+        "modified_at": item.get("last_modified"),
+        "tags": [tag for tag in tags if isinstance(tag, str)] if isinstance(tags, list) else [],
+        "category": item_category,
+    }
+
+
 def search_modelscope(
     query: str,
     *,
@@ -242,43 +274,9 @@ def search_modelscope(
         for item in items:
             if not isinstance(item, dict):
                 continue
-            model_id = item.get("id")
-            if not isinstance(model_id, str) or not model_id.strip():
-                continue
-            tasks = item.get("tasks")
-            tags = item.get("tags")
-            pipeline_tag = (
-                tasks[0]
-                if isinstance(tasks, list) and tasks and isinstance(tasks[0], str)
-                else None
-            )
-            item_category = _categorize(pipeline_tag)
-            if category == "all" and item_category == "chat":
-                continue
-            if category != "all" and item_category != category:
-                continue
-            collected.append(
-                {
-                    "id": model_id.strip(),
-                    "source": "modelscope",
-                    "name": (
-                        item.get("display_name")
-                        if isinstance(item.get("display_name"), str)
-                        else model_id.strip()
-                    ),
-                    "downloads": int(item.get("downloads") or 0),
-                    "likes": int(item.get("likes") or 0),
-                    "revision": None,
-                    "pipeline_tag": pipeline_tag,
-                    "modified_at": item.get("last_modified"),
-                    "tags": (
-                        [tag for tag in tags if isinstance(tag, str)]
-                        if isinstance(tags, list)
-                        else []
-                    ),
-                    "category": item_category,
-                }
-            )
+            parsed = _parse_modelscope_item(item, category)
+            if parsed is not None:
+                collected.append(parsed)
         if len(collected) >= limit:
             break
         if len(items) < page_size:
@@ -294,6 +292,49 @@ def search_modelscope(
         for result, revision in zip(results, revisions):
             result["revision"] = revision
     return results
+
+
+def _merge_cross_source(batch: dict[str, list[dict[str, Any]]]) -> dict[str, dict[str, Any]]:
+    merged: dict[str, dict[str, Any]] = {}
+    for name, items in batch.items():
+        for item in items:
+            entry = merged.get(item["id"])
+            if entry is None:
+                merged[item["id"]] = {
+                    "id": item["id"],
+                    "name": item.get("name") or item["id"],
+                    "sources": [name],
+                    "source": name,
+                    "downloads": item["downloads"],
+                    "likes": item["likes"],
+                    "sha": item.get("sha"),
+                    "revision": item.get("revision"),
+                    "pipeline_tag": item.get("pipeline_tag"),
+                    "modified_at": item.get("modified_at"),
+                    "tags": item.get("tags") or [],
+                    "category": item.get("category") or "other",
+                }
+                continue
+            if name not in entry["sources"]:
+                entry["sources"].append(name)
+            entry["downloads"] = max(entry["downloads"], item["downloads"])
+            entry["likes"] = max(entry["likes"], item["likes"])
+            if name == "hf-mirror" and item.get("sha"):
+                entry["sha"] = item["sha"]
+            elif name == "modelscope" and item.get("revision"):
+                entry["revision"] = item["revision"]
+            if not entry["pipeline_tag"] and item.get("pipeline_tag"):
+                entry["pipeline_tag"] = item["pipeline_tag"]
+            if not entry["category"] or entry["category"] == "other":
+                if item.get("category"):
+                    entry["category"] = item["category"]
+    for entry in merged.values():
+        if len(entry["sources"]) > 1:
+            if entry["revision"] and "modelscope" in entry["sources"]:
+                entry["source"] = "modelscope"
+            elif entry["sha"] and "hf-mirror" in entry["sources"]:
+                entry["source"] = "hf-mirror"
+    return merged
 
 
 def search_hub(
@@ -345,49 +386,7 @@ def search_hub(
             except HubSearchError as error:
                 errors.append(f"{name}: {error}")
 
-    # 跨源合并：同 id 合并为一行，保留全部来源与各源 hash
-    merged: dict[str, dict[str, Any]] = {}
-    for name, items in batch.items():
-        for item in items:
-            entry = merged.get(item["id"])
-            if entry is None:
-                merged[item["id"]] = {
-                    "id": item["id"],
-                    "name": item.get("name") or item["id"],
-                    "sources": [name],
-                    "source": name,
-                    "downloads": item["downloads"],
-                    "likes": item["likes"],
-                    "sha": item.get("sha"),
-                    "revision": item.get("revision"),
-                    "pipeline_tag": item.get("pipeline_tag"),
-                    "modified_at": item.get("modified_at"),
-                    "tags": item.get("tags") or [],
-                    "category": item.get("category") or "other",
-                }
-                continue
-            if name not in entry["sources"]:
-                entry["sources"].append(name)
-            entry["downloads"] = max(entry["downloads"], item["downloads"])
-            entry["likes"] = max(entry["likes"], item["likes"])
-            if name == "hf-mirror" and item.get("sha"):
-                entry["sha"] = item["sha"]
-            elif name == "modelscope" and item.get("revision"):
-                entry["revision"] = item["revision"]
-            if not entry["pipeline_tag"] and item.get("pipeline_tag"):
-                entry["pipeline_tag"] = item["pipeline_tag"]
-            if not entry["category"] or entry["category"] == "other":
-                if item.get("category"):
-                    entry["category"] = item["category"]
-
-    # 首选源：优先带不可变 hash 的那一个（能检视/下载），保证两源都能操作
-    for entry in merged.values():
-        if len(entry["sources"]) > 1:
-            if entry["revision"] and "modelscope" in entry["sources"]:
-                entry["source"] = "modelscope"
-            elif entry["sha"] and "hf-mirror" in entry["sources"]:
-                entry["source"] = "hf-mirror"
-
+    merged = _merge_cross_source(batch)
     results = sorted(merged.values(), key=lambda it: it["downloads"], reverse=True)[:limit]
     return {"results": results, "errors": errors}
 

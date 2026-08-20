@@ -120,8 +120,8 @@ class AgentRReflector:
         # 实时检测: 第一个错误即触发
         if not success and self._current_trajectory.type == TrajectoryType.INITIAL:
             self._current_trajectory.type = TrajectoryType.ERROR
-            logger.info(f"AgentR.error_detected step={step.step_idx} "
-                         f"action={action} error={error}")
+            logger.info("AgentR.error_detected step={} action={} error={}",
+                         step.step_idx, action, error)
 
     def should_reflect(self) -> bool:
         """是否需要触发反思"""
@@ -163,8 +163,8 @@ class AgentRReflector:
                 self._memories = self._memories[-self._max_memory:]
 
         self._current_trajectory.reflection = lesson
-        logger.info(f"AgentR.reflect memory_added pattern={pattern} "
-                     f"lesson={lesson[:80]}")
+        logger.info("AgentR.reflect memory_added pattern={} lesson={}",
+                     pattern, lesson[:80])
 
         # A4: 反思生成的教训同步记录到学习反馈闭环 (失败不阻塞)
         try:

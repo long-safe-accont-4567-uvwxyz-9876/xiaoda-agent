@@ -40,7 +40,7 @@ def _maybe_decrypt(value: str) -> str:
     try:
         from security.credential_vault import decrypt
         return decrypt(value)
-    except Exception:
+    except (ImportError, OSError, ValueError, RuntimeError):
         return value
 
 

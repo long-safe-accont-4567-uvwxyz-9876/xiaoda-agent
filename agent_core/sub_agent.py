@@ -349,7 +349,7 @@ class SubAgent:
                             "请在回复中适度体现此方向倾向。"
                         )
             except Exception:
-                logger.debug("JSpace.intervention_evaluate_failed")
+                logger.debug("JSpace.intervention_evaluate_failed", exc_info=True)
 
         response: str | None = None
         success = False
@@ -372,7 +372,7 @@ class SubAgent:
                 await _signal_stream.emit(
                     f"agent_{self.config.name}_success", success_score, "agent_dispatcher")
             except Exception:
-                logger.debug("agent_dispatcher.signal_emit_failed")
+                logger.debug("agent_dispatcher.signal_emit_failed", exc_info=True)
 
         if response is not None:
             return response
@@ -862,7 +862,7 @@ class SubAgent:
             if not result:
                 return f"{self.config.display_name}思考了一下，但还没有整理好回答，请稍等或换个问题问我吧～"
             return result
-        except (TimeoutError, Exception):
+        except (TimeoutError, asyncio.TimeoutError):
             last_tool = working[-1] if working else {}
             if isinstance(last_tool, dict) and last_tool.get("role") == "tool":
                 raw_content = last_tool.get("content", "").strip()
@@ -965,5 +965,3 @@ class SubAgent:
         if not self.config.voice_ref:
             return None
         return await self._tts.synthesize(text, voice=self.config.voice_ref, style=style, emotion=emotion)
-
-

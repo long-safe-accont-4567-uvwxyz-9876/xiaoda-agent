@@ -29,7 +29,7 @@ async def emit_tool_event(phase: str, tool_name: str, arguments: dict | None = N
         if arguments:
             try:
                 preview = json.dumps(arguments, ensure_ascii=False)[:200]
-            except Exception:
+            except (TypeError, ValueError):
                 preview = str(arguments)[:200]
         event = {
             "type": "tool_event",
@@ -43,5 +43,5 @@ async def emit_tool_event(phase: str, tool_name: str, arguments: dict | None = N
         # fire-and-forget：可视化推送不阻塞工具执行；_spawn 保证任务被跟踪不丢
         from core.background_tasks import _spawn
         _spawn(manager.broadcast(event))
-    except Exception:
+    except (RuntimeError, OSError, ConnectionError, ImportError):
         logger.debug("tool_events.emit_error", exc_info=True)

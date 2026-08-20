@@ -96,7 +96,7 @@ class MediaTaskQueue:
                     handler(row["prompt"], params),
                     timeout=600 if row["kind"] == "video" else 120)
                 await self._set_status(task_id, "done", progress=1.0, result_path=url)
-            except Exception as e:
+            except (RuntimeError, OSError, ValueError, TimeoutError) as e:
                 logger.warning("media_task.failed id={} error={}", task_id, str(e))
                 await self._set_status(task_id, "failed", error=str(e)[:300])
             finally:
@@ -130,7 +130,7 @@ class MediaTaskQueue:
                 "progress": progress, "result_url": result_url or None,
                 "error": error or None,
             })
-        except Exception:
+        except (RuntimeError, OSError, ConnectionError):
             logger.debug("media_tasks.broadcast_error", exc_info=True)
 
     # ── 各类型执行 ───────────────────────────────────────

@@ -11,7 +11,7 @@ def test_correct_sensitive_file_permissions(tmp_path, monkeypatch):
     """存量 0644 敏感文件应被校正为 0600"""
     # 构造敏感文件（644）
     sensitive = tmp_path / "webui_secret"
-    sensitive.write_text("secret123")
+    sensitive.write_text("secret123", encoding="utf-8")
     sensitive.chmod(0o644)
     assert stat.S_IMODE(sensitive.stat().st_mode) == 0o644
 
@@ -34,7 +34,7 @@ def test_correct_sensitive_file_permissions(tmp_path, monkeypatch):
 def test_noop_on_already_0600(tmp_path):
     """已经是 0600 的文件不应被改动"""
     fp = tmp_path / "ok"
-    fp.write_text("x")
+    fp.write_text("x", encoding="utf-8")
     fp.chmod(0o600)
     assert stat.S_IMODE(fp.stat().st_mode) == 0o600
     # 再次调用不应抛异常

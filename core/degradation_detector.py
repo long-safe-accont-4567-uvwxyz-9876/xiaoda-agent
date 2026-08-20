@@ -354,7 +354,7 @@ class DegradationDetector:
             try:
                 cb(report)
             except Exception as e:
-                logger.error("DegradationDetector 回调异常: {!r}", e)
+                logger.error("DegradationDetector 回调异常: {!r}", e, exc_info=True)
         log_fn = (
             logger.warning if severity == Severity.WARNING
             else logger.error if severity == Severity.CRITICAL

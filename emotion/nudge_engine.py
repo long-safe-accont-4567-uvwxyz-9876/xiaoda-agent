@@ -22,7 +22,10 @@ def _get_local_now() -> datetime:
     tz_name = os.getenv("NUDGE_TIMEZONE", "Asia/Shanghai")
     try:
         tz = ZoneInfo(tz_name)
+    except (KeyError, ImportError):
+        tz = ZoneInfo("Asia/Shanghai")
     except Exception:
+        logger.exception("nudge.zoneinfo_unexpected tz={}", tz_name)
         tz = ZoneInfo("Asia/Shanghai")
     return datetime.now(tz)
 
@@ -251,7 +254,11 @@ class NudgeEngine:
             rows = await self._db.fetch_all(
                 "SELECT content FROM greeting_log ORDER BY fired_at DESC LIMIT ?", (limit,))
             return [r["content"][:30] for r in rows if r.get("content")]
+        except (OSError, RuntimeError, ValueError):
+            return []
+
         except Exception:
+            logger.exception(".emotion.nudge_engine._recent_greetings_unexpected")
             return []
 
     async def _generate_idle_greeting(self, idle_seconds: float) -> str:
@@ -351,7 +358,10 @@ class NudgeEngine:
                 try:
                     session = await self._core.get_session(self._user_openid)
                     session_id = session["id"] if session else await self._core.create_session(self._user_openid)
+                except (OSError, RuntimeError, KeyError):
+                    session_id = ""
                 except Exception:
+                    logger.exception("nudge.session_get_unexpected user={}", self._user_openid)
                     session_id = ""
                 result = await asyncio.wait_for(
                     self._core.process(

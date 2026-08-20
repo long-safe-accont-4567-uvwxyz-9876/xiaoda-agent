@@ -29,13 +29,20 @@ from loguru import logger
 
 try:
     from utils.atomic_write import atomic_json_write
-except Exception:  # pragma: no cover
+except (ImportError, AttributeError):
+    atomic_json_write = None  # type: ignore[assignment]
+except Exception:
+    logger.exception(".core.permanent_memory.unexpected")
     atomic_json_write = None  # type: ignore[assignment]
 
 # 延迟导入 DATA_DIR, 避免 config 模块在测试中导入失败时影响本模块
 try:
     from config import DATA_DIR
-except Exception:  # pragma: no cover - 配置缺失时退化为项目根目录
+except (ImportError, AttributeError):
+    DATA_DIR = Path(__file__).resolve().parent.parent / "data"
+    DATA_DIR.mkdir(parents=True, exist_ok=True)
+except Exception:
+    logger.exception(".core.permanent_memory.unexpected")
     DATA_DIR = Path(__file__).resolve().parent.parent / "data"
     DATA_DIR.mkdir(parents=True, exist_ok=True)
 
@@ -159,19 +166,19 @@ class PermanentMemoryManager:
                 for uid, entries in data.items()
             }
             logger.info(
-                f"PermanentMemory.load path={self._memories_path} "
-                f"users={len(self._memories)}"
+                "PermanentMemory.load path={} users={}",
+                self._memories_path, len(self._memories)
             )
         except (json.JSONDecodeError, KeyError, ValueError, TypeError) as e:
-            logger.error(f"PermanentMemory.load FAILED — file corrupted: {e}. Backing up and starting fresh.")
+            logger.error("PermanentMemory.load FAILED — file corrupted: {}. Backing up and starting fresh.", e, exc_info=True)
             # 备份损坏的文件，避免数据被覆盖后无法恢复
             import shutil
             backup = self._memories_path.with_suffix('.json.corrupt')
             try:
                 shutil.copy2(self._memories_path, backup)
-                logger.warning(f"PermanentMemory backed up corrupt file to {backup}")
+                logger.warning("PermanentMemory backed up corrupt file to {}", backup)
             except Exception:
-                logger.debug("permanent_memory.corrupt_backup_copy_error: {}", exc_info=True)
+                logger.debug("permanent_memory.corrupt_backup_copy_error", exc_info=True)
             self._memories = {}
 
     def _save(self) -> None:
@@ -195,7 +202,7 @@ class PermanentMemoryManager:
                             encoding="utf-8", indent=2, ensure_ascii=False,
                         )
                     except Exception as e:
-                        logger.warning(f"PermanentMemory.save_failed: {e}")
+                        logger.warning("PermanentMemory.save_failed: {}", e)
                 else:
                     # fallback: 固定 tmp 方式（atomic_write 不可用时）
                     tmp = self._memories_path.with_suffix(".json.tmp")
@@ -204,7 +211,7 @@ class PermanentMemoryManager:
                             json.dump(data, f, ensure_ascii=False, indent=2)
                         os.replace(tmp, self._memories_path)
                     except Exception as e:
-                        logger.warning(f"PermanentMemory.save_failed: {e}")
+                        logger.warning("PermanentMemory.save_failed: {}", e)
                         try:
                             if tmp.exists():
                                 tmp.unlink()

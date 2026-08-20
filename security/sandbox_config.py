@@ -121,7 +121,10 @@ def check_domain_allowed(url: str, sandbox: SandboxSettings | None = None) -> tu
         parsed = urllib.parse.urlparse(url)
         hostname = parsed.hostname or ""
         port = parsed.port
+    except (ImportError, OSError, RuntimeError, ValueError):
+        return False, "无效的 URL"
     except Exception:
+        logger.exception(".security.sandbox_config.check_domain_allowed_unexpected")
         return False, "无效的 URL"
 
     # 检查端口

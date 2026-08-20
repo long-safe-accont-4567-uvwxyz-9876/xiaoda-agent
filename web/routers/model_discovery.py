@@ -74,6 +74,9 @@ async def _fetch_openai_compatible_models(
                 logger.debug("discover.connect_failed provider={} error={} (local={})",
                              provider_id, str(e)[:100], is_local)
                 return []
+            except Exception:
+                logger.exception("model_discovery._fetch_openai_compatible_models.unexpected_error")
+                return []
             resp.raise_for_status()
             body = resp.json()
 
@@ -132,8 +135,11 @@ async def _fetch_openai_compatible_models(
 
         logger.info("discover.fetched provider={} count={}", provider_id, len(models))
         return models
-    except Exception as e:
+    except (httpx.HTTPError, OSError, RuntimeError, ValueError) as e:
         logger.warning("discover.fetch_failed provider={} error={}", provider_id, str(e))
+        return []
+    except Exception:
+        logger.exception("model_discovery.unknown.unexpected_error")
         return []
 
 
@@ -200,7 +206,7 @@ async def _get_siliconflow_pricing() -> dict[str, dict] | None:
     try:
         import re as _re
         import httpx
-        async with httpx.AsyncClient() as client:
+        async with httpx.AsyncClient(timeout=15) as client:
             resp = await client.get("https://siliconflow.cn/models",
                              headers={"User-Agent": "Mozilla/5.0"}, timeout=15)
         html = resp.text
@@ -233,11 +239,12 @@ async def _get_siliconflow_pricing() -> dict[str, dict] | None:
         logger.warning("siliconflow.pricing_parse_empty")
         return None
 
-    except Exception as e:
+    except (httpx.HTTPError, OSError, RuntimeError, ValueError) as e:
         logger.warning("siliconflow.pricing_fetch_failed error={}", str(e))
         return None
-
-
+    except Exception:
+        logger.exception("model_discovery.unknown.unexpected_error")
+        return None
 # ── 特殊 provider 的获取逻辑 ──────────────────────────────────────
 
 
@@ -281,8 +288,11 @@ async def _fetch_openrouter_models(api_key: str) -> list[dict]:
 
         logger.info("discover.fetched provider=openrouter count={}", len(models))
         return models
-    except Exception as e:
+    except (httpx.HTTPError, OSError, RuntimeError, ValueError) as e:
         logger.warning("discover.openrouter_failed error={}", str(e))
+        return []
+    except Exception:
+        logger.exception("model_discovery.unknown.unexpected_error")
         return []
 
 
@@ -324,8 +334,11 @@ async def _fetch_siliconflow_models(api_key: str) -> list[dict]:
             })
         logger.info("discover.fetched provider=siliconflow count={}", len(models))
         return models
-    except Exception as e:
+    except (httpx.HTTPError, OSError, RuntimeError, ValueError) as e:
         logger.warning("discover.siliconflow_failed error={}", str(e))
+        return []
+    except Exception:
+        logger.exception("model_discovery._fetch_siliconflow_models.unexpected_error")
         return []
 
 
@@ -364,9 +377,11 @@ async def _build_local_ort_group(request: Request) -> dict:
     if registry is not None:
         try:
             installed = await registry.list()
-        except Exception as e:  # noqa: BLE001
+        except (OSError, RuntimeError, ValueError, AttributeError) as e:  # noqa: BLE001
             logger.warning("discover.local_ort_list_failed error={}", str(e))
             installed = []
+        except Exception:
+            logger.exception("model_discovery._build_local_ort_group.unexpected_error")
         for item in installed:
             purpose = getattr(item, "purpose", None)
             if purpose is None or str(purpose) != "chat":
@@ -422,9 +437,10 @@ def _get_all_providers() -> list[dict]:
                 "builtin": p.get("builtin", False),
                 "order": p.get("order", 9999),
             })
-    except Exception as e:
+    except (OSError, KeyError, ValueError, RuntimeError, ImportError) as e:
         logger.warning("discover.load_providers_failed error={}", str(e))
-
+    except Exception:
+        logger.exception("model_discovery._get_all_providers.unexpected_error")
     return providers
 
 
@@ -552,9 +568,14 @@ async def set_chat_model(body: dict, request: Request) -> Any:
                 "type": "config_changed",
                 "payload": {"type": "chat_model", "provider": provider, "model_id": model_id},
             })
-        except Exception as e:
+        except (OSError, RuntimeError, ValueError, ConnectionError) as e:
             logger.warning("discover.chat_model_broadcast_failed error={}", str(e))
+        except Exception:
+            logger.exception("model_discovery.set_chat_model.unexpected_error")
         return Envelope(data=info)
-    except Exception as e:
+    except (ValueError, KeyError, RuntimeError, OSError) as e:
         logger.error("discover.set_chat_model_failed error={}", str(e))
+        return Envelope(ok=False, error={"code": "set_failed", "message": str(e)})
+    except Exception as e:
+        logger.exception("model_discovery.set_chat_model.unexpected_error")
         return Envelope(ok=False, error={"code": "set_failed", "message": str(e)})

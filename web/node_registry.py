@@ -191,7 +191,7 @@ def get_backend(cfg: Any, node_id: str) -> str:
             cfg.get(f"local_deploy.nodes.{node_id}", "")
             or _NODE_MAP[node_id]["default"]
         ).strip().lower()
-    except Exception:  # noqa: BLE001
+    except (KeyError, ValueError, RuntimeError):  # noqa: BLE001
         value = _NODE_MAP[node_id]["default"]
     value = _BACKEND_ALIASES.get(value, value)
     return value if valid_backend(value) else _NODE_MAP[node_id]["default"]
@@ -227,6 +227,6 @@ def get_local_model(cfg: Any, node_id: str) -> str:
             cfg.get(f"local_deploy.node_models.{node_id}", "")
             or _NODE_MAP[node_id].get("local_model", "")
         ).strip()
-    except Exception:  # noqa: BLE001
+    except (KeyError, ValueError, RuntimeError):  # noqa: BLE001
         value = _NODE_MAP[node_id].get("local_model", "")
     return value or ""

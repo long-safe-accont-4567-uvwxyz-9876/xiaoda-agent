@@ -43,7 +43,7 @@ class SimpleFaultInjectingLLMClient:
         for fault in self._faults:
             if random.random() < fault.probability:
                 self._injection_count += 1
-                logger.warning(f"故障注入: {fault.fault_type.value} (#{self._injection_count})")
+                logger.warning("故障注入: {} (#{})", fault.fault_type.value, self._injection_count)
                 return self._generate_fault_response(fault)
         return await self._real.complete(messages, **kwargs)
 

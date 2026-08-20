@@ -87,7 +87,14 @@ class MemoryDB(ChildChunkMixin, EntityMixin, EpisodicMixin, SearchMixin, Distill
                 )
                 if auto_commit:
                     await self._conn.commit()
+        except (ImportError, OSError, RuntimeError, ValueError) as e:
+            _record_fts_sync_failure(event_label, e)
+
+
+
+
         except Exception as e:
+            logger.exception(".db.db_memory._sync_fts_unexpected")
             _record_fts_sync_failure(event_label, e)
 
 

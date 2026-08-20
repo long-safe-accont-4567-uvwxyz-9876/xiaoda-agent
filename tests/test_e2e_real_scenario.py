@@ -34,7 +34,7 @@ async def test_model_route_configuration():
         return True
 
     import json
-    with open(overrides_path) as f:
+    with open(overrides_path, encoding="utf-8") as f:
         overrides = json.load(f)
 
     route_table = overrides.get("ROUTE_TABLE", {})

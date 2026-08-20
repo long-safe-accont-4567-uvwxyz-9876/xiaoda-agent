@@ -27,13 +27,23 @@ from loguru import logger
 # 延迟导入 DATA_DIR, 避免 config 模块在测试中导入失败时影响本模块
 try:
     from config import DATA_DIR
-except Exception:  # pragma: no cover - 配置缺失时退化为项目根目录
+except (ImportError, AttributeError):
+    DATA_DIR = Path(__file__).resolve().parent.parent / "data"
+    DATA_DIR.mkdir(parents=True, exist_ok=True)
+
+except Exception:
+    logger.exception(".core.learning_feedback.unexpected")
     DATA_DIR = Path(__file__).resolve().parent.parent / "data"
     DATA_DIR.mkdir(parents=True, exist_ok=True)
 
 try:
     from utils.atomic_write import atomic_json_write
-except Exception:  # pragma: no cover
+except (ImportError, AttributeError):
+    atomic_json_write = None  # type: ignore[assignment]
+
+
+except Exception:
+    logger.exception(".core.learning_feedback.unexpected")
     atomic_json_write = None  # type: ignore[assignment]
 
 
@@ -186,7 +196,7 @@ class LearningFeedbackLoop:
         try:
             self.load()
         except Exception as e:  # pragma: no cover - 加载失败不影响功能
-            logger.warning(f"LearningFeedback.load_failed: {e}")
+            logger.warning("LearningFeedback.load_failed: {}", e)
 
     # ── 记录与提取 ──────────────────────────────────────────
 
@@ -326,7 +336,7 @@ class LearningFeedbackLoop:
                     json.dump(data, f, ensure_ascii=False, indent=2)
                 os.replace(tmp, self._persist_path)
         except Exception as e:
-            logger.warning(f"LearningFeedback.persist_failed: {e}")
+            logger.warning("LearningFeedback.persist_failed: {}", e)
         logger.info(
             f"LearningFeedback.persist path={self._persist_path} "
             f"lessons={len(self._lessons)} strategies={len(self._strategies)}"
@@ -347,7 +357,7 @@ class LearningFeedbackLoop:
                 f"lessons={len(self._lessons)} strategies={len(self._strategies)}"
             )
         except (json.JSONDecodeError, KeyError, ValueError) as e:
-            logger.warning(f"LearningFeedback.load corrupted: {e}")
+            logger.warning("LearningFeedback.load corrupted: {}", e)
             self._lessons = []
             self._strategies = {}
 
@@ -443,7 +453,7 @@ def record_tool_outcome(tool_name: str, arguments: dict,
         )
         loop.record(event)
     except Exception as e:  # pragma: no cover - 不影响主流程
-        logger.warning(f"LearningFeedback.record_tool_outcome_failed: {e}")
+        logger.warning("LearningFeedback.record_tool_outcome_failed: {}", e)
 
 
 def record_reflection_lesson(lesson_text: str,
@@ -469,4 +479,4 @@ def record_reflection_lesson(lesson_text: str,
         )
         loop.record(event)
     except Exception as e:  # pragma: no cover - 不影响主流程
-        logger.warning(f"LearningFeedback.record_reflection_lesson_failed: {e}")
+        logger.warning("LearningFeedback.record_reflection_lesson_failed: {}", e)

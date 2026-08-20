@@ -79,7 +79,7 @@ def _verify_dns_pin(url: str) -> str | None:
         return None  # ssrf_guard 不可用, 跳过
     try:
         pinned_ip = get_pinned_ip(url)
-    except Exception:
+    except (ValueError, OSError, RuntimeError):
         return None  # 校验异常, 跳过 (不阻塞, 已在入口处校验)
     if not pinned_ip:
         return None  # 无 pinned IP (例如白名单主机), 跳过
@@ -124,7 +124,7 @@ def _fetch_html(url: str, timeout: int = 15) -> tuple[int, str, str]:
         return resp.status_code, resp.text, ""
     except ImportError:
         logger.debug("web_browse_tools.httpx_unavailable", exc_info=True)
-    except Exception as e:
+    except (OSError, RuntimeError, ConnectionError) as e:
         logger.debug("web_browse.primp_failed", error=str(e))
 
     import urllib.request
@@ -219,7 +219,7 @@ async def web_browse(url: str) -> ToolResult:
             _browse_cache.popitem(last=False)
 
         return result
-    except Exception as e:
+    except (OSError, RuntimeError, ValueError, ConnectionError) as e:
         return ToolResult.fail(f"浏览网页失败: {e!s}")
 
 

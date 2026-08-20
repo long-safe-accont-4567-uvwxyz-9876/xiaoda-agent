@@ -237,7 +237,7 @@ class AgentRegistry:
         if fp.exists():
             try:
                 return json.loads(fp.read_text(encoding="utf-8"))
-            except Exception:
+            except (json.JSONDecodeError, OSError, ValueError):
                 logger.warning("xiaoda.json 损坏，忽略", exc_info=True)
         return {}
 
@@ -314,7 +314,7 @@ class AgentRegistry:
                     logger.info("agent_registry.custom_loaded name={}", name)
                 if data.get("_disabled"):
                     self._disabled.add(name)
-            except Exception as e:
+            except (json.JSONDecodeError, OSError, ValueError, RuntimeError) as e:
                 logger.warning("agent_registry.load_failed file={} error={}", fp.name, str(e))
 
     @staticmethod
@@ -414,7 +414,7 @@ class AgentRegistry:
             from web.config_service import get_config_service
             tools_cfg = get_config_service().get("tools", {})
             disabled_by_webui = {n for n, c in tools_cfg.items() if isinstance(c, dict) and not c.get("enabled", True)}
-        except Exception:
+        except (ImportError, RuntimeError, ValueError):
             logger.debug("registry.webui_tools_error", exc_info=True)
         excluded = set(xiaoda_cfg.get("excluded_tools") or [])
         tool_count = len([t for t in all_tools
@@ -441,7 +441,7 @@ class AgentRegistry:
             wp = get_config_service().get("ui.main_wallpaper")
             if wp:
                 main["wallpaper"] = _normalize_wallpaper(wp)
-        except Exception:
+        except (OSError, ValueError, RuntimeError):
             logger.debug("registry.wallpaper_error", exc_info=True)
         out = [main]
         registered_names: set[str] = set()
@@ -468,7 +468,7 @@ class AgentRegistry:
         try:
             from model_router import ROUTE_TABLE
             return ROUTE_TABLE.get("chat", {}).get("model", "")
-        except Exception:
+        except (ImportError, RuntimeError, KeyError):
             logger.debug("registry.model_name_error", exc_info=True)
             return ""
 
@@ -563,7 +563,7 @@ class AgentRegistry:
                 fp = self._file(name)
                 try:
                     cfg_data = json.loads(fp.read_text(encoding="utf-8"))
-                except Exception:
+                except (json.JSONDecodeError, OSError, ValueError):
                     logger.debug("registry.cfg_parse_error name={}", name, exc_info=True)
                     cfg_data = {}
                 deps = cfg_data.get("deprecated_names", [])
@@ -590,7 +590,7 @@ class AgentRegistry:
                 await agent.reload_model_config(
                     agent.config.provider, agent.config.model,
                     agent.config.base_url, agent.config.api_key_env)
-            except Exception:
+            except (ImportError, RuntimeError, OSError, ValueError):
                 logger.debug("registry.model_reload_error", exc_info=True)
         if personality_text is not None and personality_text.strip():
             from config import reverse_agent_name_replacements
@@ -724,7 +724,7 @@ class AgentRegistry:
         mcp = {}
         try:
             mcp_names = list(self.core._mcp_manager._clients.keys())
-        except Exception:
+        except (RuntimeError, AttributeError):
             logger.debug("registry.mcp_clients_error", exc_info=True)
             mcp_names = []
         for s in mcp_names:

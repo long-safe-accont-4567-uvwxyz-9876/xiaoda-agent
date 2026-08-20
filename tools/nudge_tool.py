@@ -1,4 +1,5 @@
 import random
+from loguru import logger
 from tool_engine.tool_registry import register_tool, ToolPermission, ToolResult
 from config import get_agent_display_name
 
@@ -31,7 +32,10 @@ async def nudge_greeting(user_id: str, message: str = "") -> ToolResult:
                 address_term = m.group(1).strip().split("\n")[0].strip() if m else "爸爸"
             else:
                 address_term = "爸爸"
+        except (ImportError, AttributeError):
+            address_term = "爸爸"
         except Exception:
+            logger.exception(".tools.nudge_tool.nudge_greeting_unexpected")
             address_term = "爸爸"
         greetings = [
             f"{address_term}，好久不见！最近怎么样呀？",

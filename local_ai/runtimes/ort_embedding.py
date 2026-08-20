@@ -11,6 +11,8 @@ import threading
 from pathlib import Path
 from typing import Any
 
+from loguru import logger
+
 from local_ai.contracts import RuntimeProfile
 from local_ai.runtimes.base import Runtime, RuntimeValidationError
 
@@ -89,8 +91,10 @@ class EmbeddingRuntime(Runtime):
         if provider is not None:
             try:
                 provider.close()
-            except Exception:  # noqa: BLE001 - 关闭失败不影响状态重置
-                pass
+            except (OSError, RuntimeError) as e:
+                logger.debug("ort_embedding.provider_close_failed error={}", str(e))
+            except Exception:
+                logger.exception("ort_embedding.stop.unexpected_error")
 
     # ── 加载 ──────────────────────────────────────────────
 
@@ -161,7 +165,11 @@ class EmbeddingRuntime(Runtime):
     def _infer_dimensions(session: Any) -> int:
         try:
             out_shape = session.get_outputs()[0].shape
-        except Exception:  # noqa: BLE001 - 假 session 或形状缺失
+        except (AttributeError, IndexError, OSError, RuntimeError) as e:
+            logger.debug("ort_embedding.infer_dimensions_failed error={}", str(e))
+            return 0
+        except Exception:
+            logger.exception("ort_embedding._infer_dimensions.unexpected_error")
             return 0
         hidden = out_shape[-1] if out_shape else None
         hidden = getattr(hidden, "dim_value", hidden)

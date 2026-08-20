@@ -206,7 +206,7 @@ class MCPClient:
                         tools=list(self._tool_names))
             return True
 
-        except Exception as e:
+        except (OSError, RuntimeError, ValueError, ImportError) as e:
             logger.error("mcp_client.start_failed", server=self.server_name, error=str(e))
             await self.stop()
             return False
@@ -226,7 +226,7 @@ class MCPClient:
             logger.info("mcp.sse_connected", url=self._config.url,
                         tools=list(self._tool_names))
             return True
-        except Exception as e:
+        except (OSError, RuntimeError, ValueError, ConnectionError) as e:
             logger.warning("mcp.sse_connect_failed", url=self._config.url, error=str(e))
             await self.stop()
             return False
@@ -246,7 +246,7 @@ class MCPClient:
             logger.info("mcp.http_connected", url=self._config.url,
                         tools=list(self._tool_names))
             return True
-        except Exception as e:
+        except (OSError, RuntimeError, ValueError, ConnectionError) as e:
             logger.warning("mcp.http_connect_failed", url=self._config.url, error=str(e))
             await self.stop()
             return False
@@ -276,7 +276,7 @@ class MCPClient:
             try:
                 self._process.stdin.close()
                 await self._process.stdin.wait_closed()
-            except Exception:
+            except (OSError, RuntimeError):
                 logger.debug("mcp.close_stdin_error", exc_info=True)
             try:
                 await asyncio.wait_for(self._process.wait(), timeout=5.0)
@@ -307,7 +307,7 @@ class MCPClient:
         if self._http_client:
             try:
                 await self._http_client.aclose()
-            except Exception:
+            except (OSError, RuntimeError):
                 logger.debug("mcp.close_http_client_error", exc_info=True)
             self._http_client = None
 
@@ -373,7 +373,7 @@ class MCPClient:
 
         except TimeoutError:
             return ToolResult.fail(f"MCP tool '{tool_name}' call timed out")
-        except Exception as e:
+        except (RuntimeError, OSError, ValueError, ConnectionError, KeyError) as e:
             logger.error("mcp_client.call_tool_error", server=self.server_name,
                          tool=tool_name, error=str(e))
             return ToolResult.fail(f"MCP tool '{tool_name}' error: {e}")
@@ -402,7 +402,7 @@ class MCPClient:
         try:
             self._process.stdin.write(line.encode())
             await self._process.stdin.drain()
-        except Exception as e:
+        except (OSError, RuntimeError, ConnectionError) as e:
             self._pending.pop(msg_id, None)
             fut.set_result(None)
             logger.error("mcp_client.write_error", server=self.server_name, error=str(e))
@@ -464,7 +464,7 @@ class MCPClient:
                 if "error" in data:
                     return {"error": data["error"]}
                 return data.get("result")
-        except Exception as e:
+        except (RuntimeError, OSError, ConnectionError, ValueError) as e:
             logger.error("mcp_client.http_request_error",
                          server=self.server_name, error=str(e))
             return None
@@ -521,7 +521,7 @@ class MCPClient:
         try:
             self._process.stdin.write(line.encode())
             await self._process.stdin.drain()
-        except Exception as e:
+        except (OSError, RuntimeError, ConnectionError) as e:
             logger.error("mcp_client.notify_error", server=self.server_name, error=str(e))
 
     async def _notify_http(self, msg: dict) -> None:
@@ -543,7 +543,7 @@ class MCPClient:
             if resp.status_code not in (200, 202):
                 logger.warning("mcp_client.http_notify_status",
                                server=self.server_name, status=resp.status_code)
-        except Exception as e:
+        except (RuntimeError, OSError, ConnectionError, ValueError) as e:
             logger.error("mcp_client.http_notify_error",
                          server=self.server_name, error=str(e))
 
@@ -585,7 +585,7 @@ class MCPClient:
         except asyncio.CancelledError:
             # 协程取消属正常关闭路径：finally 中已完成清理，静默吞掉
             pass
-        except Exception as e:
+        except (OSError, RuntimeError, ValueError, ConnectionError) as e:
             logger.error("mcp_client.read_loop_error", server=self.server_name, error=str(e))
         finally:
             self._available = False
@@ -620,7 +620,7 @@ class MCPClient:
         except asyncio.CancelledError:
             # 协程取消属正常关闭路径，静默吞掉
             pass
-        except Exception as e:
+        except (OSError, RuntimeError) as e:
             logger.debug("mcp_client.stderr_read_error",
                          server=self.server_name, error=str(e))
 
@@ -745,7 +745,7 @@ class MCPManager:
             try:
                 await client.start()
                 logger.info("mcp_manager.server_started", server=server_name)
-            except Exception as e:
+            except (OSError, RuntimeError, ValueError, ConnectionError) as e:
                 logger.error("mcp_manager.server_start_failed",
                              server=server_name, error=str(e))
 
@@ -761,7 +761,7 @@ class MCPManager:
         for server_name, client in self._clients.items():
             try:
                 await client.stop()
-            except Exception as e:
+            except (OSError, RuntimeError, ConnectionError) as e:
                 logger.error("mcp_manager.server_stop_failed",
                              server=server_name, error=str(e))
         self._clients.clear()
@@ -797,7 +797,7 @@ class MCPManager:
                     if not healthy:
                         logger.warning("mcp.health_check_failed", server=name)
                         await self._reconnect_server(name)
-                except Exception as e:
+                except (OSError, RuntimeError, ConnectionError) as e:
                     logger.warning("mcp.health_check_error", server=name, error=str(e))
                     await self._reconnect_server(name)
 
@@ -817,7 +817,7 @@ class MCPManager:
                     logger.info("mcp.reconnected", server=name)
                     return
             except Exception as e:
-                logger.warning("mcp.reconnect_failed", server=name, attempt=attempt + 1, error=str(e))
+                logger.warning("mcp.reconnect_failed", server=name, attempt=attempt + 1, error=str(e), exc_info=True)
         logger.error("mcp.reconnect_exhausted", server=name)
 
     # ── tool-level permissions ───────────────────────────────────
@@ -889,7 +889,7 @@ class MCPManager:
             return False
         except Exception as e:
             logger.error("mcp_manager.server_add_failed",
-                         server=server_name, error=str(e))
+                         server=server_name, error=str(e), exc_info=True)
             return False
 
     def get_tools_for_agent(self, mcp_servers: list[str]) -> list[dict]:
@@ -1058,7 +1058,7 @@ class SdkMcpServer:
         try:
             return await tool.handler(arguments)
         except Exception as e:
-            logger.error("sdk_mcp_server.call_tool.error", tool=tool_name, error=str(e))
+            logger.error("sdk_mcp_server.call_tool.error", tool=tool_name, error=str(e), exc_info=True)
             return {"error": str(e)}
 
     def register_tool(self, tool: SdkMcpTool) -> None:

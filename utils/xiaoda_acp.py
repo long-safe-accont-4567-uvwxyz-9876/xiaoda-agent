@@ -138,7 +138,7 @@ class XiaodaAcpServer:
             if len(data) > 10 * 1024 * 1024:
                 return None
             return {"mimeType": mime, "data": base64.b64encode(data).decode("ascii")}
-        except Exception:
+        except (OSError, ValueError, RuntimeError):
             return None
 
     async def _send_audio_file(self, audio_path: Any, acp_session_id: str) -> None:
@@ -176,7 +176,7 @@ class XiaodaAcpServer:
                 logger.warning("xiaoda_acp.audio_no_coze_ids",
                                has_agent_id=bool(self._coze_agent_id),
                                has_session_id=bool(self._coze_session_id))
-        except Exception as e:
+        except (OSError, RuntimeError, ConnectionError) as e:
             logger.warning("xiaoda_acp.audio_send_failed", error=str(e))
 
     async def _handle_session_prompt(self, msg: Any) -> dict:
@@ -285,7 +285,7 @@ class XiaodaAcpServer:
             reply = result.reply
             sticker_path = result.sticker_path
             audio_path = result.audio_path
-        except Exception as e:
+        except (RuntimeError, OSError, ValueError, ConnectionError) as e:
             logger.error("xiaoda_acp.process_error", error=str(e))
             reply = f"嗯……出了点小问题：{str(e)[:200]}"
         return reply, sticker_path, audio_path
@@ -342,7 +342,7 @@ class XiaodaAcpServer:
                 logger.warning("xiaoda_acp.sticker_bridge_failed",
                                code=proc.returncode, stderr=stderr.decode()[:200])
                 self._send_inline_image(session_id, sticker_path)
-        except Exception as e:
+        except (OSError, RuntimeError, ConnectionError) as e:
             logger.warning("xiaoda_acp.sticker_send_error", error=str(e))
 
     def _handle_session_cancel(self, msg: Any) -> Any:
@@ -384,7 +384,7 @@ class XiaodaAcpServer:
         while True:
             try:
                 msg = self._read_message()
-            except Exception:
+            except (OSError, RuntimeError, ValueError):
                 break
 
             if msg is None:
@@ -430,7 +430,7 @@ class XiaodaAcpServer:
                         self._write_message(
                             self._make_error(msg, -32601, f"Method not found: {method}")
                         )
-            except Exception as e:
+            except (RuntimeError, ValueError, KeyError, OSError) as e:
                 logger.error("xiaoda_acp.handler_error", method=method, error=str(e))
                 if msg_id is not None:
                     self._write_message(

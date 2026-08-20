@@ -53,7 +53,7 @@ def _resolve_user_id(explicit: str = "") -> str:
         ctx = _current_request_ctx.get()
         if ctx is not None and getattr(ctx, "user_id", ""):
             return ctx.user_id
-    except Exception as e:
+    except (RuntimeError, ValueError, AttributeError) as e:
         logger.debug("schedule_tool.resolve_user_id_failed error={}", str(e))
     return "default"
 
@@ -136,7 +136,7 @@ async def list_reminders(include_disabled: bool = False,
         total = len(formatted)
         header = f"共 {total} 条提醒（按时间排序）："
         return ToolResult.ok(header + "\n" + "\n".join(formatted))
-    except Exception as e:
+    except (RuntimeError, OSError, ValueError) as e:
         logger.error("schedule_tool.list_failed", error=str(e))
         return ToolResult.fail(f"查询提醒失败：{e!s}")
 
@@ -244,7 +244,7 @@ async def update_reminder(id: int, time: str = "", prompt_hint: str = "",
     except ValueError as e:
         # 输入格式错误，不写日志
         return ToolResult.fail(f"参数格式错误：{e!s}")
-    except Exception as e:
+    except (RuntimeError, OSError, ValueError) as e:
         logger.error("schedule_tool.update_failed", id=id, error=str(e))
         return ToolResult.fail(f"修改提醒失败：{e!s}")
 
@@ -296,6 +296,6 @@ async def delete_reminder(id: int, user_id: str = "") -> ToolResult:
         hint = existing.get("prompt_hint", "")
         time_str = existing.get("time", "")
         return ToolResult.ok(f"已删除提醒 ID {id}（{time_str} - {hint}）")
-    except Exception as e:
+    except (RuntimeError, OSError, ValueError) as e:
         logger.error("schedule_tool.delete_failed", id=id, error=str(e))
         return ToolResult.fail(f"删除提醒失败：{e!s}")

@@ -3,6 +3,9 @@ from __future__ import annotations
 import json
 from typing import Any, AsyncIterator, Mapping
 
+import httpx
+from loguru import logger
+
 from llm_gateway.contracts import ProviderCapabilities
 from llm_gateway.transports.base import (
     CapabilityReport,
@@ -103,7 +106,10 @@ class AnthropicTransport(ProviderTransport):
                 usage=TokenUsage(prompt, completion, prompt + completion),
                 raw=data,
             )
+        except (httpx.HTTPStatusError, httpx.ConnectError, httpx.TimeoutException, OSError, ValueError) as error:
+            raise TransportError("completion request failed") from error
         except Exception as error:
+            logger.exception("transport.anthropic.complete_unexpected model={}", request.model)
             raise TransportError("completion request failed") from error
 
     async def stream(self, request: CompletionRequest) -> AsyncIterator[CompletionChunk]:
@@ -134,7 +140,10 @@ class AnthropicTransport(ProviderTransport):
                         yield CompletionChunk(text=str(data["delta"].get("text", "")), model=request.model, raw=data)
                     elif event_type == "message_delta":
                         yield CompletionChunk(model=request.model, finish_reason=normalize_finish_reason(data.get("delta", {}).get("stop_reason")), raw=data)
+        except (httpx.HTTPStatusError, httpx.ConnectError, httpx.TimeoutException, OSError, ValueError) as error:
+            raise TransportError("stream request failed") from error
         except Exception as error:
+            logger.exception("transport.anthropic.stream_unexpected model={}", request.model)
             raise TransportError("stream request failed") from error
 
     async def discover_models(self) -> tuple[str, ...]:
@@ -143,7 +152,10 @@ class AnthropicTransport(ProviderTransport):
             response.raise_for_status()
             models = tuple(str(item["id"]) for item in response.json().get("data", ()) if item.get("id"))
             return models or await super().discover_models()
+        except (httpx.HTTPStatusError, httpx.ConnectError, httpx.TimeoutException, OSError, ValueError):
+            return await super().discover_models()
         except Exception:
+            logger.exception("transport.anthropic.discover_models_unexpected")
             return await super().discover_models()
 
     async def health_check(self) -> CapabilityReport:
@@ -154,7 +166,10 @@ class AnthropicTransport(ProviderTransport):
             response.raise_for_status()
             models = tuple(str(item["id"]) for item in response.json().get("data", ()) if item.get("id"))
             return CapabilityReport(True, self.capabilities, models=models or await super().discover_models())
+        except (httpx.HTTPStatusError, httpx.ConnectError, httpx.TimeoutException, OSError):
+            return CapabilityReport(False, self.capabilities, error="health check failed")
         except Exception:
+            logger.exception("transport.anthropic.health_check_unexpected")
             return CapabilityReport(False, self.capabilities, error="health check failed")
 
     async def aclose(self) -> None:

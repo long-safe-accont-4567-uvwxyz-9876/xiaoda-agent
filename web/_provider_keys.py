@@ -11,6 +11,7 @@ ROUTE_EDITABLE_FIELDS 常量抽到本模块, 该模块仅依赖 config, 不依�
 """
 from __future__ import annotations
 
+import contextlib
 from pathlib import Path
 from loguru import logger
 
@@ -71,14 +72,14 @@ def _decode_key(encoded: str) -> str | None:
                 return decrypt(encoded)
             except DecryptionError:
                 return None
-        except Exception:
+        except (ImportError, OSError):
             logger.debug("provider_keys.vault_import_error", exc_info=True)
 
     # 2. 兼容旧版 base64 编码
     import base64
     try:
         return base64.b64decode(encoded.encode("ascii")).decode("utf-8")
-    except Exception:
+    except (ValueError, UnicodeDecodeError, OSError):
         logger.debug("provider_keys.base64_decode_error", exc_info=True)
         return None
 
@@ -102,6 +103,8 @@ def load_provider_key(provider_id: str) -> str:
             from security.credential_vault import is_encrypted
             if not is_encrypted(raw):
                 fp.write_text(_encode_key(decoded) + "\n", encoding="utf-8")
+                with contextlib.suppress(OSError):
+                    fp.chmod(0o600)
         except OSError:
             logger.debug("provider_keys.encrypt_migration_write_failed provider={}", provider_id, exc_info=True)
         return decoded
@@ -109,6 +112,8 @@ def load_provider_key(provider_id: str) -> str:
     if raw and not raw.startswith("enc:"):
         try:
             fp.write_text(_encode_key(raw) + "\n", encoding="utf-8")
+            with contextlib.suppress(OSError):
+                fp.chmod(0o600)
             return raw
         except OSError:
             logger.debug("provider_keys.plain_migration_write_failed provider={}", provider_id, exc_info=True)

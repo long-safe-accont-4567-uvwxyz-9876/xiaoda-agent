@@ -122,7 +122,7 @@ def _trust_forwarded_for() -> bool:
         from config import TRUST_FORWARDED_FOR as _cfg_val  # type: ignore
         if _cfg_val:
             return True
-    except Exception:
+    except (ImportError, RuntimeError, ValueError):
         logger.debug("rate_limit.trust_forwarded_for_config_read_failed", exc_info=True)
     return False
 
@@ -352,8 +352,8 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
             logger.info(
                 "rate_limit.states_loaded user={} write={}", restored_user, restored_write,
             )
-        except Exception as e:
-            logger.warning(f"rate_limit.load_states_failed: {e}")
+        except (OSError, RuntimeError, ValueError) as e:
+            logger.warning("rate_limit.load_states_failed: {}", e)
 
     def _save_states(self) -> None:
         """保存用户桶与写端点桶状态到 SQLite (全量替换)。"""
@@ -379,14 +379,19 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
                 )
                 c.commit()
             self._last_save = now
-        except Exception as e:
-            logger.warning(f"rate_limit.save_states_failed: {e}")
+        except (OSError, RuntimeError, ValueError) as e:
+            logger.warning("rate_limit.save_states_failed: {}", e)
 
     def _evict_inactive_buckets(self) -> int:
         """淘汰长时间未访问的桶, 防止内存无限增长。返回淘汰数量。"""
         now = time.time()
         threshold = now - _EVICT_INACTIVE_AFTER
         evicted = 0
+        # login 桶淘汰
+        stale_login = [k for k, b in self._login_buckets.items() if b.last_access < threshold]
+        for k in stale_login:
+            self._login_buckets.pop(k, None)
+            evicted += 1
         # 用户桶淘汰
         stale_user = [k for k, b in self._user_buckets.items() if b.last_access < threshold]
         for k in stale_user:
@@ -398,6 +403,13 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
             self._write_buckets.pop(k, None)
             evicted += 1
         # 数量上限保护 (即使活跃也限制最大桶数)
+        if len(self._login_buckets) > _MAX_BUCKETS:
+            sorted_keys = sorted(
+                list(self._login_buckets.items()), key=lambda kv: kv[1].last_access
+            )
+            for k, _ in sorted_keys[:len(self._login_buckets) - _MAX_BUCKETS]:
+                self._login_buckets.pop(k, None)
+                evicted += 1
         if len(self._user_buckets) > _MAX_BUCKETS:
             sorted_keys = sorted(
                 list(self._user_buckets.items()), key=lambda kv: kv[1].last_access

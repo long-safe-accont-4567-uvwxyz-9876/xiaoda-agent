@@ -235,7 +235,7 @@ class TestThresholds:
         assert model.should_archive(0.20) is False
 
     def test_constant_values(self):
-        assert S_PERMANENT == 30.0
+        assert S_PERMANENT == 15.0  # P2: 30→15
         assert R_ARCHIVE == 0.05
         assert BUFFER_DAYS == 21
         assert S_INIT == 3.0

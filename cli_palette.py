@@ -26,6 +26,7 @@ from prompt_toolkit.layout.controls import BufferControl, FormattedTextControl
 from prompt_toolkit.formatted_text import ANSI
 from prompt_toolkit.layout.layout import Layout
 from prompt_toolkit.styles import Style
+from loguru import logger
 
 
 @dataclass
@@ -239,7 +240,10 @@ class CommandPalette:
         if children is None and node.loader is not None:
             try:
                 children = node.loader() or []
+            except (ImportError, OSError, RuntimeError, ValueError):
+                children = []
             except Exception:
+                logger.exception(".cli_palette._activate_unexpected")
                 children = []
         if not children:
             # 无可选项：等同于取消，不误发

@@ -658,92 +658,7 @@ def merge_continuation(
 
     # 5/6. 无重叠的两种处理路径
     if assume_tail:
-        # 调用方采用 assistant-prefill 续写。无重叠的 continuation 有两种可能：
-        # (a) prefill 成功的纯尾巴（如 original 末尾"...散步"，continuation
-        #     "回来后我们一起吃了晚饭"——无边界重叠但语义上是续写）；
-        # (b) prefill 失效后 LLM 重生成完全不同的回复（如事故 ID 2112 的人格
-        #     切换：original 是小狼段、continuation 是小妲段）。
-        #
-        # CodeRabbit 复审 I1 修复方案评估：
-        # - 长度比例无法区分两种场景：合法 prefill 尾巴可能与 original 长度
-        #   接近（如 original 是前半段、continuation 是后半段），人格切换的
-        #   重生成也可能长度相近。
-        # - 字符重叠率也无法可靠区分：合法续写可能用词完全不同（如"散步"→
-        #   "回来后吃饭"），人格切换可能恰好共享"我们"等常用词。
-        # 强行用启发式判定会误伤合法 prefill 尾巴，导致内容缺失。
-        #
-        # 最终方案：保持 appended 行为（信任 prefill），但记录 warning 日志
-        # 便于线上观测实际触发频率。真正的根因（人格切换）由 N9/N10 修复
-        # 避免降级场景产生，而非在合并层硬判。
-        #
-        # I1 观测增强：在日志之外增加 metrics 计数。dashboard 上若
-        # `llm.merge_continuation.appended_long` 在短时间内多次触发，
-        # 说明 N9/N10 防线可能失效（prefill 频繁失效导致重生成），值班可
-        # 通过 metrics 仪表盘快速感知，无需翻日志。
-        # 治本修复（"一个问题重复两遍"事故根因）：
-        # 走到这里说明 continuation 与 original 无边界重叠（上方分支 4 spliced 未命中）。
-        # 无重叠 = assistant-prefill 失效（provider 不支持 prefill，LLM 重生成完整回复
-        # 而非续写真正的尾巴）。此时若 appended 直接拼接，最终回复会包含两遍相似内容
-        # （改写/语序调整的重复漏过分支 2 的精确子串检测）。
-        #
-        # P0 修复（用户反馈"截断问题非常严重"根因）：
-        # 原"无重叠一律丢弃"策略导致截断无法修复——agnes 流式常不发 finish_reason，
-        # 触发 stream_no_finish_retry 重试，但 merge_continuation 把续写丢弃了，
-        # 回复停留在截断位置（如"...大概是【6"被原样返回）。
-        # 修复：区分"原回复被截断"vs"原回复可能完整"两种场景：
-        #   - 原回复不以合法句末标记结尾（被截断）→ 必须拼接续写，否则截断无法修复
-        #   - 原回复以合法句末标记结尾（可能完整）→ 丢弃无重叠续写（避免重复）
-        # 代价：截断场景可能引入少量重复，但比截断更可接受——用户明确反馈截断比重复严重。
-        if _looks_truncated(original):
-            # P0 修复（用户反馈"语不达意"根因）：
-            # 原 implementation 无脑拼接 original + continuation，但当续写太短
-            # （如 13 字节）且原文较长（如 172 字节）时，13 字节是 LLM 重新生成
-            # 的（不是真正的尾巴），拼接处语义断裂 → "语不达意"。
-            # 事故证据：22:07:42 original=172B（截断在"今天的这"）+ continuation=13B
-            #   = 185B 拼接结果，衔接不上 → 用户投诉"语不达意"。
-            # 修复：续写太短（< 20 字节）且原文足够长（>= 80 字节）时，丢弃续写
-            #   直接用原文——截断在"这"比拼接 13 字节无意义内容更好。
-            #   原文太短（< 80 字节）时仍拼接（截断太短必须补全）。
-            # 注意：用 UTF-8 字节数比较（与日志 original_len/continuation_len 对齐，
-            # 中文 1 字符 = 3 字节，len() 返回字符数会导致阈值偏差）。
-            _cont_bytes = len(continuation.encode("utf-8"))
-            _orig_bytes = len(original.encode("utf-8"))
-            _MIN_CONT_BYTES = 20      # < 20 字节 ≈ 6 个中文字 = LLM 无实质续写
-            _MIN_ORIG_BYTES_FOR_DROP = 80  # >= 80 字节 ≈ 26 个中文字 = 原文已足够长
-            if _cont_bytes < _MIN_CONT_BYTES and _orig_bytes >= _MIN_ORIG_BYTES_FOR_DROP:
-                logger.info("llm_cleanup.merge_continuation.short_continuation_discarded",
-                            context=context, original_len=_orig_bytes,
-                            continuation_len=_cont_bytes,
-                            note="continuation_too_short_keep_truncated_original")
-                metrics.inc("llm.merge_continuation.short_continuation_discarded")
-                return original, "discarded"
-            # Fix B（2830 事故兜底）：continuation 若是 LLM 重生成的完整回复
-            # （与 original 主体高度相似但非逐字重复，漏过上方子串/重叠检测），
-            # 拼接只会产生重复内容 → 替换为较长者，而非 appended。
-            if _looks_like_regeneration(original, continuation):
-                logger.warning("llm_cleanup.merge_continuation.regeneration_detected",
-                               context=context, original_len=_orig_bytes,
-                               continuation_len=_cont_bytes,
-                               note="similar_regeneration_replace_not_append")
-                if _cont_bytes >= _orig_bytes:
-                    metrics.inc("llm.merge_continuation.replaced")
-                    return continuation, "replaced"
-                metrics.inc("llm.merge_continuation.discarded")
-                return original, "discarded"
-            merged = original + continuation
-            logger.warning("llm_cleanup.merge_continuation.truncated_appended",
-                           context=context, original_len=_orig_bytes,
-                           continuation_len=_cont_bytes,
-                           note="original_truncated_append_to_recover")
-            metrics.inc("llm.merge_continuation.truncated_appended")
-            return merged, "appended"
-        # 原回复可能完整，丢弃无重叠续写（避免重复）
-        logger.warning("llm_cleanup.merge_continuation.assume_tail_no_overlap_discarded",
-                       context=context, original_len=len(original),
-                       continuation_len=len(continuation),
-                       note="original_complete_discard_no_overlap_continuation")
-        metrics.inc("llm.merge_continuation.assume_tail_no_overlap_discarded")
-        return original, "discarded"
+        return _merge_no_overlap_assume_tail(original, continuation, context)
 
     # assume_tail=False：判定为重生成（assistant-prefill 失效，LLM 重新生成完整回复）
     # 保留较长者，避免两份完整回复拼接产生重复（生产事故根因）
@@ -762,3 +677,43 @@ def merge_continuation(
     metrics.inc("llm.merge_continuation.discarded")
     return original, "discarded"
 
+
+def _merge_no_overlap_assume_tail(
+    original: str, continuation: str, context: str,
+) -> tuple[str, str]:
+    """assume_tail=True 时无重叠的合并策略：区分截断 vs 完整回复。"""
+    if _looks_truncated(original):
+        _cont_bytes = len(continuation.encode("utf-8"))
+        _orig_bytes = len(original.encode("utf-8"))
+        _MIN_CONT_BYTES = 20
+        _MIN_ORIG_BYTES_FOR_DROP = 80
+        if _cont_bytes < _MIN_CONT_BYTES and _orig_bytes >= _MIN_ORIG_BYTES_FOR_DROP:
+            logger.info("llm_cleanup.merge_continuation.short_continuation_discarded",
+                        context=context, original_len=_orig_bytes,
+                        continuation_len=_cont_bytes,
+                        note="continuation_too_short_keep_truncated_original")
+            metrics.inc("llm.merge_continuation.short_continuation_discarded")
+            return original, "discarded"
+        if _looks_like_regeneration(original, continuation):
+            logger.warning("llm_cleanup.merge_continuation.regeneration_detected",
+                           context=context, original_len=_orig_bytes,
+                           continuation_len=_cont_bytes,
+                           note="similar_regeneration_replace_not_append")
+            if _cont_bytes >= _orig_bytes:
+                metrics.inc("llm.merge_continuation.replaced")
+                return continuation, "replaced"
+            metrics.inc("llm.merge_continuation.discarded")
+            return original, "discarded"
+        merged = original + continuation
+        logger.warning("llm_cleanup.merge_continuation.truncated_appended",
+                       context=context, original_len=_orig_bytes,
+                       continuation_len=_cont_bytes,
+                       note="original_truncated_append_to_recover")
+        metrics.inc("llm.merge_continuation.truncated_appended")
+        return merged, "appended"
+    logger.warning("llm_cleanup.merge_continuation.assume_tail_no_overlap_discarded",
+                   context=context, original_len=len(original),
+                   continuation_len=len(continuation),
+                   note="original_complete_discard_no_overlap_continuation")
+    metrics.inc("llm.merge_continuation.assume_tail_no_overlap_discarded")
+    return original, "discarded"

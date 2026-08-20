@@ -225,6 +225,8 @@ def _correct_sensitive_file_permissions() -> None:
     """
     import stat
     from utils.atomic_write import _restrict_file_permissions_windows
+    from config import get_credentials_dir
+    cred_dir = get_credentials_dir()
     sensitive_files = [
         # 项目内遗留副本（应在后续清理，此处先校正权限）
         Path(__file__).parent / "credentials" / "webui_secret",
@@ -233,6 +235,14 @@ def _correct_sensitive_file_permissions() -> None:
         # 环境变量文件
         Path(__file__).parent / ".env",
     ]
+    # credentials_dir 下的敏感文件
+    for name in ("webui_secret", "webui_recovery.json", "revoked_tokens.json",
+                 "token_epoch", "credential_salt.bin"):
+        sensitive_files.append(cred_dir / name)
+    # provider key 文件
+    if cred_dir.exists():
+        for fp in cred_dir.glob("provider_*.key"):
+            sensitive_files.append(fp)
     for fp in sensitive_files:
         try:
             if fp.exists() and fp.is_file():
@@ -410,7 +420,7 @@ def _is_running_in_docker() -> bool:
     if os.path.exists("/.dockerenv"):
         return True
     try:
-        with open("/proc/1/cgroup", errors="ignore") as f:
+        with open("/proc/1/cgroup", encoding="utf-8", errors="ignore") as f:
             return "docker" in f.read()
     except OSError:
         return False
@@ -447,7 +457,7 @@ def _run_web(host: str, port: int) -> None:
 
     # 显示友好的访问地址（0.0.0.0 对用户不友好）
     display_host = "localhost" if host == "0.0.0.0" else host
-    logger.info(f"Web UI: http://{display_host}:{port}")
+    logger.info("Web UI: http://{}:{}", display_host, port)
 
     # 检测局域网 IP，打印手机可访问的地址
     if host == "0.0.0.0":
@@ -460,7 +470,7 @@ def _run_web(host: str, port: int) -> None:
             if lan_ips:
                 logger.info("手机访问（同一 WiFi 下）:")
                 for ip in lan_ips:
-                    logger.info(f"  http://{ip}:{port}")
+                    logger.info("  http://{}:{}", ip, port)
 
     uvicorn.run(
         app,
@@ -500,11 +510,11 @@ async def _wait_for_port_available_async(host: str, port: int) -> None:
         if _port_bind_ok(host, port):
             break
         if attempt == 0:
-            logger.warning(f"agent.port_in_use port={port}, waiting for old process to release...")
+            logger.warning("agent.port_in_use port={}, waiting for old process to release...", port)
         if attempt < 29:
             await asyncio.sleep(2)
         else:
-            logger.error(f"agent.port_still_in_use port={port}, giving up after 60s")
+            logger.error("agent.port_still_in_use port={}, giving up after 60s", port)
             sys.exit(1)
 
 
@@ -519,11 +529,11 @@ def _wait_for_port_available(host: str, port: int) -> None:
         if _port_bind_ok(host, port):
             break
         if attempt == 0:
-            logger.warning(f"agent.port_in_use port={port}, waiting for old process to release...")
+            logger.warning("agent.port_in_use port={}, waiting for old process to release...", port)
         if attempt < 119:
             time.sleep(0.5)
         else:
-            logger.error(f"agent.port_still_in_use port={port}, giving up after 60s")
+            logger.error("agent.port_still_in_use port={}, giving up after 60s", port)
             sys.exit(1)
 
 
@@ -568,7 +578,7 @@ def _start_splash_server(port: int) -> str:
         threading.Thread(target=_splash_httpd.serve_forever, daemon=True).start()
         return f'http://127.0.0.1:{_splash_port}/splash.html#{port}'
     except OSError:
-        logger.warning(f"Splash HTTP 端口 {_splash_port} 被占用, 回退到 file://")
+        logger.warning("Splash HTTP 端口 {} 被占用, 回退到 file://", _splash_port)
         return 'file://' + os.path.join(_splash_dir(), 'splash.html') + '#' + str(port)
 
 
@@ -589,7 +599,7 @@ def _wait_for_server_ready(window: Any, port: int) -> None:
         try:
             window.evaluate_js("if(typeof onServerTimeout==='function')onServerTimeout();")
         except Exception:
-            logger.warning("splash.onServerTimeout() failed")
+            logger.warning("splash.onServerTimeout() failed", exc_info=True)
         return
 
     # WebUI 就绪，等待 splash 页面加载完成后调用 onServerReady
@@ -603,7 +613,7 @@ def _wait_for_server_ready(window: Any, port: int) -> None:
                 logger.info("splash.onServerReady() triggered")
                 return
         except Exception as e:
-            logger.warning(f"evaluate_js attempt {attempt}: {e}")
+            logger.warning("evaluate_js attempt {}: {}", attempt, e)
         time.sleep(1)
     logger.warning("splash.onServerReady() failed after retries")
 
@@ -676,8 +686,8 @@ def _run_desktop(host: str, port: int) -> None:
     # 4. 启动 splash 独立 HTTP 服务器
     splash_url = _start_splash_server(port)
     webui_url = f"http://localhost:{port}"
-    logger.info(f"Desktop splash: {splash_url}")
-    logger.info(f"Desktop WebUI: {webui_url}")
+    logger.info("Desktop splash: {}", splash_url)
+    logger.info("Desktop WebUI: {}", webui_url)
 
     # 5. 创建 pywebview 窗口
     import webview

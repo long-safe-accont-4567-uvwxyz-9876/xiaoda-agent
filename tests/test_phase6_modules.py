@@ -503,7 +503,7 @@ def test_config_reloader_detects_changes():
         assert r.get("v") == 1
         # 修改文件
         time.sleep(0.1)
-        with open(path, "w") as f:
+        with open(path, "w", encoding="utf-8") as f:
             f.write('{"v": 2}')
             f.flush()
         assert r.reload()
@@ -524,7 +524,7 @@ def test_config_reloader_callback():
         notified = []
         r.on_change(lambda snap: notified.append(snap.version))
         time.sleep(0.1)
-        with open(path, "w") as f:
+        with open(path, "w", encoding="utf-8") as f:
             f.write('{"v": 2}')
             f.flush()
         r.reload()

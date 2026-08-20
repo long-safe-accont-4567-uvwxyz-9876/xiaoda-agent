@@ -55,7 +55,7 @@ class MetaCognition:
         self._latency_history.append(latency_ms)
         self._error_history.append(1)  # 1 = 成功
         self._state.total_turns += 1
-        self._state.avg_response_ms = sum(self._latency_history) / len(self._latency_history)
+        self._state.avg_response_ms = sum(self._latency_history) / max(1, len(self._latency_history))
         self._state.confidence = confidence
         self._state.error_rate = 1 - (sum(self._error_history) / max(1, len(self._error_history)))
         self._state.fatigue = min(1.0, self._state.total_turns / 200)

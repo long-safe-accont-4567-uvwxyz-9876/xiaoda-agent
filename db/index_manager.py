@@ -88,7 +88,7 @@ class IndexManager:
                 )
         await conn.commit()
         if created:
-            logger.info(f"IndexManager.applied created_or_existing={created} total={len(self._indexes)}")
+            logger.info("IndexManager.applied created_or_existing={} total={}", created, len(self._indexes))
         return created
 
     async def verify(self, conn: aiosqlite.Connection, table: str,

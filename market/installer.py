@@ -183,8 +183,14 @@ class MarketInstaller:
                 os.rename(str(target_dir), str(backup_dir))
                 try:
                     shutil.move(str(plugin_src), str(target_dir))
-                except Exception:
+                except (OSError, shutil.Error):
                     # move 失败：回滚（把旧目录改回来）
+                    if target_dir.exists():
+                        _rmtree_with_retry(target_dir)
+                    os.rename(str(backup_dir), str(target_dir))
+                    raise
+                except Exception:
+                    logger.exception("installer.plugin_move_unexpected")
                     if target_dir.exists():
                         _rmtree_with_retry(target_dir)
                     os.rename(str(backup_dir), str(target_dir))
@@ -617,7 +623,12 @@ class MarketInstaller:
             import yaml
             data = yaml.safe_load(yaml_path.read_text(encoding="utf-8")) or {}
             result["checks"].append({"name": "plugin.yaml", "status": "ok"})
+        except (ValueError, KeyError, ImportError) as e:
+            result["checks"].append({"name": "plugin.yaml", "status": "fail", "detail": str(e)})
+            return result
+
         except Exception as e:
+            logger.exception(".market.installer._verify_plugin_unexpected")
             result["checks"].append({"name": "plugin.yaml", "status": "fail", "detail": str(e)})
             return result
 
@@ -629,7 +640,12 @@ class MarketInstaller:
                 import importlib
                 importlib.import_module(f"plugins.{plugin_id}.{module_name}")
                 result["checks"].append({"name": "entry_module", "status": "ok"})
+            except (ImportError, OSError, RuntimeError, ValueError) as e:
+                result["checks"].append({"name": "entry_module", "status": "fail", "detail": str(e)})
+                return result
+
             except Exception as e:
+                logger.exception(".market.installer._verify_plugin_unexpected")
                 result["checks"].append({"name": "entry_module", "status": "fail", "detail": str(e)})
                 return result
 
@@ -642,7 +658,11 @@ class MarketInstaller:
                 else:
                     result["checks"].append({"name": "registered", "status": "warn",
                                              "detail": "插件未被发现，可能需要扫描"})
+            except (ImportError, OSError, RuntimeError, ValueError) as e:
+                result["checks"].append({"name": "registered", "status": "warn", "detail": str(e)})
+
             except Exception as e:
+                logger.exception(".market.installer.unexpected")
                 result["checks"].append({"name": "registered", "status": "warn", "detail": str(e)})
 
         result["ok"] = all(c["status"] != "fail" for c in result["checks"])

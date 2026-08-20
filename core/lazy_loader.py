@@ -30,7 +30,7 @@ class LazyLoader:
         cls = getattr(module, class_name)
         self._instance = cls(**self._args)
         self._loaded = True
-        logger.debug(f"LazyLoader: 已加载 {self._path}")
+        logger.debug("LazyLoader: 已加载 {}", self._path)
 
     @property
     def is_loaded(self) -> bool:

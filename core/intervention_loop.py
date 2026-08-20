@@ -73,7 +73,7 @@ class InterventionLoop:
 
             direction = self._registry.get(rule.direction_name)
             if direction is None:
-                logger.debug(f"intervention_loop.direction_not_found: {rule.direction_name}")
+                logger.debug("intervention_loop.direction_not_found: {}", rule.direction_name)
                 continue
 
             scaled = direction * rule.alpha

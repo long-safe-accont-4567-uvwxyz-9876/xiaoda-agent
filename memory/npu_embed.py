@@ -183,12 +183,17 @@ class NpuEmbeddingProvider:
         log_path = Path(__file__).resolve().parent.parent / "logs" / "npu_embed_runner.log"
         log_path.parent.mkdir(parents=True, exist_ok=True)
         self._stderr_f = open(log_path, "ab")
-        self._proc = subprocess.Popen(
-            cmd,
-            stdin=subprocess.PIPE,
-            stdout=subprocess.PIPE,
-            stderr=self._stderr_f,
-        )
+        try:
+            self._proc = subprocess.Popen(
+                cmd,
+                stdin=subprocess.PIPE,
+                stdout=subprocess.PIPE,
+                stderr=self._stderr_f,
+            )
+        except OSError:
+            self._stderr_f.close()
+            self._stderr_f = None
+            raise
         # 逐块读 stdout 直到 magic，之前内容（VIPLite 版本横幅）全部丢弃；
         # 加超时兜底：runner 初始化挂起（如 NPU 设备忙/驱动异常）时不阻塞服务
         buf = b""
@@ -206,19 +211,23 @@ class NpuEmbeddingProvider:
                 if time.monotonic() > deadline:
                     raise TimeoutError(
                         f"runner magic timeout after {self._timeout_s:.0f}s")
-        except (TimeoutError, Exception) as e:
+        except (TimeoutError, RuntimeError, OSError) as e:
             # 清理泄漏的子进程和管道，避免 magic 超时后僵尸进程/stderr 句柄残留
             try:
                 if self._proc and self._proc.poll() is None:
                     self._proc.kill()
                     self._proc.wait(timeout=5)
+            except (ImportError, OSError, RuntimeError, ValueError):
+                logger.debug("npu_embed.proc_kill_cleanup_failed")
             except Exception:
-                pass
+                logger.exception("npu_embed.proc_kill_unexpected")
             try:
                 if self._stderr_f and not self._stderr_f.closed:
                     self._stderr_f.close()
+            except (ImportError, OSError, RuntimeError, ValueError):
+                logger.debug("npu_embed.stderr_close_cleanup_failed")
             except Exception:
-                pass
+                logger.exception("npu_embed.stderr_close_unexpected")
             raise
         # (超时抛出后由 load() 捕获，Adaptive 层探测已先排除大部分无 NPU 场景)
 
@@ -343,6 +352,20 @@ class NpuEmbeddingProvider:
         self._proc = None
         self._stderr_f = None
         self._loaded = False
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        self.close()
+        return False
+
+    def __del__(self):
+        if self._proc is not None or self._stderr_f is not None:
+            try:
+                self.close()
+            except Exception:
+                pass
 
 
 class AdaptiveEmbeddingProvider:

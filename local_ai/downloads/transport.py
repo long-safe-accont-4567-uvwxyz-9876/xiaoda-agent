@@ -6,6 +6,7 @@ from typing import Protocol
 from urllib.parse import quote
 
 import httpx
+from loguru import logger
 
 from local_ai.contracts import CatalogModel
 
@@ -44,7 +45,11 @@ class HttpDownloadTransport:
         response = await self._client.send(request, stream=True)
         try:
             response.raise_for_status()
+        except (OSError, RuntimeError, ConnectionError, ValueError):
+            await response.aclose()
+            raise
         except Exception:
+            logger.exception("transport.open_stream.unexpected_error url={}", url)
             await response.aclose()
             raise
         total_size = _total_size(response, offset)

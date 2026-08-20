@@ -125,11 +125,17 @@ def _machine_identity() -> str:
     """
     try:
         user = getpass.getuser()
+    except (ImportError, OSError, RuntimeError, ValueError):
+        user = os.getenv("USER", "") or os.getenv("USERNAME", "") or "unknown-user"
     except Exception:
+        logger.exception(".security.credential_vault._machine_identity_unexpected")
         user = os.getenv("USER", "") or os.getenv("USERNAME", "") or "unknown-user"
     try:
         host = socket.gethostname()
+    except (ImportError, OSError, RuntimeError, ValueError):
+        host = "unknown-host"
     except Exception:
+        logger.exception(".security.credential_vault._machine_identity_unexpected")
         host = "unknown-host"
     return f"{user}@{host}"
 
@@ -275,7 +281,7 @@ def encrypt(plaintext: str) -> str:
             encoded = base64.urlsafe_b64encode(ct_bytes).decode("ascii")
             return f"{_DPAPI_PREFIX}{encoded}"
         except Exception as e:
-            logger.warning(f"DPAPI 加密失败，回退到 enc:v1: 方案：{e}")
+            logger.warning("DPAPI 加密失败，回退到 enc:v1: 方案：{}", e, exc_info=True)
             # 落到下面的 enc:v1: 路径
 
     # Windows + 无 pywin32：首次警告（避免日志刷屏）
@@ -309,7 +315,7 @@ def _decrypt_v1(ciphertext: str) -> str:
     try:
         payload = base64.urlsafe_b64decode(encoded.encode("ascii"))
     except Exception as e:
-        logger.warning(f"凭证解密失败：base64 解码错误：{e}")
+        logger.warning("凭证解密失败：base64 解码错误：{}", e, exc_info=True)
         raise DecryptionError(f"base64 解码错误：{e}") from e
 
     if len(payload) < _NONCE_LEN + _TAG_LEN:
@@ -334,7 +340,7 @@ def _decrypt_v1(ciphertext: str) -> str:
     try:
         return pt_bytes.decode("utf-8")
     except UnicodeDecodeError as e:
-        logger.warning(f"凭证解密失败：UTF-8 解码错误：{e}")
+        logger.warning("凭证解密失败：UTF-8 解码错误：{}", e, exc_info=True)
         raise DecryptionError(f"UTF-8 解码错误：{e}") from e
 
 
@@ -356,13 +362,13 @@ def decrypt(ciphertext: str) -> str:
         try:
             ct_bytes = base64.urlsafe_b64decode(encoded.encode("ascii"))
         except Exception as e:
-            logger.warning(f"DPAPI 凭证 base64 解码失败，尝试 enc:v1: 回退：{e}")
+            logger.warning("DPAPI 凭证 base64 解码失败，尝试 enc:v1: 回退：{}", e, exc_info=True)
 
         if ct_bytes is not None and HAS_WIN32CRYPT:
             try:
                 return _dpapi_decrypt(ct_bytes)
             except Exception as e:
-                logger.warning(f"DPAPI 解密失败，尝试 enc:v1: 回退：{e}")
+                logger.warning("DPAPI 解密失败，尝试 enc:v1: 回退：{}", e, exc_info=True)
                 # 落到下面的 v1 fallback
 
         # Fallback：尝试将 payload 当作 v1 密文解密
@@ -415,13 +421,13 @@ def migrate_env_file(env_path: str) -> int:
     """
     path = Path(env_path)
     if not path.exists():
-        logger.warning(f"迁移跳过：.env 文件不存在：{env_path}")
+        logger.warning("迁移跳过：.env 文件不存在：{}", env_path)
         return 0
 
     try:
         content = path.read_text(encoding="utf-8")
     except Exception as e:
-        logger.error(f"读取 .env 失败：{env_path}：{e}")
+        logger.error("读取 .env 失败：{}：{}", env_path, e)
         return 0
 
     # 保留原始行尾格式
@@ -458,7 +464,7 @@ def migrate_env_file(env_path: str) -> int:
         new_line = f"{prefix}{key}{eq}{quote}{encrypted}{quote}"
         new_lines.append(new_line)
         migrated += 1
-        logger.info(f"已加密 .env 条目：{key}")
+        logger.info("已加密 .env 条目：{}", key)
 
     if migrated == 0:
         return 0
@@ -468,9 +474,11 @@ def migrate_env_file(env_path: str) -> int:
         if trailing_newline:
             new_content += "\n"
         path.write_text(new_content, encoding="utf-8")
-        logger.info(f"迁移完成：共加密 {migrated} 个明文凭证，文件：{env_path}")
+        with contextlib.suppress(OSError):
+            path.chmod(0o600)
+        logger.info("迁移完成：共加密 {} 个明文凭证，文件：{}", migrated, env_path)
     except Exception as e:
-        logger.error(f"写入 .env 失败：{env_path}：{e}")
+        logger.error("写入 .env 失败：{}：{}", env_path, e)
         return 0
 
     return migrated

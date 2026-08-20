@@ -10,7 +10,7 @@ from tool_engine.tool_registry import register_tool, ToolPermission, ToolResult
 
 try:
     from utils.atomic_write import atomic_write as _atomic_write
-except Exception:  # pragma: no cover
+except ImportError:  # pragma: no cover
     _atomic_write = None  # type: ignore[assignment]
 
 
@@ -261,7 +261,7 @@ def _normalize_command(command: str) -> str:
             if decoded == normalized:
                 break
             normalized = decoded
-        except Exception:
+        except (ValueError, UnicodeDecodeError):
             logger.debug("file_tools.url_decode_error", exc_info=True)
             break
     # hex 编码绕过：\xHH 格式
@@ -361,7 +361,7 @@ async def shell_command(command: str) -> ToolResult:
                     output = _sanitize_output(output)
                     return ToolResult.ok(output[:3000])
                 return ToolResult.ok("命令执行成功（无输出）")
-    except Exception:
+    except (RuntimeError, OSError, ValueError):
         logger.debug("file_tools.pty_exec_error", exc_info=True)
 
     # Fallback: subprocess（无终端会话时）
@@ -375,7 +375,7 @@ async def shell_command(command: str) -> ToolResult:
             stderr=asyncio.subprocess.PIPE,
             cwd=os.path.expanduser("~"),
         )
-    except Exception as e:
+    except (OSError, RuntimeError, ValueError) as e:
         return ToolResult.fail(f"启动子进程失败: {e!s}")
 
     try:
@@ -394,22 +394,25 @@ async def shell_command(command: str) -> ToolResult:
             proc.kill()
         except ProcessLookupError:
             logger.debug("file_tools.proc_kill_skipped_process_gone", exc_info=True)
-        except Exception:
+        except (OSError, RuntimeError):
             logger.debug("file_tools.subprocess_kill_error", exc_info=True)
         try:
             await proc.wait()
-        except Exception:
+        except (OSError, RuntimeError):
             logger.debug("file_tools.subprocess_wait_error", exc_info=True)
         # 不在错误信息中包含 command，避免命令内容泄漏到日志/返回结果
         return ToolResult.fail("命令执行超时（30秒）")
-    except Exception as e:
-        # 兜底清理：子进程可能仍在运行
+    except (RuntimeError, OSError, ValueError, TimeoutError) as e:
         try:
             proc.kill()
         except ProcessLookupError:
             logger.debug("file_tools.proc_kill_skipped_process_gone", exc_info=True)
-        except Exception:
+        except (OSError, RuntimeError):
             logger.debug("file_tools.subprocess_kill_error", exc_info=True)
+        try:
+            await proc.wait()
+        except (OSError, RuntimeError):
+            logger.debug("file_tools.subprocess_wait_error", exc_info=True)
         return ToolResult.fail(f"执行错误: {e!s}")
 
 
@@ -458,7 +461,7 @@ def list_files(path: str = "~") -> ToolResult:
                     items.append(f"{prefix} {item}")
 
         return ToolResult.ok(f"目录: {resolved}\n" + "\n".join(items[:50]))
-    except Exception as e:
+    except (OSError, RuntimeError, ValueError) as e:
         return ToolResult.fail(f"错误: {e!s}")
 
 
@@ -500,7 +503,7 @@ def read_file(path: str, offset: int = 0, limit: int = 200) -> ToolResult:
         return ToolResult.ok(f"文件: {resolved}\n{'='*40}\n{content}")
     except PermissionError as e:
         return ToolResult.fail(f"路径访问被拒绝: {e!s}")
-    except Exception as e:
+    except (OSError, ValueError, RuntimeError) as e:
         return ToolResult.fail(f"读取错误: {e!s}")
 
 
@@ -544,7 +547,7 @@ def write_file(input_str: str) -> ToolResult:
         return ToolResult.ok(f"文件已写入: {resolved}")
     except PermissionError as e:
         return ToolResult.fail(f"路径访问被拒绝: {e!s}")
-    except Exception as e:
+    except (OSError, ValueError, RuntimeError) as e:
         return ToolResult.fail(f"写入错误: {e!s}")
 
 
@@ -587,5 +590,5 @@ def search_files(pattern: str) -> ToolResult:
         if len(matches) > 30:
             result.append(f"... 还有 {len(matches) - 30} 个文件")
         return ToolResult.ok("\n".join(result))
-    except Exception as e:
+    except (OSError, RuntimeError, ValueError) as e:
         return ToolResult.fail(f"搜索错误: {e!s}")

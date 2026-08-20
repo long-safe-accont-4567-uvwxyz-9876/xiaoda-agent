@@ -125,7 +125,7 @@ class ConfigReloader:
     def _load(self) -> bool:
         """加载配置 (内部使用, 调用方需持有锁)"""
         if not self._path.exists():
-            logger.warning(f"ConfigReloader: file not found {self._path}")
+            logger.warning("ConfigReloader: file not found {}", self._path)
             return False
         try:
             content = self._path.read_text(encoding="utf-8")
@@ -140,11 +140,10 @@ class ConfigReloader:
             new_snap = ConfigSnapshot(data, new_version, new_hash)
             # 原子切换: 替换 _active 指针
             self._active = new_snap
-            logger.info(f"ConfigReloader: reloaded v{new_version} "
-                         f"hash={new_hash[:8]}")
+            logger.info("ConfigReloader: reloaded v{} hash={}", new_version, new_hash[:8])
             return True
         except Exception as e:
-            logger.error(f"ConfigReloader: load failed {e}")
+            logger.error("ConfigReloader: load failed {}", e, exc_info=True)
             return False
 
     def reload(self) -> bool:
@@ -164,7 +163,7 @@ class ConfigReloader:
             try:
                 cb(snap)
             except Exception as e:
-                logger.warning(f"ConfigReloader: callback failed {e}")
+                logger.warning("ConfigReloader: callback failed {}", e)
         # 异步回调 (在事件循环中)
         # 修复 P1：原代码在 Timer 线程内调用 asyncio.get_running_loop()，
         # Timer 线程无 running loop，外层抛 RuntimeError 后 except 内再次调用
@@ -201,7 +200,7 @@ class ConfigReloader:
                 else:
                     loop.call_soon_threadsafe(acb, snap)
             except Exception:
-                logger.debug("config_reloader.async_callback_error: {}", exc_info=True)
+                logger.debug("config_reloader.async_callback_error", exc_info=True)
 
     def _on_async_cb_done(self, task: asyncio.Task) -> None:
         """异步回调任务完成: 移除引用并记录异常。"""
@@ -281,7 +280,7 @@ class ConfigReloader:
         )
         self._observer.daemon = True
         self._observer.start()
-        logger.info(f"ConfigReloader: watching {self._path}")
+        logger.info("ConfigReloader: watching {}", self._path)
         return True
 
     def stop(self) -> None:

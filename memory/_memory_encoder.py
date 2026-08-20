@@ -18,7 +18,7 @@ from memory._memory_utils import (
     RuleBasedMemoryExtractor,
     _char_bigrams,
 )
-from .fsrs_model import estimate_initial_difficulty, S_INIT
+from .fsrs_model import estimate_initial_difficulty, S_INIT, S_PERMANENT, should_be_permanent_on_create
 from config import get_agent_display_name
 
 
@@ -120,13 +120,26 @@ class MemoryEncoder:
             # Initialize FSRS state for new memory
             now_ts = time.time()
             initial_difficulty = estimate_initial_difficulty(summary, emotion)
+            # P2+ 事实类永久：含生日/电话/地址等关键词的记忆直接置 PERMANENT，
+            # 跳过 BUFFER/DECAY 衰减，避免关键事实被遗忘。
+            # stability 直接给 S_PERMANENT，phase=permanent，rc=1（视为已强化）。
+            if should_be_permanent_on_create(summary):
+                init_stability = S_PERMANENT
+                init_phase = "permanent"
+                init_rc = 1
+                logger.info("memory.fact_permanent",
+                            mem_id=mem_id, summary=summary[:50])
+            else:
+                init_stability = S_INIT
+                init_phase = "buffer"
+                init_rc = 0
             await self._mm.memory.update_fsrs_state(
                 mem_id,
                 difficulty=initial_difficulty,
-                stability=S_INIT,
-                phase="buffer",
+                stability=init_stability,
+                phase=init_phase,
                 last_review=now_ts,
-                reinforcement_count=0,
+                reinforcement_count=init_rc,
             )
 
             # 标记候选已应用
@@ -556,7 +569,7 @@ class MemoryEncoder:
                     continue
                 intersection = query_bigrams & candidate_bigrams
                 union = query_bigrams | candidate_bigrams
-                jaccard = len(intersection) / len(union)
+                jaccard = len(intersection) / len(union) if union else 0.0
                 if jaccard >= 0.4:
                     return c
             return None

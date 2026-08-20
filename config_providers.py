@@ -80,7 +80,7 @@ def get_provider_catalog():
         bundled_path = Path(__file__).resolve().parent / "config" / "provider_metadata.json"
         _PROVIDER_CATALOG_CACHE = ProviderCatalog.from_paths(user_path, bundled_path)
         for source_path, error in _PROVIDER_CATALOG_CACHE.load_errors:
-            logger.warning(f"config.provider_catalog_load_failed source={source_path} error={error}")
+            logger.warning("config.provider_catalog_load_failed source=%s error=%s", source_path, error)
     return _PROVIDER_CATALOG_CACHE
 
 

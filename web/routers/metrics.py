@@ -93,7 +93,6 @@ def _safe_register(factory):
     try:
         return factory()
     except ValueError:
-        # 同名 metric 已注册, 从 REGISTRY 中取回已有实例
         return None
 
 

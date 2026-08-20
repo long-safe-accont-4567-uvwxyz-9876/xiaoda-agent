@@ -93,7 +93,7 @@ def _infer_emotion(text: str) -> dict:
             "emotion": result.get("primary", "平静"),
             "intensity": result.get("intensity", 0.0),
         }
-    except Exception:
+    except (ValueError, RuntimeError, OSError):
         logger.debug("chat.emotion_inference_failed", exc_info=True)
         return {}
 
@@ -142,8 +142,10 @@ async def list_sessions(request: Request) -> Any:
                 updated_at=row["updated"] or 0,
                 source=src,
             ))
-    except Exception as e:
+    except (OSError, ValueError, RuntimeError) as e:
         logger.warning("webui.sessions.list_failed error={}", str(e))
+    except Exception:
+        logger.exception("chat.list_sessions.unexpected_error")
     return Envelope(data=sessions)
 
 
@@ -181,8 +183,10 @@ async def get_messages(session_id: str, request: Request,
                     id=row["id"] * 2 + 1, role="assistant",
                     content=_strip_tags(row["assistant_reply"]),
                     emotion=row["emotion_label"] or None, timestamp=row["timestamp"]))
-    except Exception as e:
+    except (OSError, ValueError, RuntimeError) as e:
         logger.warning("webui.messages.list_failed error={}", str(e))
+    except Exception:
+        logger.exception("chat.get_messages.unexpected_error")
     return Envelope(data=messages)
 
 
@@ -214,8 +218,11 @@ async def export_session(session_id: str, request: Request) -> Any:
             raise HTTPException(401, "Invalid or expired token")
     except HTTPException:
         raise
-    except Exception as exc:
+    except (ValueError, KeyError, OSError, TypeError) as exc:
         logger.debug("chat.validate_token_failed: {}", exc, exc_info=True)
+        raise HTTPException(401, "Invalid or expired token") from None
+    except Exception:
+        logger.exception("chat.export_session.unexpected_error")
         raise HTTPException(401, "Invalid or expired token") from None
     core = request.app.state.core
     rows = await core.db.fetch_all(
@@ -245,8 +252,11 @@ async def chat(req: ChatRequest, request: Request) -> Any:
             core, req.text, session_id=req.session_id or f"web_{uuid.uuid4().hex[:12]}",
             agent=req.agent, app=request.app)
         return Envelope(data=data)
-    except Exception as e:
+    except (OSError, ValueError, RuntimeError, ConnectionError) as e:
         logger.error("webui.chat.failed error={}", str(e))
+        return Envelope(ok=False, error={"code": "CHAT_ERROR", "message": str(e)})
+    except Exception as e:
+        logger.exception("chat.chat.unexpected_error")
         return Envelope(ok=False, error={"code": "CHAT_ERROR", "message": str(e)})
 
 
@@ -295,13 +305,45 @@ async def upload_doc(file: UploadFile = File(...)) -> Any:
     })
 
 
+def _asr_via_openai(api_key: str, base_url: str, model: str, audio_content: bytes) -> str:
+    """使用 OpenAI SDK 调用 ASR 服务，返回转录文本。"""
+    from openai import OpenAI
+    client = OpenAI(api_key=api_key, base_url=base_url)
+    tmp_path = None
+    try:
+        with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as tmp:
+            tmp.write(audio_content)
+            tmp_path = tmp.name
+        with open(tmp_path, "rb") as audio_file:
+            transcript = client.audio.transcriptions.create(model=model, file=audio_file)
+        return transcript.text if hasattr(transcript, "text") else str(transcript)
+    finally:
+        if tmp_path and os.path.exists(tmp_path):
+            try:
+                os.unlink(tmp_path)
+            except OSError:
+                pass
+
+
+def _parse_asr_json_text(text: str) -> str:
+    """如果 ASR 返回的是 JSON 字符串，尝试解析提取 text 字段。"""
+    if text.startswith("{") and '"text"' in text:
+        import json as _json
+        try:
+            return _json.loads(text).get("text", text)
+        except (ValueError, KeyError) as exc:
+            logger.debug("chat.json_parse_failed: {}", exc, exc_info=True)
+        except Exception as exc:
+            logger.exception("chat._parse_asr_json_text.unexpected_error")
+    return text
+
+
 @router.post("/chat/speech-to-text", response_model=Envelope[dict])
 async def speech_to_text(file: UploadFile = File(...)) -> Any:
     content = await file.read()
-    if len(content) > 20 * 1024 * 1024:  # 20MB
+    if len(content) > 20 * 1024 * 1024:
         raise HTTPException(400, "音频大小不能超过 20MB")
 
-    # 功能节点后端控制：asr=off 时禁用语音识别
     try:
         from web.config_service import get_config_service
         from web.local_deploy_nodes import get_backend
@@ -309,62 +351,29 @@ async def speech_to_text(file: UploadFile = File(...)) -> Any:
             raise HTTPException(503, "ASR 已关闭（语音识别节点设置为关闭）")
     except HTTPException:
         raise
-    except Exception:  # noqa: BLE001
-        pass
+    except (ImportError, AttributeError, ValueError):
+        logger.debug("chat.asr_config_check_skipped")
 
     try:
         from config import ASR_API_KEY, ASR_BASE_URL, ASR_MODEL
         if not ASR_API_KEY:
-            # 降级：尝试使用 MIMO ASR（向后兼容）
             mimo_key = os.getenv("MIMO_API_KEY", "")
             if not mimo_key:
                 raise HTTPException(503, "ASR 不可用：未配置 SILICONFLOW_API_KEY 或 MIMO_API_KEY")
-            # MIMO 降级路径 — sync OpenAI SDK 调用放到线程池
-            def _mimo_asr() -> str:
-                from openai import OpenAI
-                from config import get_base_url_for_provider
-                client = OpenAI(api_key=mimo_key, base_url=get_base_url_for_provider("mimo"))
-                tmp_path = None
-                try:
-                    with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as tmp:
-                        tmp.write(content)
-                        tmp_path = tmp.name
-                    with open(tmp_path, "rb") as audio_file:
-                        transcript = client.audio.transcriptions.create(model="mimo-v2.5-asr", file=audio_file)
-                    return transcript.text
-                finally:
-                    if tmp_path and os.path.exists(tmp_path):
-                        os.unlink(tmp_path)
-            text = await asyncio.to_thread(_mimo_asr)
+            from config import get_base_url_for_provider
+            text = await asyncio.to_thread(
+                _asr_via_openai, mimo_key, get_base_url_for_provider("mimo"), "mimo-v2.5-asr", content,
+            )
             return Envelope(data={"text": text, **_infer_emotion(text)})
 
-        # 主路径：SiliconFlow + TeleSpeechASR — sync OpenAI SDK 调用放到线程池
-        def _siliconflow_asr() -> str:
-            from openai import OpenAI
-            client = OpenAI(api_key=ASR_API_KEY, base_url=ASR_BASE_URL)
-            tmp_path = None
-            try:
-                with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as tmp:
-                    tmp.write(content)
-                    tmp_path = tmp.name
-                with open(tmp_path, "rb") as audio_file:
-                    transcript = client.audio.transcriptions.create(model=ASR_MODEL, file=audio_file)
-                return transcript.text if hasattr(transcript, "text") else str(transcript)
-            finally:
-                if tmp_path and os.path.exists(tmp_path):
-                    os.unlink(tmp_path)
-
-        text = await asyncio.to_thread(_siliconflow_asr)
-        # 如果返回的是 JSON 字符串，尝试解析提取 text 字段
-        if text.startswith("{") and '"text"' in text:
-            import json as _json
-            try:
-                text = _json.loads(text).get("text", text)
-            except Exception as exc:
-                logger.debug("chat.json_parse_failed: {}", exc, exc_info=True)
+        text = await asyncio.to_thread(_asr_via_openai, ASR_API_KEY, ASR_BASE_URL, ASR_MODEL, content)
+        text = _parse_asr_json_text(text)
         return Envelope(data={"text": text, **_infer_emotion(text)})
 
     except HTTPException:
         raise
+    except (OSError, RuntimeError, ValueError, ConnectionError) as e:
+        raise HTTPException(503, f"ASR 不可用：{e!s}") from None
     except Exception as e:
+        logger.exception("chat.speech_to_text.unexpected_error")
         raise HTTPException(503, f"ASR 不可用：{e!s}") from None

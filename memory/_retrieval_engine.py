@@ -296,7 +296,15 @@ class RetrievalEngine(EntityKgBoostMixin, MemoryMetadataMixin):
                     _child_vec_coro,
                     return_exceptions=True,
                 )
+            except (ImportError, OSError, RuntimeError, ValueError):
+                # gather 同步阶段失败（参数非 awaitable），
+                # 关闭未调度的协程避免 "was never awaited" 警告
+                for _c in (_child_fts_coro, _child_vec_coro):
+                    if asyncio.iscoroutine(_c):
+                        _c.close()
+                raise
             except Exception:
+                logger.exception(".memory._retrieval_engine.unexpected")
                 # gather 同步阶段失败（参数非 awaitable），
                 # 关闭未调度的协程避免 "was never awaited" 警告
                 for _c in (_child_fts_coro, _child_vec_coro):
@@ -473,10 +481,11 @@ class RetrievalEngine(EntityKgBoostMixin, MemoryMetadataMixin):
         fts_items, vec_items, kg_items, child_items, spread_items, entity_items, kg_v2_items = channels
         try:
             import config as _cfg
-            warm_vec_weight = getattr(_cfg, "MEMORY_WARM_VEC_WEIGHT", 0.2)
+            warm_vec_weight = getattr(_cfg, "MEMORY_WARM_VEC_WEIGHT", 0.6)
         except (ImportError, AttributeError):
-            warm_vec_weight = 0.2
-        # 温用户: 向量低权重 (default 0.2:0.8); 热用户: 均衡 (1.0:1.0)
+            warm_vec_weight = 0.6
+        # 温用户: 向量低权重 (default 0.6:1.0); 热用户: 均衡 (1.0:1.0)
+        # P0-2 调整：0.2→0.6，避免温用户期间语义召回被过度压制导致"记不住"
         if is_warm:
             fts_weight, vec_weight = 1.0, warm_vec_weight
         else:
@@ -533,16 +542,16 @@ class RetrievalEngine(EntityKgBoostMixin, MemoryMetadataMixin):
             for _kitem in kg_items:
                 _kitem["kg_recall"] = True
             ranked_lists.append([str(item["id"]) for item in kg_items])
-            weights.append(0.8)  # KG 通道权重
+            weights.append(0.6)  # KG 通道权重（P1-1: 0.8→0.6，联想召回降权避免串台）
         if child_items:
             ranked_lists.append([str(item["id"]) for item in child_items])
-            weights.append(0.9)  # 子chunk召回的父chunk权重
+            weights.append(0.7)  # 子chunk召回的父chunk权重（P1-1: 0.9→0.7）
         if spread_items:
             ranked_lists.append([str(item["id"]) for item in spread_items])
-            weights.append(0.85)  # 扩散激活权重略低于直接匹配
+            weights.append(0.4)  # 扩散激活权重（P1-1: 0.85→0.4，间接联想降权）
         if entity_items:
             ranked_lists.append([str(item["id"]) for item in entity_items])
-            weights.append(0.7)  # 实体召回权重
+            weights.append(0.5)  # 实体召回权重（P1-1: 0.7→0.5）
         return ranked_lists, weights
 
     @staticmethod
@@ -635,11 +644,29 @@ class RetrievalEngine(EntityKgBoostMixin, MemoryMetadataMixin):
             # 原 3.5s 超时在 embed 慢时必然先触发，导致向量通道被跳过 → "想不起来"。
             # 注：原注释"embed 6.9s 击穿 8s"的根因正是 connect=5s 过短，现已修复。
             __st = time.time()
-            vec_results = await self._mm.vec.search(
-                query, top_k=k * 2, candidate_ids=candidate_ids, deterministic=True,
-                query_vec=query_vec,
-            )
-            _stage_log("vec_embed_search", __st, query)
+            # HyDE（假设文档嵌入）：开启时生成假设答案文档，与原查询向量混合检索。
+            # 默认关闭（HYDE_ENABLED=False），避免查询变换跑偏（同多查询扩展教训）。
+            import config as _hyde_cfg
+            _hyde_enabled = getattr(_hyde_cfg, "HYDE_ENABLED", False)
+            _hyde_doc = None
+            if _hyde_enabled and self._mm._query_transformer and self._mm._query_transformer.available:
+                try:
+                    _hyde_doc = await self._mm._query_transformer.generate_hyde_document(query)
+                except Exception as e:
+                    logger.debug("memory.hyde_failed", error=str(e))
+                    _hyde_doc = None
+            if _hyde_doc:
+                vec_results = await self._mm.vec.search_with_hyde(
+                    query, hyde_doc=_hyde_doc, alpha=0.4,
+                    k=k * 2, candidate_ids=candidate_ids,
+                )
+                _stage_log("vec_embed_hyde_search", __st, query)
+            else:
+                vec_results = await self._mm.vec.search(
+                    query, top_k=k * 2, candidate_ids=candidate_ids, deterministic=True,
+                    query_vec=query_vec,
+                )
+                _stage_log("vec_embed_search", __st, query)
             if not vec_results:
                 return []
             vec_ids = [row_id for row_id, _ in vec_results]
@@ -660,7 +687,9 @@ class RetrievalEngine(EntityKgBoostMixin, MemoryMetadataMixin):
             # 不进入 RRF 融合，从源头杜绝噪声。
             import config as _cfg
             _max_distance = getattr(_cfg, 'RAG_VEC_MAX_DISTANCE', 1.0)
+            _soft_penalty = getattr(_cfg, 'RAG_VEC_SOFT_PENALTY', 0.3)
             _filtered_count = 0
+            _demoted_count = 0
             items = []
             for row_id, distance in vec_results:
                 mem = vec_mem_map.get(row_id)
@@ -670,16 +699,20 @@ class RetrievalEngine(EntityKgBoostMixin, MemoryMetadataMixin):
                     # 即使所有结果都距离很远（接近 RAG_VEC_MAX_DISTANCE），最相关的也有高分，
                     # 与绝对阈值过滤配合时分数失真。绝对距离 0~1.0 映射相似度 1.0~0.0，
                     # 与 RAG_MIN_FINAL_SCORE / RRF 的分数语义对齐。
+                    # P0-2: 硬阈值改软降权。distance > _max_distance 不再丢弃，
+                    # 而是降权保留（乘 0.3），避免语义查询整体偏远时向量通道空转。
+                    # Reranker 仍可判定相关性，噪声由 final_score 最低分过滤兜底。
+                    sim = max(0.0, 1.0 - distance)
                     if distance > _max_distance:
-                        _filtered_count += 1
-                        continue
-                    mem["score"] = max(0.0, 1.0 - distance)
+                        _demoted_count += 1
+                        sim = sim * _soft_penalty  # 软降权不丢弃
+                    mem["score"] = sim
                     items.append(mem)
-            if _filtered_count > 0:
-                logger.info("memory.vec_distance_filtered",
+            if _demoted_count > 0:
+                logger.info("memory.vec_distance_demoted",
                             query=query[:50],
                             total=len(vec_results),
-                            filtered=_filtered_count,
+                            demoted=_demoted_count,
                             kept=len(items),
                             max_distance=_max_distance)
             return items
@@ -858,7 +891,10 @@ class RetrievalEngine(EntityKgBoostMixin, MemoryMetadataMixin):
             if isinstance(caught, asyncio.CancelledError):
                 try:
                     child_ids = await asyncio.shield(insert_task)
+                except (ImportError, OSError, RuntimeError, ValueError):
+                    child_ids = []
                 except Exception:
+                    logger.exception(".memory._retrieval_engine._insert_batch_unexpected")
                     child_ids = []
         await asyncio.shield(self._mm.memory.delete_child_chunks(child_ids))
         if isinstance(error, asyncio.CancelledError):
@@ -1792,6 +1828,11 @@ class RetrievalEngine(EntityKgBoostMixin, MemoryMetadataMixin):
                     _migration_needed.append((mem_id, phase.value, difficulty, stability, last_review, rc))
 
             R = state.retrievability(now)
+            # P1-3 修复：本次检索命中即等价于一次"刚被复习"信号，
+            # 不应让排序再用旧 last_review 把 R 算到接近 0。
+            # 给命中记忆一个 R 下限 0.5（即"刚复习过"的物理含义），
+            # touch 后台异步更新 DB 后，下次检索的 last_review 已是本次时间。
+            R = max(R, 0.5)
             fsrs_score = self._mm._fsrs.score(similarity, state, now)
             # 放宽过滤阈值：R < 0.01 才完全过滤（原 0.05 过于激进，会过早遗忘有用记忆）
             if R < 0.01:
@@ -1801,7 +1842,11 @@ class RetrievalEngine(EntityKgBoostMixin, MemoryMetadataMixin):
             r["fluid_score"] = R
             r["fsrs_score"] = fsrs_score
             importance = r.get("importance", 0.5)
-            r["effective_score"] = importance * fsrs_score
+            # P0-1 修复：effective_score 不再乘 fsrs_score（含 R 衰减），
+            # 避免 R 在 effective_score 与 final_score（0.25 权重）里被双重计入。
+            # R 衰减只通过 final_score 的 fluid_score 分量体现一次。
+            # 保留 fsrs_score 字段用于可观测性，但不参与 effective_score 计算。
+            r["effective_score"] = importance * similarity
             filtered.append(r)
 
         # 异步批量迁移 phase（fire-and-forget，不阻塞检索返回）
@@ -1832,7 +1877,7 @@ class RetrievalEngine(EntityKgBoostMixin, MemoryMetadataMixin):
         except Exception as e:
             logger.warning("fsrs.batch_migrate_error", error=str(e))
 
-    def _dedup_by_content_similarity(self, results: list[dict], threshold: float = 0.7) -> list[dict]:
+    def _dedup_by_content_similarity(self, results: list[dict], threshold: float = 0.85) -> list[dict]:
         if len(results) <= 1:
             return results
         kept = []
@@ -1962,13 +2007,15 @@ class RetrievalEngine(EntityKgBoostMixin, MemoryMetadataMixin):
             r["kg_boost"] = kg_boost
             r["importance_score"] = importance
             r["recency_boost"] = recency
-            # 统一评分公式: rerank 0.4 + R 0.25 + recency 0.15 + kg 0.1 + importance 0.1
+            # 统一评分公式: rerank 0.45 + R 0.15 + recency 0.15 + kg 0.1 + importance 0.15
+            # P0-1 调整：R 权重 0.25→0.15（effective_score 已不再含 R，避免衰减过狠）
+            # rerank 0.4→0.45（相关性权重提升），importance 0.1→0.15（重要记忆保底）
             r["final_score"] = (
-                rerank_score * 0.4      # Reranker 精排分数
-                + R * 0.25              # FSRS-DSR Retrievability
+                rerank_score * 0.45     # Reranker 精排分数
+                + R * 0.15              # FSRS-DSR Retrievability（衰减单次计入）
                 + recency * 0.15        # 时间新鲜度加成
                 + kg_boost * 0.1        # KG 增强分数
-                + importance * 0.1       # 记忆重要性
+                + importance * 0.15     # 记忆重要性
             )
 
     async def _apply_topic_trigger(self, query: str, results: list[dict],

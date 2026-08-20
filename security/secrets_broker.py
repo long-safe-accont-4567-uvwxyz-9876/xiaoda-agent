@@ -99,7 +99,7 @@ class SecretsBroker:
             try:
                 raw = credential_vault.decrypt(self._source[name])
             except credential_vault.DecryptionError as e:
-                logger.error(f"secrets_broker.decrypt_failed: {name} ({e})")
+                logger.error("secrets_broker.decrypt_failed: {} ({})", name, e)
                 raise RuntimeError(f"凭证 {name} 解密失败：{e}") from e
             entry = {
                 "raw_key": raw,
@@ -160,7 +160,7 @@ class SecretsBroker:
         entry["use_count"] += 1
 
         self._audit_log(caller, "get", name, f"scope={scope}")
-        logger.debug(f"SecretsBroker.get: name={name} scope={scope} caller={caller}")
+        logger.debug("SecretsBroker.get: name={} scope={} caller={}", name, scope, caller)
         return TemporaryCredential(access_token=token, expires_at=expires_at, scope=scope)
 
     def is_valid(self, credential: TemporaryCredential) -> bool:
@@ -185,7 +185,7 @@ class SecretsBroker:
         if hmac.compare_digest(self._creds.get(name, {}).get("current_token", ""), token):
             self._creds[name]["current_token"] = None
         self._audit_log(caller, "revoke", name)
-        logger.debug(f"SecretsBroker.revoke: name={name} caller={caller}")
+        logger.debug("SecretsBroker.revoke: name={} caller={}", name, caller)
         return True
 
     def rotate(self, name: str, caller: str = "system") -> bool:

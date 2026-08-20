@@ -27,7 +27,7 @@ class EpisodicMixin:
             await self._conn.commit()
         except Exception as e:
             # 列已存在时忽略
-            logger.debug(f"db_memory.migrate_add_source_column skipped: {e}")
+            logger.debug("db_memory.migrate_add_source_column skipped: {}", e)
 
     async def insert_episodic_memory(self, summary: str, importance: float = 0.5,
                                       emotion_label: str = "", session_id: str = "user",

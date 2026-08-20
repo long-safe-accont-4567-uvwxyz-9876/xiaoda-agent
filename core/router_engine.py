@@ -420,5 +420,8 @@ class RouterEngine:
 # ── 公共导出（保持向后兼容）────────────────────────────────────────
 try:
     MENTION_MAP = _build_mention_map()
+except (ImportError, OSError, RuntimeError, ValueError):
+    MENTION_MAP = dict(_DEFAULT_MENTION_MAP)
 except Exception:
+    logger.exception("core.router_engine.unexpected")
     MENTION_MAP = dict(_DEFAULT_MENTION_MAP)

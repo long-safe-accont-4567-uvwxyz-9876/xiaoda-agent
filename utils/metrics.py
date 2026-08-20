@@ -93,13 +93,13 @@ class Metrics:
             return
         self._last_report = now
         for name, count in self._counters.items():
-            logger.info(f"metrics.{name}", count=count)
+            logger.info("metrics.{}", name, count=count)
         for name, durations in self._timers.items():
             if durations:
                 avg = sum(durations) / len(durations)
-                logger.info(f"metrics.{name}.avg_seconds", avg=round(avg, 3), samples=len(durations))
+                logger.info("metrics.{}.avg_seconds", name, avg=round(avg, 3), samples=len(durations))
         for name, value in self._gauges.items():
-            logger.info(f"metrics.{name}", value=round(value, 3))
+            logger.info("metrics.{}", name, value=round(value, 3))
         self._counters.clear()
         self._timers.clear()
         self._gauges.clear()

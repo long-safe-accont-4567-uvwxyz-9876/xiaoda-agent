@@ -306,7 +306,7 @@ class MemoryManager:
     async def _batch_migrate_phase(self, migrations: list[tuple[int, str, float, float, float, int]]) -> None:
         return await self._retrieval._batch_migrate_phase(migrations)
 
-    def _dedup_by_content_similarity(self, results: list[dict], threshold: float = 0.7) -> list[dict]:
+    def _dedup_by_content_similarity(self, results: list[dict], threshold: float = 0.85) -> list[dict]:
         return self._retrieval._dedup_by_content_similarity(results, threshold=threshold)
 
     def _compute_recency_boost(self, item: dict) -> float:

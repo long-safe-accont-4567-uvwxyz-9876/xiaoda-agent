@@ -187,7 +187,22 @@ async def _start_instance(services: Any, request_id: str, model_id: str, device_
         await services.broadcast(
             {"type": "local_ai_instance_updated", "instance": instance.to_dict()}
         )
+    except (OSError, RuntimeError, ValueError, ConnectionError) as error:
+        services.request_results[key] = error
+        await services.broadcast({
+            "type": "local_ai_instance_updated",
+            "request_id": request_id,
+            "model_id": model_id,
+            "operation": "start",
+            "status": "failed",
+            "error": {
+                "code": "instance_start_failed",
+                "message": str(error),
+                "retryable": True,
+            },
+        })
     except Exception as error:
+        logger.exception("local_ai._start_instance.unexpected model_id={}", model_id)
         services.request_results[key] = error
         await services.broadcast({
             "type": "local_ai_instance_updated",
@@ -333,17 +348,48 @@ class HubDownloadRequest(BaseModel):
     source: str = Field(default="modelscope", pattern=r"^(modelscope|hf-mirror)$")
 
 
+def _validate_inspection(inspection: Any) -> None:
+    if inspection.missing:
+        raise HTTPException(
+            status_code=422,
+            detail=f"仓库缺少必需文件: {'、'.join(inspection.missing)}",
+        )
+    if inspection.purpose is None:
+        raise HTTPException(status_code=422, detail="无法识别模型布局，拒绝下载")
+
+
+def _build_catalog_files(inspection: Any) -> list[CatalogFile]:
+    files: list[CatalogFile] = []
+    for item in inspection.files:
+        if item.sha256 is None:
+            raise HTTPException(
+                status_code=422,
+                detail=f"文件 {item.path} 缺少 SHA256，无法校验下载",
+            )
+        files.append(CatalogFile(path=item.path, size=item.size, sha256=item.sha256))
+    return files
+
+
+def _ensure_download_idempotent(
+    services: Any, body: HubDownloadRequest, request_input: tuple, task: Any
+) -> Envelope | None:
+    key = ("download", body.request_id)
+    existing = services.request_results.get(key)
+    if existing is not None:
+        if services.request_inputs.get(key) != request_input:
+            raise HTTPException(status_code=409, detail="request_id conflicts with a different download")
+        return Envelope(data={"task": existing.to_dict()})
+    services.request_results[key] = task
+    services.request_inputs[key] = request_input
+    return None
+
+
 @router.post(
     "/local-ai/hub/download",
     response_model=Envelope[dict[str, Any]],
     status_code=status.HTTP_202_ACCEPTED,
 )
 async def download_hub_repository(body: HubDownloadRequest, request: Request) -> Any:
-    """检视并下载用户从在线搜索选中的仓库（ModelScope 契约）。
-
-    与 /local-ai/downloads 相同的约束：只接受不可变 commit hash；
-    布局不可识别或缺必需文件时拒绝下载（可运行性在检视时已评估）。
-    """
     services = _services(request)
     try:
         inspection = await asyncio.to_thread(
@@ -355,23 +401,8 @@ async def download_hub_repository(body: HubDownloadRequest, request: Request) ->
         raise HTTPException(status_code=403, detail=str(error)) from error
     except ValueError as error:
         raise HTTPException(status_code=400, detail=str(error)) from error
-    if inspection.missing:
-        raise HTTPException(
-            status_code=422,
-            detail=f"仓库缺少必需文件: {'、'.join(inspection.missing)}",
-        )
-    if inspection.purpose is None:
-        raise HTTPException(status_code=422, detail="无法识别模型布局，拒绝下载")
-    files: list[CatalogFile] = []
-    for item in inspection.files:
-        if item.sha256 is None:
-            raise HTTPException(
-                status_code=422,
-                detail=f"文件 {item.path} 缺少 SHA256，无法校验下载",
-            )
-        files.append(
-            CatalogFile(path=item.path, size=item.size, sha256=item.sha256)
-        )
+    _validate_inspection(inspection)
+    files = _build_catalog_files(inspection)
     model = CatalogModel(
         id=body.repository,
         source=body.source,
@@ -382,25 +413,17 @@ async def download_hub_repository(body: HubDownloadRequest, request: Request) ->
         download_size=sum(item.size for item in files),
         license=None,
     )
-    validation = services.storage_policy.validate_destination(
-        body.destination,
-        model.download_size,
-    )
+    validation = services.storage_policy.validate_destination(body.destination, model.download_size)
     if not validation.writable:
         raise HTTPException(
             status_code=422,
             detail=validation.reason or validation.error or "invalid download destination",
         )
-    key = ("download", body.request_id)
     request_input = (body.repository, body.revision, validation.path)
-    existing = services.request_results.get(key)
-    if existing is not None:
-        if services.request_inputs.get(key) != request_input:
-            raise HTTPException(status_code=409, detail="request_id conflicts with a different download")
-        return Envelope(data={"task": existing.to_dict()})
     task = services.downloads.create(model, validation.path)
-    services.request_results[key] = task
-    services.request_inputs[key] = request_input
+    existing = _ensure_download_idempotent(services, body, request_input, task)
+    if existing is not None:
+        return existing
     services.spawn(services.downloads.start(task.id))
     return Envelope(data={"task": task.to_dict()})
 

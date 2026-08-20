@@ -39,7 +39,7 @@ async def _audit(request: Request, action: str, detail: str) -> None:
     try:
         await core.db.insert_audit_log(f"webui.schedule.{action}", "webui", detail)
         await core.db.commit()
-    except Exception:
+    except (OSError, RuntimeError, ValueError):
         logger.debug("schedule.audit_failed", exc_info=True)
 
 
@@ -122,7 +122,10 @@ def _validate_schedule(body: dict) -> dict:
         _check_hm(body.get("window_end", ""), "window_end")
         rec["window_start"] = body["window_start"]
         rec["window_end"] = body["window_end"]
-        rec["count_per_day"] = max(1, min(int(body.get("count_per_day", 1)), 10))
+        try:
+            rec["count_per_day"] = max(1, min(int(body.get("count_per_day", 1)), 10))
+        except (TypeError, ValueError):
+            raise HTTPException(400, "count_per_day 必须为整数")
     return rec
 
 
@@ -150,7 +153,7 @@ async def create_greeting(body: dict, request: Request) -> Any:
             (rec["type"], rec["time"], rec["window_start"], rec["window_end"],
              rec["count_per_day"], rec["days"], rec["prompt_hint"],
              rec["channels"], rec["enabled"], time.time(), "webui"))
-    except Exception as _e:
+    except (OSError, ValueError, RuntimeError) as _e:
         # 旧库无 user_id 列, 降级为原 INSERT
         logger.debug("schedule.create_greeting_fallback_no_user_id error={}", str(_e))
         await core.db.execute(
@@ -161,6 +164,8 @@ async def create_greeting(body: dict, request: Request) -> Any:
             (rec["type"], rec["time"], rec["window_start"], rec["window_end"],
              rec["count_per_day"], rec["days"], rec["prompt_hint"],
              rec["channels"], rec["enabled"], time.time()))
+    except Exception:
+        logger.exception("schedule.create_greeting.unexpected_error")
     row = await core.db.fetch_one(
         "SELECT * FROM greeting_schedules ORDER BY id DESC LIMIT 1")
     await _audit(request, "greeting.create", json.dumps(body, ensure_ascii=False))

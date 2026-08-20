@@ -201,7 +201,11 @@ class MemoryDistiller:
         # 按时间升序排列，便于"按时间顺序串起事件"
         try:
             sorted_mems = sorted(memories, key=lambda m: float(m.get("timestamp", 0)))
+        except (ImportError, OSError, RuntimeError, ValueError):
+            sorted_mems = memories
+
         except Exception:
+            logger.exception(".memory.memory_distiller.distill_recall_unexpected")
             sorted_mems = memories
 
         lines = []

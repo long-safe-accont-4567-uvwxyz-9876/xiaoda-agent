@@ -163,7 +163,10 @@ class GreetingMixin:
                     row = await cursor.fetchone()
                     if row and row[0]:
                         idle_seconds = max(0.0, time.time() - float(row[0]))
+                except (ImportError, OSError, RuntimeError, ValueError):
+                    idle_seconds = 0.0
                 except Exception:
+                    logger.exception(".agent_core.mixins.greeting._try_reunion_greeting_unexpected")
                     idle_seconds = 0.0
             # 2. last_emotion：从 mental_state 的 user_last_emotion 读取
             last_emotion = ("neutral", 0.0)
@@ -186,6 +189,5 @@ class GreetingMixin:
             )
             return ProcessResult(reply=reply, emotion="greeting")
         except Exception:
-            logger.debug("reunion_reflection.failed")
+            logger.debug("reunion_reflection.failed", exc_info=True)
             return None
-

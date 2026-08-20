@@ -6,6 +6,8 @@ import math
 from pathlib import Path
 from typing import ClassVar, Any, AsyncIterator, Mapping, Sequence
 
+from loguru import logger
+
 from local_ai.contracts import RuntimeKind, RuntimeProfile
 from local_ai.runtimes.base import Runtime, RuntimeDependencyError, RuntimeValidationError
 
@@ -88,8 +90,17 @@ class OrtGenAiChatRuntime(Runtime):
                     config.set_provider_option(provider, name, value)
             model = genai_module.Model(config)
             tokenizer = genai_module.Tokenizer(model)
+        except (OSError, RuntimeError, ValueError, ImportError) as error:
+            cleanup_errors = self._close_resources((tokenizer, model))
+            logger.warning("ort_genai.load_failed error={}", str(error)[:200])
+            if cleanup_errors:
+                raise RuntimeValidationError(
+                    self._cleanup_error_message(cleanup_errors)
+                ) from error
+            raise
         except Exception as error:
             cleanup_errors = self._close_resources((tokenizer, model))
+            logger.exception("ort_genai.start.unexpected_error")
             if cleanup_errors:
                 raise RuntimeValidationError(
                     self._cleanup_error_message(cleanup_errors)
@@ -278,7 +289,11 @@ class OrtGenAiChatRuntime(Runtime):
             if close is not None:
                 try:
                     close()
+                except (OSError, RuntimeError, AttributeError) as error:
+                    logger.debug("ort_genai.resource_close_failed error={}", str(error))
+                    errors.append(error)
                 except Exception as error:
+                    logger.exception("ort_genai._close_resources.unexpected_error")
                     errors.append(error)
         return errors
 

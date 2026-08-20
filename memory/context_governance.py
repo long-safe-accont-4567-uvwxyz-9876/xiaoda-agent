@@ -198,7 +198,12 @@ class ContextGovernance:
                 prev_hash = content_hash
             return {"valid": True, "broken_at_version": None,
                     "versions": len(rows), "detail": "chain intact"}
+        except (ImportError, OSError, RuntimeError, ValueError) as e:
+            return {"valid": False, "broken_at_version": None,
+                    "versions": 0, "detail": f"verify_error: {e}"}
+
         except Exception as e:
+            logger.exception(".memory.context_governance.unexpected")
             return {"valid": False, "broken_at_version": None,
                     "versions": 0, "detail": f"verify_error: {e}"}
 

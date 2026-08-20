@@ -244,7 +244,7 @@ class DegradationStrategy:
             try:
                 cb(event)
             except Exception as e:
-                logger.error(f"Degradation 回调异常: {e!r}")
+                logger.error("Degradation 回调异常: {!r}", e, exc_info=True)
 
     # ─── 状态查询 ───
 
@@ -312,7 +312,7 @@ class DegradationStrategy:
         try:
             from core.degradation_detector import Severity
         except Exception as e:
-            logger.debug(f"DegradationStrategy 无法导入 Severity: {e!r}")
+            logger.debug("DegradationStrategy 无法导入 Severity: {!r}", e)
             return None
 
         report = getattr(detector, "_last_report", None)
@@ -365,7 +365,7 @@ class DegradationStrategy:
         try:
             burn = float(burn_fn())
         except Exception as e:
-            logger.debug(f"DegradationStrategy 读取 burn_rate 失败: {e!r}")
+            logger.debug("DegradationStrategy 读取 burn_rate 失败: {!r}", e)
             return None
         if burn > burn_threshold:
             target = DegradationLevel.L1_DEGRADED
@@ -430,13 +430,17 @@ def wire_auto_trigger(
             from core.degradation_detector import get_degradation_detector
             detector = get_degradation_detector()
         except Exception as e:
-            logger.debug(f"wire_auto_trigger: 无可用 detector: {e!r}")
+            logger.debug("wire_auto_trigger: 无可用 detector: {!r}", e)
             return False
     if slo_tracker is None:
         try:
             from core.slo_tracker import get_slo_tracker
             slo_tracker = get_slo_tracker()
+        except (ImportError, AttributeError):
+            slo_tracker = None
+
         except Exception:
+            logger.exception(".core.degradation_strategy.wire_auto_trigger_unexpected")
             slo_tracker = None
 
     strat = get_degradation_strategy()
@@ -450,7 +454,7 @@ def wire_auto_trigger(
             if _slo is not None:
                 strat.evaluate_from_slo(_slo, burn_threshold=_burn_thr)
         except Exception as e:
-            logger.error(f"wire_auto_trigger 回调异常: {e!r}")
+            logger.error("wire_auto_trigger 回调异常: {!r}", e, exc_info=True)
 
     on_degradation = getattr(detector, "on_degradation", None)
     if callable(on_degradation):

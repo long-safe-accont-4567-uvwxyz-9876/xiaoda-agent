@@ -31,7 +31,7 @@ def _get_local_now() -> datetime:
     tz_name = os.getenv("NUDGE_TIMEZONE", "Asia/Shanghai")
     try:
         tz = ZoneInfo(tz_name)
-    except Exception:
+    except (KeyError, ValueError, OSError):
         tz = ZoneInfo("Asia/Shanghai")
     return datetime.now(tz)
 
@@ -71,7 +71,7 @@ class GreetingScheduler:
         while True:
             try:
                 await self._tick()
-            except Exception as e:
+            except (RuntimeError, OSError, ConnectionError) as e:
                 logger.warning("greeting_scheduler.tick_error error={}", str(e))
             await asyncio.sleep(self.TICK_SECONDS)
 
@@ -84,7 +84,7 @@ class GreetingScheduler:
         for p in self.cfg.get("schedule.dnd_periods", []):
             try:
                 s, e = _hm_to_min(p["start"]), _hm_to_min(p["end"])
-            except Exception:
+            except (KeyError, ValueError, TypeError):
                 continue
             if s <= e:
                 if s <= now_min < e:
@@ -128,7 +128,7 @@ class GreetingScheduler:
                 if await self._sent_today_count() < max_per_day:
                     try:
                         await self.fire(d["schedule"], reason=d["reason"] + "_deferred")
-                    except Exception as e:
+                    except (RuntimeError, OSError, ConnectionError) as e:
                         logger.warning("greeting.deferred_fire_failed error={}", str(e))
                         still_deferred.append(d)
                 else:
@@ -190,7 +190,7 @@ class GreetingScheduler:
     def _draw_random_times(self, row: dict) -> list[int]:
         try:
             ws, we = _hm_to_min(row["window_start"]), _hm_to_min(row["window_end"])
-        except Exception:
+        except (KeyError, ValueError, TypeError):
             return []
         if we <= ws:
             return []
@@ -307,7 +307,7 @@ class GreetingScheduler:
             rows = await self.core.db.fetch_all(
                 "SELECT content FROM greeting_log ORDER BY fired_at DESC LIMIT ?", (limit,))
             return [r["content"][:30] for r in rows if r.get("content")]
-        except Exception:
+        except (OSError, ValueError, RuntimeError):
             return []
 
     async def _quality_check(self, text: str) -> bool:
@@ -351,7 +351,7 @@ class GreetingScheduler:
                 if not passed:
                     logger.info("greeting.quality_check_failed text={} result={}", text[:40], result)
                 return passed
-        except Exception as e:
+        except (RuntimeError, OSError, ValueError) as e:
             logger.debug("greeting.quality_check_error error={}", str(e))
             return True  # 检查出错则放行
 
@@ -465,7 +465,7 @@ class GreetingScheduler:
                 else:
                     logger.info("greeting.quality_retry attempt={}", attempt)
                     continue  # 不合格，重试
-            except Exception as e:
+            except (RuntimeError, OSError, ValueError, ConnectionError) as e:
                 logger.warning("greeting.generate_failed attempt={} error={}", attempt, str(e))
                 continue
 
@@ -478,7 +478,7 @@ class GreetingScheduler:
             from qq_bot_adapter import send_proactive_message
             await send_proactive_message(text)
             return None
-        except Exception as e:
+        except (RuntimeError, OSError, ConnectionError) as e:
             logger.warning("greeting.qq_send_failed error={}", str(e))
             return str(e)[:120]
 
@@ -488,6 +488,6 @@ class GreetingScheduler:
             from wechat_bot_adapter import send_proactive_message
             await send_proactive_message(text)
             return None
-        except Exception as e:
+        except (RuntimeError, OSError, ConnectionError) as e:
             logger.warning("greeting.wechat_send_failed error={}", str(e))
             return str(e)[:120]

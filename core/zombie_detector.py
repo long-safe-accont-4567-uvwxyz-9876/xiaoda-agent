@@ -69,7 +69,7 @@ class ZombieDetector:
             "last_mem": None,         # 上次内存采样
             "last_change_ts": now,    # 上次资源变化时间
         }
-        logger.debug(f"ZombieDetector.register pid={pid} name={name} timeout={timeout}s")
+        logger.debug("ZombieDetector.register pid={} name={} timeout={}s", pid, name, timeout)
 
     def check_heartbeat(self, pid: int) -> bool:
         """检查/更新进程心跳
@@ -140,7 +140,7 @@ class ZombieDetector:
             info["last_cpu"] = cpu
             info["last_mem"] = mem
         except Exception as e:
-            logger.debug(f"ZombieDetector.resource_stall_failed pid={pid}: {e}")
+            logger.debug("ZombieDetector.resource_stall_failed pid={}: {}", pid, e)
         return None
 
     def detect_zombies(self) -> list[ZombieProcess]:
@@ -199,27 +199,27 @@ class ZombieDetector:
         """
         info = self._processes.get(pid)
         if not info:
-            logger.warning(f"ZombieDetector.kill_zombie: pid={pid} not registered")
+            logger.warning("ZombieDetector.kill_zombie: pid={} not registered", pid)
             return False
         try:
             if os.name == "nt":
                 # Windows: os.kill 对非 CTRL_C/CTRL_BREAK 信号走 TerminateProcess 硬杀，
                 # 无资源清理机会（与 Unix SIGTERM 优雅退出语义不同）。
                 # 已知限制：无法优雅终止，但可防止僵尸进程残留。
-                logger.warning(f"ZombieDetector.kill_zombie windows_hard_kill pid={pid} name={info['name']}")
+                logger.warning("ZombieDetector.kill_zombie windows_hard_kill pid={} name={}", pid, info['name'])
             os.kill(pid, signal.SIGTERM)
-            logger.info(f"ZombieDetector.kill_zombie SIGTERM pid={pid} name={info['name']}")
+            logger.info("ZombieDetector.kill_zombie SIGTERM pid={} name={}", pid, info['name'])
             self._processes.pop(pid, None)
             return True
         except ProcessLookupError:
-            logger.warning(f"ZombieDetector.kill_zombie pid={pid} not found, removing")
+            logger.warning("ZombieDetector.kill_zombie pid={} not found, removing", pid)
             self._processes.pop(pid, None)
             return False
         except PermissionError:
-            logger.error(f"ZombieDetector.kill_zombie pid={pid} permission denied")
+            logger.error("ZombieDetector.kill_zombie pid={} permission denied", pid)
             return False
         except Exception as e:
-            logger.error(f"ZombieDetector.kill_zombie pid={pid} failed: {e}")
+            logger.error("ZombieDetector.kill_zombie pid={} failed: {}", pid, e)
             return False
 
     # ── 状态查询 ──

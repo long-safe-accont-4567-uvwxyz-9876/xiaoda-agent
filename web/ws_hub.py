@@ -89,6 +89,7 @@ class ConnectionManager:
         # 改为入队即返回，写入由后台任务串行执行，可视化推送不再阻塞主流程。
         self._send_queues: dict[str, asyncio.Queue] = {}
         self._writer_tasks: dict[str, asyncio.Task] = {}
+        self._term_start_tasks: set[asyncio.Task] = set()
         self._SEND_QUEUE_MAX = 64  # 有界队列上限；溢出的连接视为过慢并关闭
 
     def register(self, ws: WebSocket) -> str:
@@ -119,7 +120,7 @@ class ConnectionManager:
         if ws is not None:
             try:
                 await ws.close()
-            except Exception as e:
+            except (RuntimeError, OSError, ConnectionError) as e:
                 # 防御性: 连接可能已被对端关闭，close 抛错不应阻塞清理
                 logger.debug("ws.close_failed conn_id={} error={}", conn_id, str(e))
         self._connections.pop(conn_id, None)
@@ -206,7 +207,7 @@ class ConnectionManager:
                 return
             except asyncio.CancelledError:
                 return
-            except Exception as e:
+            except (RuntimeError, OSError, ConnectionError) as e:
                 logger.warning("ws.heartbeat_error conn_id={} error={}",
                                conn_id, str(e))
                 await self.unregister(conn_id)
@@ -515,7 +516,7 @@ async def process_and_serialize(core: Any, text: str, session_id: str,
             if status_callback:
                 try:
                     await status_callback(f"⚠️ {_original_agent} 暂不可用，已切换到小妲回复")
-                except Exception:
+                except (RuntimeError, OSError, ConnectionError):
                     logger.warning("ws.agent_fallback_status_callback_failed", exc_info=True)
         else:
             # 走与 QQ 通道相同的完整子代理流程：表情包/情绪/TTS/落库都不缺
@@ -541,7 +542,7 @@ async def process_and_serialize(core: Any, text: str, session_id: str,
                 from core.xp_system import get_xp_system
                 _xp_uid = os.getenv("MASTER_QQ_OPENID", "webui")  # 统一 XP ID
                 await asyncio.to_thread(get_xp_system().add_chat_xp, _xp_uid, len(text))
-            except Exception as _e:
+            except (ImportError, RuntimeError, OSError) as _e:
                 from loguru import logger as _logger
                 _logger.warning("xp.auto_add_failed", error=str(_e))
             data["agent"] = agent
@@ -665,8 +666,10 @@ async def _dispatch_message(conn_id: str, msg: dict, mtype: str, ws: WebSocket) 
     elif mtype == "terminal_start":
         term_sid = str(msg.get("term_sid") or uuid.uuid4().hex[:8])
         _t = asyncio.create_task(_handle_terminal_start(conn_id, msg, term_sid))
+        manager._term_start_tasks.add(_t)
 
         def _on_term_start_done(t):
+            manager._term_start_tasks.discard(t)
             if t.cancelled():
                 return
             exc = t.exception()

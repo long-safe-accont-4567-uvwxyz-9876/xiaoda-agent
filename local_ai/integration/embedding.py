@@ -4,6 +4,8 @@ import os
 from pathlib import Path
 from typing import Any, Callable
 
+from loguru import logger
+
 from local_ai.integration.errors import (
     LocalEmbeddingUnavailableError,
     LocalModelUnavailableError,
@@ -72,8 +74,10 @@ class LocalEmbeddingService:
 
                 if self._instance_manager.selection_available(ModelPurpose.EMBEDDING):
                     return True
-            except Exception:  # noqa: BLE001 - 实例状态查询失败按未就绪处理
-                pass
+            except (OSError, RuntimeError, ValueError, ImportError) as e:
+                logger.debug("embedding.selection_check_failed error={}", str(e))
+            except Exception:
+                logger.exception("embedding.ready.unexpected_error")
         runtime = self._runtime
         if runtime is not None and getattr(runtime, "ready", False):
             return True
@@ -97,7 +101,11 @@ class LocalEmbeddingService:
                 continue
             try:
                 stats = fn()
-            except Exception:  # noqa: BLE001
+            except (OSError, RuntimeError, ValueError) as e:
+                logger.debug("embedding.npu_stats_failed error={}", str(e))
+                continue
+            except Exception:
+                logger.exception("embedding.npu_stats.unexpected_error")
                 continue
             if stats and stats.get("resident"):
                 return stats
@@ -107,7 +115,11 @@ class LocalEmbeddingService:
                 continue
             try:
                 return fn()
-            except Exception:  # noqa: BLE001
+            except (OSError, RuntimeError, ValueError) as e:
+                logger.debug("embedding.npu_stats_fallback_failed error={}", str(e))
+                continue
+            except Exception:
+                logger.exception("embedding.npu_stats_fallback.unexpected_error")
                 continue
         return {"resident": False, "busy": False, "last_call_ms": None, "calls": 0}
 
@@ -189,7 +201,11 @@ class LocalEmbeddingService:
 
         try:
             runtime = await self._instance_manager.resolve_runtime(ModelPurpose.EMBEDDING)
+        except (OSError, RuntimeError, ConnectionError, ValueError) as error:
+            logger.warning("local_embedding.resolve_failed error={}", str(error)[:200])
+            raise LocalEmbeddingUnavailableError(str(error)) from error
         except Exception as error:
+            logger.exception("local_embedding._resolve_runtime.unexpected_error")
             raise LocalEmbeddingUnavailableError(str(error)) from error
         if runtime is not None:
             return runtime
@@ -216,7 +232,11 @@ class LocalEmbeddingService:
         route = "memory:embedding"
         try:
             acquired = await acquire(ModelPurpose.EMBEDDING, route)
+        except (OSError, RuntimeError, ConnectionError, ValueError) as error:
+            logger.warning("local_embedding.acquire_failed error={}", str(error)[:200])
+            raise LocalEmbeddingUnavailableError(str(error)) from error
         except Exception as error:
+            logger.exception("local_embedding._resolve_runtime_for_inference.unexpected_error")
             raise LocalEmbeddingUnavailableError(str(error)) from error
         if acquired is None:
             return await self._resolve_runtime(), None

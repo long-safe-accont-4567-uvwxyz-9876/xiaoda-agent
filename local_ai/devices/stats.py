@@ -270,7 +270,11 @@ def _devfreq_npu() -> dict:
         mx = int(_read_text(max_node).strip() or "0")
         if mx > 0:
             stats["max_freq_hz"] = mx
-    except Exception:  # noqa: BLE001
+    except (OSError, ValueError, RuntimeError) as e:
+        logger.debug("device_stats.devfreq_npu_failed error={}", str(e))
+        return stats
+    except Exception:
+        logger.exception("device_stats._devfreq_npu.unexpected_error")
         return stats
     return stats
 

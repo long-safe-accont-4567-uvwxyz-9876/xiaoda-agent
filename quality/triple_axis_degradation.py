@@ -88,7 +88,7 @@ class SilentDegradationDetector:
             alerts.append(f"延迟退化: p95 {current.latency_p95:.0f}ms > baseline*2")
 
         for a in alerts:
-            logger.warning(f"[三轴退化] {a}")
+            logger.warning("[三轴退化] {}", a)
 
         return alerts
 

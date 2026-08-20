@@ -74,7 +74,7 @@ class DirectionVector:
             elif dim == "route":
                 result["route_bias"] = result.get("route_bias", 0.0) + weight
             else:
-                logger.debug(f"direction_unapplied_dim: dim={dim}, value={weight}")
+                logger.debug("direction_unapplied_dim: dim={}, value={}", dim, weight)
         unapplied = set(self.dimensions.keys()) - known_dims
         if unapplied:
             result.setdefault("unapplied_dims", []).extend(unapplied)
@@ -132,7 +132,7 @@ class DirectionRegistry:
             Path(self._storage_path).write_text(
                 json.dumps(registry, indent=2, ensure_ascii=False), encoding="utf-8")
         except Exception as e:
-            logger.error(f"direction_registry.save_failed: {e}")
+            logger.error("direction_registry.save_failed: {}", e, exc_info=True)
 
     def _load_from_storage(self) -> None:
         path = Path(self._storage_path)
@@ -148,5 +148,5 @@ class DirectionRegistry:
                     meta=data.get("meta", {}),
                 )
         except Exception as e:
-            logger.error(f"direction_registry.load_failed_corrupted: {e}")
+            logger.error("direction_registry.load_failed_corrupted: {}", e, exc_info=True)
             # 损坏时返回空注册表，不崩溃

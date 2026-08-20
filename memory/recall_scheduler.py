@@ -35,7 +35,10 @@ def _get_local_now() -> datetime:
     tz_name = os.getenv("NUDGE_TIMEZONE", "Asia/Shanghai")
     try:
         tz = ZoneInfo(tz_name)
+    except (KeyError, ImportError):
+        tz = ZoneInfo("Asia/Shanghai")
     except Exception:
+        logger.exception(".memory.recall_scheduler._get_local_now_unexpected")
         tz = ZoneInfo("Asia/Shanghai")
     return datetime.now(tz)
 
@@ -88,8 +91,10 @@ class MemoryRecallScheduler:
             self._task.cancel()
             try:
                 await self._task
-            except (asyncio.CancelledError, Exception):
+            except asyncio.CancelledError:
                 pass
+            except Exception:
+                logger.debug("recall_scheduler.stop_task_error")
             self._task = None
             logger.info("memory_recall_scheduler.stopped")
 

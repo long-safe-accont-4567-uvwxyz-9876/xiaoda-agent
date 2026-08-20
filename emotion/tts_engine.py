@@ -13,7 +13,10 @@ from loguru import logger
 
 try:
     from utils.atomic_write import atomic_write
-except Exception:  # pragma: no cover
+except (ImportError, AttributeError):
+    atomic_write = None  # type: ignore[assignment]
+except Exception:
+    logger.exception(".emotion.tts_engine.unexpected")
     atomic_write = None  # type: ignore[assignment]
 from .emotion_enum import resolve_emotion, TTS_STYLE_MAP, is_unified
 from config import get_agent_display_name, get_base_url_for_provider
@@ -560,7 +563,11 @@ class TTSEngine:
                 return await asyncio.shield(existing)
             except asyncio.CancelledError:
                 raise
+            except (OSError, PermissionError):
+                return None
+
             except Exception:
+                logger.exception(".emotion.tts_engine.unexpected")
                 return None
 
         fut = asyncio.get_running_loop().create_future()

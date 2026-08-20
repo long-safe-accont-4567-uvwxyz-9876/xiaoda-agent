@@ -44,7 +44,7 @@ def _read_pdf(path: str) -> ToolResult:
         if tables:
             content += "\n\n--- 表格 ---\n" + "\n\n".join(tables[:1000])
         return ToolResult.ok(content[:5000])
-    except Exception as e:
+    except (RuntimeError, OSError, ValueError, ImportError) as e:
         return ToolResult.fail(f"PDF读取错误: {e!s}")
 
 
@@ -80,7 +80,7 @@ def _read_docx(path: str) -> ToolResult:
         if tables_text:
             content += "\n\n--- 表格 ---\n" + "\n".join(tables_text[:50])
         return ToolResult.ok(content[:5000])
-    except Exception as e:
+    except (RuntimeError, OSError, ValueError, ImportError) as e:
         return ToolResult.fail(f"DOCX读取错误: {e!s}")
 
 
@@ -115,7 +115,7 @@ def _read_pptx(path: str) -> ToolResult:
         content = f"PPTX: {resolved} ({len(prs.slides)}页)\n\n"
         content += "\n\n".join(slides_text)
         return ToolResult.ok(content[:5000])
-    except Exception as e:
+    except (RuntimeError, OSError, ValueError, ImportError) as e:
         return ToolResult.fail(f"PPTX读取错误: {e!s}")
 
 
@@ -154,7 +154,7 @@ def _read_xlsx(path: str) -> ToolResult:
         content = f"XLSX: {resolved} ({sheet_count}个工作表)\n\n"
         content += "\n\n".join(sheets_text)
         return ToolResult.ok(content[:5000])
-    except Exception as e:
+    except (RuntimeError, OSError, ValueError, ImportError) as e:
         return ToolResult.fail(f"XLSX读取错误: {e!s}")
 
 
@@ -168,7 +168,7 @@ def _read_text(path: str) -> ToolResult:
             return ToolResult.fail(f"文件不存在: {path}")
         content = Path(resolved).read_text(encoding="utf-8-sig")
         return ToolResult.ok(content[:5000])
-    except Exception as e:
+    except (OSError, ValueError, UnicodeDecodeError) as e:
         return ToolResult.fail(f"文本读取错误: {e!s}")
 
 

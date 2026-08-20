@@ -22,6 +22,10 @@ from typing import Any
 from loguru import logger
 
 from local_ai.contracts import RuntimeProfile
+from local_ai.runtimes.session_tuning import (
+    auto_provider_options,
+    build_session_options,
+)
 
 # 单批最大条数：onnxruntime 单会话串行推理，大批次长时间占会话
 # 会让检索路径的 embed 排队（32 条实测 6.5s），拆小批缩短排队窗口
@@ -134,15 +138,10 @@ class LocalEmbeddingProvider:
         return dict(self._sessions[self._active_session_index][0])
 
     def _session_options(self, providers: list[str], disable_fallback: bool) -> Any:
-        session_options = ort.SessionOptions()
-        if "DmlExecutionProvider" in providers:
-            session_options.enable_mem_pattern = False
-            session_options.execution_mode = ort.ORT_SEQUENTIAL
-        if disable_fallback and providers != ["CPUExecutionProvider"]:
-            session_options.add_session_config_entry(
-                "session.disable_cpu_ep_fallback", "1"
-            )
-        return session_options
+        # 自动调优：纯 CPU 设线程数、DML 特判、CPU fallback 门控
+        return build_session_options(
+            providers, disable_cpu_fallback=disable_fallback, ort_module=ort
+        )
 
     def _create_session(
         self,
@@ -152,12 +151,22 @@ class LocalEmbeddingProvider:
         *,
         disable_fallback: bool,
     ) -> Any:
+        merged_options = list(provider_options) if provider_options is not None else []
+        # 自动 provider_options 补缺省（显式传入的优先）
+        if providers and len(providers) == 1:
+            auto = auto_provider_options(providers[0])
+            if auto:
+                if merged_options:
+                    for key, value in auto.items():
+                        merged_options[0].setdefault(key, value)
+                else:
+                    merged_options = [auto]
         session_kwargs: dict[str, Any] = {
             "sess_options": self._session_options(providers, disable_fallback),
             "providers": providers,
         }
-        if provider_options is not None:
-            session_kwargs["provider_options"] = provider_options
+        if merged_options:
+            session_kwargs["provider_options"] = merged_options
         return ort.InferenceSession(str(onnx_path), **session_kwargs)
 
     def load(self) -> bool:
@@ -176,8 +185,19 @@ class LocalEmbeddingProvider:
             try:
                 if not HAS_LOCAL_EMBED_DEPS:
                     raise RuntimeError("onnxruntime/tokenizers not installed")
-                onnx_path = None
-                for candidate in (
+                # TRT + N 卡时优先 FP16 变体（配合 trt_fp16_enable）；回退 binding 共用同一文件
+                primary_provider = (
+                    self._bindings[0]["provider"]
+                    if self._bindings
+                    else (self._providers or ["CPUExecutionProvider"])[0]
+                )
+                candidates = []
+                if primary_provider == "TensorrtExecutionProvider":
+                    candidates = [
+                        self._model_dir / "model_fp16.onnx",
+                        self._model_dir / "onnx" / "model_fp16.onnx",
+                    ]
+                candidates += [
                     self._model_dir / "model.onnx",
                     self._model_dir / "onnx" / "model.onnx",
                     self._model_dir / "model_quantized.onnx",
@@ -186,7 +206,9 @@ class LocalEmbeddingProvider:
                     self._model_dir / "onnx" / "model_int8.onnx",
                     self._model_dir / "model_uint8.onnx",
                     self._model_dir / "onnx" / "model_uint8.onnx",
-                ):
+                ]
+                onnx_path = None
+                for candidate in candidates:
                     if candidate.exists():
                         onnx_path = candidate
                         break

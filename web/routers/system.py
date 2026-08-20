@@ -67,9 +67,11 @@ async def get_status(request: Request) -> Any:
     try:
         from web.ws_hub import manager as ws_manager
         active = ws_manager.active_count
-    except Exception as exc:
+    except (ImportError, AttributeError, OSError) as exc:
         logger.debug("system.ws_manager_get_failed: {}", exc, exc_info=True)
         active = 0
+    except Exception:
+        logger.exception("system.get_status.unexpected_error")
     qq_connected = False
     try:
         # 基于真实 WebSocket 连接状态判断，而非“近10分钟有无 QQ 消息”。
@@ -80,8 +82,10 @@ async def get_status(request: Request) -> Any:
         bot = qq_bot_adapter._ACTIVE_BOT
         if bot is not None and not bot.is_closed():
             qq_connected = True
-    except Exception as exc:
+    except (ImportError, AttributeError, OSError, RuntimeError) as exc:
         logger.debug("system.qq_status_check_failed: {}", exc, exc_info=True)
+    except Exception:
+        logger.exception("system.get_status.unexpected_error")
     wechat_connected = False
     try:
         import wechat_bot_adapter
@@ -95,8 +99,10 @@ async def get_status(request: Request) -> Any:
             and not getattr(bot, "_expired", False)
         ):
             wechat_connected = True
-    except Exception as exc:
+    except (ImportError, AttributeError, OSError, RuntimeError) as exc:
         logger.debug("system.wechat_status_check_failed: {}", exc, exc_info=True)
+    except Exception:
+        logger.exception("system.get_status.unexpected_error")
     return Envelope(data=SystemStatus(
         uptime=time.time() - _start_time,
         qq_connected=qq_connected,
@@ -129,6 +135,62 @@ async def get_metrics() -> Any:
     return Envelope(data=metrics.get_snapshot())
 
 
+def _read_agent_json_logs(log_dir: Path, level: str) -> list[str]:
+    """读取 loguru 的 agent_YYYY-MM-DD.json 日志，按 level 过滤。"""
+    import datetime as _dt
+    import json as _json
+    result: list[str] = []
+    today = _dt.date.today().isoformat()
+    agent_log = log_dir / f"agent_{today}.json"
+    if not agent_log.exists():
+        candidates = sorted(log_dir.glob("agent_*.json"), reverse=True)
+        if candidates:
+            agent_log = candidates[0]
+    if not agent_log.exists():
+        return result
+    with open(agent_log, "rb") as f:
+        f.seek(0, os.SEEK_END)
+        size = f.tell()
+        f.seek(max(0, size - 512 * 1024))
+        content = f.read().decode("utf-8", errors="replace")
+    for raw_line in content.splitlines():
+        rl = raw_line.strip()
+        if not rl:
+            continue
+        try:
+            obj = _json.loads(rl)
+            text = obj.get("text", "").rstrip("\n")
+            if not text:
+                continue
+            rec = obj.get("record", {})
+            lvl = rec.get("level", {}).get("name", "")
+            if level and lvl.upper() != level.upper():
+                continue
+            result.append(text)
+        except _json.JSONDecodeError:
+            continue
+    return result
+
+
+def _read_botpy_text_log(log_dir: Path, level: str) -> list[str]:
+    """兜底读取 botpy.log 文本日志，按 level 过滤。"""
+    from config import get_base_dir
+    log_path = log_dir / "botpy.log"
+    if not log_path.exists():
+        log_path = get_base_dir() / "botpy.log"
+    if not log_path.exists():
+        return []
+    with open(log_path, "rb") as f:
+        f.seek(0, os.SEEK_END)
+        size = f.tell()
+        f.seek(max(0, size - 512 * 1024))
+        content = f.read().decode("utf-8", errors="replace")
+    lines_out = content.splitlines()
+    if level:
+        lines_out = [line for line in lines_out if f"| {level.upper()}" in line or f"[{level.upper()}]" in line]
+    return lines_out
+
+
 @router.get("/system/logs", response_model=Envelope[list[str]])
 async def get_logs(lines: int = Query(default=200, le=1000),
                    level: str = Query(default="")) -> Any:
@@ -138,69 +200,20 @@ async def get_logs(lines: int = Query(default=200, le=1000),
         LOG_DIR = Path(__file__).resolve().parent.parent.parent / "data" / "logs"
 
     out: list[str] = []
-
-    # 优先读取 loguru 的 agent_YYYY-MM-DD.json 日志（同步 I/O 放到线程池）
-    def _read_agent_logs() -> list[str]:
-        import datetime as _dt
-        import json as _json
-        result: list[str] = []
-        today = _dt.date.today().isoformat()
-        agent_log = LOG_DIR / f"agent_{today}.json"
-        if not agent_log.exists():
-            candidates = sorted(LOG_DIR.glob("agent_*.json"), reverse=True)
-            if candidates:
-                agent_log = candidates[0]
-        if agent_log.exists():
-            with open(agent_log, "rb") as f:
-                f.seek(0, os.SEEK_END)
-                size = f.tell()
-                f.seek(max(0, size - 512 * 1024))
-                content = f.read().decode("utf-8", errors="replace")
-            for raw_line in content.splitlines():
-                rl = raw_line.strip()
-                if not rl:
-                    continue
-                try:
-                    obj = _json.loads(rl)
-                    text = obj.get("text", "").rstrip("\n")
-                    if not text:
-                        continue
-                    rec = obj.get("record", {})
-                    lvl = rec.get("level", {}).get("name", "")
-                    if level and lvl.upper() != level.upper():
-                        continue
-                    result.append(text)
-                except _json.JSONDecodeError:
-                    continue
-        return result
-
     try:
-        out = await asyncio.to_thread(_read_agent_logs)
-    except Exception as exc:
+        out = await asyncio.to_thread(_read_agent_json_logs, LOG_DIR, level)
+    except (OSError, ValueError, RuntimeError) as exc:
         logger.debug("system.agent_log_read_failed: {}", exc, exc_info=True)
+    except Exception:
+        logger.exception("system._read_agent_logs.unexpected_error")
 
-    # 兜底：如果 agent 日志为空，尝试读取 botpy.log
     if not out:
-        def _read_botpy_log() -> list[str]:
-            from config import get_base_dir
-            log_path = LOG_DIR / "botpy.log"
-            if not log_path.exists():
-                log_path = get_base_dir() / "botpy.log"
-            if log_path.exists():
-                with open(log_path, "rb") as f:
-                    f.seek(0, os.SEEK_END)
-                    size = f.tell()
-                    f.seek(max(0, size - 512 * 1024))
-                    content = f.read().decode("utf-8", errors="replace")
-                lines_out = content.splitlines()
-                if level:
-                    lines_out = [line for line in lines_out if f"| {level.upper()}" in line or f"[{level.upper()}]" in line]
-                return lines_out
-            return []
         try:
-            out = await asyncio.to_thread(_read_botpy_log)
-        except Exception as exc:
+            out = await asyncio.to_thread(_read_botpy_text_log, LOG_DIR, level)
+        except (OSError, ValueError, RuntimeError) as exc:
             logger.debug("system.botpy_log_read_failed: {}", exc, exc_info=True)
+        except Exception:
+            logger.exception("system._read_botpy_log.unexpected_error")
 
     if not out:
         return Envelope(data=["（暂无日志）"])
@@ -215,16 +228,21 @@ async def get_lan_addresses(request: Request) -> Any:
     port = request.url.port or DEFAULT_WEBUI_PORT
     # 获取本机局域网 IP
     lan_ips = []
+    s = None
     try:
         s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         s.settimeout(0.5)
         s.connect(("8.8.8.8", 80))
         primary_ip = s.getsockname()[0]
-        s.close()
         if primary_ip and not primary_ip.startswith("127."):
             lan_ips.append(primary_ip)
-    except Exception as exc:
+    except (OSError, RuntimeError) as exc:
         logger.debug("system.lan_ip_detect_failed: {}", exc, exc_info=True)
+    except Exception:
+        logger.exception("system.get_lan_addresses.unexpected_error")
+    finally:
+        if s is not None:
+            s.close()
     return Envelope(data={
         "localhost": f"http://localhost:{port}",
         "lan_ips": lan_ips,
@@ -321,8 +339,15 @@ async def restart_service(request: Request) -> Any:
                 bat_path = bat.name
             try:
                 subprocess.Popen(['cmd', '/c', bat_path], creationflags=subprocess.CREATE_NEW_PROCESS_GROUP)
-            except Exception as exc:
+            except (OSError, RuntimeError) as exc:
                 os.unlink(bat_path)
+                raise exc
+            except Exception as exc:
+                logger.exception("system._exit.unexpected_error")
+                try:
+                    os.unlink(bat_path)
+                except OSError:
+                    logger.debug("system._exit.bat_cleanup_failed", exc_info=True)
                 raise exc
             logger.warning("webui.restart.exiting (Windows auto-restart)")
         else:

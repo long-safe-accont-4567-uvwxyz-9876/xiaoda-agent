@@ -143,7 +143,7 @@ class SmartErrorHandler:
         if self._db:
             try:
                 await self._learn_from_error(error_ctx)
-            except Exception as e:
+            except (RuntimeError, OSError, ValueError) as e:
                 logger.warning("error_handler.learn_failed", error=str(e))
 
         return "\n".join(reply_parts)
@@ -220,7 +220,7 @@ class SmartErrorHandler:
                 d["error_pattern"] = d.get("summary", "")
                 result.append(d)
             return result
-        except Exception:
+        except (OSError, ValueError, RuntimeError):
             return []
 
     async def count_by_error_type(self, error_type: str) -> int:
@@ -235,7 +235,7 @@ class SmartErrorHandler:
             )
             row = await cursor.fetchone()
             return row["cnt"] if row else 0
-        except Exception:
+        except (OSError, ValueError, RuntimeError):
             return 0
 
     async def promote_error_pattern(self, error_type: str, correction: str) -> None:
@@ -249,8 +249,8 @@ class SmartErrorHandler:
                 (f"{error_type}:%",),
             )
             await self._db._conn.commit()
-        except Exception as e:
-            logger.warning(f"smart_error_handler.promote_failed: {e}")
+        except (OSError, RuntimeError, ValueError) as e:
+            logger.warning("smart_error_handler.promote_failed: {}", e)
 
     async def log_error(self, task: str = "", error: str = "",
                         error_type: str = "", correction: str = "",
@@ -269,8 +269,8 @@ class SmartErrorHandler:
                 source="failure_trigger",
                 pattern_key=pattern_key,
             )
-        except Exception as e:
-            logger.warning(f"smart_error_handler.log_error_failed: {e}")
+        except (OSError, RuntimeError, ValueError) as e:
+            logger.warning("smart_error_handler.log_error_failed: {}", e)
 
     def should_delegate_to_specialist(self, error_ctx: ErrorContext | str = None,
                                       context: dict | None = None) -> str | None:
@@ -326,7 +326,7 @@ class SmartErrorHandler:
 
         try:
             return await specialist.chat(prompt)
-        except Exception as e:
+        except (RuntimeError, OSError, ValueError, ConnectionError) as e:
             logger.warning("error_handler.agent_consult_failed",
                           agent=agent_name, error=str(e))
             return None

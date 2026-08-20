@@ -90,11 +90,11 @@ async def test_all(request: Request) -> Any:
     if _all_running_lock.locked():
         raise HTTPException(409, "全量自检已在进行中")
     core = request.app.state.core
-    await _all_running_lock.acquire()
     _all_running = True
 
     async def _run() -> None:
         global _all_running
+        await _all_running_lock.acquire()
         try:
             from web.probes import run_all
             from web.ws_hub import manager
@@ -116,11 +116,16 @@ async def test_all(request: Request) -> Any:
                 "type": "health_done",
                 "passed": report["passed"], "total": report["total"],
             })
-        except Exception as e:
+        except (OSError, RuntimeError, ValueError, ConnectionError) as e:
             logger.warning("health.run_all_failed error={}", str(e))
+        except Exception:
+            logger.exception("health.on_progress.unexpected_error")
         finally:
             _all_running = False
-            _all_running_lock.release()
+            try:
+                _all_running_lock.release()
+            except RuntimeError:
+                pass
 
     request.app.state.health_run_task = asyncio.create_task(_run())
     return Envelope(data={"started": True})
@@ -151,11 +156,13 @@ async def system_info() -> Any:
         logger.error("health.psutil_import_failed error={}", str(e))
         data["error"] = f"psutil导入失败: {e!s}"
         return Envelope(data=data)
-    except Exception as e:
+    except (OSError, RuntimeError) as e:
         logger.error("health.psutil_init_failed error={}", str(e))
         data["error"] = f"psutil初始化失败: {e!s}"
         return Envelope(data=data)
-
+    except Exception:
+        logger.exception("health.system_info.unexpected_error")
+        return Envelope(data=data)
     data.update(_collect_cpu_mem_metrics(psutil))
     data.update(_collect_disk_temp_metrics(psutil))
     data.update(_collect_proc_net_metrics(psutil))
@@ -170,8 +177,10 @@ def _collect_cpu_mem_metrics(psutil: Any) -> dict:
         data["cpu_percent"] = psutil.cpu_percent(interval=0.5)
         data["cpu_count"] = psutil.cpu_count(logical=True)
         data["cpu_count_physical"] = psutil.cpu_count(logical=False)
-    except Exception as e:
+    except (OSError, RuntimeError, ValueError) as e:
         logger.warning("health.cpu_failed error={}", str(e))
+    except Exception:
+        logger.exception("health._collect_cpu_mem_metrics.unexpected_error")
     try:
         load1, load5, load15 = os.getloadavg()
         data["load"] = [load1, load5, load15]
@@ -184,17 +193,20 @@ def _collect_cpu_mem_metrics(psutil: Any) -> dict:
         data["mem_total"] = mem.total
         data["mem_available"] = mem.available
         data["mem_percent"] = mem.percent
-    except Exception as e:
+    except (OSError, RuntimeError, ValueError) as e:
         logger.warning("health.mem_failed error={}", str(e))
-
+    except Exception:
+        logger.exception("health._collect_cpu_mem_metrics.unexpected_error")
     # ── 交换区 ──
     try:
         swap = psutil.swap_memory()
         data["swap_total"] = swap.total
         data["swap_used"] = swap.used
         data["swap_percent"] = swap.percent
-    except Exception as e:
+    except (OSError, RuntimeError, ValueError) as e:
         logger.warning("health.swap_failed error={}", str(e))
+    except Exception:
+        logger.exception("health._collect_cpu_mem_metrics.unexpected_error")
     return data
 
 
@@ -219,9 +231,10 @@ def _collect_disk_temp_metrics(psutil: Any) -> dict:
             except (PermissionError, OSError):
                 continue
         data["disks"] = disks
-    except Exception as e:
+    except (OSError, RuntimeError, ValueError) as e:
         logger.warning("health.disks_failed error={}", str(e))
-
+    except Exception:
+        logger.exception("health._collect_disk_temp_metrics.unexpected_error")
     # ── 温度（Windows 不支持 sensors_temperatures）──
     try:
         if hasattr(psutil, 'sensors_temperatures'):
@@ -238,9 +251,11 @@ def _collect_disk_temp_metrics(psutil: Any) -> dict:
             data["temperatures"] = temp_list
         else:
             data["temperatures"] = []
-    except Exception as e:
+    except (OSError, RuntimeError, ValueError, AttributeError) as e:
         logger.warning("health.temps_failed error={}", str(e))
         data["temperatures"] = []
+    except Exception:
+        logger.exception("health.unknown.unexpected_error")
     return data
 
 
@@ -250,26 +265,29 @@ def _collect_proc_net_metrics(psutil: Any) -> dict:
     # ── 运行时间 ──
     try:
         data["uptime"] = time.time() - psutil.boot_time()
-    except Exception as e:
+    except (OSError, RuntimeError) as e:
         logger.warning("health.uptime_failed error={}", str(e))
-
+    except Exception:
+        logger.exception("health._collect_proc_net_metrics.unexpected_error")
     # ── 进程内存 ──
     try:
         proc = psutil.Process()
         mem_info = proc.memory_info()
         data["process_rss"] = mem_info.rss
         data["process_vms"] = mem_info.vms
-    except Exception as e:
+    except (OSError, RuntimeError, ValueError) as e:
         logger.warning("health.process_mem_failed error={}", str(e))
-
+    except Exception:
+        logger.exception("health._collect_proc_net_metrics.unexpected_error")
     # ── 网络 ──
     try:
         net = psutil.net_io_counters()
         data["net_bytes_sent"] = net.bytes_sent
         data["net_bytes_recv"] = net.bytes_recv
-    except Exception as e:
+    except (OSError, RuntimeError, ValueError) as e:
         logger.warning("health.net_failed error={}", str(e))
-
+    except Exception:
+        logger.exception("health._collect_proc_net_metrics.unexpected_error")
     # ── 电池（笔记本）──
     try:
         bat = psutil.sensors_battery()
@@ -277,6 +295,8 @@ def _collect_proc_net_metrics(psutil: Any) -> dict:
             data["battery_percent"] = bat.percent
             data["battery_plugged"] = bat.power_plugged
             data["battery_secs_left"] = bat.secsleft
-    except Exception as e:
+    except (OSError, RuntimeError, ValueError, AttributeError) as e:
         logger.warning("health.battery_failed error={}", str(e))
+    except Exception:
+        logger.exception("health._collect_proc_net_metrics.unexpected_error")
     return data

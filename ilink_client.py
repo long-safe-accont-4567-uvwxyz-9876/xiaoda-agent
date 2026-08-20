@@ -36,7 +36,13 @@ from loguru import logger
 
 try:
     from utils.atomic_write import atomic_write, _restrict_file_permissions_windows
-except Exception:  # pragma: no cover
+except (ImportError, AttributeError):
+    atomic_write = None  # type: ignore[assignment]
+    def _restrict_file_permissions_windows(path):  # type: ignore[no-redef]
+        return
+
+except Exception:
+    logger.exception(".ilink_client.unexpected")
     atomic_write = None  # type: ignore[assignment]
     def _restrict_file_permissions_windows(path):  # type: ignore[no-redef]
         return
@@ -667,7 +673,7 @@ class ILinkClient:
             "media_type": 1,  # IMAGE
             "to_user_id": to_user_id,
             "rawsize": len(raw_bytes),
-            "rawfilemd5": hashlib.md5(raw_bytes).hexdigest(),
+            "rawfilemd5": hashlib.md5(raw_bytes, usedforsecurity=False).hexdigest(),
             "filesize": len(encrypted),
             "no_need_thumb": True,  # 表情包无需缩略图
             "aeskey": aes_key.hex(),

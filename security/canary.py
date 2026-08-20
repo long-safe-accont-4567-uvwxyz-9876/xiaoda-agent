@@ -112,7 +112,7 @@ class CanaryDetector:
         self._retired_tokens |= self._active_tokens
         self._active_tokens.clear()
         new_token = self.generate()
-        logger.info(f"canary.rotated active_count=0 retired_count={len(self._retired_tokens)}")
+        logger.info("canary.rotated active_count=0 retired_count={}", len(self._retired_tokens))
         return new_token
 
     def clear(self) -> None:
@@ -207,7 +207,7 @@ class CanaryDetector:
             try:
                 cb(leaked_tokens, text)
             except Exception as e:
-                logger.warning(f"security.canary_callback_failed error={e}")
+                logger.warning("security.canary_callback_failed error={}", e, exc_info=True)
 
 
 # ── 全局单例 ──────────────────────────────────────────────

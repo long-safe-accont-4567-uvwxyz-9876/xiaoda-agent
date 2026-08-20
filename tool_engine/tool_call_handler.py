@@ -150,8 +150,8 @@ class ToolCallHandler:
         if self._status_callback:
             try:
                 await self._status_callback(message)
-            except Exception as e:
-                logger.warning(f"工具调用状态回调通知失败: {e}")
+            except (RuntimeError, OSError, ConnectionError) as e:
+                logger.warning("工具调用状态回调通知失败: {}", e)
 
     async def _notify_tool_status(self, tool_name: str, stage: str, detail: str = "") -> None:
         """推送工具调用的中间状态 — 通过 EventBus 发射 TOOL_* 事件。
@@ -194,8 +194,8 @@ class ToolCallHandler:
                 "label": f"{label} {display}...",
                 "detail": detail[:100] if detail else "",
             })
-        except Exception as e:
-            logger.debug(f"tool_status_push_failed: {e}")
+        except (RuntimeError, OSError, ConnectionError) as e:
+            logger.debug("tool_status_push_failed: {}", e)
 
     def _check_path_whitelist(self, path: str, agent_config: Any = None) -> tuple[bool, str]:
         """检查路径是否在子代理白名单内。
@@ -246,9 +246,7 @@ class ToolCallHandler:
             return self._clean_reply(assistant_content), []
 
         if reasoning_content:
-            pass
-            # scavenge 已移除：DSML 从 content 中已完整解析出工具调用列表，
-            # reasoning_content 中的思考过程文本不应再提取为额外工具调用，否则会导致重复执行
+            pass  # scavenge 已移除：DSML 从 content 中已完整解析出工具调用列表
 
         tool_results = []
         tool_messages = []
@@ -260,7 +258,7 @@ class ToolCallHandler:
 
         if tool_calls:
             display_names = [TOOL_DISPLAY_NAMES.get(tc["function"]["name"], tc["function"]["name"]) for tc in tool_calls]
-            logger.info(f"tool.calls_selected tools={[tc['function']['name'] for tc in tool_calls]} user_input={current_user_input[:80]}")
+            logger.info("tool.calls_selected tools={} user_input={}", [tc['function']['name'] for tc in tool_calls], current_user_input[:80])
             # 只对耗时/重要工具显示进度，简单查询跳过
             important_tools = {"shell_command", "python_executor", "web_search", "multi_search", "web_browse", "document_reader"}
             has_important = any(tc["function"]["name"] in important_tools for tc in tool_calls)
@@ -403,7 +401,7 @@ class ToolCallHandler:
                     result = await self._tool_execute_callback(t_name, t_args, user_id=user_id, safe_mode=safe_mode)
                 else:
                     result = await self._tool_executor.execute(t_name, t_args, safe_mode=safe_mode)
-            except Exception as e:
+            except (RuntimeError, OSError, ValueError, TimeoutError, KeyError) as e:
                 _tool_elapsed = round(time.time() - _tool_start, 2)
                 logger.warning("tool.exec_failed", tool=t_name, elapsed=_tool_elapsed, error=str(e)[:100])
                 await self._notify_tool_status(t_name, "failed", detail=str(e)[:100])
@@ -426,7 +424,7 @@ class ToolCallHandler:
                 if self._error_pipeline is not None and result.error:
                     try:
                         _spawn(self._error_pipeline.extract_rule(t_name, t_args, result.error))
-                    except Exception as e:
+                    except (RuntimeError, ValueError) as e:
                         trace.warning("error_rule.spawn_failed", error=str(e))
 
             # S7: 工具结果标记为 EXTERNAL 级别并清理注入内容 (防 prompt injection)
@@ -437,7 +435,7 @@ class ToolCallHandler:
         """检查历史失败规则，返回阻塞元组或 None。"""
         try:
             matched_rules = await self._error_pipeline.check_rules(t_name, t_args)
-        except Exception as e:
+        except (RuntimeError, OSError, ValueError) as e:
             trace.warning("error_rule.check_failed", error=str(e))
             matched_rules = []
         if not matched_rules:
@@ -448,7 +446,7 @@ class ToolCallHandler:
         rule_id = rule.get("id")
         try:
             await self._error_pipeline.increment_hit_count(rule_id)
-        except Exception:
+        except (OSError, RuntimeError):
             logger.debug("tool_call_handler.increment_hit_count_failed", exc_info=True)
         logger.warning("error_rule.hit", tool_name=t_name, rule_id=rule_id, rule_text=rule_text)
         if ERROR_RULE_STRICT_MODE:
@@ -581,7 +579,7 @@ class ToolCallHandler:
                 return self._clean_reply(summary)
         except TimeoutError:
             logger.warning("tool.summarize_timeout", tool_count=len(tool_results))
-        except Exception as e:
+        except (RuntimeError, ValueError, OSError) as e:
             trace.error("tool.summarize_failed", error=str(e))
 
         # P0 修复：summarize 超时/失败时绝不返回原始工具结果当回复。

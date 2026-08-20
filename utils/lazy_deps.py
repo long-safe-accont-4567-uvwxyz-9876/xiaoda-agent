@@ -90,7 +90,7 @@ def ensure(feature_name: str) -> bool:
             return False
         logger.info("lazy_deps.installed", feature=feature_name, packages=missing)
         return True
-    except Exception as e:
+    except (subprocess.CalledProcessError, OSError, RuntimeError) as e:
         logger.error("lazy_deps.install_error", feature=feature_name, error=str(e))
         return False
 

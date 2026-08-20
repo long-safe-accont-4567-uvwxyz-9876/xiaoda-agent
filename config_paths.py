@@ -306,7 +306,11 @@ def _init_agent_json5(bundled_config: Path, user_config_dir: Path) -> None:
         try:
             shutil.copy2(bundled_agent_json5, user_agent_json5)
             print("[config] agent.json5 initialized from bundled resource")
+        except (OSError, shutil.Error) as e:
+            print(f"[config] Warning: failed to copy agent.json5: {e}")
         except Exception as e:
+            import logging
+            logging.getLogger(__name__).exception("config.agent_json5_copy_unexpected")
             print(f"[config] Warning: failed to copy agent.json5: {e}")
 
 
@@ -324,7 +328,11 @@ def _init_agents_subdir(bundled_config: Path, user_config_dir: Path) -> None:
                     try:
                         shutil.copy2(item, target)
                         print(f"[config] Copied new agent file: {item.name}")
+                    except (OSError, shutil.Error) as e:
+                        print(f"[config] Warning: failed to copy {item.name}: {e}")
                     except Exception as e:
+                        import logging
+                        logging.getLogger(__name__).exception("config.agent_file_copy_unexpected name=%s", item.name)
                         print(f"[config] Warning: failed to copy {item.name}: {e}")
 
     # 清理旧版 agent 配置文件（升级后旧名称不应残留）
@@ -336,7 +344,11 @@ def _init_agents_subdir(bundled_config: Path, user_config_dir: Path) -> None:
                 try:
                     old_path.unlink()
                     print(f"[config] Removed deprecated agent config: {old_file}")
+                except (OSError, PermissionError) as e:
+                    print(f"[config] Warning: failed to remove {old_file}: {e}")
                 except Exception as e:
+                    import logging
+                    logging.getLogger(__name__).exception("config.agent_deprecated_remove_unexpected name=%s", old_file)
                     print(f"[config] Warning: failed to remove {old_file}: {e}")
 
 

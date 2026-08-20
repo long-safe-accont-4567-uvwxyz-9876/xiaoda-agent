@@ -100,7 +100,10 @@ def get_agent_display_name(name: str) -> str:
         import json
         data = json.loads(fp.read_text(encoding="utf-8"))
         dn = data.get("display_name") or default
+    except (ValueError, KeyError, ImportError):
+        dn = default
     except Exception:
+        logger.exception(".config_agents.get_agent_display_name_unexpected")
         dn = default
     _display_name_cache[name] = (mtime, dn)
     return dn
@@ -143,7 +146,10 @@ def get_agent_deprecated_names(agent_key: str) -> list[str]:
         import json
         data = json.loads(fp.read_text(encoding="utf-8"))
         names = data.get("deprecated_names", [])
+    except (ValueError, KeyError, ImportError):
+        names = []
     except Exception:
+        logger.exception(".config_agents.get_agent_deprecated_names_unexpected")
         names = []
     if not names:
         names = [k for k, v in _FALLBACK_DEPRECATED_NAMES.items() if v == agent_key]

@@ -160,7 +160,7 @@ async def test_agent_e2e():
         with tempfile.TemporaryDirectory() as td:
             test_path = os.path.join(td, "test.txt")
             atomic_write(test_path, "hello world")
-            with open(test_path) as f:
+            with open(test_path, encoding="utf-8") as f:
                 content = f.read()
             if content == "hello world":
                 print('    OK: 原子文本写入正确')
@@ -170,7 +170,7 @@ async def test_agent_e2e():
             json_path = os.path.join(td, "test.json")
             atomic_json_write(json_path, {"key": "value"})
             import json
-            with open(json_path) as f:
+            with open(json_path, encoding="utf-8") as f:
                 data = json.load(f)
             if data == {"key":
                 "value"}:

@@ -34,18 +34,20 @@ async def _audit(request: Request, action: str, detail: str) -> None:
     try:
         await core.db.insert_audit_log(f"webui.models.{action}", "webui", detail)
         await core.db.commit()
-    except Exception as exc:
+    except (OSError, RuntimeError, ValueError) as exc:
         logger.debug("models.audit_failed: {}", exc, exc_info=True)
+    except Exception:
+        logger.exception("models._audit.unexpected_error")
 
 
 async def _broadcast_changed() -> None:
     try:
         from web.ws_hub import manager
         await manager.broadcast({"type": "config_changed", "domain": "models"})
-    except Exception as exc:
+    except (OSError, RuntimeError, ValueError, ConnectionError) as exc:
         logger.debug("models.broadcast_failed: {}", exc, exc_info=True)
-
-
+    except Exception:
+        logger.exception("models._broadcast_changed.unexpected_error")
 # ── providers ────────────────────────────────────────────────────
 
 
@@ -106,11 +108,14 @@ async def create_provider(body: dict, request: Request) -> Any:
         definition = await request.app.state.provider_service.create(body, {"api_key": api_key})
     except ValueError as e:
         raise HTTPException(400, str(e)) from None
-    except Exception as e:
+    except (OSError, RuntimeError, ConnectionError) as e:
         from llm_gateway.provider_service import ProviderConnectionError
         if isinstance(e, ProviderConnectionError):
             raise HTTPException(422, str(e)) from None
         raise
+    except Exception as e:
+        logger.exception("models.create_provider.unexpected_error")
+        raise HTTPException(422, str(e)) from None
     await _audit(request, "provider.create", pid)
     await invalidate_discovery_cache()
     await _broadcast_changed()
@@ -138,11 +143,14 @@ async def update_provider(pid: str, body: dict, request: Request) -> Any:
         definition = await request.app.state.provider_service.update(pid, body, credentials)
     except ValueError as e:
         raise HTTPException(400, str(e)) from None
-    except Exception as e:
+    except (OSError, RuntimeError, ConnectionError) as e:
         from llm_gateway.provider_service import ProviderConnectionError
         if isinstance(e, ProviderConnectionError):
             raise HTTPException(422, str(e)) from None
         raise
+    except Exception as e:
+        logger.exception("models.update_provider.unexpected_error")
+        raise HTTPException(422, str(e)) from None
     key = load_provider_key(pid)
     await _audit(request, "provider.update", pid)
     await invalidate_discovery_cache()
@@ -161,11 +169,14 @@ async def delete_provider(pid: str, request: Request) -> Any:
         raise HTTPException(404, f"provider {pid} 不存在") from None
     except ValueError as e:
         raise HTTPException(400, str(e)) from None
-    except Exception as e:
+    except (OSError, RuntimeError, ConnectionError) as e:
         from llm_gateway.provider_service import ProviderInUseError
         if isinstance(e, ProviderInUseError):
             raise HTTPException(409, f"provider 正被路由使用: {e}") from None
         raise
+    except Exception as e:
+        logger.exception("models.delete_provider.unexpected_error")
+        raise HTTPException(409, f"provider 正被路由使用: {e}") from None
     await _audit(request, "provider.delete", pid)
     await invalidate_discovery_cache()
     await _broadcast_changed()
@@ -185,11 +196,14 @@ async def set_provider_key(pid: str, body: dict, request: Request) -> Any:
         await request.app.state.provider_service.update(pid, record, {"api_key": api_key})
     except ValueError as e:
         raise HTTPException(400, str(e)) from None
-    except Exception as e:
+    except (OSError, RuntimeError, ConnectionError) as e:
         from llm_gateway.provider_service import ProviderConnectionError
         if isinstance(e, ProviderConnectionError):
             raise HTTPException(422, str(e)) from None
         raise
+    except Exception as e:
+        logger.exception("models.set_provider_key.unexpected_error")
+        raise HTTPException(422, str(e)) from None
     await _audit(request, "provider.key", pid)
     return Envelope(data={"id": pid, "key_masked": _mask(api_key)})
 
@@ -308,9 +322,11 @@ async def update_route(task: str, body: dict, request: Request) -> Any:
         )
     except KeyError as e:
         raise HTTPException(404, f"未知路由任务 {task}: {e}") from None
-    except Exception as e:
+    except (OSError, ValueError, RuntimeError) as e:
         raise HTTPException(500, f"路由更新失败: {e}") from None
-
+    except Exception as e:
+        logger.exception("models.unknown.unexpected_error")
+        raise HTTPException(500, f"路由更新失败: {e}") from None
     # Qodo#5 修复：TASK_TIMEOUTS 在 registry 持久化成功后才修改，
     # 失败时（上面抛 HTTPException）不修改运行时 timeout，保持原值
     if timeout is not None:
@@ -384,10 +400,14 @@ async def credentials_status() -> Any:
                     "error_count": 0,
                     "last_used_at": None,
                 })
-            except Exception as e:
-                logger.error(f"[credentials_status] pid={pid} error: {e}")
-    except Exception as e:
-        logger.error(f"[credentials_status] custom providers block error: {e}")
+            except (OSError, ValueError, RuntimeError) as e:
+                logger.error("[credentials_status] pid={} error: {}", pid, e)
+            except Exception:
+                logger.exception("models.credentials_status.unexpected_error")
+    except (OSError, ValueError, RuntimeError) as e:
+        logger.error("[credentials_status] custom providers block error: {}", e, exc_info=True)
+    except Exception:
+        logger.exception("models.unknown.unexpected_error")
     return Envelope(data=out)
 
 

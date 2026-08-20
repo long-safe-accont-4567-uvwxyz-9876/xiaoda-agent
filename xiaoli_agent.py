@@ -102,7 +102,7 @@ class XiaoliAgent:
         for _name, client, _models in self._clients:
             try:
                 await client.close()
-            except Exception:
+            except (OSError, RuntimeError):
                 logger.debug("xiaoli_agent.close_client_error", exc_info=True)
         self._clients.clear()
 
@@ -125,7 +125,7 @@ class XiaoliAgent:
             try:
                 await status_callback("小莉正在思考...")
             except (AttributeError, RuntimeError, OSError):
-                pass  # status_callback 失败不影响聊天
+                logger.debug("xiaoli.status_callback_failed")
 
         system_prompt = self._personality
         if context:
@@ -144,7 +144,7 @@ class XiaoliAgent:
             for model in models:
                 try:
                     return await self._chat_loop(client, model, messages, tools, provider_name)
-                except Exception as e:
+                except (RuntimeError, OSError, ValueError, ConnectionError) as e:
                     error_str = str(e)
                     if "429" in error_str or "rate" in error_str.lower():
                         logger.warning("xiaoli.rate_limited", provider=provider_name, model=model)
@@ -153,7 +153,7 @@ class XiaoliAgent:
                         logger.warning("xiaoli.tools_not_supported", provider=provider_name, model=model)
                         try:
                             return await self._chat_loop(client, model, messages, None, provider_name)
-                        except Exception as e2:
+                        except (RuntimeError, OSError, ValueError, ConnectionError) as e2:
                             logger.warning("xiaoli.fallback_failed", provider=provider_name, model=model, error=str(e2))
                             continue
                     logger.warning("xiaoli.chat.error", provider=provider_name, model=model, error=error_str)

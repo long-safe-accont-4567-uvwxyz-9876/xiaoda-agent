@@ -41,7 +41,7 @@ class PersonaMixin:
                     user_emotion=emotion.get("primary", ""),
                 )
         except Exception as e:
-            logger.debug(f"mental_state.update_failed: {e}")
+            logger.debug("mental_state.update_failed: {}", e)
 
     def _apply_persona_critic(self, reply: str, user_openid: str, user_id: str) -> None:
         """应用 Persona Critic 检查 LLM 输出的人格一致性.
@@ -76,7 +76,7 @@ class PersonaMixin:
                 try:
                     critic._case_repo.add_case(reply, check)
                 except Exception as e:
-                    logger.debug(f"persona.add_case_failed: {e}")
+                    logger.debug("persona.add_case_failed: {}", e)
         except Exception as e:
             logger.warning("persona.check_failed", error=str(e))
 

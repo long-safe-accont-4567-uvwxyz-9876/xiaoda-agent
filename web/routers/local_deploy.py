@@ -44,7 +44,7 @@ def _persist_embed_mode_by_rule(vs: Any) -> str:
             engine_running = bool(
                 vs.embed_engine_status().get("engine_running", False)
             )
-        except Exception:  # noqa: BLE001
+        except (OSError, RuntimeError, ValueError, AttributeError):  # noqa: BLE001
             engine_running = False
     node_local = False
     try:
@@ -55,13 +55,15 @@ def _persist_embed_mode_by_rule(vs: Any) -> str:
             if get_backend(cfg, node["id"]) == "local":
                 node_local = True
                 break
-    except Exception:  # noqa: BLE001
+    except (ImportError, OSError, ValueError, RuntimeError):  # noqa: BLE001
         node_local = False
     mode = "local" if (engine_running and node_local) else "remote"
     try:
         get_config_service().set("local_deploy.mode", mode)
-    except Exception as e:  # noqa: BLE001
+    except (OSError, ValueError, RuntimeError) as e:  # noqa: BLE001
         logger.warning("local_deploy.mode_persist_failed error={}", str(e))
+    except Exception:
+        logger.exception("local_deploy._persist_embed_mode_by_rule.unexpected_error")
     logger.info(
         "local_deploy.mode_persisted mode={} engine_running={} node_local={}",
         mode, engine_running, node_local,
@@ -69,47 +71,34 @@ def _persist_embed_mode_by_rule(vs: Any) -> str:
     return mode
 
 
-def _cpu_stats() -> dict:
-    """CPU 性能与实时占用：核数 / 频率 / 占用百分比。
-
-    Linux 用 /proc 差值法；Windows/macOS 用 psutil（跨平台采样）。
-    """
-    stats: dict[str, Any] = {"cores": None, "freq_mhz": None, "usage_pct": None}
+def _cpu_stats_psutil(stats: dict[str, Any]) -> dict[str, Any]:
     try:
-        stats["cores"] = os.cpu_count() or 0
-    except Exception:  # noqa: BLE001
-        logger.warning("local_deploy.cpu_count_failed", exc_info=True)
-
-    if platform.system() != "Linux":
-        # Windows/macOS：psutil.cpu_freq() / cpu_percent() 跨平台可用
-        try:
-            import psutil as _ps
-        except ImportError:  # noqa: BLE001
-            return stats
-        try:
-            freq = _ps.cpu_freq()
-            if freq is not None and freq.current:
-                stats["freq_mhz"] = round(freq.current)
-        except Exception:  # noqa: BLE001
-            logger.warning("local_deploy.cpu_freq_failed", exc_info=True)
-        try:
-            # interval=None：非阻塞，首次调用返回 0.0，后续轮询（5s）取到真实值
-            stats["usage_pct"] = round(_ps.cpu_percent(interval=None), 1)
-        except Exception:  # noqa: BLE001
-            logger.warning("local_deploy.cpu_percent_failed", exc_info=True)
+        import psutil as _ps
+    except ImportError:
         return stats
+    try:
+        freq = _ps.cpu_freq()
+        if freq is not None and freq.current:
+            stats["freq_mhz"] = round(freq.current)
+    except (OSError, RuntimeError, ValueError):
+        logger.warning("local_deploy.cpu_freq_failed", exc_info=True)
+    try:
+        stats["usage_pct"] = round(_ps.cpu_percent(interval=None), 1)
+    except (OSError, RuntimeError, ValueError):
+        logger.warning("local_deploy.cpu_percent_failed", exc_info=True)
+    return stats
 
-    # 频率：/proc/cpuinfo "cpu MHz" → cpufreq sysfs（kHz）→ 未知
+
+def _cpu_stats_linux(stats: dict[str, Any]) -> dict[str, Any]:
     try:
         with open("/proc/cpuinfo", "r", encoding="utf-8", errors="ignore") as f:
             for line in f:
                 if line.startswith("cpu MHz"):
                     stats["freq_mhz"] = round(float(line.split(":")[1].strip()))
                     break
-    except (OSError, ValueError):  # noqa: BLE001
+    except (OSError, ValueError):
         logger.debug("local_deploy.cpuinfo_read_failed", exc_info=True)
     if not stats["freq_mhz"]:
-        # 额定频率：cpuinfo_max_freq（性能规格）优先，回退当前频率
         try:
             for i in range(64):
                 for f in ("cpuinfo_max_freq", "cpuinfo_cur_freq"):
@@ -120,9 +109,8 @@ def _cpu_stats() -> dict:
                         break
                 if stats["freq_mhz"]:
                     break
-        except (OSError, ValueError):  # noqa: BLE001
+        except (OSError, ValueError):
             logger.debug("local_deploy.cpufreq_sysfs_read_failed", exc_info=True)
-    # 占用百分比：两次采样间 (1 - idle/total) × 100
     try:
         with open("/proc/stat", "r", encoding="utf-8", errors="ignore") as f:
             parts = f.readline().split()
@@ -137,9 +125,20 @@ def _cpu_stats() -> dict:
             if dt > 0:
                 stats["usage_pct"] = round((1 - di / dt) * 100, 1)
         _CPU_SAMPLE.update(ts=now, total=total, idle=idle)
-    except (OSError, ValueError):  # noqa: BLE001
+    except (OSError, ValueError):
         logger.debug("local_deploy.proc_stat_read_failed", exc_info=True)
     return stats
+
+
+def _cpu_stats() -> dict:
+    stats: dict[str, Any] = {"cores": None, "freq_mhz": None, "usage_pct": None}
+    try:
+        stats["cores"] = os.cpu_count() or 0
+    except (OSError, RuntimeError):
+        logger.warning("local_deploy.cpu_count_failed", exc_info=True)
+    if platform.system() != "Linux":
+        return _cpu_stats_psutil(stats)
+    return _cpu_stats_linux(stats)
 
 
 def _npu_stats(vs: Any) -> dict:
@@ -149,8 +148,10 @@ def _npu_stats(vs: Any) -> dict:
         prov = getattr(vs, "_local_provider", None)
         if prov is not None and hasattr(prov, "npu_stats"):
             d.update(prov.npu_stats())
-    except Exception as e:  # noqa: BLE001
+    except (OSError, RuntimeError, ValueError, AttributeError) as e:  # noqa: BLE001
         logger.warning("local_deploy.npu_stats_failed error={}", str(e))
+    except Exception:
+        logger.exception("local_deploy._npu_stats.unexpected_error")
     return d
 
 
@@ -241,39 +242,20 @@ def _detect_gpu_model_windows() -> str:
         return ""
 
 
-def _detect_devices() -> dict:
-    """探测本机算力设备（带 5 分钟缓存）。
-
-    返回：
-        current: 当前持久化的设备（"" = 跟随 LOCAL_EMBED_BACKEND / auto）
-        devices: [{id, name, model, desc, available, active}] —— CPU 恒可用；
-                 NPU 由 probe_npu 实测；GPU 恒置灰（"此模型暂不支持"）。
-    """
-    now = time.monotonic()
-    if _DEVICE_CACHE["data"] is not None and (now - _DEVICE_CACHE["ts"]) < _DEVICE_CACHE_TTL:
-        return _DEVICE_CACHE["data"]
-
-    # NPU 实测（probe_npu 会 sudo -n 拉起 runner --probe，约 50ms~15s）
-    # 仅报告可用性，不虚构具体型号/算力（型号由权威探测路径提供）
-    npu_ok = False
+def _probe_npu_available() -> bool:
     try:
         from memory.npu_embed import probe_npu
-        npu_ok = probe_npu()
-    except Exception as e:  # noqa: BLE001
+        return probe_npu()
+    except (ImportError, OSError, RuntimeError, ValueError) as e:
         logger.warning("local_deploy.device_npu_probe_failed error={}", str(e))
-        npu_ok = False
+        return False
+    except Exception:
+        logger.exception("local_deploy._detect_devices.unexpected_error")
+        return False
 
-    cpu_model = _detect_cpu_model()
-    gpu_model = _detect_gpu_model()
 
-    # 当前持久化的设备（webui_overrides.json local_deploy.device）
-    current = ""
-    try:
-        current = str(get_config_service().get("local_deploy.device", "") or "")
-    except Exception:  # noqa: BLE001
-        current = ""
-
-    devices = [
+def _build_device_list(npu_ok: bool, cpu_model: str, gpu_model: str) -> list[dict[str, Any]]:
+    return [
         {
             "id": "cpu",
             "name": "CPU",
@@ -297,6 +279,21 @@ def _detect_devices() -> dict:
             "available": False,
         },
     ]
+
+
+def _detect_devices() -> dict:
+    now = time.monotonic()
+    if _DEVICE_CACHE["data"] is not None and (now - _DEVICE_CACHE["ts"]) < _DEVICE_CACHE_TTL:
+        return _DEVICE_CACHE["data"]
+    npu_ok = _probe_npu_available()
+    cpu_model = _detect_cpu_model()
+    gpu_model = _detect_gpu_model()
+    current = ""
+    try:
+        current = str(get_config_service().get("local_deploy.device", "") or "")
+    except (OSError, ValueError, RuntimeError):
+        current = ""
+    devices = _build_device_list(npu_ok, cpu_model, gpu_model)
     data = {"current": current, "devices": devices}
     _DEVICE_CACHE.update(ts=now, data=data)
     return data
@@ -322,71 +319,57 @@ def _fallback_status() -> dict:
     }
 
 
-@router.get("/local-deploy/devices", response_model=Envelope[dict])
-async def local_deploy_devices(request: Request) -> Any:
-    """算力设备检测：CPU / NPU / GPU 探测结果 + 当前持久化设备 + 实时占用。"""
-    services = getattr(request.app.state, "local_ai", None)
-    if services is not None:
-        # scan() 内部执行 subprocess 系统探测 + onnxruntime 会话创建，
-        # 必须在线程池执行，避免阻塞事件循环
-        authoritative = await asyncio.to_thread(services.devices.scan)
-        configured = str(get_config_service().get("local_deploy.device", "") or "")
-        current = next(
-            (device.id for device in authoritative if device.id == configured),
-            next((device.id for device in authoritative if device.kind == configured), ""),
-        )
-        devices = []
-        kinds: set[str] = set()
-        for device in authoritative:
-            item = device.to_dict()
-            kinds.add(str(item["kind"]))
-            devices.append({
-                "id": item["id"],
-                "name": item["kind"].upper(),
-                "model": item["name"],
-                "desc": ", ".join(
-                    backend["provider"] for backend in item.get("backends", [])
-                ) or item["architecture"],
-                "available": item["state"] == "available",
-                "active": item["id"] == current,
-                "stats": {
-                    "memory_total": item["memory_total"],
-                    "memory_available": item["memory_available"],
-                },
-            })
-        # 保证 CPU/NPU/GPU 三卡位 UI 一致性：权威列表只含实测硬件，
-        # 未探测到 NPU/GPU 时补置灰卡位（与 _detect_devices fallback 行为对齐）
-        if "npu" not in kinds:
-            devices.append({
-                "id": "npu",
-                "name": "NPU",
-                "model": "未检测到可用 NPU",
-                "desc": "未检测到可用 NPU（需 Linux 驱动与 sudo 免密）",
-                "available": False,
-                "active": current == "npu",
-                "stats": {"status": "unavailable"},
-            })
-        if "gpu" not in kinds:
-            devices.append({
-                "id": "gpu",
-                "name": "GPU",
-                "model": "未检测到独立显卡",
-                "desc": "此模型暂不支持 GPU 推理",
-                "available": False,
-                "active": current == "gpu",
-                "stats": {"status": "unavailable"},
-            })
-        return Envelope(data={
-            "current": current,
-            "devices": devices,
-            "runtime_backend": os.getenv("LOCAL_EMBED_BACKEND", "auto"),
+def _authoritative_devices_to_list(
+    authoritative: list[Any],
+    current: str,
+) -> tuple[list[dict[str, Any]], set[str]]:
+    devices: list[dict[str, Any]] = []
+    kinds: set[str] = set()
+    for device in authoritative:
+        item = device.to_dict()
+        kinds.add(str(item["kind"]))
+        devices.append({
+            "id": item["id"],
+            "name": item["kind"].upper(),
+            "model": item["name"],
+            "desc": ", ".join(
+                backend["provider"] for backend in item.get("backends", [])
+            ) or item["architecture"],
+            "available": item["state"] == "available",
+            "active": item["id"] == current,
+            "stats": {
+                "memory_total": item["memory_total"],
+                "memory_available": item["memory_available"],
+            },
         })
-    # _detect_devices 内含 sudo -n NPU 探测（最长 15s）等同步重操作，
-    # 必须在线程池执行，避免阻塞事件循环
-    data = await asyncio.to_thread(_detect_devices)
-    data["runtime_backend"] = os.getenv("LOCAL_EMBED_BACKEND", "auto")
+    return devices, kinds
+
+
+def _ensure_ui_slots(devices: list[dict[str, Any]], kinds: set[str], current: str) -> None:
+    if "npu" not in kinds:
+        devices.append({
+            "id": "npu",
+            "name": "NPU",
+            "model": "未检测到可用 NPU",
+            "desc": "未检测到可用 NPU（需 Linux 驱动与 sudo 免密）",
+            "available": False,
+            "active": current == "npu",
+            "stats": {"status": "unavailable"},
+        })
+    if "gpu" not in kinds:
+        devices.append({
+            "id": "gpu",
+            "name": "GPU",
+            "model": "未检测到独立显卡",
+            "desc": "此模型暂不支持 GPU 推理",
+            "available": False,
+            "active": current == "gpu",
+            "stats": {"status": "unavailable"},
+        })
+
+
+async def _attach_live_stats(data: dict, request: Request) -> None:
     vs = _get_vector_store(request)
-    # 附加实时性能/占用数据（不做 5 分钟缓存，保持页面 5s 轮询下的新鲜度）
     for dev in data.get("devices", []):
         if dev["id"] == "cpu":
             dev["stats"] = await asyncio.to_thread(_cpu_stats)
@@ -394,6 +377,28 @@ async def local_deploy_devices(request: Request) -> Any:
             dev["stats"] = _npu_stats(vs)
         else:
             dev["stats"] = {"status": "unavailable"}
+
+
+@router.get("/local-deploy/devices", response_model=Envelope[dict])
+async def local_deploy_devices(request: Request) -> Any:
+    services = getattr(request.app.state, "local_ai", None)
+    if services is not None:
+        authoritative = await asyncio.to_thread(services.devices.scan)
+        configured = str(get_config_service().get("local_deploy.device", "") or "")
+        current = next(
+            (device.id for device in authoritative if device.id == configured),
+            next((device.id for device in authoritative if device.kind == configured), ""),
+        )
+        devices, kinds = _authoritative_devices_to_list(authoritative, current)
+        _ensure_ui_slots(devices, kinds, current)
+        return Envelope(data={
+            "current": current,
+            "devices": devices,
+            "runtime_backend": os.getenv("LOCAL_EMBED_BACKEND", "auto"),
+        })
+    data = await asyncio.to_thread(_detect_devices)
+    data["runtime_backend"] = os.getenv("LOCAL_EMBED_BACKEND", "auto")
+    await _attach_live_stats(data, request)
     return Envelope(data=data)
 
 

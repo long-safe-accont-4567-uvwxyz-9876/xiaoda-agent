@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from typing import Any, AsyncIterator
 
+from loguru import logger
+
 from llm_gateway.contracts import ProviderCapabilities
 from llm_gateway.transports.base import (
     CapabilityReport,
@@ -59,7 +61,10 @@ class OpenAICompatibleTransport(ProviderTransport):
                 ),
                 raw=response,
             )
+        except (ConnectionError, TimeoutError, OSError, ValueError) as error:
+            raise TransportError("completion request failed") from error
         except Exception as error:
+            logger.exception("transport.openai.complete_unexpected model={}", request.model)
             raise TransportError("completion request failed") from error
 
     async def stream(self, request: CompletionRequest) -> AsyncIterator[CompletionChunk]:
@@ -76,7 +81,10 @@ class OpenAICompatibleTransport(ProviderTransport):
                     tool_calls=parse_tool_calls(getattr(delta, "tool_calls", None)),
                     raw=item,
                 )
+        except (ConnectionError, TimeoutError, OSError, ValueError) as error:
+            raise TransportError("stream request failed") from error
         except Exception as error:
+            logger.exception("transport.openai.stream_unexpected model={}", request.model)
             raise TransportError("stream request failed") from error
 
     async def discover_models(self) -> tuple[str, ...]:
@@ -85,7 +93,10 @@ class OpenAICompatibleTransport(ProviderTransport):
             response = await self._client.models.list()
             models = tuple(str(model.id) for model in response.data if getattr(model, "id", None))
             return models or await super().discover_models()
+        except (ConnectionError, TimeoutError, OSError, ValueError):
+            return await super().discover_models()
         except Exception:
+            logger.exception("transport.openai.discover_models_unexpected")
             return await super().discover_models()
 
     async def health_check(self) -> CapabilityReport:
@@ -94,7 +105,10 @@ class OpenAICompatibleTransport(ProviderTransport):
             response = await self._client.models.list()
             models = tuple(str(model.id) for model in response.data if getattr(model, "id", None))
             return CapabilityReport(True, self.capabilities, models=models or await super().discover_models())
+        except (ConnectionError, TimeoutError, OSError, ValueError) as error:
+            return CapabilityReport(False, self.capabilities, error="health check failed")
         except Exception as error:
             if getattr(error, "status_code", None) == 404:
                 return CapabilityReport(True, self.capabilities, models=await super().discover_models())
+            logger.exception("transport.openai.health_check_unexpected")
             return CapabilityReport(False, self.capabilities, error="health check failed")

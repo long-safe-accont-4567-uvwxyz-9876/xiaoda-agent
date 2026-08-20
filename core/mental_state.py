@@ -209,7 +209,7 @@ class MentalState:
                 data = json.load(f)
             return cls.from_dict(data)
         except (OSError, json.JSONDecodeError, ValueError, TypeError) as e:
-            logger.warning(f"MentalState.load_failed path={path} error={e}")
+            logger.warning("MentalState.load_failed path={} error={}", path, e)
             return cls()
 
 
@@ -272,7 +272,7 @@ class MentalStateManager:
         try:
             self._state.save(self._state_path)
         except Exception as e:
-            logger.warning(f"MentalState.save_failed error={e}")
+            logger.warning("MentalState.save_failed error={}", e)
 
     def flush(self) -> None:
         """G3: 立即写盘（退出时调用）."""
@@ -284,7 +284,7 @@ class MentalStateManager:
         try:
             self._state.save(self._state_path)
         except Exception as e:
-            logger.warning(f"MentalState.flush_failed error={e}")
+            logger.warning("MentalState.flush_failed error={}", e)
 
     # ── L 层: 长期身份 ──────────────────────────────────
 
@@ -309,7 +309,7 @@ class MentalStateManager:
         self._state.L.core_traits = self._extract_core_traits(soul_content)
         self._state.L.last_updated = time.time()
         self._save()
-        logger.info(f"MentalState.L.reloaded traits={self._state.L.core_traits}")
+        logger.info("MentalState.L.reloaded traits={}", self._state.L.core_traits)
 
     @staticmethod
     def _read_text(path: Path) -> str:
@@ -450,9 +450,9 @@ class MentalStateManager:
 
         decayed = (before_events - len(self._state.M.stress_events)
                    + before_milestones - len(self._state.M.relationship_milestones))
-        logger.info(f"MentalState.consolidate_dream decayed={decayed} "
-                     f"events={len(self._state.M.stress_events)} "
-                     f"milestones={len(self._state.M.relationship_milestones)}")
+        logger.info("MentalState.consolidate_dream decayed={} events={} milestones={}",
+                     decayed, len(self._state.M.stress_events),
+                     len(self._state.M.relationship_milestones))
 
     # ── Prompt 生成 ─────────────────────────────────────
 

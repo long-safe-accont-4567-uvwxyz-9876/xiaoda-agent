@@ -333,7 +333,7 @@ class KnowledgeGraph:
                                 boost += 0.05
                                 break
                 except Exception:
-                    logger.debug("kg.relation_boost_fast_failed: {}", exc_info=True)
+                    logger.debug("kg.relation_boost_fast_failed", exc_info=True)
             boosts.append(min(boost, 0.5))
         return boosts
 
@@ -409,7 +409,7 @@ class KnowledgeGraph:
         try:
             return await self.knowledge_db.get_entity_count()
         except Exception:
-            logger.debug("kg.get_entity_count_failed: {}", exc_info=True)
+            logger.debug("kg.get_entity_count_failed", exc_info=True)
             return 0
 
     def set_kg_v2(self, kg_v2: Any) -> None:
@@ -430,7 +430,7 @@ class KnowledgeGraph:
                 except Exception as e:
                     logger.warning("kg.v2_extract_failed_fallback_to_v1", error=str(e))
         except Exception:
-            logger.debug("kg.v2_extract_fatal_fallback_to_v1")
+            logger.debug("kg.v2_extract_fatal_fallback_to_v1", exc_info=True)
 
         # v1 逻辑 (原有代码)
         entity_count = await self.get_entity_count()

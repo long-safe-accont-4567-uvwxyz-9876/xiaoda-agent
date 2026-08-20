@@ -197,7 +197,7 @@ class QueryTransformer:
             return original_query
 
         # G15: 缓存命中检查
-        cache_key = hashlib.md5(f"{original_query}|{context[-200:]}".encode("utf-8")).hexdigest()
+        cache_key = hashlib.md5(f"{original_query}|{context[-200:]}".encode("utf-8"), usedforsecurity=False).hexdigest()
         cached = self._cache_get(self._rewrite_cache, cache_key)
         if cached is not _CACHE_MISS:
             return cached
@@ -248,7 +248,7 @@ class QueryTransformer:
             return [query]
 
         # G15: 缓存命中检查
-        cache_key = hashlib.md5(f"{query}|{n}".encode("utf-8")).hexdigest()
+        cache_key = hashlib.md5(f"{query}|{n}".encode("utf-8"), usedforsecurity=False).hexdigest()
         cached = self._cache_get(self._expand_cache, cache_key)
         if cached is not _CACHE_MISS:
             return list(cached)  # 返回副本，避免外部修改污染缓存
@@ -300,7 +300,7 @@ class QueryTransformer:
             return None
 
         # G15: 缓存命中检查
-        cache_key = hashlib.md5(f"{query}|{context[-200:]}".encode("utf-8")).hexdigest()
+        cache_key = hashlib.md5(f"{query}|{context[-200:]}".encode("utf-8"), usedforsecurity=False).hexdigest()
         cached = self._cache_get(self._hyde_cache, cache_key)
         if cached is not _CACHE_MISS:
             return cached

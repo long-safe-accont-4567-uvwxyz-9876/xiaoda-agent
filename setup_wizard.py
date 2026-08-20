@@ -1,4 +1,5 @@
 from typing import Any
+import contextlib
 import os
 import sys
 import shutil
@@ -26,7 +27,12 @@ except ImportError:
 
 try:
     from utils.atomic_write import atomic_write
-except Exception:  # pragma: no cover
+except (ImportError, AttributeError):
+    atomic_write = None  # type: ignore[assignment]
+
+
+except Exception:
+    logger.exception(".setup_wizard.dotenv_values_unexpected")
     atomic_write = None  # type: ignore[assignment]
 
 
@@ -295,10 +301,12 @@ def _write_env(existing_lines: list, updates: dict) -> None:
     if new_lines and new_lines[-1] != "":
         content += "\n"
     if atomic_write is not None:
-        atomic_write(ENV_PATH, content, encoding="utf-8")
+        atomic_write(ENV_PATH, content, mode=0o600, encoding="utf-8")
     else:
         with open(ENV_PATH, "w", encoding="utf-8") as f:
             f.write(content)
+        with contextlib.suppress(OSError):
+            ENV_PATH.chmod(0o600)
 
 
 def _ask_key(item: dict, current_val: str, is_required: bool) -> str:

@@ -29,13 +29,16 @@ from loguru import logger
 try:
     from config import DATA_DIR
 except Exception:
-    logger.debug("user_profile_learner.DATA_DIR_fallback: {}", exc_info=True)
+    logger.debug("user_profile_learner.DATA_DIR_fallback", exc_info=True)
     DATA_DIR = Path(__file__).resolve().parent.parent / "data"
     DATA_DIR.mkdir(parents=True, exist_ok=True)
 
 try:
     from utils.atomic_write import atomic_json_write
-except Exception:  # pragma: no cover
+except (ImportError, AttributeError):
+    atomic_json_write = None  # type: ignore[assignment]
+except Exception:
+    logger.exception(".core.user_profile_learner.unexpected")
     atomic_json_write = None  # type: ignore[assignment]
 
 # ── 常量 ───────────────────────────────────────────────────
@@ -100,7 +103,7 @@ class UserProfileLearner:
                     json.dump(self._stats, f, ensure_ascii=False, indent=2)
                 os.replace(tmp, self._data_path)
         except Exception as e:
-            logger.warning(f"UserProfileLearner.save_failed: {e}")
+            logger.warning("UserProfileLearner.save_failed: {}", e)
 
     # ── 统计层（零成本，每条消息调用） ────────────────────────
 
@@ -142,7 +145,7 @@ class UserProfileLearner:
         return s.get("new_since_insight", 0) >= _INSIGHT_INTERVAL
 
     def get_stats(self, user_id: str) -> dict:
-        return self._stats.get(user_id, {})
+        return dict(self._stats.get(user_id, {}))
 
     # ── 认知层（由调用方传入 LLM 响应） ──────────────────────
 
@@ -176,7 +179,7 @@ class UserProfileLearner:
         # 写入 USER.md
         self._write_to_user_md(insight_text, xp_level)
 
-        logger.info(f"UserProfileLearner.insight_saved user={user_id} lv={xp_level} len={len(insight_text)}")
+        logger.info("UserProfileLearner.insight_saved user={} lv={} len={}", user_id, xp_level, len(insight_text))
         return insight_text
 
     @staticmethod
@@ -215,7 +218,7 @@ class UserProfileLearner:
             from prompt_builder import _workspace_dir
             return _workspace_dir() / "USER.md"
         except Exception:
-            logger.debug("user_profile_learner.user_md_path_fallback: {}", exc_info=True)
+            logger.debug("user_profile_learner.user_md_path_fallback", exc_info=True)
             return Path.home() / ".ai-agent" / "workspace" / "USER.md"
 
     def _write_to_user_md(self, insight_text: str, xp_level: int):
@@ -255,9 +258,9 @@ class UserProfileLearner:
         try:
             tmp.write_text(content, encoding="utf-8")
             os.replace(tmp, path)
-            logger.info(f"UserProfileLearner.user_md_updated path={path}")
+            logger.info("UserProfileLearner.user_md_updated path={}", path)
         except OSError as e:
-            logger.warning(f"UserProfileLearner.user_md_write_failed: {e}")
+            logger.warning("UserProfileLearner.user_md_write_failed: {}", e)
 
     # ── 读取认知（供 prompt_builder 使用） ────────────────────
 

@@ -8,6 +8,7 @@
 from __future__ import annotations
 
 import os
+import time
 import uuid
 from datetime import datetime
 
@@ -44,11 +45,21 @@ class ConfirmCmdBody(BaseModel):
 # 记录中携带发起会话 session_id：confirm_cmd 必须由同一会话回传，
 # 避免无关客户端（其它标签页/LAN 连接）替他人决定命令放行/拒绝。
 _pending_cmd_decisions: dict[str, dict] = {}
+_PENDING_CMD_TTL = 300
+
+
+def _evict_stale_cmd_decisions() -> None:
+    now = time.time()
+    stale = [k for k, v in _pending_cmd_decisions.items()
+             if now - v.get("_ts", 0) > _PENDING_CMD_TTL]
+    for k in stale:
+        _pending_cmd_decisions.pop(k, None)
 
 
 def register_cmd_decision_scope(request_id: str, session_id: str) -> None:
     """登记命令确认请求的发起会话（供 confirm_cmd 身份校验）。"""
-    _pending_cmd_decisions[request_id] = {"session_id": session_id or "", "decision": ""}
+    _evict_stale_cmd_decisions()
+    _pending_cmd_decisions[request_id] = {"session_id": session_id or "", "decision": "", "_ts": time.time()}
 
 
 def discard_cmd_decision_scope(request_id: str) -> None:
@@ -65,8 +76,10 @@ def _persist_workspace(cwd: str, authorized_at: str = "") -> None:
             "workspace.cwd": cwd,
             "workspace.authorized_at": authorized_at,
         })
-    except Exception as e:
+    except (OSError, ValueError, RuntimeError) as e:
         logger.warning("workspace.persist_failed", error=str(e))
+    except Exception:
+        logger.exception("workspace._persist_workspace.unexpected_error")
 
 
 def _persist_whitelist(whitelist: list[str]) -> None:
@@ -75,10 +88,10 @@ def _persist_whitelist(whitelist: list[str]) -> None:
         from web.config_service import get_config_service
         cs = get_config_service()
         cs.set_many({"workspace.cmd_whitelist": whitelist})
-    except Exception as e:
+    except (ImportError, OSError, ValueError, RuntimeError) as e:
         logger.warning("workspace.whitelist_persist_failed", error=str(e))
-
-
+    except Exception:
+        logger.exception("workspace._persist_whitelist.unexpected_error")
 # ── 工作目录授权端点 ────────────────────────────────────────
 @router.get("")
 async def get_workspace():

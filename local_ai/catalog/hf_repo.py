@@ -18,6 +18,8 @@ import os
 from concurrent.futures import ThreadPoolExecutor
 from typing import Any
 
+from loguru import logger
+
 from local_ai.catalog.modelscope import (
     CatalogInspection,
     InvalidRevisionError,
@@ -75,7 +77,8 @@ class HuggingFaceRepository:
                 evidence={"error": "inspect timed out (hf-mirror 响应超时)"},
                 missing=(),
             )
-        except Exception as error:  # noqa: BLE001 — surface as error-state inspection
+        except (OSError, RuntimeError, ValueError, ConnectionError) as error:
+            logger.warning("hf_repo.inspect_failed repo={} error={}", repository, str(error)[:200])
             return CatalogInspection(
                 repository=repository,
                 revision=revision,
@@ -157,7 +160,11 @@ class HuggingFaceRepository:
                             chunks.append(chunk)
                 content = b"".join(chunks) if path == "config.json" else None
                 return path, digest.hexdigest(), content
-            except Exception:  # noqa: BLE001 — 单个文件失败不阻断整体检视
+            except (OSError, RuntimeError, ValueError) as e:
+                logger.debug("hf_repo.file_inspect_failed path={} error={}", path, str(e))
+                return path, None, None
+            except Exception:
+                logger.exception("hf_repo._inspect_file.work_unexpected path={}", path)
                 return path, None, None
 
         sha_map: dict[str, str] = {}
@@ -171,7 +178,11 @@ class HuggingFaceRepository:
                         parsed = json.loads(content.decode("utf-8"))
                         if isinstance(parsed, dict):
                             config = parsed
-                    except Exception:  # noqa: BLE001
+                    except (json.JSONDecodeError, ValueError, UnicodeDecodeError) as e:
+                        logger.debug("hf_repo.config_parse_failed error={}", str(e))
+                        continue
+                    except Exception:
+                        logger.exception("hf_repo._resolve_small_files.config_unexpected")
                         continue
         resolved: list[RemoteFile] = []
         for item in files:
@@ -186,6 +197,39 @@ class HuggingFaceRepository:
 
     # ── 布局识别（与 ModelScopeRepository 同一套规则） ──
 
+    @staticmethod
+    def _has_onnx_files(paths: set[str]) -> bool:
+        return any(
+            p.endswith(".onnx") or p.endswith(".onnx_data") or p.endswith(".onnx_weights")
+            for p in paths
+        )
+
+    @staticmethod
+    def _embedding_markers(paths: set[str]) -> list[str]:
+        return [m for m in ("sentence_bert_config.json", "modules.json") if m in paths]
+
+    @staticmethod
+    def _classify_by_architectures(
+        config: dict[str, Any],
+    ) -> ModelPurpose | None:
+        architectures = config.get("architectures", [])
+        arch_list = list(architectures) if isinstance(architectures, list) else [str(architectures)]
+        arch_str = " ".join(arch_list)
+        if any(kw in arch_str for kw in _RERANKER_ARCH_KEYWORDS):
+            return ModelPurpose.RERANKER
+        if any(arch in _EMBEDDING_ARCHITECTURES for arch in arch_list) or "Embedding" in arch_str:
+            return ModelPurpose.EMBEDDING
+        return None
+
+    @staticmethod
+    def _unknown_layout_missing(paths: set[str], has_onnx: bool, embedding_markers: list[str]) -> tuple[str, ...]:
+        missing: list[str] = []
+        if not has_onnx:
+            missing.append("onnx model file (.onnx / .onnx_data / .onnx_weights)")
+        if "genai_config.json" not in paths and "config.json" not in paths and not embedding_markers:
+            missing.append("recognized config file (genai_config.json / config.json / sentence_bert_config.json)")
+        return tuple(missing)
+
     def _recognize_layout(
         self,
         repository: str,
@@ -194,107 +238,42 @@ class HuggingFaceRepository:
         config: dict[str, Any] | None,
     ) -> CatalogInspection:
         paths = {item.path for item in files}
-        has_onnx = any(
-            path.endswith(".onnx")
-            or path.endswith(".onnx_data")
-            or path.endswith(".onnx_weights")
-            for path in paths
-        )
+        has_onnx = self._has_onnx_files(paths)
 
-        # ORT GenAI chat 布局
         if "genai_config.json" in paths and has_onnx:
             return CatalogInspection(
-                repository=repository,
-                revision=revision,
-                files=tuple(files),
-                purpose=ModelPurpose.CHAT,
-                runnable=True,
-                state="ready",
+                repository=repository, revision=revision, files=tuple(files),
+                purpose=ModelPurpose.CHAT, runnable=True, state="ready",
                 evidence={"layout": "ort_genai_chat", "configs": ["genai_config.json"]},
                 missing=(),
             )
 
-        # Sentence-transformers embedding 标记
-        embedding_markers = [
-            marker for marker in ("sentence_bert_config.json", "modules.json")
-            if marker in paths
-        ]
-        if embedding_markers and has_onnx:
+        markers = self._embedding_markers(paths)
+        if markers and has_onnx:
             return CatalogInspection(
-                repository=repository,
-                revision=revision,
-                files=tuple(files),
-                purpose=ModelPurpose.EMBEDDING,
-                runnable=True,
-                state="ready",
-                evidence={"layout": "embedding", "markers": embedding_markers},
+                repository=repository, revision=revision, files=tuple(files),
+                purpose=ModelPurpose.EMBEDDING, runnable=True, state="ready",
+                evidence={"layout": "embedding", "markers": markers},
                 missing=(),
             )
 
-        # config.json 架构区分 reranker / embedding
         if config is not None:
-            architectures = config.get("architectures", [])
-            arch_list = (
-                list(architectures)
-                if isinstance(architectures, list)
-                else [str(architectures)]
-            )
-            arch_str = " ".join(arch_list)
-            if any(keyword in arch_str for keyword in _RERANKER_ARCH_KEYWORDS):
+            purpose = self._classify_by_architectures(config)
+            if purpose is not None:
+                arch_list = list(config.get("architectures", []))
+                layout = "reranker" if purpose == ModelPurpose.RERANKER else "embedding"
                 return CatalogInspection(
-                    repository=repository,
-                    revision=revision,
-                    files=tuple(files),
-                    purpose=ModelPurpose.RERANKER,
-                    runnable=True,
-                    state="ready",
-                    evidence={
-                        "layout": "reranker",
-                        "configs": ["config.json"],
-                        "architectures": arch_list,
-                    },
-                    missing=(),
-                )
-            if any(
-                arch in _EMBEDDING_ARCHITECTURES for arch in arch_list
-            ) or "Embedding" in arch_str:
-                return CatalogInspection(
-                    repository=repository,
-                    revision=revision,
-                    files=tuple(files),
-                    purpose=ModelPurpose.EMBEDDING,
-                    runnable=True,
-                    state="ready",
-                    evidence={
-                        "layout": "embedding",
-                        "configs": ["config.json"],
-                        "architectures": arch_list,
-                    },
+                    repository=repository, revision=revision, files=tuple(files),
+                    purpose=purpose, runnable=True, state="ready",
+                    evidence={"layout": layout, "configs": ["config.json"], "architectures": arch_list},
                     missing=(),
                 )
 
-        # 无法识别的布局
-        missing: list[str] = []
-        if not has_onnx:
-            missing.append("onnx model file (.onnx / .onnx_data / .onnx_weights)")
-        if (
-            "genai_config.json" not in paths
-            and "config.json" not in paths
-            and not embedding_markers
-        ):
-            missing.append(
-                "recognized config file "
-                "(genai_config.json / config.json / sentence_bert_config.json)"
-            )
         return CatalogInspection(
-            repository=repository,
-            revision=revision,
-            files=tuple(files),
-            purpose=None,
-            runnable=False,
-            state="requires_configuration",
+            repository=repository, revision=revision, files=tuple(files),
+            purpose=None, runnable=False, state="requires_configuration",
             evidence={"layout": "unknown", "files": sorted(paths)},
-            missing=tuple(missing),
+            missing=self._unknown_layout_missing(paths, has_onnx, markers),
         )
 
 

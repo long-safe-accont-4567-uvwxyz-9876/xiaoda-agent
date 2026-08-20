@@ -472,7 +472,7 @@ class GateGuardHook(BaseHook):
                 from security.permission_manager import get_permission_manager
                 pm = get_permission_manager()
                 if pm.is_bypass_mode():
-                    logger.warning(f"GateGuardHook.bypass: tool={tool_name}, risk=HIGH, mode={pm.mode.value}")
+                    logger.warning("GateGuardHook.bypass: tool={}, risk=HIGH, mode={}", tool_name, pm.mode.value)
                 else:
                     return HookResult(
                         allowed=False, reason="高风险操作，需要用户确认",

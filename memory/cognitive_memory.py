@@ -306,9 +306,9 @@ class CognitiveMemory:
         if transferred > 0:
             self._rebuild_clusters()
 
-        logger.info(f"CognitiveMemory.consolidate: transferred={transferred} "
-                     f"connections={len(connections)} episodic={len(self._episodic)} "
-                     f"semantic={len(self._semantic)}")
+        logger.info("CognitiveMemory.consolidate: transferred={} "
+                     "connections={} episodic={} semantic={}", transferred,
+                     len(connections), len(self._episodic), len(self._semantic))
         return transferred
 
     def connection_strength(self, a: MemoryEntry, b: MemoryEntry) -> float:

@@ -188,8 +188,10 @@ def _extract_agent_email_from_inbox(out: str) -> str:
                 return to_field
             if isinstance(to_field, dict):
                 return to_field.get("email", "")
-    except Exception as exc:
+    except (ValueError, TypeError, KeyError, OSError) as exc:
         logger.debug("mail.inbox_parse_failed: {}", exc, exc_info=True)
+    except Exception:
+        logger.exception("mail_manage._extract_agent_email_from_inbox.unexpected_error")
     return ""
 
 
@@ -200,8 +202,10 @@ def _match_email_regex(text: str) -> str:
         m = re.search(r'[\w.+-]+@[\w.-]+\.\w+', text)
         if m:
             return m.group(0)
-    except Exception as exc:
+    except (ValueError, TypeError, OSError) as exc:
         logger.debug("mail.email_regex_match_failed: {}", exc, exc_info=True)
+    except Exception:
+        logger.exception("mail_manage._match_email_regex.unexpected_error")
     return ""
 
 
@@ -429,8 +433,15 @@ async def trigger_mail_auth_login(request: Request) -> Any:
             "cli_path": cli_path,
         })
 
-    except Exception as e:
+    except (OSError, RuntimeError, ValueError) as e:
         logger.error("mail.auth_login.start_failed", error=str(e))
+        return Envelope(data={
+            "started": False,
+            "message": f"启动授权失败: {e}",
+            "cli_path": cli_path,
+        })
+    except Exception as e:
+        logger.exception("mail_manage.unknown.unexpected_error")
         return Envelope(data={
             "started": False,
             "message": f"启动授权失败: {e}",

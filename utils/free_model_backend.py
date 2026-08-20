@@ -124,7 +124,7 @@ class FreeModelBackend:
             if not choices:
                 return None
             return choices[0].get("message", {}).get("content", "")
-        except Exception as e:
+        except (RuntimeError, OSError, ValueError, ConnectionError) as e:
             logger.debug("free_model.call_failed",
                          error=str(e)[:200], error_type=type(e).__name__)
             return None
@@ -160,7 +160,7 @@ async def call_local_model(router: Any, messages: list[dict], temperature: float
             timeout=timeout,
         )
         return result if isinstance(result, str) else None
-    except Exception as e:
+    except (RuntimeError, OSError, ValueError, ConnectionError) as e:
         logger.warning("local_model.call_failed",
                        error=str(e)[:200], error_type=type(e).__name__)
         return None

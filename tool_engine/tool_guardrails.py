@@ -161,8 +161,8 @@ class ToolGuardrails:
                 return False, reason
 
             return True, ""
-        except Exception as e:
-            logger.error(f"validate_args 异常: {e}", tool_name=tool_name)
+        except (ValueError, TypeError, KeyError) as e:
+            logger.error("validate_args 异常: {}", e, tool_name=tool_name)
             return False, f"验证异常: {e}"
 
     def _validate_required_fields(self, rules: dict, arguments: dict) -> tuple[bool, str]:
@@ -226,7 +226,7 @@ class ToolGuardrails:
                 if re.search(pattern, cmd):
                     return False, f"L3验证失败: {desc}"
             except re.error:
-                logger.warning(f"正则模式异常: {pattern}")
+                logger.warning("正则模式异常: {}", pattern)
                 continue
         return True, ""
 
@@ -246,8 +246,8 @@ class ToolGuardrails:
                 self._call_history.append(record)
                 if len(self._call_history) > self._max_history:
                     self._call_history = self._call_history[-self._max_history:]
-        except Exception as e:
-            logger.error(f"record_call 异常: {e}", tool_name=tool_name)
+        except (ValueError, TypeError, KeyError) as e:
+            logger.error("record_call 异常: {}", e, tool_name=tool_name)
 
     async def check(self, tool_name: str, arguments: dict) -> tuple[str, str]:
         """检查是否应该继续执行
@@ -295,8 +295,8 @@ class ToolGuardrails:
                     return "halt", msg
 
             return "allow", ""
-        except Exception as e:
-            logger.error(f"check 异常: {e}", tool_name=tool_name)
+        except (ValueError, TypeError, RuntimeError) as e:
+            logger.error("check 异常: {}", e, tool_name=tool_name)
             return "deny", f"安全检查异常: {e}"  # 异常时默认拒绝, 避免绕过安全检查
 
     def _simple_args_hash(self, arguments: dict) -> str:
@@ -307,7 +307,7 @@ class ToolGuardrails:
             items = sorted(arguments.items())
             raw = str(items)
             return hashlib.md5(raw.encode(), usedforsecurity=False).hexdigest()[:16]
-        except Exception:
+        except (TypeError, ValueError, AttributeError):
             return ""
 
     def reset(self) -> None:
@@ -323,8 +323,8 @@ class ToolGuardrails:
                 "recent_successes": sum(1 for r in recent if r.success),
                 "recent_failures": sum(1 for r in recent if not r.success),
             }
-        except Exception as e:
-            logger.error(f"get_stats 异常: {e}")
+        except (ValueError, TypeError) as e:
+            logger.error("get_stats 异常: {}", e, exc_info=True)
             return {"total_calls": 0, "recent_successes": 0, "recent_failures": 0}
 
 

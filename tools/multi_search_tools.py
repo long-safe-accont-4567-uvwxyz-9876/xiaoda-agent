@@ -19,7 +19,7 @@ def _deep_search(query: str, max_results: int = 10) -> tuple[list[dict], str]:
             results, _answer = _tavily_search_sync(query, max_results, search_depth="advanced")
             if results:
                 return results, "Tavily"
-        except Exception:
+        except (OSError, RuntimeError, ConnectionError, ValueError):
             logger.debug("multi_search.tavily_failed", exc_info=True)
 
     return [], ""
@@ -78,7 +78,7 @@ def _wolfram_api_query(query: str) -> ToolResult | None:
             return ToolResult.fail(f"WolframAlpha 无可用结果: {query}")
 
         return ToolResult.ok(f"WolframAlpha: {query}\n" + "\n".join(lines))
-    except Exception:
+    except (OSError, RuntimeError, ValueError, ConnectionError, json.JSONDecodeError):
         logger.debug("wolfram_search_failed")
         return None
 
@@ -128,5 +128,5 @@ def wolfram_query(query: str) -> ToolResult:
             if values:
                 return ToolResult.ok(f"WolframAlpha: {query}\n结果: {values[0][:200]}")
             return ToolResult.ok(f"WolframAlpha: {query}\n请查看: {url}")
-    except Exception as e:
+    except (OSError, RuntimeError, ValueError, ConnectionError) as e:
         return ToolResult.fail(f"WolframAlpha查询失败: {str(e)[:100]}")

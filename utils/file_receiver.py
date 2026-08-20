@@ -234,15 +234,20 @@ class FileReceiver:
                                 try:
                                     os.close(tmp_fd)
                                 except OSError:
-                                    pass
+                                    logger.debug("file_receiver.tmp_fd_close_failed")
                                 try:
                                     os.unlink(tmp_path)
                                 except OSError:
-                                    pass
+                                    logger.debug("file_receiver.tmp_unlink_failed")
                                 return None, total_size
                             os.write(tmp_fd, chunk)
                         os.close(tmp_fd)
+                    except (ImportError, OSError, RuntimeError, ValueError):
+                        os.close(tmp_fd)
+                        os.unlink(tmp_path)
+                        raise
                     except Exception:
+                        logger.exception(".utils.file_receiver.unexpected")
                         os.close(tmp_fd)
                         os.unlink(tmp_path)
                         raise
@@ -268,7 +273,7 @@ class FileReceiver:
                 "content_type": content_type,
                 "text_preview": text_preview,
             }
-        except Exception as e:
+        except (OSError, RuntimeError, ConnectionError, ValueError) as e:
             logger.warning("file_receiver.download_failed", error=str(e), filename=filename)
             return {"status": "error", "filename": filename, "error": str(e)[:100]}
 
@@ -306,5 +311,5 @@ class FileReceiver:
             try:
                 return path.read_text(encoding='utf-8', errors='ignore')[:2000]
             except Exception as e:
-                logger.warning(f"读取文本文件预览失败({path}): {e}")
+                logger.warning("读取文本文件预览失败({}): {}", path, e)
         return ""

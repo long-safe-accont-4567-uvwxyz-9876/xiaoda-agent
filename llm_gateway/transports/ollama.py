@@ -4,6 +4,7 @@ import json
 from typing import Any, AsyncIterator
 
 import httpx
+from loguru import logger
 
 from llm_gateway.contracts import ProviderCapabilities
 from llm_gateway.transports.base import (
@@ -61,7 +62,10 @@ class OllamaTransport(ProviderTransport):
                 tool_calls=calls,
                 raw=data,
             )
+        except (httpx.HTTPStatusError, httpx.ConnectError, httpx.TimeoutException, OSError, ValueError) as error:
+            raise map_http_error(error, "completion request failed") from error
         except Exception as error:
+            logger.exception("transport.ollama.complete_unexpected model={}", request.model)
             raise map_http_error(error, "completion request failed") from error
 
     async def stream(self, request: CompletionRequest) -> AsyncIterator[CompletionChunk]:
@@ -80,7 +84,10 @@ class OllamaTransport(ProviderTransport):
                         tool_calls=calls,
                         raw=data,
                     )
+        except (httpx.HTTPStatusError, httpx.ConnectError, httpx.TimeoutException, OSError, ValueError) as error:
+            raise map_http_error(error, "stream request failed") from error
         except Exception as error:
+            logger.exception("transport.ollama.stream_unexpected model={}", request.model)
             raise map_http_error(error, "stream request failed") from error
 
     async def discover_models(self) -> tuple[str, ...]:
@@ -89,7 +96,10 @@ class OllamaTransport(ProviderTransport):
             response.raise_for_status()
             models = tuple(str(item["name"]) for item in response.json().get("models", ()) if item.get("name"))
             return models or await super().discover_models()
+        except (httpx.HTTPStatusError, httpx.ConnectError, httpx.TimeoutException, OSError, ValueError):
+            return await super().discover_models()
         except Exception:
+            logger.exception("transport.ollama.discover_models_unexpected")
             return await super().discover_models()
 
     async def health_check(self) -> CapabilityReport:
@@ -100,7 +110,10 @@ class OllamaTransport(ProviderTransport):
             response.raise_for_status()
             models = tuple(str(item["name"]) for item in response.json().get("models", ()) if item.get("name"))
             return CapabilityReport(True, self.capabilities, models=models or await super().discover_models())
+        except (httpx.HTTPStatusError, httpx.ConnectError, httpx.TimeoutException, OSError):
+            return CapabilityReport(False, self.capabilities, error="health check failed")
         except Exception:
+            logger.exception("transport.ollama.health_check_unexpected")
             return CapabilityReport(False, self.capabilities, error="health check failed")
 
     async def aclose(self) -> None:

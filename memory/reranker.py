@@ -87,13 +87,13 @@ class Reranker:
 
         try:
             # G14: 缓存命中检查 — 对每个 doc 计算 (query_hash, doc_hash)
-            query_hash = hashlib.md5(query.encode("utf-8")).hexdigest()
+            query_hash = hashlib.md5(query.encode("utf-8"), usedforsecurity=False).hexdigest()
             cached_results: list[dict] = []
             uncached_indices: list[int] = []
             uncached_documents: list[str] = []
 
             for idx, doc in enumerate(documents):
-                doc_hash = hashlib.md5(doc.encode("utf-8")).hexdigest()
+                doc_hash = hashlib.md5(doc.encode("utf-8"), usedforsecurity=False).hexdigest()
                 cache_key = (query_hash, doc_hash)
                 if cache_key in self._score_cache:
                     score = self._score_cache[cache_key]
@@ -122,7 +122,7 @@ class Reranker:
                     original_idx = uncached_indices[uncached_idx_in_batch]
                     score = item.get("relevance_score", 0.0)
                     doc_text = uncached_documents[uncached_idx_in_batch]
-                    doc_hash = hashlib.md5(doc_text.encode("utf-8")).hexdigest()
+                    doc_hash = hashlib.md5(doc_text.encode("utf-8"), usedforsecurity=False).hexdigest()
                     cache_key = (query_hash, doc_hash)
                     self._score_cache[cache_key] = score
                     # 维护 maxsize：超过时淘汰最旧（ OrderedDict 头部）

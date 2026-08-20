@@ -46,7 +46,7 @@ def _detect_fs_type(path: Path) -> str:
                     root, None, 0, None, None, None, fs_buf, 260)
                 return fs_buf.value.lower()
             except (OSError, ValueError):
-                logger.debug("database.detect_fs_type_windows_error: {}", exc_info=True)
+                logger.debug("database.detect_fs_type_windows_error", exc_info=True)
                 return ""
         # Linux: 读取 /proc/mounts
         while not p.is_mount() and p != p.parent:
@@ -57,7 +57,7 @@ def _detect_fs_type(path: Path) -> str:
                 if len(parts) >= 3 and parts[1] == str(p):
                     return parts[2]
     except (OSError, ValueError):
-        logger.debug("database.detect_fs_type_error: {}", exc_info=True)
+        logger.debug("database.detect_fs_type_error", exc_info=True)
     return ""
 
 
@@ -127,7 +127,7 @@ class DatabaseManager(LegacyMigrationMixin, DDLMixin, ConversationLogMixin, Life
             _probe_file.write_text("probe", encoding="utf-8")
             _probe_file.unlink(missing_ok=True)
         except (OSError, PermissionError) as e:
-            logger.critical(f"database.readonly_fs db_path={self.db_path} error={e}")
+            logger.critical("database.readonly_fs db_path={} error={}", self.db_path, e)
             raise OSError(
                 f"数据库目录不可写: {self.db_path.parent}. "
                 f"请检查文件系统权限或卸载/重新挂载外置存储。"
@@ -166,7 +166,7 @@ class DatabaseManager(LegacyMigrationMixin, DDLMixin, ConversationLogMixin, Life
         fs_type = _detect_fs_type(self.db_path)
         self._is_fat_fs = fs_type in ("vfat", "fat", "msdos", "exfat", "fat32")
         if self._is_fat_fs:
-            logger.info(f"database.fat_fs_detected fs={fs_type} → 使用 DELETE journal_mode, 禁用 FTS5 触发器")
+            logger.info("database.fat_fs_detected fs={} → 使用 DELETE journal_mode, 禁用 FTS5 触发器", fs_type)
         await self._setup_pragmas(self._is_fat_fs)
         self.memory = MemoryDB(self._conn)
         await self._create_tables()
@@ -206,7 +206,7 @@ class DatabaseManager(LegacyMigrationMixin, DDLMixin, ConversationLogMixin, Life
         try:
             await self._conn.execute("PRAGMA busy_timeout=15000")
         except (OSError, RuntimeError) as e:
-            logger.warning(f"PRAGMA busy_timeout 失败: {e}")
+            logger.warning("PRAGMA busy_timeout 失败: {}", e)
         journal_mode_sql = "PRAGMA journal_mode=DELETE" if is_fat_fs else "PRAGMA journal_mode=WAL"
         pragmas = [
             "PRAGMA foreign_keys=ON",
@@ -222,18 +222,18 @@ class DatabaseManager(LegacyMigrationMixin, DDLMixin, ConversationLogMixin, Life
             try:
                 await self._conn.execute(pragma_sql)
             except (OSError, RuntimeError) as e:
-                logger.warning(f"PRAGMA 失败: {pragma_sql} - {e}")
+                logger.warning("PRAGMA 失败: {} - {}", pragma_sql, e)
         try:
             cursor = await self._conn.execute("PRAGMA journal_mode")
             row = await cursor.fetchone()
             mode = row[0] if row else "unknown"
             expected = "delete" if is_fat_fs else "wal"
             if mode.lower() != expected:
-                logger.warning(f"journal_mode 未生效，期望={expected} 当前={mode}")
+                logger.warning("journal_mode 未生效，期望={} 当前={}", expected, mode)
             else:
-                logger.info(f"database.journal_mode={mode}")
+                logger.info("database.journal_mode={}", mode)
         except (OSError, RuntimeError) as e:
-            logger.warning(f"验证 journal_mode 失败: {e}")
+            logger.warning("验证 journal_mode 失败: {}", e)
 
     async def _setup_read_pool(self) -> None:
         """初始化只读连接池；单个连接失败记 warning 并停止。"""
@@ -266,17 +266,17 @@ class DatabaseManager(LegacyMigrationMixin, DDLMixin, ConversationLogMixin, Life
         try:
             mgr = build_default_index_manager()
             count = await mgr.apply(self._conn)
-            logger.info(f"database.composite_indexes applied={count}")
+            logger.info("database.composite_indexes applied={}", count)
         except (OSError, RuntimeError) as e:
             # 复合索引失败不应阻塞数据库初始化
-            logger.warning(f"database.composite_indexes_failed: {e}")
+            logger.warning("database.composite_indexes_failed: {}", e)
 
     async def commit(self) -> None:
         if self._conn:
             try:
                 await self._conn.commit()
             except (OSError, RuntimeError) as e:
-                logger.warning(f"database.commit_failed: {e}")
+                logger.warning("database.commit_failed: {}", e)
 
     async def rollback(self) -> None:
         """回滚当前事务，清理脏事务残留。
@@ -289,7 +289,7 @@ class DatabaseManager(LegacyMigrationMixin, DDLMixin, ConversationLogMixin, Life
             try:
                 await self._conn.rollback()
             except (OSError, RuntimeError) as e:
-                logger.warning(f"database.rollback_failed: {e}")
+                logger.warning("database.rollback_failed: {}", e)
 
     @contextlib.asynccontextmanager
     async def write_transaction(self):
@@ -325,7 +325,7 @@ class DatabaseManager(LegacyMigrationMixin, DDLMixin, ConversationLogMixin, Life
                     except asyncio.CancelledError:
                         raise
                     except Exception as e:
-                        logger.warning(f"database.write_transaction_rollback_failed: {e}")
+                        logger.warning("database.write_transaction_rollback_failed: {}", e)
                 self._write_tx_active.reset(token)
 
     @contextlib.asynccontextmanager
@@ -465,4 +465,3 @@ class DatabaseManager(LegacyMigrationMixin, DDLMixin, ConversationLogMixin, Life
         if sql.strip().upper().startswith("INSERT"):
             return cur.lastrowid or 0
         return cur.rowcount
-

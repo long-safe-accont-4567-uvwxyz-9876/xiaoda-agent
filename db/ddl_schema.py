@@ -195,7 +195,7 @@ class DDLMixin:
                 "USING fts5(content, tokenize='unicode61')"
             )
         except Exception as e:
-            logger.warning(f"创建 memory_child_chunks_fts 失败: {e}")
+            logger.warning("创建 memory_child_chunks_fts 失败: {}", e)
 
     async def _ddl_schedule_api_tables(self) -> None:
         """建表：调度/API/会话相关表。"""
@@ -305,7 +305,7 @@ class DDLMixin:
                     ],
                 )
         except (OSError, RuntimeError) as e:
-            logger.warning(f"插入默认清理策略失败: {e}")
+            logger.warning("插入默认清理策略失败: {}", e)
 
     async def _setup_fts5_triggers(self) -> None:
         """Phase 5: FTS5 触发器管理。vfat/exfat 上禁用（delete 命令不工作）。"""
@@ -317,7 +317,7 @@ class DDLMixin:
                 try:
                     await self._conn.execute(f"DROP TRIGGER IF EXISTS {trig}")
                 except (OSError, RuntimeError):
-                    logger.debug("database.fts5_trigger_drop_error: {}", exc_info=True)
+                    logger.debug("database.fts5_trigger_drop_error", exc_info=True)
             logger.info("database.fts5_triggers_disabled (vfat)")
             return
         # 非 fat 文件系统：创建 FTS5 触发器
@@ -344,4 +344,4 @@ class DDLMixin:
             await self._conn.execute("""CREATE TRIGGER kg_relations_v2_fts_ad AFTER DELETE ON kg_relations_v2 BEGIN DELETE FROM kg_relations_v2_fts WHERE id = old.id; END""")
             await self._conn.execute("""CREATE TRIGGER kg_relations_v2_fts_au AFTER UPDATE ON kg_relations_v2 BEGIN DELETE FROM kg_relations_v2_fts WHERE id = old.id; INSERT INTO kg_relations_v2_fts(id, fact) VALUES (new.id, new.fact); END""")
         except (OSError, RuntimeError) as e:
-            logger.warning(f"database.fts5_trigger_failed: {e} — FTS搜索将降级为LIKE查询")
+            logger.warning("database.fts5_trigger_failed: {} — FTS搜索将降级为LIKE查询", e)

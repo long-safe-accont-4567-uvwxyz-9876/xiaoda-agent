@@ -152,9 +152,9 @@ class DreamConsolidator:
         self._last_consolidate_at = now
 
         duration = (time.time() - t0) * 1000
-        logger.info(f"Dream.consolidate done duration={duration:.1f}ms "
-                     f"decayed={len(decayed_ids)} merged={merged_count} "
-                     f"strengthened={strengthened} total={len(self._memories)}")
+        logger.info("Dream.consolidate done duration={:.1f}ms decayed={} merged={} strengthened={} total={}",
+                     duration, len(decayed_ids), merged_count,
+                     strengthened, len(self._memories))
 
         # 联动 L/M/S 心理状态: 清理 7 天前 M 层数据
         # 根因修复：_trigger_mental_state_consolidate → consolidate_dream → _save
@@ -195,9 +195,9 @@ class DreamConsolidator:
             if to_archive:
                 await memory_db.archive_memories_batch(to_archive)
                 archived_count = len(to_archive)
-            logger.info(f"Dream.consolidate_db archived={archived_count}")
+            logger.info("Dream.consolidate_db archived={}", archived_count)
         except Exception as e:
-            logger.error(f"Dream.consolidate_db_failed: {e}")
+            logger.error("Dream.consolidate_db_failed: {}", e, exc_info=True)
         return archived_count
 
     async def consolidate_from_db(self, memory_db: Any, batch_size: int = 500) -> dict:
@@ -279,7 +279,7 @@ class DreamConsolidator:
                     await memory_db.archive_memories_batch([int(mid) for mid in evict_ids])
                     stats["evicted"] = len(evict_ids)
                 except Exception as e:
-                    logger.debug(f"Dream.archive_batch_failed: {e}")
+                    logger.debug("Dream.archive_batch_failed: {}", e)
             stats["decayed"] = len(evict_ids)
 
             # 从内存字典移除已归档的
@@ -322,7 +322,7 @@ class DreamConsolidator:
 
             return {**stats, "duration_ms": duration}
         except Exception as e:
-            logger.error(f"Dream.consolidate_from_db_failed: {e}")
+            logger.error("Dream.consolidate_from_db_failed: {}", e, exc_info=True)
             return stats
 
     def _merge_similar_db(self, memories: dict[str, Memory]) -> list[dict[str, str]]:
@@ -371,7 +371,7 @@ class DreamConsolidator:
                 if mgr is not None:
                     mgr.consolidate_dream()
         except Exception as e:
-            logger.debug(f"Dream.mental_state_consolidate_failed: {e}")
+            logger.debug("Dream.mental_state_consolidate_failed: {}", e)
 
     def _merge_similar(self) -> int:
         """合并相似记忆 (基于内容前缀聚类)"""
@@ -412,7 +412,7 @@ class DreamConsolidator:
                 if target <= time.time():
                     target += 86400  # 明天
                 wait = target - time.time()
-                logger.info(f"Dream.scheduler next_run_in={wait:.0f}s")
+                logger.info("Dream.scheduler next_run_in={:.0f}s", wait)
                 await asyncio.sleep(wait)
                 try:
                     # G7: 优先用 consolidate_from_db 操作真实 DB 记忆
@@ -427,7 +427,7 @@ class DreamConsolidator:
                         await self.consolidate()
                         logger.warning("Dream.scheduler.fallback_to_consolidate (no memory_db)")
                 except Exception as e:
-                    logger.error(f"Dream.scheduler.failed: {e}")
+                    logger.error("Dream.scheduler.failed: {}", e, exc_info=True)
 
         try:
             loop = asyncio.get_running_loop()
@@ -447,7 +447,7 @@ class DreamConsolidator:
             else:
                 await self.consolidate()
         except Exception as e:
-            logger.error(f"Dream.scheduler_test.failed: {e}")
+            logger.error("Dream.scheduler_test.failed: {}", e, exc_info=True)
 
     def stop_scheduler(self) -> None:
         """取消定时整合任务, 释放后台协程."""

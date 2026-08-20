@@ -119,7 +119,7 @@ def get_temperature(default: float = 0.7) -> float:
         if override is not None:
             return float(override)
     except Exception:
-        logger.debug("get_global_temperature.webui_read_failed")
+        logger.debug("get_global_temperature.webui_read_failed", exc_info=True)
     return default
 
 
@@ -131,7 +131,7 @@ def get_frequency_penalty(default: float = 1.0) -> float:
         if override is not None:
             return float(override)
     except Exception:
-        logger.debug("get_frequency_penalty.webui_read_failed")
+        logger.debug("get_frequency_penalty.webui_read_failed", exc_info=True)
     return default
 
 
@@ -143,7 +143,7 @@ def get_presence_penalty(default: float = 1.0) -> float:
         if override is not None:
             return float(override)
     except Exception:
-        logger.debug("get_presence_penalty.webui_read_failed")
+        logger.debug("get_presence_penalty.webui_read_failed", exc_info=True)
     return default
 
 

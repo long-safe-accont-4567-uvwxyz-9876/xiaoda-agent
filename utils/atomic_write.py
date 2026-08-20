@@ -23,7 +23,7 @@ def _resolve_symlink(path: Path) -> Path:
     """
     if path.is_symlink():
         resolved = path.resolve()
-        logger.debug(f"符号链接解析: {path} -> {resolved}")
+        logger.debug("符号链接解析: {} -> {}", path, resolved)
         return resolved
     return path
 
@@ -42,7 +42,7 @@ def _preserve_file_mode(original_mode: int | None, new_path: Path) -> None:
         try:
             os.chmod(new_path, original_mode)
         except OSError as e:
-            logger.warning(f"恢复文件权限失败 {new_path}: {e}")
+            logger.warning("恢复文件权限失败 {}: {}", new_path, e)
 
 
 def _restrict_file_permissions_windows(path: Path) -> None:
@@ -67,8 +67,8 @@ def _restrict_file_permissions_windows(path: Path) -> None:
             ["icacls", str(path), "/inheritance:r", "/grant:r", f"{user}:(R,W)"],
             capture_output=True, timeout=5, check=False,
         )
-    except Exception as e:
-        logger.debug(f"restrict_file_permissions_windows failed {path}: {e}")
+    except (OSError, RuntimeError) as e:
+        logger.debug("restrict_file_permissions_windows failed {}: {}", path, e)
 
 
 def _atomic_replace_with_retry(src: Path | str, dst: Path | str, max_retries: int = 5) -> None:
@@ -145,9 +145,9 @@ def atomic_write(target_path: str | Path, content: str | bytes,
         _atomic_replace_with_retry(tmp_path, resolved)
         tmp_path = None
 
-        logger.debug(f"原子写入完成: {resolved}")
+        logger.debug("原子写入完成: {}", resolved)
 
-    except Exception:
+    except (OSError, RuntimeError):
         # 清理临时文件
         if tmp_fd is not None:
             with contextlib.suppress(OSError):

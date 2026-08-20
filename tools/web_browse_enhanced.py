@@ -68,7 +68,7 @@ def _extract_title_from_markdown(md: str) -> str:
 async def _extract_zhihu(url: str) -> tuple[str, str]:
     try:
         return await _extract_via_jina(url)
-    except Exception:
+    except (RuntimeError, OSError, ConnectionError, ValueError):
         logger.debug("zhihu.jina_extract_failed", exc_info=True)
     from urllib.parse import urlparse
     parsed = urlparse(url)
@@ -158,7 +158,7 @@ async def _ssrf_request_hook(request: httpx.Request) -> None:
     url = str(request.url)
     try:
         ok, reason = await _ssrf_check_async(url)
-    except Exception as e:
+    except (RuntimeError, ValueError, OSError) as e:
         raise httpx.HTTPError(f"SSRF 校验异常: {e}", request=request) from e
     if not ok:
         raise httpx.HTTPError(f"SSRF blocked: {reason}", request=request)
@@ -211,7 +211,7 @@ async def web_browse_enhanced(url: str) -> ToolResult:
                     title, content = await extractor(url)
                     logger.info("web_browse.platform_extracted platform={} len={}", extractor_name, len(content))
                     return ToolResult.ok(f"网页: {title}\nURL: {url}\n{'='*40}\n{_truncate(content)}")
-            except Exception as e:
+            except (RuntimeError, ValueError, OSError) as e:
                 logger.warning("web_browse.platform_failed platform={} error={}", extractor_name, str(e)[:100])
 
         # 优先级 2：Jina Reader
@@ -220,11 +220,11 @@ async def web_browse_enhanced(url: str) -> ToolResult:
             logger.info("web_browse.jina_extracted len={}", len(content))
             if len(content) > 200:
                 return ToolResult.ok(f"网页: {title}\nURL: {url}\n{'='*40}\n{_truncate(content)}")
-        except Exception as e:
+        except (RuntimeError, OSError, ConnectionError, ValueError) as e:
             logger.warning("web_browse.jina_failed error={}", str(e)[:100])
 
         # 优先级 3：原有 primp + html2text
         from tools.web_browse_tools import web_browse as _original_browse
         return await _original_browse(url)
-    except Exception as e:
+    except (RuntimeError, OSError, ValueError, ConnectionError) as e:
         return ToolResult.fail(f"浏览网页失败: {e!s}")

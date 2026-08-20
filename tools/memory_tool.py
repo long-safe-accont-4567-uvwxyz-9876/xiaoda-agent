@@ -58,13 +58,13 @@ async def remember(content: str, tags: str = "", importance: float = 0.5) -> Too
         if mm.vec and content:
             try:
                 await mm.vec.upsert(mem_id, content)
-            except Exception as ve:
+            except (RuntimeError, OSError, ValueError) as ve:
                 logger.warning("memory_tool.vec_upsert_failed", error=str(ve))
 
         metrics.inc("memory.remember.success")
         metrics.observe("memory.remember.latency_ms", (time.time() - _start) * 1000)
         return ToolResult.ok(f"已记住（ID: {mem_id}）：{content[:50]}")
-    except Exception as e:
+    except (RuntimeError, OSError, ValueError) as e:
         metrics.inc("memory.remember.failure")
         logger.error("memory_tool.remember_failed", error=str(e))
         return ToolResult.fail(f"保存记忆失败：{e!s}")
@@ -188,7 +188,7 @@ async def recall(query: str, top_k: int = 8) -> ToolResult:
         metrics.inc("memory.recall.hit")
         metrics.observe("memory.recall.latency_ms", (time.time() - _start) * 1000)
         return ToolResult.ok(output)
-    except Exception as e:
+    except (RuntimeError, OSError, ValueError) as e:
         metrics.inc("memory.recall.failure")
         logger.error("memory_tool.recall_failed", error=str(e), exc_info=True)
         return ToolResult.fail(f"检索记忆失败：{e!s}")
@@ -227,7 +227,7 @@ async def forget(query: str) -> ToolResult:
         metrics.inc("memory.forget.success")
         logger.info("memory_tool.forgotten", mem_id=mem_id, summary=target.get("summary", "")[:50])
         return ToolResult.ok("已忘记相关内容")
-    except Exception as e:
+    except (RuntimeError, OSError, ValueError) as e:
         metrics.inc("memory.forget.failure")
         logger.error("memory_tool.forget_failed", error=str(e))
         return ToolResult.fail(f"删除记忆失败：{e!s}")
@@ -260,7 +260,7 @@ async def confirm_memory(node_ids: list[str]) -> ToolResult:
         result = await mm.confirm_correct.confirm(node_ids)
         metrics.inc("memory.confirm.success")
         return ToolResult.ok(result)
-    except Exception as e:
+    except (RuntimeError, OSError, ValueError) as e:
         metrics.inc("memory.confirm.failure")
         logger.error("memory_tool.confirm_failed", error=str(e))
         return ToolResult.fail(f"确认记忆失败：{e!s}")
@@ -293,7 +293,7 @@ async def correct_memory(old_hint: str, new_text: str) -> ToolResult:
             return ToolResult.fail(result["error"])
         metrics.inc("memory.correct.success")
         return ToolResult.ok(result)
-    except Exception as e:
+    except (RuntimeError, OSError, ValueError) as e:
         metrics.inc("memory.correct.failure")
         logger.error("memory_tool.correct_failed", error=str(e))
         return ToolResult.fail(f"纠正记忆失败：{e!s}")

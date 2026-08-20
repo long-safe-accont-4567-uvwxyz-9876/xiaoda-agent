@@ -200,8 +200,8 @@ class RecoveryOrchestrator:
             ctx.error = e
             ctx.level = self._select_initial_level(e)
             ctx.attempt = 1  # 首次执行失败, attempt 计为 1
-            logger.info(f"Recovery.start op={operation} "
-                         f"initial_level={ctx.level.name} error={str(e)[:100]}")
+            logger.info("Recovery.start op={} initial_level={} error={}",
+                         operation, ctx.level.name, str(e)[:100])
             return None
 
     async def _run_recovery_levels(self, ctx: RecoveryContext, handler: Callable,
@@ -227,9 +227,8 @@ class RecoveryOrchestrator:
                     attempts=ctx.attempt,
                 )
             except RecoveryError as e:
-                logger.warning(f"Recovery.level_{ctx.level.name}_failed "
-                                f"op={operation} attempt={ctx.attempt} "
-                                f"error={str(e)[:100]}")
+                logger.warning("Recovery.level_{}_failed op={} attempt={} error={}",
+                                ctx.level.name, operation, ctx.attempt, str(e)[:100])
                 ctx.history.append({
                     "level": ctx.level.name, "error": str(e)[:200],
                     "ts": time.time(),
@@ -240,8 +239,8 @@ class RecoveryOrchestrator:
                     break
                 ctx.level = next_level
             except Exception as e:
-                logger.error(f"Recovery.unexpected_error op={operation} "
-                               f"level={ctx.level.name} error={e}")
+                logger.error("Recovery.unexpected_error op={} level={} error={}",
+                               operation, ctx.level.name, e)
                 ctx.history.append({
                     "level": ctx.level.name, "error": str(e)[:200],
                     "ts": time.time(),
@@ -308,7 +307,11 @@ class RecoveryOrchestrator:
             await asyncio.sleep(d)
             try:
                 return await self._invoke_handler(handler, args)
+            except (ImportError, OSError, RuntimeError, ValueError):
+                if i == len(delays) - 1:
+                    raise RecoveryError(f"Backoff exhausted after {len(delays)} retries") from None
             except Exception:
+                logger.exception(".core.recovery_orchestrator._recover_with_backoff_unexpected")
                 if i == len(delays) - 1:
                     raise RecoveryError(f"Backoff exhausted after {len(delays)} retries") from None
         raise RecoveryError("Backoff failed")

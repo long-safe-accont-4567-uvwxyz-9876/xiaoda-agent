@@ -60,7 +60,10 @@ class PreferenceValidator:
             injected = has_data  # prompt_builder 会注入 (I2 已修复)
             return LayerCheck("L1 LearningLoop", has_data, injected,
                               f"{len(constraints)} 条约束")
+        except (ImportError, AttributeError, RuntimeError, ValueError) as e:
+            return LayerCheck("L1 LearningLoop", False, False, str(e)[:80])
         except Exception as e:
+            logger.exception("validator.check_l1_unexpected")
             return LayerCheck("L1 LearningLoop", False, False, str(e)[:80])
 
     async def check_l2(self, learning_manager=None) -> LayerCheck:
@@ -73,7 +76,10 @@ class PreferenceValidator:
             injected = has_data
             return LayerCheck("L2 LearningManager", has_data, injected,
                               f"prompt_additions {len(additions)} 字")
+        except (ImportError, AttributeError, RuntimeError, ValueError) as e:
+            return LayerCheck("L2 LearningManager", False, False, str(e)[:80])
         except Exception as e:
+            logger.exception("validator.check_l2_unexpected")
             return LayerCheck("L2 LearningManager", False, False, str(e)[:80])
 
     async def check_l3(self, test_query: str = "测试") -> LayerCheck:
@@ -87,7 +93,10 @@ class PreferenceValidator:
             injected = has_data  # prompt_builder 会注入 (I1 已修复)
             return LayerCheck("L3 LearningFeedback", has_data, injected,
                               f"{len(lessons)} 教训, strategy={'有' if strategy else '无'}")
+        except (ImportError, AttributeError, RuntimeError, ValueError) as e:
+            return LayerCheck("L3 LearningFeedback", False, False, str(e)[:80])
         except Exception as e:
+            logger.exception("validator.check_l3_unexpected")
             return LayerCheck("L3 LearningFeedback", False, False, str(e)[:80])
 
     async def check_pipeline_flow(self) -> bool:

@@ -14,13 +14,23 @@ from loguru import logger
 
 try:
     from config import DATA_DIR
-except Exception:  # pragma: no cover - 配置缺失时退化为项目根目录
+except (ImportError, AttributeError):
+    DATA_DIR = Path(__file__).resolve().parent.parent / "data"
+    DATA_DIR.mkdir(parents=True, exist_ok=True)
+
+except Exception:
+    logger.exception(".core.learning_loop.unexpected")
     DATA_DIR = Path(__file__).resolve().parent.parent / "data"
     DATA_DIR.mkdir(parents=True, exist_ok=True)
 
 try:
     from utils.atomic_write import atomic_json_write
-except Exception:  # pragma: no cover
+except (ImportError, AttributeError):
+    atomic_json_write = None  # type: ignore[assignment]
+
+
+except Exception:
+    logger.exception(".core.learning_loop.unexpected")
     atomic_json_write = None  # type: ignore[assignment]
 
 
@@ -45,7 +55,7 @@ class LearningLoop:
             # 根因修复：_persist 同步 json.dump 写文件，在 async 路径会阻塞事件循环。
             # 用 asyncio.to_thread 隔离到线程池。
             await asyncio.to_thread(self._persist)
-            logger.info(f"学习闭环: 新约束 → {constraint}")
+            logger.info("学习闭环: 新约束 → {}", constraint)
         return constraint
 
     def get_active_constraints(self) -> list[str]:
@@ -86,7 +96,7 @@ class LearningLoop:
                 tmp.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
                 os.replace(tmp, self._persist_path)
         except Exception as e:
-            logger.warning(f"LearningLoop.persist_failed: {e}")
+            logger.warning("LearningLoop.persist_failed: {}", e)
 
     def _load(self) -> None:
         """启动时从 JSON 加载约束"""
@@ -97,7 +107,7 @@ class LearningLoop:
                     self._active_constraints.append(c)
                 self._correction_count = data.get("correction_count", 0)
         except Exception as e:
-            logger.warning(f"LearningLoop.load_failed: {e}")
+            logger.warning("LearningLoop.load_failed: {}", e)
 
 
 _learning_loop = LearningLoop()

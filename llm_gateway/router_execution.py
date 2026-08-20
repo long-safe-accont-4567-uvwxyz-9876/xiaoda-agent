@@ -177,24 +177,17 @@ class ExecutionMixin:
                                 timeout=_stall_timeout,
                             )
                         except StopAsyncIteration:
-                            break  # 流正常结束
+                            break
                         _chunk_count += 1
-                        # CR-Major-1：捕获 usage（最后一个 chunk 才有，include_usage=True 时）
                         _chunk_usage = getattr(chunk, "usage", None)
                         if _chunk_usage is not None:
                             _stream_usage = _chunk_usage
-                        try:
-                            _choice = chunk.choices[0]
-                        except (AttributeError, IndexError):
-                            continue
-                        # P0 修复：捕获 finish_reason（最后一个 chunk 才有）
-                        _chunk_fr = getattr(_choice, "finish_reason", None)
-                        if _chunk_fr:
-                            _stream_finish_reason = _chunk_fr
-                        delta = getattr(_choice.delta, "content", None)
-                        if delta:
+                        _delta, _fr = self._parse_stream_chunk(chunk)
+                        if _fr:
+                            _stream_finish_reason = _fr
+                        if _delta:
                             _content_yielded = True
-                            yield delta
+                            yield _delta
                 await self._finalize_stream(
                     task_type, model, provider, _stream_finish_reason, _stream_usage,
                     _chunk_count, user_openid, session_id, mt, _start)
@@ -229,21 +222,28 @@ class ExecutionMixin:
 
 
         # CR-Major-1 修复：重试耗尽后调用 fallback 链，而非直接 raise。
-        # 流式调用是用户主要交互方式，主 provider 故障时应降级到 Agnes/自定义 provider。
-        # fallback 链返回字符串时（非流式降级结果），包装成 async generator yield 出去，
-        # 保证调用方 `async for chunk in chat_stream(...)` 语义一致。
         metrics.inc(f"model_route.{task_type}.failure")
         metrics.observe(f"model_route.{task_type}.duration", time.time() - _start)
         metrics.maybe_report()
         if last_error is None:
-            # 理论不可达（循环至少跑一次，失败才有 last_error）；防御性兜底
             raise LLMError("流式调用失败：未知错误（last_error 未设置）")
+        async for chunk in self._stream_fallback_yield(
+            last_error, task_type, messages, temperature, tools, tool_choice,
+            timeout, user_openid, session_id, extra_headers, mt, model, provider,
+        ):
+            yield chunk
+
+    async def _stream_fallback_yield(
+        self, last_error: Exception, task_type: str, messages: list,
+        temperature: float, tools: list[dict] | None, tool_choice: str | None,
+        timeout: float, user_openid: str, session_id: str,
+        extra_headers: dict | None, mt: int, model: str, provider: str,
+    ) -> AsyncIterator[str]:
+        """重试耗尽后走 fallback 链降级，将结果统一转为 async generator yield。"""
         logger.warning("llm.stream_fallback_attempt", event="llm_stream_fallback",
                        model=model, task=task_type, provider=provider,
                        error=f"{type(last_error).__name__}: {last_error}"[:200])
         try:
-            # fallback 链 stream=True 时返回流对象；stream=False 返回字符串
-            # 这里传 stream=True 让 fallback 也走流式（若目标 provider 支持）
             fb_result = await self._try_fallback_chain(
                 last_error, task_type, messages, temperature, True,
                 tools, tool_choice, timeout, user_openid, session_id,
@@ -253,12 +253,9 @@ class ExecutionMixin:
             logger.error("llm.stream_fallback_failed error={}", str(fb_err)[:200])
             fb_result = None
         if fb_result is not None:
-            # fallback 返回字符串（_route_with_retry stream=False 路径，或 provider 不支持流式）
-            # 包装成 async generator yield 出去，保证调用方语义一致
             if isinstance(fb_result, str):
                 yield fb_result
                 return
-            # fallback 返回流对象（stream=True 路径），透传其 chunks
             if hasattr(fb_result, "__aiter__"):
                 async for _fb_chunk in fb_result:
                     _fb_choices = getattr(_fb_chunk, "choices", None)
@@ -273,16 +270,25 @@ class ExecutionMixin:
                         if _fb_content:
                             yield _fb_content
                 return
-            # 其他类型（如 response 对象）直接 yield 字符串形式
             yield str(fb_result)
             return
-        # 所有降级目标均不可用，抛出明确异常（与 route() 语义一致）
         raise LLMError(
             f"流式调用所有降级目标均不可用 (task={task_type}): "
             f"{type(last_error).__name__}: {last_error}",
             error_code=ErrorCodeEnum.E_LLM001,
             cause=last_error,
         ) from last_error
+
+    @staticmethod
+    def _parse_stream_chunk(chunk: Any) -> tuple[str | None, str | None]:
+        """从流式 chunk 中提取 delta content 和 finish_reason。"""
+        try:
+            _choice = chunk.choices[0]
+        except (AttributeError, IndexError):
+            return None, None
+        _fr = getattr(_choice, "finish_reason", None)
+        delta = getattr(_choice.delta, "content", None)
+        return delta, _fr
 
     async def _finalize_stream(self, task_type: str, model: str, provider: str,
                                _stream_finish_reason: str | None, _stream_usage: Any,
@@ -683,7 +689,7 @@ class ExecutionMixin:
                         break  # 无内容，退出
                 except Exception as e:
                     logger.warning("llm.truncated_retry_failed", error=str(e), model=model,
-                                   retry_round=_retry_round + 1)
+                                   retry_round=_retry_round + 1, exc_info=True)
                     break
         return content
 

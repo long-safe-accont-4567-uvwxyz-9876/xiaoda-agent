@@ -198,7 +198,21 @@ class ProviderService:
                 old_client = binder(provider_id, client)
                 bound = True
                 self._reports[provider_id] = report
+            except (RuntimeError, OSError, ValueError):
+                logger.exception("provider_service.bind_builtin_commit_failed provider_id={}", provider_id)
+                if old_credential:
+                    self.credentials.write(provider_id, old_credential)
+                else:
+                    self.credentials.delete(provider_id)
+                if bound:
+                    binder(provider_id, old_client)
+                if old_report is None:
+                    self._reports.pop(provider_id, None)
+                else:
+                    self._reports[provider_id] = old_report
+                raise
             except Exception:
+                logger.exception("provider_service.bind_builtin_commit_unexpected provider_id={}", provider_id)
                 if old_credential:
                     self.credentials.write(provider_id, old_credential)
                 else:
@@ -231,7 +245,13 @@ class ProviderService:
                 self.runtime_router.remove_custom_client(provider_id)
                 self.catalog.unregister(provider_id)
                 self._reports.pop(provider_id, None)
+            except (RuntimeError, OSError, ValueError):
+                logger.exception("provider_service.delete_commit_failed provider_id={}", provider_id)
+                self._run_rollback(self._delete_rollback_actions(
+                    provider_id, definition, old_record, old_credential, old_report, old_client))
+                raise
             except Exception:
+                logger.exception("provider_service.delete_commit_unexpected provider_id={}", provider_id)
                 self._run_rollback(self._delete_rollback_actions(
                     provider_id, definition, old_record, old_credential, old_report, old_client))
                 raise
@@ -428,7 +448,18 @@ class ProviderService:
             self.config.set(path, self._record(definition))
             self.catalog.register(definition)
             self.runtime_router.set_custom_client(definition.id, client)
+        except (RuntimeError, OSError, ValueError):
+            logger.exception("provider_service.create_commit_failed provider_id={}", definition.id)
+            self._run_rollback([
+                restore_credential,
+                restore_config,
+                restore_catalog,
+                restore_runtime,
+                restore_report,
+            ])
+            raise
         except Exception:
+            logger.exception("provider_service.create_commit_unexpected provider_id={}", definition.id)
             self._run_rollback([
                 restore_credential,
                 restore_config,
@@ -462,7 +493,18 @@ class ProviderService:
             self.config.set(path, self._record(definition))
             self.catalog.register(definition, replace_existing=True)
             self.runtime_router.set_custom_client(provider_id, client)
+        except (RuntimeError, OSError, ValueError):
+            logger.exception("provider_service.update_commit_failed provider_id={}", provider_id)
+            self._run_rollback([
+                lambda: (self.credentials.write(provider_id, old_credential)
+                         if old_credential else self.credentials.delete(provider_id)),
+                lambda: self.config.set(path, old_record),
+                lambda: self.catalog.register(old_definition, replace_existing=True),
+                restore_runtime,
+            ])
+            raise
         except Exception:
+            logger.exception("provider_service.update_commit_unexpected provider_id={}", provider_id)
             self._run_rollback([
                 lambda: (self.credentials.write(provider_id, old_credential)
                          if old_credential else self.credentials.delete(provider_id)),

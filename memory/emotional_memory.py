@@ -120,7 +120,7 @@ class EmotionalMemoryManager:
             for user_id, mems in data.items():
                 self._memories[user_id] = [EmotionalMemory.from_dict(m) for m in mems]
         except (json.JSONDecodeError, OSError, KeyError) as e:
-            logger.warning(f"emotional_memory.load_failed: {e}")
+            logger.warning("emotional_memory.load_failed: {}", e)
             self._memories = {}
 
     def _save(self) -> None:
@@ -131,7 +131,7 @@ class EmotionalMemoryManager:
             }
             atomic_json_write(self._memories_path, data, indent=2, ensure_ascii=False)
         except Exception as e:
-            logger.error(f"emotional_memory.save_failed: {e}")
+            logger.error("emotional_memory.save_failed: {}", e, exc_info=True)
 
     @staticmethod
     def is_enabled() -> bool:
@@ -186,9 +186,9 @@ class EmotionalMemoryManager:
                 CN_TO_EN_MAP.get(emotion, emotion.lower()), intensity
             )
         except Exception as e:
-            logger.debug(f"emotional_memory.anchor_link_failed: {e}")
-        logger.info(f"emotional_memory.anchored user_id={user_id} "
-                    f"emotion={emotion} event={event[:50]}")
+            logger.debug("emotional_memory.anchor_link_failed: {}", e)
+        logger.info("emotional_memory.anchored user_id={} "
+                    "emotion={} event={}", user_id, emotion, event[:50])
         return memory
 
     def _extract_keywords(self, text: str) -> list[str]:
@@ -329,11 +329,11 @@ class EmotionalMemoryManager:
                     pad = pad_from_emotion(cn_standard, 0.5)
                     get_emotion_state(user_id).shift_pad(pad.to_dict(), weight=0.1)
             except Exception as e:
-                logger.debug(f"emotional_memory.recall_link_failed: {e}")
+                logger.debug("emotional_memory.recall_link_failed: {}", e)
             bounded = self.bound(user_id, recalled)
             return self.enact(bounded, user_xp_level)
         except Exception as e:
-            logger.warning(f"emotional_memory.recall_and_enact_failed: {e}")
+            logger.warning("emotional_memory.recall_and_enact_failed: {}", e)
             return ""
 
 

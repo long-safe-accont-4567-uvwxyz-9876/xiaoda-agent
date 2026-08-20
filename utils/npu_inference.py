@@ -536,26 +536,29 @@ class NPUModel:
         for buf in self._output_buffers:
             try:
                 self._vip.destroy_buffer(buf)
-            except Exception:
+            except (RuntimeError, OSError):
                 logger.debug("npu.destroy_output_buffer_failed", exc_info=True)
         self._output_buffers.clear()
         for buf in self._input_buffers:
             try:
                 self._vip.destroy_buffer(buf)
-            except Exception:
+            except (RuntimeError, OSError):
                 logger.debug("npu.destroy_input_buffer_failed", exc_info=True)
         self._input_buffers.clear()
         if self._network:
             try:
                 self._vip.finish_network(self._network)
                 self._vip.destroy_network(self._network)
-            except Exception:
+            except (RuntimeError, OSError):
                 logger.debug("npu.destroy_network_failed", exc_info=True)
             self._network = None
 
     def __del__(self) -> None:
         """析构时释放资源 (推荐使用 close() 显式释放)。"""
-        self.close()
+        try:
+            self.close()
+        except Exception:
+            pass
 
 
 def _sigmoid(x: Any) -> Any:
@@ -713,7 +716,7 @@ class NPUInference:
                 return
             self.available = True
             logger.info("NPU inference ready")
-        except Exception as e:
+        except (RuntimeError, ImportError, OSError, ValueError) as e:
             logger.warning("NPU init failed: {}", e)
             self.available = False
 
@@ -761,6 +764,6 @@ class NPUInference:
                 det["y2"] = min(orig_h, det["y2"] * scale_y)
 
             return detections
-        except Exception as e:
+        except (RuntimeError, ValueError, OSError) as e:
             logger.warning("NPU detection failed: {}", e)
             return []

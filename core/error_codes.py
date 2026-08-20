@@ -84,13 +84,13 @@ class StructuredError:
         """按严重度分级日志"""
         severity = int(self.code.split("_")[1]) if "_" in self.code else 2
         if severity >= 3:
-            logger.critical(f"[{self.code}] {self.message}", context=self.context)
+            logger.critical("[{}] {}", self.code, self.message, context=self.context)
         elif severity >= 2:
-            logger.error(f"[{self.code}] {self.message}", context=self.context)
+            logger.error("[{}] {}", self.code, self.message, context=self.context)
         elif severity >= 1:
-            logger.warning(f"[{self.code}] {self.message}", context=self.context)
+            logger.warning("[{}] {}", self.code, self.message, context=self.context)
         else:
-            logger.info(f"[{self.code}] {self.message}")
+            logger.info("[{}] {}", self.code, self.message)
 
 
 def make_error(code: str, message: str, **kwargs: Any) -> StructuredError:

@@ -41,8 +41,12 @@ async def _run_cmd(args: list[str], timeout: int = 30, cwd: str | None = None) -
     except TimeoutError:
         try:
             proc.kill()
-        except Exception:
+        except (OSError, RuntimeError):
             logger.debug("system_tools.proc_kill_failed", exc_info=True)
+        try:
+            await asyncio.wait_for(proc.wait(), timeout=2)
+        except (asyncio.TimeoutError, ProcessLookupError):
+            logger.debug("system_tools.proc_wait_skipped", exc_info=True)
         raise
 
 
@@ -122,7 +126,7 @@ async def service_manage(action: str, name: str = "", lines: int = 30) -> ToolRe
 
     except TimeoutError:
         return ToolResult.fail(f"操作超时: {action}")
-    except Exception as e:
+    except (RuntimeError, OSError, ValueError) as e:
         return ToolResult.fail(f"服务管理错误: {e!s}")
 
 
@@ -208,7 +212,7 @@ async def network_diag(action: str, target: str = "8.8.8.8", count: int = 3) -> 
 
     except TimeoutError:
         return ToolResult.fail(f"操作超时: {action}")
-    except Exception as e:
+    except (RuntimeError, OSError, ValueError) as e:
         return ToolResult.fail(f"网络诊断错误: {e!s}")
 
 
@@ -259,7 +263,7 @@ async def dev_assist(action: str, path: str = _DEFAULT_PROJECT_DIR, lines: int =
 
     except TimeoutError:
         return ToolResult.fail(f"操作超时: {action}")
-    except Exception as e:
+    except (RuntimeError, OSError, ValueError) as e:
         return ToolResult.fail(f"开发辅助错误: {e!s}")
 
 
@@ -311,7 +315,7 @@ async def _dev_assist_logs(path: str, lines: int, service: str) -> ToolResult:
     try:
         from config import LOG_DIR
         log_dir = LOG_DIR
-    except Exception:
+    except (ImportError, RuntimeError):
         log_dir = os.path.join(path, "logs")
     if os.path.isdir(log_dir):
         # 兼容 .log 和 .json 两种日志格式（logging_config 写的是 agent_YYYY-MM-DD.json）
@@ -332,7 +336,7 @@ async def _dev_assist_logs(path: str, lines: int, service: str) -> ToolResult:
             )
             recent = all_lines[-lines:]
             return ToolResult.ok(f"日志文件 {log_files[0]} (最后{len(recent)}行):\n{_truncate(''.join(recent).strip())}")
-        except Exception as e:
+        except (OSError, ValueError, RuntimeError) as e:
             return ToolResult.fail(f"读取日志文件失败: {e!s}")
     else:
         rc, log_out, _ = await _run_cmd(["journalctl", "-u", service, "-n", str(lines), "--no-pager"], timeout=30)

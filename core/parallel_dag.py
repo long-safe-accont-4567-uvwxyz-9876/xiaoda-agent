@@ -190,14 +190,14 @@ class ToolDAG:
                             context[p] = node.result[p]
                         else:
                             context[p] = node.result
-                    logger.debug(f"DAG.node.success name={node.name} "
-                                  f"duration={node.duration:.3f}s attempt={attempt+1}")
+                    logger.debug("DAG.node.success name={} duration={:.3f}s attempt={}",
+                                  node.name, node.duration, attempt+1)
                     self._signal_done()
                     return
             except Exception as e:
                 last_error = e
-                logger.warning(f"DAG.node.failed name={node.name} "
-                                f"attempt={attempt+1} error={e}")
+                logger.warning("DAG.node.failed name={} attempt={} error={}",
+                                node.name, attempt+1, e)
                 if attempt < node.retries:
                     await asyncio.sleep(0.5 * (attempt + 1))
 
@@ -212,10 +212,14 @@ class ToolDAG:
                 node.finished_at = time.time()
                 for p in node.produces:
                     context[p] = node.result
-                logger.info(f"DAG.node.fallback_success name={node.name}")
+                logger.info("DAG.node.fallback_success name={}", node.name)
                 self._signal_done()
                 return
+            except (ImportError, OSError, RuntimeError, ValueError) as e:
+                last_error = e
+
             except Exception as e:
+                logger.exception(".core.parallel_dag.unexpected")
                 last_error = e
 
         node.state = NodeState.FAILED

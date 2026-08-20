@@ -154,7 +154,23 @@ class LegacyMigrationMixin:
         # 确保 migration_state 表存在（防御 vfat 上 executescript 静默失败）
         try:
             await self._conn.execute("SELECT 1 FROM migration_state LIMIT 1")
+        except (ImportError, OSError, RuntimeError, ValueError):
+            await self._conn.execute("""
+                CREATE TABLE IF NOT EXISTS migration_state (
+                    id INTEGER PRIMARY KEY CHECK (id = 1),
+                    dirty INTEGER NOT NULL DEFAULT 0,
+                    last_version INTEGER NOT NULL DEFAULT 0,
+                    last_error TEXT NOT NULL DEFAULT ''
+                )
+            """)
+            await self._conn.execute("""
+                INSERT OR IGNORE INTO migration_state (id, dirty, last_version, last_error)
+                VALUES (1, 0, 0, '')
+            """)
+            await self._conn.commit()
+
         except Exception:
+            logger.exception(".db.legacy_migrations._apply_migration_unexpected")
             await self._conn.execute("""
                 CREATE TABLE IF NOT EXISTS migration_state (
                     id INTEGER PRIMARY KEY CHECK (id = 1),
@@ -193,7 +209,7 @@ class LegacyMigrationMixin:
                     (version,),
                 )
                 await self._conn.commit()
-                logger.info(f"database.migration_v{version}", desc=description)
+                logger.info("database.migration_v{}", version, desc=description)
                 return  # 成功，退出重试循环
             except Exception as e:
                 err_msg = str(e)
@@ -218,7 +234,7 @@ class LegacyMigrationMixin:
                     )
                     await self._conn.commit()
                 except (OSError, RuntimeError):
-                    logger.warning("database.migration_dirty_record_error: {}", exc_info=True)
+                    logger.warning("database.migration_dirty_record_error", exc_info=True)
                 logger.error(
                     f"❌ 数据库迁移 v{version} 失败: {err_msg}\n"
                     f"已标记 dirty 状态，下次启动将自动重试。\n"

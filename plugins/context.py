@@ -99,7 +99,11 @@ class PluginContext:
             with open(data_file, encoding="utf-8") as f:
                 data = json.load(f)
             return data.get(key, default)
+        except (ValueError, KeyError, ImportError):
+            return default
+
         except Exception:
+            logger.exception(".plugins.context.plugin_data_get_unexpected")
             return default
 
     def plugin_data_set(self, key: str, value: Any) -> None:

@@ -268,9 +268,9 @@ class BehavioralHealthScorer:
                     )
                     if score.level <= HealthLevel.POOR:
                         for rec in score.recommendations:
-                            logger.warning(f"BHS.recommendation: {rec}")
+                            logger.warning("BHS.recommendation: {}", rec)
                 except Exception as e:
-                    logger.warning(f"BHS.monitor_error: {e}")
+                    logger.warning("BHS.monitor_error: {}", e)
                 await asyncio.sleep(interval)
 
         try:
@@ -278,7 +278,7 @@ class BehavioralHealthScorer:
         except RuntimeError:
             return None
         self._monitor_task = loop.create_task(_loop())
-        logger.info(f"BHS.monitoring_started interval={interval}s")
+        logger.info("BHS.monitoring_started interval={}s", interval)
         return self._monitor_task
 
     def stop_monitoring(self) -> None:
@@ -307,7 +307,7 @@ class BehavioralHealthScorer:
             metrics["error_rate"] = float(err_rate)
             metrics["success_rate"] = max(0.0, 1.0 - float(err_rate))
         except Exception as e:
-            logger.debug(f"BHS.collect_slo_failed: {e}")
+            logger.debug("BHS.collect_slo_failed: {}", e)
 
         # 内存使用
         try:
@@ -318,7 +318,7 @@ class BehavioralHealthScorer:
             if vm:
                 metrics["memory_usage"] = rss / vm
         except Exception as e:
-            logger.debug(f"BHS.collect_memory_failed: {e}")
+            logger.debug("BHS.collect_memory_failed: {}", e)
         return metrics
 
 

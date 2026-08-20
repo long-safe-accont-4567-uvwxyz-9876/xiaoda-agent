@@ -232,14 +232,14 @@ def test_boundary_conditions():
             # 正常写入
             test_file = os.path.join(tmpdir, "test.txt")
             atomic_write(test_file, "hello")
-            with open(test_file) as f:
+            with open(test_file, encoding="utf-8") as f:
                 assert f.read() == "hello"
 
             # JSON 写入
             json_file = os.path.join(tmpdir, "test.json")
             atomic_json_write(json_file, {"key": "value"})
             import json
-            with open(json_file) as f:
+            with open(json_file, encoding="utf-8") as f:
                 assert json.load(f) == {"key": "value"}
 
             print("    OK: AtomicWrite 正常")

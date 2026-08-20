@@ -216,7 +216,11 @@ def ensure_emotion_tag(text: str) -> tuple[str, Emotion]:
         if isinstance(cn_label, dict):
             cn_label = cn_label.get("primary", "平静")
         emotion = resolve_emotion(cn_label)
+    except (ImportError, AttributeError):
+        emotion = Emotion.NEUTRAL
+
     except Exception:
+        logger.exception(".emotion.emotion_enum.ensure_emotion_tag_unexpected")
         emotion = Emotion.NEUTRAL
 
     # 在文本末尾追加标签

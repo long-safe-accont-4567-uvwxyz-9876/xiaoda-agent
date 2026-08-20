@@ -307,7 +307,7 @@ class BackgroundTaskManager:
                             logger.error("degradation_triggered bg.session_update_failed error={}", str(e))
             except Exception as e:
                 # write_transaction 内部已 shield(rollback)，这里仅记录未预期异常
-                logger.error("bg.persistence_txn_failed error={}", str(e))
+                logger.error("bg.persistence_txn_failed error={}", str(e), exc_info=True)
 
         # 3. 记忆编码（独立，不纳入批量提交，改为 _spawn 避免阻塞持久化任务）
         # 根因：try_idle_encode 涉及 LLM 调用，可能需要几十秒，await 会阻塞整个 _run_persistence_tasks
@@ -338,7 +338,7 @@ class BackgroundTaskManager:
                 except asyncio.TimeoutError:
                     logger.warning("bg.memory_encode_timeout", hint="记忆编码超时 90s，跳过本次")
                 except Exception as e:
-                    logger.warning("bg.memory_encode_failed", error=str(e))
+                    logger.warning("bg.memory_encode_failed", error=str(e), exc_info=True)
             self._spawn(_encode_task(), timeout=120.0)  # 内部已有 90s 超时，外层 120s 兜底
         else:
             logger.debug("bg.memory_encode_skipped", reason="history_too_short",
@@ -515,11 +515,11 @@ class BackgroundTaskManager:
             count = self._consecutive_failures.get(task_name, 0) + 1
             self._consecutive_failures[task_name] = count
             if count >= 5:
-                logger.error(f"periodic_task_possibly_dead: task={task_name}, consecutive_failures={count}")
+                logger.error("periodic_task_possibly_dead: task={}, consecutive_failures={}", task_name, count)
             elif count >= 3:
-                logger.warning(f"periodic_task_degraded: task={task_name}, consecutive_failures={count}")
+                logger.warning("periodic_task_degraded: task={}, consecutive_failures={}", task_name, count)
             else:
-                logger.warning(f"periodic_task_db_error: task={task_name}")
+                logger.warning("periodic_task_db_error: task={}", task_name)
             return False
 
     async def _dream_archive_task(self) -> None:
@@ -582,7 +582,7 @@ class BackgroundTaskManager:
                         nrem_sampled=stats.get("nrem_sampled", 0),
                         insight_communities=stats.get("insight_communities", 0))
         except Exception as e:
-            logger.warning("dream_engine_v2.failed", error=str(e))
+            logger.warning("dream_engine_v2.failed", error=str(e), exc_info=True)
 
     async def _warm_embedding_cache(self) -> None:
         """预热嵌入缓存：将最近 30 条情景记忆摘要写入向量缓存，减少查询时 cache miss。"""
@@ -662,7 +662,7 @@ class BackgroundTaskManager:
                 metrics.inc("concept_graph.curator_timeout")
             _curator_ms = int((time.time() - _curator_t0) * 1000)
             if _curator_ms > 10000:
-                logger.warning(f"concept_graph.curator_slow elapsed_ms={_curator_ms}")
+                logger.warning("concept_graph.curator_slow elapsed_ms={}", _curator_ms)
             await self.db.set_cron_last_run("concept_link_curator")
         except (OSError, RuntimeError) as e:
             logger.warning("bg.concept_link_curator_failed", error=str(e))
@@ -702,7 +702,7 @@ class BackgroundTaskManager:
                     from web.routers.mail_manage import _clear_auth_status_cache
                     _clear_auth_status_cache()
                 except (ImportError, AttributeError):
-                    logger.debug("bg.clear_auth_status_cache_error: {}", exc_info=True)
+                    logger.debug("bg.clear_auth_status_cache_error", exc_info=True)
             else:
                 logger.warning("mail.token_refresh_failed", rc=rc, err=err[:200] if err else "")
             await self.db.set_cron_last_run("mail_token_refresh")
@@ -774,7 +774,7 @@ async def event_loop_watchdog() -> None:
                     tid, ''.join(tail),
                 )
         except Exception as e:
-            logger.error("event_loop.watchdog_dump_failed error={}", str(e))
+            logger.error("event_loop.watchdog_dump_failed error={}", str(e), exc_info=True)
 
 
 def start_event_loop_watchdog() -> None:

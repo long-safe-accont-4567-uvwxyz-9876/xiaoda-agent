@@ -104,7 +104,7 @@ class PersonaCritic:
             "attitude": self._check_attitude(output),
             "boundary": self._check_boundary(output),
         }
-        score = sum(dims.values()) / len(dims)
+        score = sum(dims.values()) / len(dims) if dims else 0.0
         issues = []
         for dim, s in dims.items():
             if s < 0.7:
@@ -121,7 +121,7 @@ class PersonaCritic:
         drift_detected = self._detect_drift()
         if drift_detected:
             logger.warning("persona.drift_detected",
-                           recent_avg=sum(self._recent_scores) / len(self._recent_scores),
+                           recent_avg=sum(self._recent_scores) / len(self._recent_scores) if self._recent_scores else 0.0,
                            threshold=0.7)
             # 触发 Drift Suppressor
             self._suppress_drift()
@@ -213,7 +213,7 @@ class PersonaCritic:
 
     def _suppress_drift(self) -> None:
         """触发 Drift Suppressor: 检索 Persona Case Repository"""
-        recent_avg = sum(self._recent_scores) / len(self._recent_scores)
+        recent_avg = sum(self._recent_scores) / len(self._recent_scores) if self._recent_scores else 0.0
         # 检索最相似案例
         cases = self._case_repo.search(query=f"low_score_{recent_avg:.2f}", top_k=3)
         if cases:

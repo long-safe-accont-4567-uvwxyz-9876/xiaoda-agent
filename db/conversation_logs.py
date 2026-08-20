@@ -141,7 +141,7 @@ class ConversationLogMixin:
                 )
                 configs = await cursor.fetchall()
             except (OSError, ValueError):
-                logger.debug("database.cleanup_config_read_error: {}", exc_info=True)
+                logger.debug("database.cleanup_config_read_error", exc_info=True)
                 return result
 
             now = time.time()
@@ -177,7 +177,7 @@ class ConversationLogMixin:
                         try:
                             await _w_conn.commit()
                         except (OSError, RuntimeError) as e:
-                            logger.warning(f"database.cleanup_commit_failed table={table_name} error={e}")
+                            logger.warning("database.cleanup_commit_failed table={} error={}", table_name, e)
                 except (OSError, RuntimeError) as e:
                     logger.warning("database.cleanup_failed", table=table_name, error=str(e))
                     result[table_name] = 0
@@ -186,7 +186,7 @@ class ConversationLogMixin:
                 try:
                     await _w_conn.commit()
                 except (OSError, RuntimeError) as e:
-                    logger.warning(f"清理过期数据提交事务失败: {e}")
+                    logger.warning("清理过期数据提交事务失败: {}", e)
 
             _cleanup_ms = int((time.time() - _cleanup_t0) * 1000)
             if _cleanup_ms > 2000:
@@ -199,4 +199,3 @@ class ConversationLogMixin:
             if _w_conn is not None:
                 with contextlib.suppress(Exception):
                     await _w_conn.close()
-

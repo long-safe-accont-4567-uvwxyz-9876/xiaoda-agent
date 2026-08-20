@@ -10,6 +10,8 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
+from loguru import logger
+
 from local_ai.contracts import RuntimeProfile
 from local_ai.runtimes.base import Runtime, RuntimeValidationError
 
@@ -65,8 +67,10 @@ class VIPEmbeddingRuntime(Runtime):
         if provider is not None:
             try:
                 provider.close()
-            except Exception:  # noqa: BLE001 - 关闭失败不影响状态重置
-                pass
+            except (OSError, RuntimeError) as e:
+                logger.debug("vip_embedding.provider_close_failed error={}", str(e))
+            except Exception:
+                logger.exception("vip_embedding.stop.unexpected_error")
 
     def health(self) -> bool:
         return self.ready

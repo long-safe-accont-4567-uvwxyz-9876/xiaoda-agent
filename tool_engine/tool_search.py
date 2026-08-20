@@ -227,7 +227,7 @@ class VectorIndex:
             t.join()
             return result_holder[0] if result_holder else []
         except Exception as e:
-            logger.warning("tool_search.embed_sync_failed", error=str(e))
+            logger.warning("tool_search.embed_sync_failed", error=str(e), exc_info=True)
             return []
 
     def search(self, query: str, top_k: int = 5) -> list[tuple[ToolDef, float]]:
@@ -350,7 +350,7 @@ class ToolSearchEngine:
             self._index.add_tool(tool)
             if self._vector_index is not None:
                 self._vector_index.add_tool(tool)
-        logger.debug(f"ToolSearch: 注册工具 {tool.name} (defer={tool.defer_loading})")
+        logger.debug("ToolSearch: 注册工具 {} (defer={})", tool.name, tool.defer_loading)
 
     def search(self, query: str, top_k: int = 5) -> list[ToolDef]:
         """搜索工具 (v2 混合检索).
@@ -405,7 +405,7 @@ class ToolSearchEngine:
             saved = sum(t.token_estimate for t in self._index._tool_defs) - sum(t.token_estimate for t in searched)
             self._total_token_saved += saved
             mode = "hybrid" if self._vector_index is not None else "bm25"
-            logger.info(f"ToolSearch: 搜索'{query}' → {len(searched)}个工具, 节省~{saved} tokens, mode={mode}")
+            logger.info("ToolSearch: 搜索'{}' → {}个工具, 节省~{} tokens, mode={}", query, len(searched), saved, mode)
         return [
             {
                 "type": "function",

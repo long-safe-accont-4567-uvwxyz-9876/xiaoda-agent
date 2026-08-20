@@ -132,8 +132,10 @@ def _write_skill_file(workflow: dict) -> None:
         content = generate_workflow_prompt(workflow)
         _skill_path(name).write_text(content, encoding="utf-8-sig")
         logger.info("workflow.skill_written name={}", name)
-    except Exception as e:
+    except (OSError, ValueError, TypeError) as e:
         logger.warning("workflow.skill_write_failed name={} error={}", name, str(e))
+    except Exception:
+        logger.exception("workflows._write_skill_file.unexpected_error")
 
 
 def _remove_skill_file(name: str) -> None:
@@ -145,7 +147,7 @@ def _remove_skill_file(name: str) -> None:
         try:
             fp.unlink()
             logger.info("workflow.skill_removed name={}", name)
-        except Exception as e:
+        except OSError as e:
             logger.warning("workflow.skill_remove_failed name={} error={}", name, str(e))
 
 
@@ -159,8 +161,10 @@ async def list_workflows() -> Any:
             wf = json.loads(fp.read_text(encoding="utf-8"))
             wf["node_count"] = len(wf.get("nodes", []))
             out.append(wf)
-        except Exception as e:
+        except (json.JSONDecodeError, OSError, ValueError) as e:
             logger.warning("workflow.list_read_failed file={} error={}", fp.name, str(e))
+        except Exception:
+            logger.exception("workflows.list_workflows.unexpected_error")
     return Envelope(data=out)
 
 
@@ -173,7 +177,10 @@ async def get_workflow(wf_id: str) -> Any:
         raise HTTPException(404, f"工作流 {wf_id} 不存在")
     try:
         wf = json.loads(fp.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, OSError) as e:
+        raise HTTPException(500, f"工作流文件读取失败: {e}") from None
     except Exception as e:
+        logger.exception("workflows.get_workflow.unexpected_error")
         raise HTTPException(500, f"工作流文件读取失败: {e}") from None
     return Envelope(data=wf)
 
@@ -197,7 +204,7 @@ async def create_workflow(body: dict, request: Request) -> Any:
     try:
         await core.db.insert_audit_log("webui.workflows.create", "webui", wf_id)
         await core.db.commit()
-    except Exception:
+    except (OSError, RuntimeError):
         logger.debug("workflows.audit_create_failed", exc_info=True)
     logger.info("workflow.created id={}", wf_id)
     return Envelope(data=body)
@@ -220,7 +227,7 @@ async def update_workflow(wf_id: str, body: dict, request: Request) -> Any:
     try:
         old_wf = json.loads(fp.read_text(encoding="utf-8"))
         old_name = old_wf.get("name", "")
-    except Exception:
+    except (json.JSONDecodeError, OSError):
         logger.debug("workflows.read_old_name_failed", exc_info=True)
 
     body["id"] = wf_id
@@ -239,7 +246,7 @@ async def update_workflow(wf_id: str, body: dict, request: Request) -> Any:
     try:
         await core.db.insert_audit_log("webui.workflows.update", "webui", wf_id)
         await core.db.commit()
-    except Exception:
+    except (OSError, RuntimeError):
         logger.debug("workflows.audit_update_failed", exc_info=True)
     logger.info("workflow.updated id={}", wf_id)
     return Envelope(data=body)
@@ -258,7 +265,7 @@ async def delete_workflow(wf_id: str, request: Request) -> Any:
     try:
         wf = json.loads(fp.read_text(encoding="utf-8"))
         name = wf.get("name", "")
-    except Exception:
+    except (json.JSONDecodeError, OSError):
         logger.debug("workflows.read_name_before_delete_failed", exc_info=True)
 
     fp.unlink()
@@ -267,7 +274,7 @@ async def delete_workflow(wf_id: str, request: Request) -> Any:
     try:
         await core.db.insert_audit_log("webui.workflows.delete", "webui", wf_id)
         await core.db.commit()
-    except Exception:
+    except (OSError, RuntimeError):
         logger.debug("workflows.audit_delete_failed", exc_info=True)
     logger.info("workflow.deleted id={}", wf_id)
     return Envelope(data={"deleted": wf_id})
@@ -282,7 +289,10 @@ async def preview_workflow(wf_id: str) -> Any:
         raise HTTPException(404, f"工作流 {wf_id} 不存在")
     try:
         wf = json.loads(fp.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, OSError) as e:
+        raise HTTPException(500, f"工作流文件读取失败: {e}") from None
     except Exception as e:
+        logger.exception("workflows.preview_workflow.unexpected_error")
         raise HTTPException(500, f"工作流文件读取失败: {e}") from None
     prompt = generate_workflow_prompt(wf)
     return Envelope(data={"prompt": prompt})

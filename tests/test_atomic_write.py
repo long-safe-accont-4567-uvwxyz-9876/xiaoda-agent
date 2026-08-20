@@ -53,7 +53,7 @@ class TestAtomicWrite(unittest.TestCase):
         """符号链接不被替换为常规文件"""
         # 创建真实文件
         real_file = os.path.join(self.tmp_dir, "real.txt")
-        with open(real_file, "w") as f:
+        with open(real_file, "w", encoding="utf-8") as f:
             f.write("原始内容")
 
         # 创建符号链接指向真实文件

@@ -66,13 +66,13 @@ async def close_agnes_clients() -> None:
     if _agnes_openai_client is not None:
         try:
             await _agnes_openai_client.close()
-        except Exception:
+        except (OSError, RuntimeError):
             logger.debug("agnes.close_openai_client_error", exc_info=True)
         _agnes_openai_client = None
     if _agnes_http_client is not None:
         try:
             await _agnes_http_client.aclose()
-        except Exception:
+        except (OSError, RuntimeError):
             logger.debug("agnes.close_http_client_error", exc_info=True)
         _agnes_http_client = None
 
@@ -104,7 +104,7 @@ def _parse_agnes_error(e: Exception) -> tuple[str, str, int]:
             if isinstance(err_obj, dict):
                 error_code = error_code or err_obj.get("code", "") or err_obj.get("type", "")
                 error_msg = err_obj.get("message", "") or error_msg
-        except Exception as e:
+        except (ValueError, KeyError, RuntimeError) as e:
             logger.debug("agnes.parse_error_response_failed error={}", str(e))
     return error_code, error_msg, status_code
 
@@ -178,7 +178,7 @@ async def agnes_image_generate(prompt: str, image_url: str = "",
                 results.append(f"图片已保存到: {img_path}")
 
         return ToolResult.ok("\n".join(results) if results else "图片生成完成但无结果")
-    except Exception as e:
+    except (RuntimeError, OSError, ValueError, ConnectionError, TimeoutError) as e:
         code, msg, status = _parse_agnes_error(e)
         # f-string 确保错误详情进日志（旧 logger.error("...", error=str(e)) 的 extra 字段
         # loguru format 不渲染，导致 journalctl 里只剩事件名，content_policy_violation 无法诊断）
@@ -230,7 +230,7 @@ async def agnes_video_generate(prompt: str, seconds: float = 5, fps: int = 24) -
         return await _agnes_poll_and_download_video(
             client, _agnes_url, _agnes_key, video_id
         )
-    except Exception as e:
+    except (RuntimeError, OSError, ValueError, ConnectionError, TimeoutError) as e:
         code, msg, status = _parse_agnes_error(e)
         logger.error(
             f"agnes.video_generate_failed code={code} status={status} "
@@ -317,7 +317,7 @@ async def _agnes_poll_and_download_video(
                     download_resp.raise_for_status()
                     local_path.write_bytes(download_resp.content)
                     return ToolResult.ok(f"视频生成完成！本地路径: {local_path}")
-                except Exception as dl_err:
+                except (OSError, RuntimeError, ValueError) as dl_err:
                     logger.error("agnes.video_download_failed", error=str(dl_err))
                     # 降级：返回 URL 供用户手动查看
                     return ToolResult.ok(f"视频生成完成！下载失败，请直接访问：{video_url}")

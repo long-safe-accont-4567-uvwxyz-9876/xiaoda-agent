@@ -142,7 +142,11 @@ class AgentIntrospector:
         # 运行时间
         try:
             state.uptime = max(0.0, time.time() - self._start_time)
+        except (ImportError, OSError, RuntimeError, ValueError):
+            state.uptime = 0.0
+
         except Exception:
+            logger.exception(".core.agent_introspection.get_current_state_unexpected")
             state.uptime = 0.0
 
         # 最后一次错误 (来自 agent._error_handler 或 self_diagnostic)
@@ -180,7 +184,7 @@ class AgentIntrospector:
             drift_score = float(d.get("drift_score", 0.0))
             state.cognitive_load = max(0.0, min(1.0, 0.5 * uncertainty + 0.5 * drift_score))
         except Exception as e:
-            logger.debug(f"Introspect.metacog_failed: {e!r}")
+            logger.debug("Introspect.metacog_failed: {!r}", e)
 
     def _collect_active_goals(self, state: AgentState) -> None:
         """从 context 采集活跃目标"""
@@ -203,7 +207,7 @@ class AgentIntrospector:
                         break
             state.active_goals = goals[:5]  # 最多保留 5 条
         except Exception as e:
-            logger.debug(f"Introspect.goals_failed: {e!r}")
+            logger.debug("Introspect.goals_failed: {!r}", e)
 
     def _collect_emotional_state(self, state: AgentState) -> None:
         """从 emotion 模块或 context.emotion_hint 采集情绪"""
@@ -227,7 +231,7 @@ class AgentIntrospector:
                     emo = detect_emotion(last_input)
                     state.emotional_state = str(emo.get("primary", "平静"))
         except Exception as e:
-            logger.debug(f"Introspect.emotion_failed: {e!r}")
+            logger.debug("Introspect.emotion_failed: {!r}", e)
 
     def _collect_reflection_stats(self, state: AgentState) -> None:
         """从 agent_r_reflection 采集反思次数/活跃教训数"""
@@ -240,7 +244,7 @@ class AgentIntrospector:
             state.reflection_count = int(stats.get("reflection_count", 0))
             state.lessons_active = int(stats.get("memories", 0))
         except Exception as e:
-            logger.debug(f"Introspect.reflection_failed: {e!r}")
+            logger.debug("Introspect.reflection_failed: {!r}", e)
 
     def _collect_degradation_level(self, state: AgentState) -> None:
         """从 degradation_strategy 采集降级级别"""
@@ -250,7 +254,7 @@ class AgentIntrospector:
             # current_level 是 IntEnum, int() 得到 0-3
             state.degradation_level = int(strat.current_level)
         except Exception as e:
-            logger.debug(f"Introspect.degradation_failed: {e!r}")
+            logger.debug("Introspect.degradation_failed: {!r}", e)
 
     def _collect_health_score(self, state: AgentState) -> None:
         """从 behavioral_health 采集健康度评分"""
@@ -262,7 +266,7 @@ class AgentIntrospector:
             state.health_score = float(score.score)
             return
         except Exception as e:
-            logger.debug(f"Introspect.health_scorer_failed: {e!r}")
+            logger.debug("Introspect.health_scorer_failed: {!r}", e)
         # 回退: doctor/behavioral_health.py 的 BehavioralHealthMonitor
         try:
             from doctor.behavioral_health import get_behavioral_health_monitor
@@ -272,7 +276,7 @@ class AgentIntrospector:
             # 0-1 映射到 1-5
             state.health_score = max(1.0, min(5.0, round(bhs * 5)))
         except Exception as e:
-            logger.debug(f"Introspect.health_monitor_failed: {e!r}")
+            logger.debug("Introspect.health_monitor_failed: {!r}", e)
 
     def _collect_last_error(self, state: AgentState) -> None:
         """从 agent._error_handler 或 self_diagnostic 采集最后一次错误"""
@@ -288,7 +292,7 @@ class AgentIntrospector:
                         state.last_error = str(msg)[:200]
                         return
         except Exception as e:
-            logger.debug(f"Introspect.last_error_handler_failed: {e!r}")
+            logger.debug("Introspect.last_error_handler_failed: {!r}", e)
         # 回退: self_diagnostic 的最近 critical/warning 报告
         try:
             from core.self_diagnostic import get_self_diagnostic
@@ -297,7 +301,7 @@ class AgentIntrospector:
             if reports:
                 state.last_error = str(reports[0].message)[:200]
         except Exception as e:
-            logger.debug(f"Introspect.self_diag_failed: {e!r}")
+            logger.debug("Introspect.self_diag_failed: {!r}", e)
 
     # ─── 工具: 在 agent 及其属性中查找带指定方法的对象 (duck typing) ───
 

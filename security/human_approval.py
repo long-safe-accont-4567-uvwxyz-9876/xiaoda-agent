@@ -174,10 +174,10 @@ class HumanApprovalGate:
                 else:
                     cb(req)
             except Exception as e:
-                logger.warning(f"ApprovalGate.callback_failed: {e}")
+                logger.warning("ApprovalGate.callback_failed: {}", e, exc_info=True)
 
-        logger.info(f"ApprovalGate.request id={req.id} op={operation} "
-                     f"risk={risk.value} user={user_id}")
+        logger.info("ApprovalGate.request id={} op={} risk={} user={}",
+                     req.id, operation, risk.value, user_id)
         return req
 
     async def wait_for_decision(self, request_id: str,
@@ -240,8 +240,8 @@ class HumanApprovalGate:
             "operation": req.operation, "status": decision.value,
             "decided_by": decided_by, "ts": time.time(),
         })
-        logger.info(f"ApprovalGate.decided id={request_id} "
-                     f"status={decision.value} by={decided_by}")
+        logger.info("ApprovalGate.decided id={} status={} by={}",
+                     request_id, decision.value, decided_by)
         return True
 
     def on_request(self, callback: Callable) -> None:
@@ -384,7 +384,7 @@ class IMApprovalChannel:
         try:
             await self._send_callback(prompt)
         except Exception as e:
-            logger.warning("approval.im_channel.send_failed error={}", str(e)[:200])
+            logger.warning("approval.im_channel.send_failed error={}", str(e)[:200], exc_info=True)
 
         # 注册 pending 请求与 future (以 request_id 为 key, 支持同用户并发请求)
         loop = asyncio.get_running_loop()

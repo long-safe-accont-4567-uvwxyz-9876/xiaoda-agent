@@ -303,7 +303,7 @@ class FaultInjectingLLMClient:
             context: 上下文字典 (调用参数等)
         """
         if type not in VALID_FAULT_TYPES:
-            logger.warning(f"record_fault: 未知故障类型 {type!r}, 已忽略")
+            logger.warning("record_fault: 未知故障类型 {!r}, 已忽略", type)
             return
         self._fault_log.append({"type": type, "context": context})
 
@@ -349,7 +349,7 @@ class FaultInjectingLLMClient:
             raise ValueError(f"fault_rate 必须在 [0, 1] 范围内, 当前值: {rate}")
         old = self._config.fault_rate
         self._config.fault_rate = rate
-        logger.info(f"FaultInject.set_fault_rate {old:.2f} -> {rate:.2f}")
+        logger.info("FaultInject.set_fault_rate {:.2f} -> {:.2f}", old, rate)
 
     def reset_stats(self) -> None:
         """重置统计 (不影响 fault_rate / seed / fault_types)"""

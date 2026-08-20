@@ -171,7 +171,7 @@ class InstinctManager:
                 )
                 _route_ms = int((time.time() - _route_t0) * 1000)
                 if _route_ms > 5000:
-                    logger.warning(f"instinct.route_slow elapsed_ms={_route_ms} free_ms={_free_ms}")
+                    logger.warning("instinct.route_slow elapsed_ms={} free_ms={}", _route_ms, _free_ms)
             except asyncio.TimeoutError:
                 logger.warning("instinct.extract_router_timeout, skip this round")
                 return None
@@ -295,7 +295,7 @@ class InstinctManager:
                 )
             _db_ms = int((time.time() - _db_t0) * 1000)
             if _db_ms > 2000:
-                logger.warning(f"instinct.db_slow elapsed_ms={_db_ms} active_count={len(existing_contents)}")
+                logger.warning("instinct.db_slow elapsed_ms={} active_count={}", _db_ms, len(existing_contents))
             logger.info("instinct.extracted", count=len(rows_to_insert), session=session_id)
         except Exception as e:
             logger.debug("instinct.insert_failed", error=str(e))

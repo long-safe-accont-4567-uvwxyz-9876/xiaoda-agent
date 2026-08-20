@@ -258,8 +258,11 @@ def _http_get_json(path: str, token: str, host: str | None = None,
     import urllib.request as _ur
     url = webui_base_url(host, port) + path
     req = _ur.Request(url, headers={"Authorization": f"Bearer {token}"})
-    with _ur.urlopen(req, timeout=timeout) as resp:
-        return json.loads(resp.read().decode("utf-8"))
+    try:
+        with _ur.urlopen(req, timeout=timeout) as resp:
+            return json.loads(resp.read().decode("utf-8"))
+    except json.JSONDecodeError as e:
+        raise RuntimeError(f"响应 JSON 解析失败: {str(e)[:100]}") from e
 
 
 def get_chat_model_label(token: str, host: str | None = None,
@@ -268,7 +271,10 @@ def get_chat_model_label(token: str, host: str | None = None,
     try:
         data = _http_get_json("/api/v1/models/chat-model", token, host, port)
         d = data.get("data") or {}
+    except (ValueError, KeyError, ImportError):
+        return "mimo-v2.5"
     except Exception:
+        logger.exception(".cli_client.get_chat_model_label_unexpected")
         return "mimo-v2.5"
     provider = d.get("provider", "") or ""
     model_id = d.get("model_id", "") or ""
@@ -336,7 +342,11 @@ class WSClient:
                 connect_kwargs["subprotocols"] = [self._token]
             self._ws = await self._websockets.connect(
                 self._url, open_timeout=10, ping_interval=None, **connect_kwargs)
+        except (ImportError, OSError, RuntimeError, ValueError) as e:
+            raise RuntimeError(f"连接主进程失败: {str(e)[:120]}") from e
+
         except Exception as e:
+            logger.exception(".cli_client.connect_unexpected")
             raise RuntimeError(f"连接主进程失败: {str(e)[:120]}") from e
 
     async def close(self) -> None:

@@ -28,7 +28,10 @@ from loguru import logger
 
 try:
     from utils.atomic_write import atomic_write
-except Exception:  # pragma: no cover
+except (ImportError, AttributeError):
+    atomic_write = None  # type: ignore[assignment]
+except Exception:
+    logger.exception(".memory.numpy_index.unexpected")
     atomic_write = None  # type: ignore[assignment]
 
 try:

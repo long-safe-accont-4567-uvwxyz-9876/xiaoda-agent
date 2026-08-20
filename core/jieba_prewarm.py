@@ -19,10 +19,9 @@ def _load_jieba_dict() -> None:
         jieba.initialize()
         logger.info("jieba.prewarm_done")
     except ImportError:
-        # jieba 未安装，FTS 分词降级到 n-gram（db/fts_utils.py 现有行为）
-        pass
+        logger.debug("jieba.not_installed_fts_fallback")
     except Exception as e:
-        logger.warning(f"jieba.prewarm_failed error={e}")
+        logger.warning("jieba.prewarm_failed error={}", e)
 
 
 async def prewarm_jieba() -> None:

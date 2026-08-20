@@ -33,7 +33,10 @@ def _get_local_now() -> datetime:
     tz_name = os.getenv("NUDGE_TIMEZONE", "Asia/Shanghai")
     try:
         tz = ZoneInfo(tz_name)
+    except (KeyError, ImportError):
+        tz = ZoneInfo("Asia/Shanghai")
     except Exception:
+        logger.exception(".core.spontaneous_recall._get_local_now_unexpected")
         tz = ZoneInfo("Asia/Shanghai")
     return datetime.now(tz)
 

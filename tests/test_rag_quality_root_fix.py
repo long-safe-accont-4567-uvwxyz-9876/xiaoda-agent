@@ -59,8 +59,13 @@ class TestVectorRecallDistanceFilter:
 
         results = await mm._hybrid_vec_search("Python 配置数据库连接", k=10)
 
-        # 期望：远距离向量被过滤，返回空（而非美化成高分返回）
-        assert results == [], f"远距离向量不应被召回，但返回了 {len(results)} 条"
+        # P0-2 软降权契约：distance > RAG_VEC_MAX_DISTANCE 的向量不再被向量通道硬丢弃，
+        # 而是降权保留（乘 RAG_VEC_SOFT_PENALTY=0.3），交给下游 final_score 兜底过滤。
+        # 这里 distance>=1.5 → sim=(1-distance)*0.3 <= 0 → 被 max(0,...) 截为 0，
+        # 即远距离向量被降到最低分（而非美化成高分），下游仍不会返回给用户。
+        assert results, "软降权后向量通道仍返回候选（交给 final_score 兜底）"
+        for r in results:
+            assert r["score"] == 0.0, f"远距离向量应被降权到 0，但 score={r['score']}"
 
     @pytest.mark.asyncio
     async def test_close_vectors_kept(self):
@@ -103,10 +108,15 @@ class TestVectorRecallDistanceFilter:
 
         results = await mm._hybrid_vec_search("query", k=10)
 
-        # 期望：只保留 2 条相关的
-        assert len(results) == 2, f"应过滤 2 条无关的，保留 2 条相关的，实际 {len(results)} 条"
-        result_ids = {r["id"] for r in results}
-        assert result_ids == {301, 302}, f"应保留 301/302，实际 {result_ids}"
+        # P0-2 软降权契约：4 条都进入向量通道候选，但 303/304（distance>1.0）被降权到 score=0，
+        # 301/302（distance<1.0）保持正常相关分。下游 final_score 会过滤掉降权项。
+        # 这里验证：相关项保留且高分，无关项被降到最低分（而非被向量通道硬丢弃）。
+        assert len(results) == 4, f"软降权后 4 条都进入候选，实际 {len(results)} 条"
+        by_id = {r["id"]: r for r in results}
+        assert by_id[301]["score"] > 0.0, "相关向量 301 应保持正分"
+        assert by_id[302]["score"] > 0.0, "相关向量 302 应保持正分"
+        assert by_id[303]["score"] == 0.0, f"无关向量 303 应被降权到 0，实际 {by_id[303]['score']}"
+        assert by_id[304]["score"] == 0.0, f"无关向量 304 应被降权到 0，实际 {by_id[304]['score']}"
 
 
 class TestRRFFusionQualityFloor:

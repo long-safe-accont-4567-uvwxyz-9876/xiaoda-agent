@@ -186,8 +186,7 @@ class BeliefRouter:
                     self._beliefs[name] = AgentBelief(alpha=alpha, beta=beta)
             logger.info("belief_router.loaded_from_json", beliefs=self.get_beliefs())
         except FileNotFoundError:
-            # JSON 备份尚未生成，保持默认空信念即可，不视为异常
-            pass
+            logger.debug("belief_router.no_saved_beliefs")
         except Exception as e:
             logger.warning("belief_router.json_load_failed", error=str(e))
 

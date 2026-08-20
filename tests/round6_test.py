@@ -431,7 +431,7 @@ async def test_concurrent_operations():
             async def write_file(i):
                 path = os.path.join(td, f"file_{i}.txt")
                 atomic_write(path, f"content_{i}")
-                with open(path) as f:
+                with open(path, encoding="utf-8") as f:
                     content = f.read()
                 return content == f"content_{i}"
 

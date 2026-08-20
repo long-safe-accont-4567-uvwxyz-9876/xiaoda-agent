@@ -4,6 +4,7 @@ from collections.abc import AsyncIterator, Callable
 from typing import Any
 
 import aiosqlite
+from loguru import logger
 
 
 class TemporalMemoryDB:
@@ -27,7 +28,12 @@ class TemporalMemoryDB:
             await self._conn.execute("BEGIN IMMEDIATE")
             yield self._conn
             await self._conn.commit()
+        except (ImportError, OSError, RuntimeError, ValueError):
+            await self._conn.rollback()
+            raise
+
         except Exception:
+            logger.exception(".db.db_temporal_memory._transaction_unexpected")
             await self._conn.rollback()
             raise
 

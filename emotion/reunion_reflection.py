@@ -124,7 +124,7 @@ async def generate_reunion_message(
                 text = text[:80]
             return text if text else f"{address_term}回来啦～"
         except Exception as e:
-            logger.debug(f"reunion_reflection.llm_failed: {e}")
+            logger.debug("reunion_reflection.llm_failed: {}", e)
 
     # 降级：模板生成
     if was_low:

@@ -62,7 +62,7 @@ async def _installed_models(core: Any) -> list[dict[str, str]]:
                 "ownership": str(getattr(record, "ownership", None) or ""),
             })
         return models
-    except Exception:  # noqa: BLE001
+    except (RuntimeError, ImportError, OSError, ValueError):  # noqa: BLE001
         return []
 
 
@@ -84,7 +84,7 @@ def _catalog_candidates(purpose: str) -> list[dict[str, str]]:
             for model in models
             if (model.purpose.value if hasattr(model.purpose, "value") else str(model.purpose)) == purpose
         ]
-    except Exception:  # noqa: BLE001
+    except (RuntimeError, ImportError, OSError, ValueError):  # noqa: BLE001
         return []
 
 
@@ -135,7 +135,7 @@ async def ensure_local_instance(core: Any, node_id: str, local_model: str) -> bo
         await manager.start(real_id)
         logger.info("local_deploy.node_instance_started node={} model={} registry_id={}", node_id, local_model, real_id)
         return True
-    except Exception as e:  # noqa: BLE001
+    except (RuntimeError, OSError, ValueError, ImportError) as e:  # noqa: BLE001
         logger.warning("local_deploy.node_instance_start_failed node={} model={} error={}", node_id, local_model, str(e))
         return False
 
@@ -154,7 +154,7 @@ async def stop_node_instance(core: Any, node_id: str, local_model: str) -> None:
         if instance is not None:
             await manager.stop(instance.id)
             logger.info("local_deploy.node_instance_stopped node={} model={}", node_id, local_model)
-    except Exception as e:  # noqa: BLE001
+    except (RuntimeError, OSError, ValueError) as e:  # noqa: BLE001
         logger.warning("local_deploy.node_instance_stop_failed node={} model={} error={}", node_id, local_model, str(e))
 
 
@@ -274,7 +274,7 @@ async def build_status(core: Any, vs: Any, cfg: Any) -> list[dict[str, Any]]:
                 if service is not None:
                     try:
                         local_available = bool(service.available)
-                    except Exception:  # noqa: BLE001
+                    except (RuntimeError, OSError, ValueError):  # noqa: BLE001
                         local_available = False
         elif node_id == "asr":
             local_available = any(c.get("installed") for c in _node_local_models(node, installed))
@@ -301,79 +301,82 @@ def _try_set_backend(obj: Any, backend: str, local_model: str | None = None) -> 
         obj.set_backend(backend, local_model)
 
 
+def _apply_service_node(core: Any, vs: Any, node_id: str, backend: str, local_model: str | None) -> None:
+    if node_id == "embedding":
+        if vs is not None and backend in ("local", "api"):
+            vs.set_embed_mode("local" if backend == "local" else "remote")
+        return
+    if node_id == "reranker":
+        memory = getattr(core, "memory", None)
+        _try_set_backend(getattr(memory, "_reranker_service", None), backend, local_model)
+        return
+    if node_id == "query_transform":
+        memory = getattr(core, "memory", None)
+        _try_set_backend(getattr(memory, "_query_transformer", None), backend, local_model)
+        return
+    if node_id == "instinct":
+        _try_set_backend(getattr(core, "instinct_manager", None), backend, local_model)
+        return
+    if node_id == "error_rule":
+        _try_set_backend(getattr(core, "error_pipeline", None), backend, local_model)
+        return
+    if node_id == "kg_extract":
+        kg = getattr(core, "knowledge_graph", None)
+        _try_set_backend(kg, backend, local_model)
+        _try_set_backend(getattr(kg, "_kg_v2", None) if kg is not None else None, backend, local_model)
+        return
+    if node_id == "asr":
+        return
+
+
+def _apply_llm_node(core: Any, node_id: str, backend: str, local_model: str | None, app: Any) -> None:
+    if node_id == "emotion_llm":
+        from emotion import emotion_llm
+        _try_set_backend(emotion_llm, backend, local_model)
+        return
+    if node_id == "reunion":
+        from emotion import reunion_reflection
+        _try_set_backend(reunion_reflection, backend, local_model)
+        return
+    if node_id == "portrait":
+        _try_set_backend(getattr(core, "portrait_manager", None), backend, local_model)
+        return
+    if node_id == "memory_distill":
+        memory = getattr(core, "memory", None)
+        _try_set_backend(getattr(memory, "distiller", None), backend, local_model)
+        return
+    if node_id == "dream":
+        from core.dream_engine_v2 import get_dream_engine_v2
+        _try_set_backend(get_dream_engine_v2(), backend, local_model)
+        return
+    if node_id == "nudge":
+        try:
+            import qq_bot_adapter
+            bot = getattr(qq_bot_adapter, "_ACTIVE_BOT", None)
+            nudge = getattr(bot, "nudge_engine", None) if bot is not None else None
+            _try_set_backend(nudge, backend, local_model)
+        except (ImportError, AttributeError):
+            logger.debug("local_deploy.nudge_not_available")
+        return
+    if node_id == "spontaneous_recall":
+        obj = getattr(app.state, "spontaneous_recall", None) if app is not None else None
+        _try_set_backend(obj, backend, local_model)
+        return
+    if node_id == "growth":
+        obj = getattr(app.state, "growth_narrative", None) if app is not None else None
+        _try_set_backend(obj, backend, local_model)
+        return
+
+
+_SERVICE_NODES = {"embedding", "reranker", "query_transform", "instinct", "error_rule", "kg_extract", "asr"}
+
+
 def apply_to_runtime(core: Any, vs: Any, node_id: str, backend: str, app: Any = None,
                      local_model: str | None = None) -> None:
-    """将节点后端选择立即应用到运行时对象（热生效，无重启）。
-
-    app 为 FastAPI 应用（可选），用于访问 app.state 上的自发回忆/成长叙事实例。
-    local_model 为生成型节点选择的本地模型（每节点独立）；None 表示全局共享。
-    """
     try:
-        if node_id == "embedding":
-            # embedding 复用向量库引擎切换（热生效）
-            if vs is not None and backend in ("local", "api"):
-                mode = "local" if backend == "local" else "remote"
-                vs.set_embed_mode(mode)
-            return
-        if node_id == "reranker":
-            memory = getattr(core, "memory", None)
-            _try_set_backend(getattr(memory, "_reranker_service", None), backend, local_model)
-            return
-        if node_id == "query_transform":
-            memory = getattr(core, "memory", None)
-            _try_set_backend(getattr(memory, "_query_transformer", None), backend, local_model)
-            return
-        if node_id == "instinct":
-            _try_set_backend(getattr(core, "instinct_manager", None), backend, local_model)
-            return
-        if node_id == "error_rule":
-            _try_set_backend(getattr(core, "error_pipeline", None), backend, local_model)
-            return
-        if node_id == "kg_extract":
-            kg = getattr(core, "knowledge_graph", None)
-            _try_set_backend(kg, backend, local_model)
-            _try_set_backend(getattr(kg, "_kg_v2", None) if kg is not None else None, backend, local_model)
-            return
-        if node_id == "asr":
-            # ASR 每次请求读取配置，无需运行时对象
-            return
-
-        # ── 内在世界 LLM 节点 ──
-        if node_id == "emotion_llm":
-            from emotion import emotion_llm
-            _try_set_backend(emotion_llm, backend, local_model)
-            return
-        if node_id == "reunion":
-            from emotion import reunion_reflection
-            _try_set_backend(reunion_reflection, backend, local_model)
-            return
-        if node_id == "portrait":
-            _try_set_backend(getattr(core, "portrait_manager", None), backend, local_model)
-            return
-        if node_id == "memory_distill":
-            memory = getattr(core, "memory", None)
-            _try_set_backend(getattr(memory, "distiller", None), backend, local_model)
-            return
-        if node_id == "dream":
-            from core.dream_engine_v2 import get_dream_engine_v2
-            _try_set_backend(get_dream_engine_v2(), backend, local_model)
-            return
-        if node_id == "nudge":
-            try:
-                import qq_bot_adapter
-                bot = getattr(qq_bot_adapter, "_ACTIVE_BOT", None)
-                nudge = getattr(bot, "nudge_engine", None) if bot is not None else None
-                _try_set_backend(nudge, backend, local_model)
-            except (ImportError, AttributeError):
-                logger.debug("local_deploy.nudge_not_available")
-            return
-        if node_id == "spontaneous_recall":
-            obj = getattr(app.state, "spontaneous_recall", None) if app is not None else None
-            _try_set_backend(obj, backend, local_model)
-            return
-        if node_id == "growth":
-            obj = getattr(app.state, "growth_narrative", None) if app is not None else None
-            _try_set_backend(obj, backend, local_model)
-            return
-    except Exception as e:  # noqa: BLE001
+        if node_id in _SERVICE_NODES:
+            _apply_service_node(core, vs, node_id, backend, local_model)
+        else:
+            _apply_llm_node(core, node_id, backend, local_model, app)
+    except (RuntimeError, OSError, ValueError, ImportError) as e:
         logger.warning("local_deploy.node_apply_failed node={} error={}", node_id, str(e))

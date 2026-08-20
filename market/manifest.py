@@ -16,7 +16,10 @@ from loguru import logger
 
 try:
     from utils.atomic_write import atomic_write
-except Exception:  # pragma: no cover
+except (ImportError, AttributeError):
+    atomic_write = None  # type: ignore[assignment]
+except Exception:
+    logger.exception(".market.manifest.unexpected")
     atomic_write = None  # type: ignore[assignment]
 from pydantic import BaseModel, Field, field_validator
 

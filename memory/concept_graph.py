@@ -33,7 +33,7 @@ class ConceptGraph:
     def _make_node_id(self, text: str) -> str:
         """生成节点 ID：md5(cleaned_text)[:12]"""
         cleaned = self._clean_text(text)
-        return hashlib.md5(cleaned.encode("utf-8")).hexdigest()[:12]
+        return hashlib.md5(cleaned.encode("utf-8"), usedforsecurity=False).hexdigest()[:12]
 
     async def remember(self, text: str,
                         source_mem_id: int | None = None,

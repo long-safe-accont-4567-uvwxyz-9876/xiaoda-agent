@@ -61,7 +61,7 @@ class ToolExecutorMixin:
             from web.tool_events import emit_tool_event
             await emit_tool_event("start", tool_name, actual_args)
         except Exception as e:
-            logger.debug(f"WebUI工具事件(start)发送失败，非关键: {e}")
+            logger.debug("WebUI工具事件(start)发送失败，非关键: {}", e)
         logger.info("tool.exec_stage", tool=tool_name, stage="emit_start",
                     ms=int((_time.time() - _tool_t0) * 1000))
 
@@ -101,7 +101,7 @@ class ToolExecutorMixin:
             await emit_tool_event("end", tool_name, ok=result.success,
                                   elapsed_ms=int((_time.time() - _tool_t0) * 1000))
         except Exception as e:
-            logger.debug(f"WebUI工具事件(end)发送失败，非关键: {e}")
+            logger.debug("WebUI工具事件(end)发送失败，非关键: {}", e)
 
         # 记录工具调用到护栏
         await guardrails.record_call(tool_name, actual_args, result.success,
@@ -382,7 +382,7 @@ class ToolExecutorMixin:
                 return "检测到潜在的系统信息泄露, 已屏蔽相关内容"
             text = cleaned
         except Exception as e:
-            logger.debug(f"canary.scan_failed: {e}")
+            logger.debug("canary.scan_failed: {}", e)
         return humanize(text, style="xiaoda")
 
     # ── 工具定义泄露检测 ──────────────────────────────────
@@ -584,7 +584,7 @@ class ToolExecutorMixin:
                 path = self.sticker_manager.pick(detected)
                 if path:
                     return clean_reply, path
-                logger.warning(f"sticker.not_found name={filename}")
+                logger.warning("sticker.not_found name={}", filename)
             return clean_reply, None
 
         # [emotion:xxx] 标签处理

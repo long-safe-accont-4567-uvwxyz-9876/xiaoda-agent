@@ -96,7 +96,7 @@ def _ping_once(url: str, timeout: int) -> bool:
         with urllib.request.urlopen(url, timeout=timeout) as resp:
             body = resp.read(256).decode(errors="replace")
             return resp.status == 200 and '"ok"' in body
-    except Exception:
+    except (OSError, urllib.error.URLError, TimeoutError):
         return False
 
 
@@ -147,7 +147,7 @@ def _wait_port_release(host: str, port: int, timeout: int = 10) -> bool:
                 result = s.connect_ex((host, port))
                 if result != 0:
                     return True  # 端口已释放
-        except Exception:
+        except (OSError, RuntimeError):
             return True  # 无法检测时假设已释放
         time.sleep(1)
     return False
@@ -259,7 +259,7 @@ class Watchdog:
             )
             self.log.info("watchdog.started pid=%d", self._proc.pid)
             return True
-        except Exception as e:
+        except (OSError, RuntimeError, ValueError) as e:
             self.log.error("watchdog.start_failed err=%s", e)
             self._proc = None
             return False
@@ -309,7 +309,7 @@ class Watchdog:
             _kill_proc_tree(self._proc.pid, self.log)
             try:
                 self._proc.wait(timeout=5)
-            except Exception:
+            except (OSError, RuntimeError):
                 self.log.warning("watchdog.kill_wait_failed pid=%d", self._proc.pid, exc_info=True)
 
         # W3: 等待端口释放

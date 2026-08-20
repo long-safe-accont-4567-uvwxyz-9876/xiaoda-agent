@@ -9,6 +9,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any
 
+from loguru import logger
+
 from prompt_toolkit.application import Application
 from prompt_toolkit.key_binding import KeyBindings
 from prompt_toolkit.layout.containers import Window
@@ -41,7 +43,10 @@ def _menu_max_rows() -> int:
         import shutil
         lines = shutil.get_terminal_size().lines
         return max(6, lines - 4)
+    except (OSError, shutil.Error):
+        return 12
     except Exception:
+        logger.exception("cli_menu._menu_max_rows_unexpected")
         return 12
 
 

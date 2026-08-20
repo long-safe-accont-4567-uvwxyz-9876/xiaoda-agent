@@ -224,10 +224,10 @@ async def _run_agently(args: list[str], timeout: int = 60) -> tuple[int, str, st
         try:
             proc.kill()
             await proc.wait()  # reap 子进程，避免僵尸进程累积
-        except Exception:
+        except (OSError, RuntimeError):
             logger.debug("mail.kill_proc_error", exc_info=True)
         return 98, "", "agently-cli 执行超时"
-    except Exception as e:
+    except (OSError, RuntimeError, ValueError) as e:
         return 97, "", f"启动 agently-cli 失败: {e}"
 
 

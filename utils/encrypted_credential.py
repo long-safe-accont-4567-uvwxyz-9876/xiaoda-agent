@@ -63,7 +63,7 @@ class EncryptedCredential:
             import uuid
             mac = uuid.getnode()
             mac_str = ":".join(f"{(mac >> (8*i)) & 0xFF:02x}" for i in range(5, -1, -1))
-        except Exception:
+        except (OSError, ValueError):
             mac_str = "00:00:00:00:00:00"
         return f"{cpu_id}|{mac_str}"
 
@@ -102,8 +102,8 @@ def protect_credential(plaintext: str, salt: str = "xiaoda-agent") -> EncryptedC
     if EncryptedCredential.is_available():
         try:
             return EncryptedCredential.from_plaintext(plaintext, salt)
-        except Exception as e:
-            logger.warning(f"凭证加密失败,回退明文: {e}")
+        except (RuntimeError, ValueError, OSError) as e:
+            logger.warning("凭证加密失败,回退明文: {}", e, exc_info=True)
             return plaintext
     logger.warning("cryptography 库未安装, API Key 以明文存储")
     return plaintext

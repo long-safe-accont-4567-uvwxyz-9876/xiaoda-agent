@@ -95,7 +95,7 @@ class SelfDiagnostic:
                     metrics={"error_rate": err_rate, "target": target},
                 )
         except Exception as e:
-            logger.debug(f"SelfDiag.error_rate_check_failed: {e}")
+            logger.debug("SelfDiag.error_rate_check_failed: {}", e)
         return None
 
     async def _check_response_time(self) -> SelfReport | None:
@@ -120,7 +120,7 @@ class SelfDiagnostic:
                     metrics={"p99_ms": p99, "target_ms": target},
                 )
         except Exception as e:
-            logger.debug(f"SelfDiag.latency_check_failed: {e}")
+            logger.debug("SelfDiag.latency_check_failed: {}", e)
         return None
 
     async def _check_memory_usage(self) -> SelfReport | None:
@@ -139,7 +139,7 @@ class SelfDiagnostic:
         except ImportError:
             logger.debug("self_diagnostic.module_unavailable", exc_info=True)
         except Exception as e:
-            logger.debug(f"SelfDiag.memory_check_failed: {e}")
+            logger.debug("SelfDiag.memory_check_failed: {}", e)
         return None
 
     async def _check_active_state(self) -> SelfReport | None:
@@ -156,7 +156,7 @@ class SelfDiagnostic:
                     metrics=score,
                 )
         except Exception as e:
-            logger.debug(f"SelfDiag.bh_check_failed: {e}")
+            logger.debug("SelfDiag.bh_check_failed: {}", e)
         return None
 
     async def run_checks(self) -> list[SelfReport]:
@@ -173,7 +173,7 @@ class SelfDiagnostic:
                     self._notify(r)
             except Exception as e:
                 self._consecutive_failures += 1
-                logger.warning(f"SelfDiag.check_failed: {e}")
+                logger.warning("SelfDiag.check_failed: {}", e)
         self._last_check_at = time.time()
         return reports
 
@@ -182,8 +182,8 @@ class SelfDiagnostic:
         log_fn = (logger.info if report.level == ReportLevel.INFO else
                     logger.warning if report.level == ReportLevel.WARNING else
                     logger.error)
-        log_fn(f"SelfDiag.report level={report.level.value} "
-                f"category={report.category} msg={report.message}")
+        log_fn("SelfDiag.report level={} category={} msg={}",
+               report.level.value, report.category, report.message)
         for cb in self._callbacks:
             try:
                 if asyncio.iscoroutinefunction(cb):
@@ -193,7 +193,7 @@ class SelfDiagnostic:
                 else:
                     cb(report)
             except Exception as e:
-                logger.warning(f"SelfDiag.callback_failed: {e}")
+                logger.warning("SelfDiag.callback_failed: {}", e)
 
     def start(self) -> asyncio.Task | None:
         """启动周期性自检"""
@@ -202,13 +202,13 @@ class SelfDiagnostic:
                 try:
                     await self.run_checks()
                 except Exception as e:
-                    logger.error(f"SelfDiag.loop_error: {e}")
+                    logger.error("SelfDiag.loop_error: {}", e, exc_info=True)
                 await asyncio.sleep(self._interval)
 
         try:
             loop = asyncio.get_running_loop()
             self._task = loop.create_task(_loop())
-            logger.info(f"SelfDiag.started interval={self._interval}s")
+            logger.info("SelfDiag.started interval={}s", self._interval)
             return self._task
         except RuntimeError:
             return None

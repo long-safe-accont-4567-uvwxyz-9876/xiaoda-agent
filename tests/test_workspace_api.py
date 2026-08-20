@@ -85,7 +85,7 @@ class TestWorkspaceEndpoints:
     def test_browse_directory(self, client, tmp_path):
         (tmp_path / "subdir1").mkdir()
         (tmp_path / "subdir2").mkdir()
-        (tmp_path / "file.txt").write_text("hi")
+        (tmp_path / "file.txt").write_text("hi", encoding="utf-8")
         r = client.get("/api/v1/workspace/browse", params={"path": str(tmp_path)})
         assert r.status_code == 200
         data = D(r)

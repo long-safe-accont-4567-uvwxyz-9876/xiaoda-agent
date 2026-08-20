@@ -20,10 +20,10 @@ def _parse_env_gpu_index() -> int | None:
         return None
     try:
         idx = int(env_idx)
-        logger.info(f"vulkan gpu index overridden by env XIAODA_GPU_INDEX={idx}")
+        logger.info("vulkan gpu index overridden by env XIAODA_GPU_INDEX={}", idx)
         return idx
     except ValueError:
-        logger.warning(f"invalid XIAODA_GPU_INDEX={env_idx!r}, ignoring")
+        logger.warning("invalid XIAODA_GPU_INDEX={!r}, ignoring", env_idx)
         return None
 
 
@@ -40,8 +40,8 @@ def _get_gpu_names_from_ncnn(ncnn_module, gpu_count: int) -> list[str]:
             elif hasattr(info, "device_name"):
                 name = info.device_name() or ""
             gpu_names.append(name)
-    except Exception as e:
-        logger.info(f"ncnn.get_gpu_info failed: {e}, falling back to system commands")
+    except (RuntimeError, OSError, ValueError) as e:
+        logger.info("ncnn.get_gpu_info failed: {}, falling back to system commands", e)
     return gpu_names
 
 
@@ -55,7 +55,7 @@ def _get_gpu_names_windows() -> list[str]:
             capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=5, check=False,
         )
         return [n.strip() for n in result.stdout.strip().split("\n") if n.strip()]
-    except Exception:
+    except (OSError, subprocess.TimeoutExpired, ValueError):
         return []
 
 
@@ -70,7 +70,7 @@ def _get_gpu_names_linux() -> list[str]:
             if "VGA compatible controller" in line or "3D controller" in line or "Display controller" in line:
                 name = line.split(":")[-1].strip() if ":" in line else ""
                 gpu_names.append(name)
-    except Exception:
+    except (OSError, RuntimeError):
         _loguru_logger.debug("vision.gpu_lspci_failed", exc_info=True)
     return gpu_names
 
@@ -92,7 +92,7 @@ _INTEGRATED_GPU_KEYWORDS = ("intel(r) uhd", "intel(r) iris", "intel hd graphics"
 
 def _select_discrete_gpu_index(gpu_names: list[str], gpu_count: int) -> int:
     """根据 GPU 名称列表选择独显索引。优先独显，次选非核显，否则返回 0。"""
-    logger.info(f"vulkan gpu list (count={gpu_count}): {gpu_names}")
+    logger.info("vulkan gpu list (count={}): {}", gpu_count, gpu_names)
 
     # 优先选择独显
     for i, name in enumerate(gpu_names):
@@ -101,7 +101,7 @@ def _select_discrete_gpu_index(gpu_names: list[str], gpu_count: int) -> int:
         name_lower = name.lower()
         if any(kw in name_lower for kw in _DISCRETE_GPU_KEYWORDS):
             if not any(kw in name_lower for kw in _INTEGRATED_GPU_KEYWORDS):
-                logger.info(f"vulkan discrete gpu selected: device={i} name={name}")
+                logger.info("vulkan discrete gpu selected: device={} name={}", i, name)
                 return i
 
     # 次优选择：非核显的设备
@@ -110,7 +110,7 @@ def _select_discrete_gpu_index(gpu_names: list[str], gpu_count: int) -> int:
             break
         name_lower = name.lower()
         if not any(kw in name_lower for kw in _INTEGRATED_GPU_KEYWORDS):
-            logger.info(f"vulkan non-integrated gpu selected: device={i} name={name}")
+            logger.info("vulkan non-integrated gpu selected: device={} name={}", i, name)
             return i
 
     logger.info("vulkan no discrete gpu found, using device 0")
@@ -140,7 +140,7 @@ def _detect_discrete_gpu_index() -> int:
     try:
         import ncnn
         gpu_count = ncnn.get_gpu_count()
-    except Exception:
+    except (ImportError, OSError, RuntimeError):
         return 0
 
     if gpu_count <= 1:
@@ -154,7 +154,7 @@ def _detect_discrete_gpu_index() -> int:
         gpu_names = _get_gpu_names_from_system()
 
     if not gpu_names:
-        logger.info(f"vulkan multi-gpu detected (count={gpu_count}), but unable to identify devices, using device 0")
+        logger.info("vulkan multi-gpu detected (count={}), but unable to identify devices, using device 0", gpu_count)
         return 0
 
     return _select_discrete_gpu_index(gpu_names, gpu_count)
@@ -256,17 +256,17 @@ class VisionService:
             available_mb = psutil.virtual_memory().available / (1024 * 1024)
             return available_mb > 500
         except ImportError:
-            pass
+            logger.debug("vision.psutil_not_available")
         # fallback: /proc/meminfo（仅 Linux）
         try:
-            with open("/proc/meminfo") as f:
+            with open("/proc/meminfo", encoding="utf-8") as f:
                 for line in f:
                     if line.startswith("MemAvailable:"):
                         available_kb = int(line.split()[1])
                         available_mb = available_kb / 1024
                         return available_mb > 500
         except (OSError, ValueError):
-            pass
+            logger.debug("vision.meminfo_fallback_failed")
         return True  # 无法检测时默认允许加载（不误拒）
 
     def _load_model(self) -> None:
@@ -282,13 +282,13 @@ class VisionService:
                         self._npu = NPUInference(model_path=model_path)
                         self.model_loaded = True
                         self.backend = "npu"
-                        logger.info(f"vision.npu_loaded model={model_path}")
+                        logger.info("vision.npu_loaded model={}", model_path)
                         return
-                    logger.warning(f"vision.npu_model_not_found path={model_path}")
+                    logger.warning("vision.npu_model_not_found path={}", model_path)
                 else:
                     logger.warning("vision.npu_not_available")
-            except Exception as e:
-                logger.warning(f"vision.npu_init_failed error={e}")
+            except (RuntimeError, ImportError, OSError) as e:
+                logger.warning("vision.npu_init_failed error={}", e)
         try:
             import ncnn
         except ImportError:
@@ -332,16 +332,16 @@ class VisionService:
                 # 始终调用 set_vulkan_device，即使 index=0（独显可能就是设备 0）
                 gpu_index = _detect_discrete_gpu_index()
                 net.set_vulkan_device(gpu_index)
-                logger.info(f"vulkan compute enabled, using gpu device={gpu_index}")
-            except Exception as e:
-                logger.warning(f"vulkan init failed, falling back to cpu: {e}")
+                logger.info("vulkan compute enabled, using gpu device={}", gpu_index)
+            except (RuntimeError, OSError, ValueError) as e:
+                logger.warning("vulkan init failed, falling back to cpu: {}", e)
             net.load_param(param_file)
             net.load_model(bin_file)
             self.model = net
             self.backend = "ncnn"
             self.model_loaded = True
             logger.info("ncnn model loaded from %s", param_file)
-        except Exception as e:
+        except (RuntimeError, OSError, ValueError, ImportError) as e:
             logger.warning("failed to load ncnn model: %s, falling back to API", e)
             self.backend = "api_fallback"
             self.model_loaded = True
@@ -367,7 +367,7 @@ class VisionService:
             return (True, frame)
         except ImportError:
             return (False, "opencv not available")
-        except Exception as e:
+        except (RuntimeError, ValueError, OSError) as e:
             return (False, str(e))
 
     def save_frame(self, frame: Any, filename: Any=None) -> str:
@@ -380,7 +380,7 @@ class VisionService:
             filepath = str(CAPTURES_DIR / filename)
             cv2.imwrite(filepath, frame)
             return filepath
-        except Exception as e:
+        except (OSError, RuntimeError, ValueError) as e:
             logger.warning("failed to save frame: %s", e)
             return ""
 
@@ -434,8 +434,8 @@ class VisionService:
                     else:
                         valid_results.append(r)
                 return valid_results
-            except Exception as e:
-                logger.warning(f"vision.npu_detect_failed error={e}")
+            except (RuntimeError, ValueError, OSError) as e:
+                logger.warning("vision.npu_detect_failed error={}", e)
                 return []
         if self.backend == "ncnn":
             return self._detect_ncnn(frame)
@@ -495,7 +495,7 @@ class VisionService:
                 detections.append(Detection(label=label, confidence=confidence, x1=x1, y1=y1, x2=x2, y2=y2))
 
             return self._nms(detections)
-        except Exception as e:
+        except (RuntimeError, ValueError, OSError) as e:
             logger.warning("ncnn detection failed: %s", e)
             return []
 
@@ -539,7 +539,7 @@ class VisionService:
                     percentage=pct,
                 ))
             return results[:5]
-        except Exception as e:
+        except (RuntimeError, ValueError, OSError) as e:
             logger.warning("color analysis failed: %s", e)
             return []
 

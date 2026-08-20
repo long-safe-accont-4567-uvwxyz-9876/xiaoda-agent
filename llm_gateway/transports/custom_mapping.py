@@ -4,6 +4,9 @@ import json
 import re
 from typing import Any, AsyncIterator, Mapping
 
+import httpx
+from loguru import logger
+
 from llm_gateway.contracts import ProviderCapabilities
 from llm_gateway.transports.base import (
     CapabilityReport,
@@ -188,7 +191,10 @@ class CustomMappingTransport(ProviderTransport):
                 finish_reason=normalize_finish_reason(self._get_path(data, mapping.get("finish_reason", "choices.0.finish_reason"))),
                 raw=data,
             )
+        except (httpx.HTTPStatusError, httpx.ConnectError, httpx.TimeoutException, OSError, ValueError) as error:
+            raise TransportError("completion request failed") from error
         except Exception as error:
+            logger.exception("transport.custom_mapping.complete_unexpected model={}", request.model)
             raise TransportError("completion request failed") from error
 
     async def stream(self, request: CompletionRequest) -> AsyncIterator[CompletionChunk]:
@@ -209,7 +215,10 @@ class CustomMappingTransport(ProviderTransport):
                         finish_reason=normalize_finish_reason(self._get_path(data, mapping.get("finish_reason", "choices.0.finish_reason"))),
                         raw=data,
                     )
+        except (httpx.HTTPStatusError, httpx.ConnectError, httpx.TimeoutException, OSError, ValueError) as error:
+            raise TransportError("stream request failed") from error
         except Exception as error:
+            logger.exception("transport.custom_mapping.stream_unexpected model={}", request.model)
             raise TransportError("stream request failed") from error
 
     async def discover_models(self) -> tuple[str, ...]:
@@ -221,7 +230,10 @@ class CustomMappingTransport(ProviderTransport):
             values = self._get_path(response.json(), self._mapping.get("models", "data.*.id"), ())
             models = tuple(str(value) for value in values if value)
             return models or await super().discover_models()
+        except (httpx.HTTPStatusError, httpx.ConnectError, httpx.TimeoutException, OSError, ValueError):
+            return await super().discover_models()
         except Exception:
+            logger.exception("transport.custom_mapping.discover_models_unexpected")
             return await super().discover_models()
 
     async def health_check(self) -> CapabilityReport:
@@ -235,7 +247,10 @@ class CustomMappingTransport(ProviderTransport):
             values = self._get_path(response.json(), self._mapping.get("models", "data.*.id"), ())
             models = tuple(str(value) for value in values if value)
             return CapabilityReport(True, self.capabilities, models=models or await super().discover_models())
+        except (httpx.HTTPStatusError, httpx.ConnectError, httpx.TimeoutException, OSError):
+            return CapabilityReport(False, self.capabilities, error="health check failed")
         except Exception:
+            logger.exception("transport.custom_mapping.health_check_unexpected")
             return CapabilityReport(False, self.capabilities, error="health check failed")
 
     async def aclose(self) -> None:

@@ -265,7 +265,7 @@ def get_current_time() -> ToolResult:
     tz_name = os.getenv("NUDGE_TIMEZONE", "Asia/Shanghai")
     try:
         tz = ZoneInfo(tz_name)
-    except Exception:
+    except (KeyError, ImportError):
         tz = ZoneInfo("Asia/Shanghai")
     now = datetime.now(tz)
     weekdays = ["星期一", "星期二", "星期三", "星期四", "星期五", "星期六", "星期日"]
@@ -367,7 +367,7 @@ def python_executor(code: str) -> ToolResult:
             result.append(f"结果: {result_data}")
 
         return ToolResult.ok("\n".join(result) if result else "代码执行成功（无输出）")
-    except Exception as e:
+    except (RuntimeError, OSError, ValueError, TimeoutError) as e:
         return ToolResult.fail(f"执行错误: {e!s}")
     finally:
         # 清理临时文件
@@ -392,7 +392,7 @@ def _kill_process_group(proc: subprocess.Popen) -> None:
         except ProcessLookupError:
             # 子进程已退出，无需 kill
             return
-        except Exception:
+        except (OSError, RuntimeError):
             logger.debug("pyexec.killpg_error", exc_info=True)
 
     # Windows 或 killpg 失败的兜底
@@ -400,7 +400,7 @@ def _kill_process_group(proc: subprocess.Popen) -> None:
         proc.kill()
     except ProcessLookupError:
         logger.debug("pyexec.kill_skipped_process_gone", exc_info=True)
-    except Exception:
+    except (OSError, RuntimeError):
         logger.debug("pyexec.kill_error", exc_info=True)
     try:
         proc.wait(timeout=5)
@@ -602,7 +602,7 @@ def calculator(expression: str) -> ToolResult:
         }
         result = _safe_eval(tree, allowed_names)
         return ToolResult.ok(f"计算结果: {expression} = {result}")
-    except Exception as e:
+    except (ValueError, TypeError, ZeroDivisionError, SyntaxError, NameError) as e:
         return ToolResult.fail(f"计算错误: {e!s}")
 
 

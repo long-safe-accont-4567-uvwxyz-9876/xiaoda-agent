@@ -292,10 +292,10 @@ class StickerManager:
             # 指定情绪目录不存在或为空
             if strict:
                 # 严格模式：不 fallback，没有对应情绪的表情就不发送
-                logger.debug(f"sticker.strict_no_match emotion={emotion} (dir empty/missing)")
+                logger.debug("sticker.strict_no_match emotion={} (dir empty/missing)", emotion)
                 return None
             # fallback 到全部随机选
-            logger.debug(f"sticker.emotion_dir_empty fallback_to_all emotion={emotion}")
+            logger.debug("sticker.emotion_dir_empty fallback_to_all emotion={}", emotion)
         all_stickers = [s for v in self._cache.values() for s in v]
         return random.choice(all_stickers) if all_stickers else None
 

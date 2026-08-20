@@ -55,12 +55,12 @@ def _wire_hooks() -> None:
         import core.agent_introspection as _ai
         _ai._signal_stream = _signal_stream
     except Exception as e:
-        logger.warning(f"j_space.wire_failed agent_introspection: {e}")
+        logger.warning("j_space.wire_failed agent_introspection: {}", e)
     try:
         import core.behavioral_health as _bh
         _bh._signal_stream = _signal_stream
     except Exception as e:
-        logger.warning(f"j_space.wire_failed behavioral_health: {e}")
+        logger.warning("j_space.wire_failed behavioral_health: {}", e)
     try:
         # J-Space hook 全局态随 SubAgent.chat 一起搬至 agent_core.sub_agent，
         # 注入目标必须同步（agent_dispatcher re-export 的只是 import 时的副本，
@@ -69,22 +69,22 @@ def _wire_hooks() -> None:
         _sa._signal_stream = _signal_stream
         _sa._intervention_loop = _intervention_loop
     except Exception as e:
-        logger.warning(f"j_space.wire_failed sub_agent: {e}")
+        logger.warning("j_space.wire_failed sub_agent: {}", e)
     try:
         import core.degradation_strategy as _ds
         _ds._signal_stream = _signal_stream
     except Exception as e:
-        logger.warning(f"j_space.wire_failed degradation_strategy: {e}")
+        logger.warning("j_space.wire_failed degradation_strategy: {}", e)
     try:
         import memory.cognitive_memory as _cm
         _cm._structured_blackboard = _structured_blackboard
     except Exception as e:
-        logger.warning(f"j_space.wire_failed cognitive_memory: {e}")
+        logger.warning("j_space.wire_failed cognitive_memory: {}", e)
     try:
         import belief_router as _br
         _br._enhanced_router = _enhanced_router
     except Exception as e:
-        logger.warning(f"j_space.wire_failed belief_router: {e}")
+        logger.warning("j_space.wire_failed belief_router: {}", e)
 
 
 def init_j_space() -> None:
@@ -105,14 +105,14 @@ def init_j_space() -> None:
             default_dirs = _create_default_directions()
             for direction in default_dirs:
                 _direction_registry.register(direction)
-            logger.info(f"j_space.directions_registered count={len(default_dirs)}")
+            logger.info("j_space.directions_registered count={}", len(default_dirs))
         else:
-            logger.info(f"j_space.directions_loaded count={len(_direction_registry.list_directions())}")
+            logger.info("j_space.directions_loaded count={}", len(_direction_registry.list_directions()))
 
         _intervention_loop = InterventionLoop(_signal_stream, _direction_registry)
         for rule in _create_default_rules():
             _intervention_loop.register_rule(rule)
-        logger.info(f"j_space.rules_registered count={len(_create_default_rules())}")
+        logger.info("j_space.rules_registered count={}", len(_create_default_rules()))
 
         _structured_blackboard = StructuredBlackboard()
         # EnhancedBeliefRouter wraps the base BeliefRouter
@@ -125,14 +125,14 @@ def init_j_space() -> None:
                 signal_stream=_signal_stream,
             )
         except Exception as e:
-            logger.warning(f"j_space.enhanced_router_init_failed: {e}")
+            logger.warning("j_space.enhanced_router_init_failed: {}", e)
             _enhanced_router = None
 
         _wire_hooks()
 
         logger.info("j_space.initialized")
     except Exception as e:
-        logger.warning(f"j_space.init_failed (non-blocking): {e}")
+        logger.warning("j_space.init_failed (non-blocking): {}", e)
         _signal_stream = None
         _direction_registry = None
         _intervention_loop = None

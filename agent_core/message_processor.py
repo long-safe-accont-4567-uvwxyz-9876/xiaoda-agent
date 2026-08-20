@@ -238,7 +238,7 @@ class MessageProcessorMixin(StreamingMixin, ChatTargetMixin, VisionMixin, Person
             ctx, user_input, user_id, source, status_callback, user_openid, session_id)
         _stage_restore_ms = int((time.time() - _stage_t0) * 1000)
         if _stage_restore_ms > 1000:
-            logger.warning(f"agent.stage_slow stage=init_restore elapsed_ms={_stage_restore_ms}")
+            logger.warning("agent.stage_slow stage=init_restore elapsed_ms={}", _stage_restore_ms)
         if not allowed:
             trace.warning("agent.blocked", reason=reason)
             return ProcessResult(reply="")
@@ -288,7 +288,7 @@ class MessageProcessorMixin(StreamingMixin, ChatTargetMixin, VisionMixin, Person
         _stage_main_ms = int((time.time() - _stage_t2) * 1000)
         if _stage_main_ms > 5000:
             _pre_ms = int((_stage_t2 - _stage_t1) * 1000)
-            logger.warning(f"agent.stage_slow stage=main_path elapsed_ms={_stage_main_ms} pre_main_ms={_pre_ms} restore_ms={_stage_restore_ms}")
+            logger.warning("agent.stage_slow stage=main_path elapsed_ms={} pre_main_ms={} restore_ms={}", _stage_main_ms, _pre_ms, _stage_restore_ms)
 
         return result
 
@@ -383,4 +383,3 @@ class MessageProcessorMixin(StreamingMixin, ChatTargetMixin, VisionMixin, Person
 
     # _dedup_buf / _dedup_reply_against_recent（跨对话回复去重）已随 Phase 4 拆分迁至
     # agent_core/mixins/reply_dedup.py（ReplyDedupMixin），经 MRO 组合使用。
-

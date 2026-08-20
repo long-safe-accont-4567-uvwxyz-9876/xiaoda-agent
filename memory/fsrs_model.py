@@ -43,7 +43,7 @@ class ReinforcementSignal(Enum):
         return _map[self]
 
 
-S_PERMANENT = 30.0
+S_PERMANENT = 15.0  # P2: 30→15，记忆经 2-3 次强化即可永久，避免长期 DECAY 无法回升
 R_ARCHIVE = 0.05
 R_FORGET = 0.02
 BUFFER_DAYS = 21
@@ -56,7 +56,7 @@ MEAN_REVERT = 0.3
 FORGET_THRESHOLD = 0.05
 DREAM_THRESHOLD = 0.15
 
-_FACT_KEYWORDS = ("生日", "电话", "地址", "名字", "日期", "号码")
+_FACT_KEYWORDS = ("生日", "电话", "地址", "住址", "名字", "姓名", "日期", "号码", "账号", "密码", "邮箱", "身份证", "纪念")
 _PREF_KEYWORDS = ("喜欢", "讨厌", "偏好", "习惯", "总是")
 _ABSTRACT_KEYWORDS = ("因为", "所以", "意味着", "本质上", "原理")
 
@@ -120,6 +120,24 @@ def estimate_initial_difficulty(content: str, emotion_label: str = "") -> float:
     elif any(kw in content for kw in _ABSTRACT_KEYWORDS):
         D += 2.0
     return max(1.0, min(10.0, D))
+
+
+def is_fact_memory(content: str) -> bool:
+    """判断内容是否为事实类记忆（生日/电话/地址/名字/日期/号码等）。
+
+    事实类记忆应在写入时直接置 PERMANENT，跳过 BUFFER/DECAY 衰减，
+    避免"小妲忘了用户生日"这类关键事实丢失。
+    """
+    return any(kw in content for kw in _FACT_KEYWORDS)
+
+
+def should_be_permanent_on_create(content: str) -> bool:
+    """写入侧判定：是否应在创建时直接置 PERMANENT phase。
+
+    当前规则：事实类记忆（is_fact_memory）直接永久。
+    后续可扩展：用户显式确认的关键事实、高重要性 + 实体匹配等。
+    """
+    return is_fact_memory(content)
 
 
 class FSRSModel:

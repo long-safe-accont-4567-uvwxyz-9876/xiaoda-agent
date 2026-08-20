@@ -25,7 +25,7 @@ class CanaryManager:
         """检查输出是否泄露 canary。返回 True=安全, False=泄露"""
         for canary, desc in self._canaries.items():
             if canary in llm_output:
-                logger.critical(f"Canary泄露检测触发! 类型={desc}, canary={canary[:8]}...")
+                logger.critical("Canary泄露检测触发! 类型={}, canary={}...", desc, canary[:8])
                 return False
         return True
 

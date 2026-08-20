@@ -48,7 +48,7 @@ class EpisodicLimiter:
             row = await cursor.fetchone()
             return row[0] if row else 0
         except Exception as e:
-            logger.warning(f"EpisodicLimiter.count_failed: {e}")
+            logger.warning("EpisodicLimiter.count_failed: {}", e)
             return 0
 
     async def enforce_limit(self) -> int:
@@ -84,11 +84,11 @@ class EpisodicLimiter:
                 ids_to_prune
             )
             await self._db._conn.commit()
-            logger.info(f"EpisodicLimiter.pruned count={len(ids_to_prune)} "
-                         f"total={count} max={self._max_rows}")
+            logger.info("EpisodicLimiter.pruned count={} "
+                         "total={} max={}", len(ids_to_prune), count, self._max_rows)
             return len(ids_to_prune)
         except Exception as e:
-            logger.error(f"EpisodicLimiter.enforce_failed: {e}")
+            logger.error("EpisodicLimiter.enforce_failed: {}", e, exc_info=True)
             return 0
 
     def start_scheduler(self, interval: float = 3600.0) -> asyncio.Task | None:
@@ -98,7 +98,7 @@ class EpisodicLimiter:
                 try:
                     await self.enforce_limit()
                 except Exception as e:
-                    logger.error(f"EpisodicLimiter.loop_error: {e}")
+                    logger.error("EpisodicLimiter.loop_error: {}", e, exc_info=True)
                 await asyncio.sleep(interval)
         try:
             loop = asyncio.get_running_loop()

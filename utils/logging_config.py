@@ -96,7 +96,7 @@ def _supports_ansi() -> bool:
             new_mode = mode.value | ENABLE_VIRTUAL_TERMINAL_PROCESSING
             if kernel32.SetConsoleMode(handle, new_mode):
                 return True
-    except Exception:
+    except (OSError, RuntimeError):
         logger.debug("logging_config.ansi_check_error", exc_info=True)
     return False
 
@@ -118,7 +118,7 @@ def setup_logging() -> None:
             try:
                 _stream.reconfigure(encoding="utf-8", errors="replace")
             except (AttributeError, ValueError):
-                pass
+                pass  # stream.reconfigure 不可用，无法修复编码，静默跳过
 
     logger.remove()
     # 统一 extra 字段默认值，便于结构化日志分析

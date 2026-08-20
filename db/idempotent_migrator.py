@@ -99,7 +99,7 @@ class IdempotentMigrator:
             True 如果本次新应用, False 如果已存在
         """
         if await self.is_applied(version):
-            logger.debug(f"Migrator.skip_already_applied v={version}")
+            logger.debug("Migrator.skip_already_applied v={}", version)
             return False
 
         try:
@@ -120,10 +120,10 @@ class IdempotentMigrator:
                     if not should_skip:
                         await self._conn.execute(sql)
             await self._mark_applied(version, description)
-            logger.info(f"Migrator.applied v={version} desc={description}")
+            logger.info("Migrator.applied v={} desc={}", version, description)
             return True
         except Exception as e:
-            logger.error(f"Migrator.failed v={version} error={e}")
+            logger.error("Migrator.failed v={} error={}", version, e)
             # 不提交, 让调用方决定是否重试
             raise
 

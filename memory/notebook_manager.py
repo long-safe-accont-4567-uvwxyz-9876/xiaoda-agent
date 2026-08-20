@@ -126,7 +126,7 @@ class NotebookManager:
             items = await self.notebook.get_notebook_notes(kind="focus", limit=1)
             return items[0]["content"] if items else None
         except Exception:
-            logger.debug("notebook.get_current_focus_failed: {}", exc_info=True)
+            logger.debug("notebook.get_current_focus_failed", exc_info=True)
             return None
 
     async def schedule_task(self, title: str, priority: int = 0, due_at: float = 0.0) -> int:
@@ -261,7 +261,10 @@ class NotebookManager:
         tz_name = os.getenv("NUDGE_TIMEZONE", "Asia/Shanghai")
         try:
             tz = ZoneInfo(tz_name)
+        except (KeyError, ImportError):
+            tz = ZoneInfo("Asia/Shanghai")
         except Exception:
+            logger.exception("notebook.zoneinfo_unexpected tz={}", tz_name)
             tz = ZoneInfo("Asia/Shanghai")
         now = datetime.now(tz)
         original = time_str.strip()
@@ -379,7 +382,10 @@ class NotebookManager:
                     tz_name = os.getenv("NUDGE_TIMEZONE", "Asia/Shanghai")
                     try:
                         tz = ZoneInfo(tz_name)
+                    except (KeyError, ImportError):
+                        tz = ZoneInfo("Asia/Shanghai")
                     except Exception:
+                        logger.exception("notebook.zoneinfo_unexpected_2 tz={}", tz_name)
                         tz = ZoneInfo("Asia/Shanghai")
                     target_dt = datetime.datetime.fromtimestamp(due_ts, tz=tz)
                     days = [target_dt.isoweekday()]
@@ -399,7 +405,10 @@ class NotebookManager:
             tz_name = os.getenv("NUDGE_TIMEZONE", "Asia/Shanghai")
             try:
                 tz = ZoneInfo(tz_name)
+            except (KeyError, ImportError):
+                tz = ZoneInfo("Asia/Shanghai")
             except Exception:
+                logger.exception("notebook.zoneinfo_unexpected_3 tz={}", tz_name)
                 tz = ZoneInfo("Asia/Shanghai")
             dt = datetime.datetime.fromtimestamp(ts, tz=tz)
             return dt.strftime("%H:%M")

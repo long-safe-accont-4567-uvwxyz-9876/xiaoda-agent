@@ -31,14 +31,14 @@ def _token_from_scope(scope: dict) -> str:
     try:
         from web.routers.auth import MEDIA_COOKIE_NAME
         cookie_name = MEDIA_COOKIE_NAME.encode("latin-1")
-    except Exception:
+    except (ImportError, AttributeError):
         cookie_name = b"x_media_token"
     for name, value in headers:
         if name != b"cookie":
             continue
         try:
             cookie_header = value.decode("latin-1")
-        except Exception:
+        except (UnicodeDecodeError, ValueError):
             continue
         for part in cookie_header.split(";"):
             if "=" in part:
@@ -53,7 +53,7 @@ def _token_from_scope(scope: dict) -> str:
             continue
         try:
             auth = value.decode("latin-1")
-        except Exception:
+        except (UnicodeDecodeError, ValueError):
             continue
         if auth.startswith("Bearer "):
             token = auth[7:].strip()
@@ -64,7 +64,7 @@ def _token_from_scope(scope: dict) -> str:
     try:
         qs = raw.decode("latin-1")
         params = parse_qs(qs)
-    except Exception:
+    except (UnicodeDecodeError, ValueError):
         return ""
     tokens = params.get("token") or []
     return tokens[0] if tokens else ""
@@ -77,7 +77,7 @@ def _validate(token: str) -> bool:
     try:
         from web.routers.auth import _validate_token
         return bool(_validate_token(token))
-    except Exception:
+    except (ImportError, ValueError, RuntimeError, OSError):
         return False
 
 

@@ -351,7 +351,11 @@ class StoragePolicy:
         """
         try:
             raw = self._config.get("local_ai.allowed_storage_roots", [])
-        except Exception:  # noqa: BLE001 — config may be unavailable in edge cases
+        except (AttributeError, OSError, ValueError) as e:
+            logger.debug("storage.allowed_roots_unavailable error={}", str(e))
+            return ()
+        except Exception:
+            logger.exception("storage._allowed_roots.unexpected_error")
             return ()
         if not isinstance(raw, (list, tuple)):
             return ()
@@ -384,7 +388,11 @@ class StoragePolicy:
         """Read the persisted default_model_root (empty string if unset)."""
         try:
             value = self._config.get("local_ai.default_model_root", "")
-        except Exception:  # noqa: BLE001 — config may be unavailable in edge cases
+        except (AttributeError, OSError, ValueError) as e:
+            logger.debug("storage.default_root_unavailable error={}", str(e))
+            return ""
+        except Exception:
+            logger.exception("storage.get_default.unexpected_error")
             return ""
         if not isinstance(value, str):
             return ""

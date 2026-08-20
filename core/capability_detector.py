@@ -120,7 +120,11 @@ def detect_capabilities() -> CapabilityProfile:
     profile.processor = _uname.processor or ""
     try:
         profile.hostname = socket.gethostname()
+    except (ImportError, OSError, RuntimeError, ValueError):
+        profile.hostname = "unknown"
+
     except Exception:
+        logger.exception(".core.capability_detector.detect_capabilities_unexpected")
         profile.hostname = "unknown"
 
     # NPU 状态（从环境变量读取）
@@ -236,7 +240,10 @@ def _detect_sbc() -> bool:
                 if any(kw in content for kw in ["raspberry", "orange pi", "orangepi",
                                                   "nanopi", "rockpi", "xunlong"]):
                     return True
+        except (ImportError, OSError, RuntimeError, ValueError):
+            continue
         except Exception:
+            logger.exception(".core.capability_detector._detect_sbc_unexpected")
             continue
     return False
 

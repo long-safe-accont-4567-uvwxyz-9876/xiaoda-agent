@@ -421,7 +421,7 @@ class ModelRouter(ExecutionMixin, CostTrackingMixin, ClientLifecycleMixin, Fallb
             cfg.set("models.chat_model", {"provider": provider, "model_id": model_id})
         except Exception as e:
             logger.error("router.chat_model_persist_failed error={} rolling_back_tasks={}",
-                         str(e), _updated_tasks)
+                         str(e), _updated_tasks, exc_info=True)
             for _done_task in _updated_tasks:
                 _old = _snapshots.get(_done_task) or {}
                 try:

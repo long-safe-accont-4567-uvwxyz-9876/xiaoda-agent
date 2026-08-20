@@ -185,7 +185,10 @@ def validate_url(url: str) -> tuple[bool, str]:
     try:
         normalized = _normalize_url(url)
         parsed = urllib.parse.urlparse(normalized)
+    except (ValueError, UnicodeDecodeError) as e:
+        return False, f"URL 解析失败: {e}"
     except Exception as e:
+        logger.exception("ssrf.url_parse_unexpected url={}", url[:200])
         return False, f"URL 解析失败: {e}"
 
     scheme = (parsed.scheme or "").lower()
@@ -252,7 +255,10 @@ def get_pinned_ip(url: str) -> str | None:
     try:
         parsed = urllib.parse.urlparse(_normalize_url(url))
         hostname = (parsed.hostname or "").lower()
+    except (ValueError, UnicodeDecodeError):
+        return None
     except Exception:
+        logger.exception("ssrf.get_pinned_ip_parse_unexpected url={}", url[:200])
         return None
 
     if not hostname:
@@ -301,7 +307,10 @@ def resolve_and_pin(base_url: str) -> tuple[str, str]:
     try:
         normalized = _normalize_url(base_url)
         parsed = urllib.parse.urlparse(normalized)
+    except (ValueError, UnicodeDecodeError) as e:
+        raise ValueError(f"SSRF 校验失败: {e}") from None
     except Exception as e:
+        logger.exception("ssrf.resolve_and_pin_parse_unexpected url={}", base_url[:200])
         raise ValueError(f"SSRF 校验失败: {e}") from None
 
     scheme = (parsed.scheme or "").lower()
@@ -386,7 +395,10 @@ def is_safe(url: str) -> bool:
     try:
         ok, _ = validate_url(url)
         return ok
+    except (ValueError, UnicodeDecodeError, OSError):
+        return False
     except Exception:
+        logger.exception("ssrf.is_safe_unexpected url={}", url[:200])
         return False
 
 
@@ -415,7 +427,10 @@ def is_local_host(url: str) -> bool:
     try:
         host = (urllib.parse.urlparse(url).hostname or "").lower().rstrip(".")
         return host in _LOCAL_HOSTS
+    except (ValueError, UnicodeDecodeError):
+        return False
     except Exception:
+        logger.exception("ssrf.is_local_host_unexpected url={}", url[:200])
         return False
 
 

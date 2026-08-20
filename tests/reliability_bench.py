@@ -56,15 +56,17 @@ class ReliabilityBench:
                 if result.get("recovered"):
                     recovery_passed += 1
             except Exception as e:
-                logger.debug(f"测试失败: {tc.get('name', '?')}: {e}")
+                logger.debug("测试失败: {}: {}", tc.get('name', '?'), e)
 
         result = ReliabilityResult(
             pass_at_k=passed / total if total else 0,
             robustness=robust_passed / total if total else 0,
             fault_tolerance=recovery_passed / total if total else 0,
         )
-        logger.info(f"ReliabilityBench: pass@k={result.pass_at_k:.0%} "
-                     f"robustness={result.robustness:.0%} "
-                     f"fault_tolerance={result.fault_tolerance:.0%} "
-                     f"grade={result.grade}")
+        logger.info("ReliabilityBench: pass@k={:.0%} "
+                     "robustness={:.0%} "
+                     "fault_tolerance={:.0%} "
+                     "grade={}", result.pass_at_k,
+                     result.robustness, result.fault_tolerance,
+                     result.grade)
         return result

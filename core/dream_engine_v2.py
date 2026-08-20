@@ -149,10 +149,10 @@ class DreamEngineV2:
                 self._last_dae_cycle = self._cycle_count
 
         except Exception as e:
-            logger.error(f"DreamEngineV2.run_cycle failed: {e}", exc_info=True)
+            logger.error("DreamEngineV2.run_cycle failed: {}", e, exc_info=True)
 
         stats["duration_ms"] = (time.time() - t0) * 1000
-        logger.info(f"DreamEngineV2 cycle {self._cycle_count} done: {stats}")
+        logger.info("DreamEngineV2 cycle {} done: {}", self._cycle_count, stats)
         return stats
 
     async def _phase_nrem(self) -> dict:
@@ -249,7 +249,11 @@ class DreamEngineV2:
         # Louvain社区检测
         try:
             communities = nx.community.louvain_communities(g)
+        except (ImportError, OSError, RuntimeError, ValueError):
+            communities = [set(g.nodes())]
+
         except Exception:
+            logger.exception(".core.dream_engine_v2._phase_insight_unexpected")
             communities = [set(g.nodes())]
 
         # 派生cluster摘要记忆
@@ -360,8 +364,8 @@ class DreamEngineV2:
             # 通过 access_count 间接提升优先级
             stored += 1
 
-        logger.info(f"Phase 5 (AFE/StageS): {len(facts)} facts → "
-                     f"{len(patterns)} patterns → {stored} stored")
+        logger.info("Phase 5 (AFE/StageS): {} facts → {} patterns → {} stored",
+                     len(facts), len(patterns), stored)
         return {"patterns": stored}
 
     async def _phase_dae(self) -> dict:
@@ -423,8 +427,8 @@ class DreamEngineV2:
             src_mem.embedding = new_emb.astype(src_mem.embedding.dtype)
             updated += 1
 
-        logger.info(f"Phase 6 (DAE): updated {updated} embeddings "
-                     f"(damping={self.DAE_DAMPING})")
+        logger.info("Phase 6 (DAE): updated {} embeddings (damping={})",
+                     updated, self.DAE_DAMPING)
         return {"updated": updated}
 
     def _sample_for_dream(self, memories: list[MemoryEntry],

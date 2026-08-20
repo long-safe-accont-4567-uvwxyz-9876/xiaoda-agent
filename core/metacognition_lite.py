@@ -98,16 +98,16 @@ class MetacognitionLite:
         # 不确定性估计
         if self.state.unknowns:
             self.state.uncertainty = min(1.0, 0.3 + 0.15 * len(self.state.unknowns))
-        logger.debug(f"MC.anticipate keywords={len(self.state.task_keywords)} "
-                      f"unknowns={len(self.state.unknowns)} "
-                      f"uncertainty={self.state.uncertainty:.2f}")
+        logger.debug("MC.anticipate keywords={} unknowns={} uncertainty={:.2f}",
+                      len(self.state.task_keywords), len(self.state.unknowns),
+                      self.state.uncertainty)
         return self.state
 
     # ─── 阶段 2: Plan ───
     def plan(self, steps: list[str]) -> MetacogState:
         """规划推理步骤"""
         self.state.plan_steps = list(steps)
-        logger.debug(f"MC.plan steps={len(steps)}")
+        logger.debug("MC.plan steps={}", len(steps))
         return self.state
 
     # ─── 阶段 3: Monitor ───
@@ -149,9 +149,9 @@ class MetacognitionLite:
             "drift": self.state.drift_type.value,
         })
 
-        logger.debug(f"MC.monitor confidence={confidence:.2f} "
-                      f"drift={self.state.drift_type.value} "
-                      f"score={self.state.drift_score:.2f}")
+        logger.debug("MC.monitor confidence={:.2f} drift={} score={:.2f}",
+                      confidence, self.state.drift_type.value,
+                      self.state.drift_score)
         return self.state.drift_type
 
     # ─── 阶段 4: Reflect ───
@@ -216,8 +216,8 @@ class MetacognitionLite:
             self.state.action = "request_more_info"
         else:
             self.state.action = "continue"
-        logger.info(f"MC.regulate action={self.state.action} "
-                     f"target_step={self.state.target_step}")
+        logger.info("MC.regulate action={} target_step={}",
+                     self.state.action, self.state.target_step)
         return self.state.action
 
     def _recommend_action(self) -> str:

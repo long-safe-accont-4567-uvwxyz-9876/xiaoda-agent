@@ -21,7 +21,12 @@ from loguru import logger
 
 try:
     from config import DATA_DIR
-except Exception:  # pragma: no cover
+except (ImportError, AttributeError):
+    DATA_DIR = Path(__file__).resolve().parent.parent / "data"
+    DATA_DIR.mkdir(parents=True, exist_ok=True)
+
+except Exception:
+    logger.exception(".core.agent_work_record.unexpected")
     DATA_DIR = Path(__file__).resolve().parent.parent / "data"
     DATA_DIR.mkdir(parents=True, exist_ok=True)
 

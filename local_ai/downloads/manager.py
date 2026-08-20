@@ -14,6 +14,7 @@ from pathlib import Path, PurePosixPath
 from typing import Any
 
 from core.cancel_token import CancellationError, CancelToken
+from loguru import logger
 from local_ai.contracts import (
     CatalogFile,
     CatalogModel,
@@ -25,6 +26,60 @@ from local_ai.downloads.transport import DownloadTransport, HttpDownloadTranspor
 from local_ai.downloads.verifier import sha256_file
 
 EventSink = Callable[[dict[str, Any]], Awaitable[None] | None]
+
+
+def _make_hf_progress_bar(
+    token: CancelToken,
+    task_id: str,
+    manager: DownloadManager,
+    completed_before: int,
+    starting_bytes: int,
+    started: float,
+    loop: asyncio.AbstractEventLoop,
+) -> type:
+    from huggingface_hub.utils import tqdm as hf_tqdm
+
+    class _ProgressBar(hf_tqdm):
+        def __init__(self, *args: Any, **kwargs: Any) -> None:
+            self._cancelled = False
+            super().__init__(*args, **kwargs)
+
+        def update(self, n: int = 1) -> None:
+            if token.cancelled:
+                self._cancelled = True
+                raise KeyboardInterrupt("cancelled")
+            super().update(n)
+            downloaded = max(
+                manager._tasks[task_id].bytes_downloaded,
+                completed_before + self.n,
+            )
+            elapsed = max(time.monotonic() - started, 1e-9)
+            speed = max(downloaded - starting_bytes, 0) / elapsed
+            remaining = max(manager._tasks[task_id].total_bytes - downloaded, 0)
+            try:
+                asyncio.run_coroutine_threadsafe(
+                    manager._update(
+                        task_id,
+                        bytes_downloaded=downloaded,
+                        speed_bps=speed,
+                        eta_seconds=remaining / speed if speed else None,
+                    ),
+                    loop,
+                )
+            except (OSError, RuntimeError, ValueError):
+                logger.debug("download.progress_report_failed", exc_info=True)
+            except Exception:
+                logger.exception("download._download_file_hf.progress_unexpected")
+
+        def close(self) -> None:
+            try:
+                if token.cancelled:
+                    self._cancelled = True
+                    raise KeyboardInterrupt("cancelled")
+            finally:
+                super().close()
+
+    return _ProgressBar
 
 
 class DownloadManager:
@@ -126,7 +181,17 @@ class DownloadManager:
                         eta_seconds=None,
                         error=str(error),
                     )
+                except (OSError, RuntimeError, ConnectionError, ValueError) as error:
+                    logger.warning("download.task_failed task={} error={}", task_id, str(error)[:200])
+                    return await self._update(
+                        task_id,
+                        state=TaskState.FAILED,
+                        speed_bps=None,
+                        eta_seconds=None,
+                        error=str(error),
+                    )
                 except Exception as error:
+                    logger.exception("download.start.unexpected_error task={}", task_id)
                     return await self._update(
                         task_id,
                         state=TaskState.FAILED,
@@ -319,20 +384,12 @@ class DownloadManager:
         started: float,
         starting_bytes: int,
     ) -> None:
-        """用官方 huggingface_hub 从 hf-mirror.com 镜像下载单个文件。
-
-        - 镜像与禁用 Xet 通过环境变量指定（Xet 存储国内不可达）；
-        - 官方库自动断点续传（.incomplete）与已存在文件跳过；
-        - 进度通过 tqdm_class 上报任务；取消在进度回调里用 KeyboardInterrupt
-          （BaseException）中断官方下载线程，外层转成 CancellationError。
-        """
         import os as _os
         from huggingface_hub import hf_hub_download
 
         _os.environ.setdefault("HF_ENDPOINT", "https://hf-mirror.com")
         _os.environ.setdefault("HF_HUB_DISABLE_XET", "1")
         _os.environ.setdefault("HF_HUB_ENABLE_HF_TRANSFER", "0")
-        from huggingface_hub.utils import tqdm as hf_tqdm
 
         destination = Path(self._tasks[task_id].destination)
         final_path = self._safe_file_path(destination, manifest.path)
@@ -342,48 +399,9 @@ class DownloadManager:
             return
         completed_before = self._completed_bytes_before(model, destination, manifest.path)
         loop = asyncio.get_running_loop()
-
-        class _ProgressBar(hf_tqdm):
-            """官方下载进度条：上报任务进度 + 检查取消。"""
-
-            def __init__(self, *args: Any, **kwargs: Any) -> None:
-                self._cancelled = False
-                super().__init__(*args, **kwargs)
-
-            def update(self, n: int = 1) -> None:
-                if token.cancelled:
-                    self._cancelled = True
-                    raise KeyboardInterrupt("cancelled")
-                super().update(n)
-                # 当前文件内已下载字节 = completed_before + self.n
-                downloaded = max(
-                    self._tasks[task_id].bytes_downloaded,
-                    completed_before + self.n,
-                )
-                elapsed = max(time.monotonic() - started, 1e-9)
-                speed = max(downloaded - starting_bytes, 0) / elapsed
-                remaining = max(self._tasks[task_id].total_bytes - downloaded, 0)
-                try:
-                    asyncio.run_coroutine_threadsafe(
-                        self._update(
-                            task_id,
-                            bytes_downloaded=downloaded,
-                            speed_bps=speed,
-                            eta_seconds=remaining / speed if speed else None,
-                        ),
-                        loop,
-                    )
-                except Exception:  # noqa: BLE001 — 进度上报失败不影响下载
-                    pass
-
-            def close(self) -> None:
-                try:
-                    if token.cancelled:
-                        self._cancelled = True
-                        raise KeyboardInterrupt("cancelled")
-                finally:
-                    super().close()
-
+        ProgressBar = _make_hf_progress_bar(
+            token, task_id, self, completed_before, starting_bytes, started, loop,
+        )
         try:
             await asyncio.to_thread(
                 hf_hub_download,
@@ -393,7 +411,7 @@ class DownloadManager:
                 local_dir=str(destination),
                 force_download=False,
                 token=None,
-                tqdm_class=_ProgressBar,
+                tqdm_class=ProgressBar,
             )
         except KeyboardInterrupt:
             raise CancellationError("cancelled by user") from None

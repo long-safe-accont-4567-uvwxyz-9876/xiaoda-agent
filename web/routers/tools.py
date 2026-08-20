@@ -104,7 +104,7 @@ async def update_tool(name: str, body: dict, request: Request) -> Any:
     try:
         from web.ws_hub import manager
         await manager.broadcast({"type": "config_changed", "domain": "tools"})
-    except Exception:
+    except (RuntimeError, OSError, ConnectionError):
         logger.debug("tools.broadcast_config_changed_failed", exc_info=True)
     return Envelope(data={"name": name,
                           "enabled": tool.get("enabled", True) is not False,
@@ -166,6 +166,25 @@ async def tool_limits() -> Any:
     return Envelope(data=stats)
 
 
+def _format_tool_test_result(name: str, result: Any, elapsed_ms: float) -> dict:
+    """将工具测试结果格式化为响应字典。"""
+    if hasattr(result, "success"):
+        ok = result.success
+        data = str(result.data)[:500] if result.data else ""
+        error = result.error if not ok else ""
+    else:
+        ok = True
+        data = str(result)[:500]
+        error = ""
+    return {
+        "name": name,
+        "status": "ok" if ok else "fail",
+        "elapsed_ms": elapsed_ms,
+        "data": data,
+        "error": error,
+    }
+
+
 @router.post("/tools/{name}/test", response_model=Envelope[dict])
 async def test_tool(name: str, request: Request) -> Any:
     """测试单个工具是否可用（真实执行，安全参数）"""
@@ -177,7 +196,6 @@ async def test_tool(name: str, request: Request) -> Any:
     if not tool:
         raise HTTPException(404, f"工具 '{name}' 不存在")
 
-    # 构造安全的测试参数
     test_args = _build_safe_test_args(tool)
     if test_args is None:
         return Envelope(data={
@@ -186,7 +204,6 @@ async def test_tool(name: str, request: Request) -> Any:
             "message": "该工具没有安全的测试方式（需要用户参数或涉及危险操作）",
         })
 
-    # 执行测试
     core = request.app.state.core
     executor = ToolExecutor(core.db)
     t0 = time.monotonic()
@@ -196,36 +213,15 @@ async def test_tool(name: str, request: Request) -> Any:
             timeout=15,
         )
         elapsed_ms = round((time.monotonic() - t0) * 1000, 1)
-        if hasattr(result, "success"):
-            ok = result.success
-            data = str(result.data)[:500] if result.data else ""
-            error = result.error if not ok else ""
-        else:
-            ok = True
-            data = str(result)[:500]
-            error = ""
-        return Envelope(data={
-            "name": name,
-            "status": "ok" if ok else "fail",
-            "elapsed_ms": elapsed_ms,
-            "data": data,
-            "error": error,
-        })
+        return Envelope(data=_format_tool_test_result(name, result, elapsed_ms))
     except TimeoutError:
-        return Envelope(data={
-            "name": name,
-            "status": "timeout",
-            "elapsed_ms": 15000,
-            "error": "测试超时（15 秒）",
-        })
-    except Exception as e:
+        return Envelope(data={"name": name, "status": "timeout", "elapsed_ms": 15000, "error": "测试超时（15 秒）"})
+    except (RuntimeError, ValueError, OSError) as e:
         elapsed_ms = round((time.monotonic() - t0) * 1000, 1)
-        return Envelope(data={
-            "name": name,
-            "status": "error",
-            "elapsed_ms": elapsed_ms,
-            "error": str(e)[:500],
-        })
+        return Envelope(data={"name": name, "status": "error", "elapsed_ms": elapsed_ms, "error": str(e)[:500]})
+    except Exception as e:
+        logger.exception("tools.test_tool.unexpected_error")
+        return Envelope(data={"name": name, "ok": False, "elapsed_ms": round((time.monotonic() - t0) * 1000, 1), "error": str(e)[:200]})
 
 
 def _build_safe_test_args(tool: dict) -> dict | None:
@@ -316,7 +312,7 @@ async def save_skill(name: str, body: dict, request: Request) -> Any:
     try:
         await core.db.insert_audit_log("webui.skills.save", "webui", name)
         await core.db.commit()
-    except Exception:
+    except (OSError, RuntimeError):
         logger.debug("tools.audit_save_failed", exc_info=True)
     return Envelope(data={"name": name, "saved": True})
 
@@ -331,6 +327,6 @@ async def delete_skill(name: str, request: Request) -> Any:
     try:
         await core.db.insert_audit_log("webui.skills.delete", "webui", name)
         await core.db.commit()
-    except Exception:
+    except (OSError, RuntimeError):
         logger.debug("tools.audit_delete_failed", exc_info=True)
     return Envelope(data={"deleted": name})

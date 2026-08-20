@@ -27,7 +27,7 @@ class WorkflowRepository:
                 await self._insert_step(s)
             await self._insert_event(first_event)
             await self.conn.commit()
-        except Exception:
+        except (aiosqlite.Error, json.JSONDecodeError, ValueError):
             await self.conn.rollback()
             raise
 
@@ -82,7 +82,7 @@ class WorkflowRepository:
             await self._insert_step(step)
             await self.conn.commit()
             return step
-        except Exception:
+        except (aiosqlite.Error, ValueError):
             await self.conn.rollback()
             raise
 
@@ -122,7 +122,7 @@ class WorkflowRepository:
             }))
             await self.conn.commit()
             return step
-        except Exception:
+        except (aiosqlite.Error, ValueError):
             await self.conn.rollback()
             raise
 
@@ -150,7 +150,7 @@ class WorkflowRepository:
             await self._insert_event(event)
             await self.conn.commit()
             return True
-        except Exception:
+        except (aiosqlite.Error, json.JSONDecodeError, ValueError):
             await self.conn.rollback()
             raise
 

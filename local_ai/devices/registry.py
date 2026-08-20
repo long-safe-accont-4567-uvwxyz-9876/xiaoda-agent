@@ -15,6 +15,7 @@ from local_ai.contracts import (
 )
 from local_ai.devices.ort_providers import OrtProviderProbe
 from local_ai.devices.system_probe import probe_system_devices
+from local_ai.runtimes.session_tuning import provider_rank
 
 
 class IncompatibleBackendError(RuntimeError):
@@ -379,6 +380,52 @@ class DeviceRegistry:
                 backends=merged_backends,
             )
 
+    @staticmethod
+    def _attach_backend_to_device(
+        devices: list[ComputeDevice],
+        hardware: ComputeDevice,
+        bound_backend: ExecutionBackend,
+        backend_healthy: bool,
+    ) -> None:
+        existing_index = next(
+            (i for i, d in enumerate(devices) if d.id == hardware.id),
+            None,
+        )
+        attached = replace(
+            hardware,
+            backends=hardware.backends + (bound_backend,),
+            state=DeviceState.AVAILABLE if backend_healthy else DeviceState.DEGRADED,
+        )
+        if existing_index is None:
+            devices.append(attached)
+        else:
+            merged = devices[existing_index].backends + (bound_backend,)
+            devices[existing_index] = replace(
+                devices[existing_index],
+                state=DeviceState.AVAILABLE if any(b.healthy for b in merged) else DeviceState.DEGRADED,
+                backends=merged,
+            )
+
+    @staticmethod
+    def _make_virtual_device(backend: ExecutionBackend) -> ComputeDevice:
+        is_dml = backend.provider == "DmlExecutionProvider"
+        return ComputeDevice(
+            id="ort:dml:default" if is_dml else _provider_device_id(backend.provider),
+            name="DirectML default adapter" if is_dml else backend.provider,
+            kind="accelerator",
+            architecture=_host_architecture() if is_dml else "unknown",
+            state=DeviceState.AVAILABLE if backend.healthy else DeviceState.DEGRADED,
+            memory_total=0,
+            memory_available=0,
+            backends=(backend,),
+            system={"platform": "windows" if is_dml else _host_platform()},
+            evidence=(
+                {"source": "onnxruntime_default_adapter", "identity_persistent": False}
+                if is_dml
+                else {"source": "onnxruntime"}
+            ),
+        )
+
     def _attach_backends(
         self,
         system_devices: list[ComputeDevice],
@@ -399,38 +446,7 @@ class DeviceRegistry:
                     bound_backend = _backend_for_hardware(backend, hardware)
                     if bound_backend is None or bound_backend.options != backend.options:
                         continue
-                    existing_index = next(
-                        (
-                            index
-                            for index, device in enumerate(devices)
-                            if device.id == hardware.id
-                        ),
-                        None,
-                    )
-                    attached = replace(
-                        hardware,
-                        backends=hardware.backends + (bound_backend,),
-                        state=(
-                            DeviceState.AVAILABLE
-                            if backend.healthy
-                            else DeviceState.DEGRADED
-                        ),
-                    )
-                    if existing_index is None:
-                        devices.append(attached)
-                    else:
-                        merged_backends = (
-                            devices[existing_index].backends + (bound_backend,)
-                        )
-                        devices[existing_index] = replace(
-                            devices[existing_index],
-                            state=(
-                                DeviceState.AVAILABLE
-                                if any(item.healthy for item in merged_backends)
-                                else DeviceState.DEGRADED
-                            ),
-                            backends=merged_backends,
-                        )
+                    self._attach_backend_to_device(devices, hardware, bound_backend, backend.healthy)
                     attached_ids.add(hardware.id)
                     attached_backend = True
                 if attached_backend:
@@ -439,47 +455,7 @@ class DeviceRegistry:
                 backend.provider == "DmlExecutionProvider" and backend.options
             ):
                 continue
-            devices.append(
-                ComputeDevice(
-                    id=(
-                        "ort:dml:default"
-                        if backend.provider == "DmlExecutionProvider"
-                        else _provider_device_id(backend.provider)
-                    ),
-                    name=(
-                        "DirectML default adapter"
-                        if backend.provider == "DmlExecutionProvider"
-                        else backend.provider
-                    ),
-                    kind="accelerator",
-                    architecture=(
-                        _host_architecture()
-                        if backend.provider == "DmlExecutionProvider"
-                        else "unknown"
-                    ),
-                    state=(
-                        DeviceState.AVAILABLE if backend.healthy else DeviceState.DEGRADED
-                    ),
-                    memory_total=0,
-                    memory_available=0,
-                    backends=(backend,),
-                    system={
-                        "platform": (
-                            "windows"
-                            if backend.provider == "DmlExecutionProvider"
-                            else _host_platform()
-                        )
-                    },
-                    evidence=(
-                        {
-                            "source": "onnxruntime_default_adapter",
-                            "identity_persistent": False,
-                        }
-                        if backend.provider == "DmlExecutionProvider"
-                        else {"source": "onnxruntime"}
-                    ),
-                )
-            )
+            devices.append(self._make_virtual_device(backend))
         devices.extend(
             device
             for device in system_devices
@@ -528,43 +504,59 @@ class DeviceRegistry:
             )
         return matches[0]
 
-    def recommend(
+    def _collect_candidates(
         self,
         model: CatalogModel,
-        override: str | None = None,
-    ) -> RuntimeProfile:
-        minimum_ram, recommended_ram, minimum_vram, recommended_vram = (
-            _resource_requirements(model)
-        )
+        minimum_ram: int,
+        minimum_vram: int,
+        override: str | None,
+    ) -> list[tuple[ComputeDevice, ExecutionBackend]]:
         devices = self.scan()
         host_ram_available = max(
-            (
-                device.memory_available
-                for device in devices
-                if device.kind == "cpu" and device.state is DeviceState.AVAILABLE
-            ),
+            (d.memory_available for d in devices if d.kind == "cpu" and d.state is DeviceState.AVAILABLE),
             default=0,
         )
         candidates = [
             (device, backend)
             for device in devices
             for backend in device.backends
-            if self._compatible(
-                model,
-                device,
-                backend,
-                host_ram_available=host_ram_available,
-                minimum_ram=minimum_ram,
-                minimum_vram=minimum_vram,
-            )
+            if self._compatible(model, device, backend, host_ram_available=host_ram_available, minimum_ram=minimum_ram, minimum_vram=minimum_vram)
         ]
         if override is not None:
             candidates = [
-                item
-                for item in candidates
-                if item[0].id == override
-                and item[0].evidence.get("identity_persistent") is not False
+                item for item in candidates
+                if item[0].id == override and item[0].evidence.get("identity_persistent") is not False
             ]
+        return candidates, host_ram_available
+
+    @staticmethod
+    def _build_profile_options(
+        backend: ExecutionBackend,
+        fallback_bindings: list[tuple[ComputeDevice, ExecutionBackend]],
+    ) -> dict[str, Any]:
+        providers = (backend.provider,) + tuple(b[1].provider for b in fallback_bindings)
+        provider_options = (backend.options,) + tuple(b[1].options for b in fallback_bindings)
+        fallback_providers = tuple(dict.fromkeys(b[1].provider for b in fallback_bindings))
+        options = dict(backend.options)
+        if fallback_bindings:
+            options["fallback_bindings"] = tuple(
+                {"device_id": fd.id, "provider": fb.provider, "provider_options": fb.options}
+                for fd, fb in fallback_bindings
+            )
+        if fallback_providers:
+            options["fallback_providers"] = fallback_providers
+        if len(providers) > 1:
+            options["providers"] = providers
+            options["provider_options"] = provider_options
+        return options
+
+    def recommend(
+        self,
+        model: CatalogModel,
+        override: str | None = None,
+    ) -> RuntimeProfile:
+        minimum_ram, recommended_ram, minimum_vram, recommended_vram = _resource_requirements(model)
+        candidates, host_ram_available = self._collect_candidates(model, minimum_ram, minimum_vram, override)
         if not candidates:
             target = f" for override {override}" if override is not None else ""
             raise IncompatibleBackendError(f"no compatible backend{target}")
@@ -572,46 +564,16 @@ class DeviceRegistry:
             key=lambda item: (
                 host_ram_available < recommended_ram,
                 self._vram_available(item[0]) < recommended_vram,
-                item[1].provider == "CPUExecutionProvider",
+                provider_rank(item[1].provider),
                 -item[0].memory_available,
             )
         )
         device, backend = candidates[0]
         fallback_bindings = self._fallback_bindings(
-            model,
-            device,
-            backend,
-            candidates,
-            host_ram_available=host_ram_available,
-            minimum_ram=minimum_ram,
-            minimum_vram=minimum_vram,
+            model, device, backend, candidates,
+            host_ram_available=host_ram_available, minimum_ram=minimum_ram, minimum_vram=minimum_vram,
         )
-        providers = (backend.provider,) + tuple(
-            binding[1].provider for binding in fallback_bindings
-        )
-        provider_options = (backend.options,) + tuple(
-            binding[1].options for binding in fallback_bindings
-        )
-        fallback_providers = tuple(
-            dict.fromkeys(binding[1].provider for binding in fallback_bindings)
-        )
-        options = dict(backend.options)
-        if fallback_bindings:
-            options["fallback_bindings"] = tuple(
-                {
-                    "device_id": fallback_device.id,
-                    "provider": fallback_backend.provider,
-                    "provider_options": fallback_backend.options,
-                }
-                for fallback_device, fallback_backend in fallback_bindings
-            )
-        if fallback_providers:
-            options["fallback_providers"] = fallback_providers
-        if len(providers) > 1:
-            options["providers"] = providers
-            options["provider_options"] = provider_options
-        # ORT GenAI 模型由 CPU backend 承载：runtime 以模型清单为准（ort_genai），
-        # 而不是 ORT 设备扫描注册的 ort runtime
+        options = self._build_profile_options(backend, fallback_bindings)
         runtime = backend.runtime
         model_runtimes = _allowed(model.compatibility, "runtimes", "runtime")
         if runtime == "ort" and "ort_genai" in model_runtimes:
@@ -623,7 +585,7 @@ class DeviceRegistry:
             options=options,
             estimated_ram=minimum_ram,
             estimated_vram=minimum_vram,
-            allow_fallback=len(providers) > 1,
+            allow_fallback=len(options.get("providers", ())) > 1,
         )
 
     @staticmethod

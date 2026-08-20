@@ -7,7 +7,7 @@ if sys.platform == "win32":
         try:
             _stream.reconfigure(encoding="utf-8", errors="replace")
         except (AttributeError, ValueError):
-            pass
+            logger.debug("cli.stream_reconfigure_skipped")
 
 import time
 import random
@@ -629,11 +629,17 @@ class CLIInterface:
                 try:
                     import getpass
                     pwd = getpass.getpass("请输入 WebUI 访问密码: ")
+                except (EOFError, OSError, RuntimeError):
+                    pwd = ""
                 except Exception:
+                    logger.exception("cli.getpass_unexpected")
                     pwd = ""
                 try:
                     self._token = cli_client.fetch_token(password=pwd)
+                except (ConnectionError, TimeoutError, RuntimeError, ValueError) as e2:
+                    print(f"\n  {_C.LYELLOW}认证失败: {str(e2)[:100]}{_C.RST}")
                 except Exception as e2:
+                    logger.exception("cli.auth_unexpected")
                     print(f"\n  {_C.LYELLOW}认证失败: {str(e2)[:100]}{_C.RST}")
                     return False
             else:
@@ -643,7 +649,10 @@ class CLIInterface:
         self._ws = cli_client.WSClient(self._token)
         try:
             self._run_coro(self._ws.connect())
+        except (ConnectionError, TimeoutError, OSError, RuntimeError) as e:
+            print(f"\n  {_C.LYELLOW}连接主进程失败: {str(e)[:100]}{_C.RST}")
         except Exception as e:
+            logger.exception("cli.ws_connect_unexpected")
             print(f"\n  {_C.LYELLOW}连接主进程失败: {str(e)[:100]}{_C.RST}")
             return False
         return True
@@ -685,8 +694,15 @@ class CLIInterface:
         """
         try:
             return self._run_coro(self._ws.chat(text, status_callback=status_callback))
+        except (ConnectionError, TimeoutError, OSError, RuntimeError) as e:
+            if not self._is_ws_closed_error(e):
+                raise
+            if not self._reconnect_main_process():
+                raise RuntimeError("主进程连接已断开，重连失败") from e
+            return self._run_coro(self._ws.chat(text, status_callback=status_callback))
         except Exception as e:
             if not self._is_ws_closed_error(e):
+                logger.exception("cli.ws_chat_unexpected")
                 raise
             if not self._reconnect_main_process():
                 raise RuntimeError("主进程连接已断开，重连失败") from e

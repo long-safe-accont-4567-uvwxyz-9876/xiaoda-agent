@@ -31,7 +31,7 @@ async def probe_llm(core: Any, route: str = "chat") -> dict:
                 "model": ROUTE_TABLE[route].get("model", ""),
                 "reply_excerpt": (text or "")[:60],
                 "error": "" if ok else "空回复"}
-    except Exception as e:
+    except (RuntimeError, OSError, ValueError, ConnectionError) as e:
         return {"ok": False, "latency_ms": int((time.time() - t0) * 1000),
                 "model": ROUTE_TABLE[route].get("model", ""), "error": str(e)[:200]}
 
@@ -49,7 +49,7 @@ async def probe_provider(core: Any, provider_id: str, provider_service: Any | No
         report = await service.capabilities(provider_id)
     except KeyError:
         return {"ok": False, "error": f"provider {provider_id} 不存在", "latency_ms": 0}
-    except Exception as error:
+    except (RuntimeError, OSError, ValueError, ConnectionError) as error:
         return {"ok": False, "error": str(error)[:200], "latency_ms": int((time.time() - t0) * 1000)}
     return {
         "ok": report.available,
@@ -78,7 +78,7 @@ async def probe_tts(core: Any) -> dict:
             audio_url = f"/media/tts/{dest.name}"
         return {"ok": ok, "latency_ms": int((time.time() - t0) * 1000),
                 "audio_url": audio_url, "error": "" if ok else "合成产物缺失或过小"}
-    except Exception as e:
+    except (RuntimeError, OSError, ValueError, ConnectionError) as e:
         return {"ok": False, "latency_ms": int((time.time() - t0) * 1000), "error": str(e)[:200]}
 
 
@@ -95,7 +95,7 @@ async def probe_video_config() -> dict:
             return {"ok": False, "latency_ms": 0, "error": "视频生成工具未注册"}
         return {"ok": True, "latency_ms": int((time.time() - t0) * 1000),
                 "note": "配置就绪。完整出片测试请在媒体工坊提交任务。"}
-    except Exception as e:
+    except (RuntimeError, OSError, ValueError, ImportError) as e:
         return {"ok": False, "latency_ms": 0, "error": str(e)[:200]}
 
 
@@ -118,7 +118,7 @@ async def probe_mcp(core: Any, server: str) -> dict:
         return {"ok": ok, "latency_ms": int((time.time() - t0) * 1000),
                 "tools": sorted(client.tool_names),
                 "error": "" if ok else "连接不可用"}
-    except Exception as e:
+    except (RuntimeError, OSError, ValueError) as e:
         return {"ok": False, "latency_ms": 0, "error": str(e)[:200]}
 
 
@@ -131,7 +131,7 @@ async def probe_db(core: Any) -> dict:
         return {"ok": True, "latency_ms": int((time.time() - t0) * 1000),
                 "conversations": row["c"] if row else 0,
                 "memories": mem["c"] if mem else 0}
-    except Exception as e:
+    except (OSError, RuntimeError, ValueError) as e:
         return {"ok": False, "latency_ms": int((time.time() - t0) * 1000), "error": str(e)[:200]}
 
 
@@ -144,7 +144,7 @@ async def probe_vector(core: Any) -> dict:
         results = await core.memory.retrieve_memories("测试", k=1)
         return {"ok": True, "latency_ms": int((time.time() - t0) * 1000),
                 "hits": len(results)}
-    except Exception as e:
+    except (RuntimeError, OSError, ValueError) as e:
         return {"ok": False, "latency_ms": int((time.time() - t0) * 1000), "error": str(e)[:200]}
 
 
@@ -174,7 +174,7 @@ def _list_custom_providers(core: Any, provider_service: Any | None = None) -> li
                 "provider_id": pid,
                 "model_id": model,
             })
-    except Exception as e:
+    except (RuntimeError, ImportError, ValueError) as e:
         logger.debug("probes.list_custom_providers_failed error={}", str(e))
     return out
 
@@ -191,7 +191,7 @@ def list_probe_ids(core: Any, provider_service: Any | None = None) -> list[dict]
     try:
         for name in core._mcp_manager._clients:
             probes.append({"id": f"mcp:{name}", "label": f"MCP · {name}", "detail": "stdio"})
-    except Exception:
+    except (RuntimeError, AttributeError):
         logger.debug("probes.mcp_clients_error", exc_info=True)
     probes.append({"id": "db", "label": "数据库", "detail": "SQLite"})
     probes.append({"id": "vector", "label": "向量记忆库", "detail": "sqlite-vec"})
@@ -249,7 +249,7 @@ async def run_all(core: Any, on_progress: Any | None=None, provider_service: Any
             _probe_t0 = time.time()
             try:
                 res = await run_probe(core, item["id"], provider_service)
-            except Exception as e:
+            except (RuntimeError, OSError, ValueError, ConnectionError, TimeoutError) as e:
                 _elapsed = int((time.time() - _probe_t0) * 1000)
                 # 截断异常文本，防止大响应体/路径/密钥泄漏到 health_reports
                 _err_text = str(e)[:300]
@@ -263,15 +263,15 @@ async def run_all(core: Any, on_progress: Any | None=None, provider_service: Any
             if on_progress:
                 try:
                     await on_progress(item["id"], res)
-                except Exception:
+                except (RuntimeError, OSError):
                     logger.debug("probes.progress_callback_error", exc_info=True)
 
-    await asyncio.gather(*[_run_one(item) for item in items])
+    await asyncio.gather(*[_run_one(item) for item in items], return_exceptions=True)
     report = {"run_at": time.time(), "passed": passed, "total": len(items), "detail": results}
     try:
         await core.db.execute(
             "INSERT INTO health_reports(run_at, passed, total, detail) VALUES (?,?,?,?)",
             (report["run_at"], passed, len(items), json.dumps(results, ensure_ascii=False)))
-    except Exception as e:
+    except (OSError, RuntimeError, ValueError) as e:
         logger.warning("health.report_save_failed error={}", str(e))
     return report

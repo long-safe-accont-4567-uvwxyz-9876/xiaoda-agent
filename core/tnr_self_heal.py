@@ -32,7 +32,7 @@ class TNRSelfHeal:
         self._state.tested = True
         needs_healing = self._state.health_before < 0.7
         if needs_healing:
-            logger.warning(f"TNR: 检测到健康度低 ({self._state.health_before:.2f}), 需要自愈")
+            logger.warning("TNR: 检测到健康度低 ({:.2f}), 需要自愈", self._state.health_before)
         return needs_healing
 
     def negotiate(self, options: list[str]) -> str | None:
@@ -42,7 +42,7 @@ class TNRSelfHeal:
         # 优先选择风险最低的策略
         chosen = options[0]
         self._state.negotiated = True
-        logger.info(f"TNR: 选择自愈策略 → {chosen}")
+        logger.info("TNR: 选择自愈策略 → {}", chosen)
         return chosen
 
     def recover(self, heal_func: Any, rollback_func: Any | None=None) -> bool:
@@ -53,13 +53,13 @@ class TNRSelfHeal:
             logger.info("TNR: 自愈成功")
             return True
         except Exception as e:
-            logger.error(f"TNR: 自愈失败: {e}")
+            logger.error("TNR: 自愈失败: {}", e, exc_info=True)
             if rollback_func:
                 try:
                     rollback_func()
                     logger.info("TNR: 已回滚")
                 except Exception as re:
-                    logger.error(f"TNR: 回滚也失败: {re}")
+                    logger.error("TNR: 回滚也失败: {}", re)
             return False
 
     def verify(self, health_check_func: Any) -> bool:
@@ -67,7 +67,7 @@ class TNRSelfHeal:
         self._state.health_after = health_check_func()
         ok = self._state.health_after >= self._state.health_before
         if not ok:
-            logger.warning(f"TNR: 自愈后健康度下降 {self._state.health_before:.2f} → {self._state.health_after:.2f}")
+            logger.warning("TNR: 自愈后健康度下降 {:.2f} → {:.2f}", self._state.health_before, self._state.health_after)
         return ok
 
     def get_state(self) -> dict:

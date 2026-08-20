@@ -14,6 +14,10 @@ from typing import Any
 from loguru import logger
 
 from local_ai.contracts import RuntimeProfile
+from local_ai.runtimes.session_tuning import (
+    auto_provider_options,
+    build_session_options,
+)
 
 # onnxruntime / tokenizers 为可选依赖：未安装时运行时降级不可用，
 # 调用方保持既有远程路径（参照 memory/local_embed.py 的降级约定）。
@@ -149,7 +153,11 @@ class _OrtRuntimeBase(Runtime):
     def _infer_dimensions(session: Any) -> int:
         try:
             out_shape = session.get_outputs()[0].shape
-        except Exception:  # noqa: BLE001 - 假 session 或形状缺失
+        except (AttributeError, IndexError, OSError, RuntimeError) as e:
+            logger.debug("ort_runtime.infer_dimensions_failed error={}", str(e))
+            return 0
+        except Exception:
+            logger.exception("ort_runtime._infer_dimensions.unexpected_error")
             return 0
         hidden = out_shape[-1] if out_shape else None
         hidden = getattr(hidden, "dim_value", hidden)
@@ -183,15 +191,8 @@ class _OrtRuntimeBase(Runtime):
         ]
 
     def _session_options(self, providers: list[str]) -> Any:
-        session_options = ort.SessionOptions()
-        if "DmlExecutionProvider" in providers:
-            session_options.enable_mem_pattern = False
-            session_options.execution_mode = ort.ORT_SEQUENTIAL
-        if providers != ["CPUExecutionProvider"]:
-            session_options.add_session_config_entry(
-                "session.disable_cpu_ep_fallback", "1"
-            )
-        return session_options
+        # 自动调优：纯 CPU 设线程数、DML 特判、CPU fallback 门控
+        return build_session_options(providers)
 
     def _create_session(
         self,
@@ -199,17 +200,30 @@ class _OrtRuntimeBase(Runtime):
         provider: str,
         provider_options: dict[str, Any],
     ) -> Any:
+        merged = dict(provider_options)
+        auto = auto_provider_options(provider)
+        if auto:
+            # 显式传入的 provider_options 优先，自动参数只补缺省
+            for key, value in auto.items():
+                merged.setdefault(key, value)
         return ort.InferenceSession(
             str(onnx_path),
             sess_options=self._session_options([provider]),
             providers=[provider],
-            provider_options=[dict(provider_options)],
+            provider_options=[merged],
         )
 
-    def _resolve_onnx_path(self) -> Path:
+    def _resolve_onnx_path(self, *, prefer_fp16: bool = False) -> Path:
+        # prefer_fp16（N 卡 TRT）：优先加载 FP16 变体，配合 trt_fp16_enable。
         # 标准布局 model.onnx / onnx/model.onnx 优先；缺省时按量化变体降级，
         # 兼容 onnx-community 等仓库只提供 int8/uint8 版本（体积小一个数量级）。
-        for candidate in (
+        candidates: list[Path] = []
+        if prefer_fp16:
+            candidates = [
+                self._model_dir / "model_fp16.onnx",
+                self._model_dir / "onnx" / "model_fp16.onnx",
+            ]
+        candidates += [
             self._model_dir / "model.onnx",
             self._model_dir / "onnx" / "model.onnx",
             self._model_dir / "model_quantized.onnx",
@@ -218,7 +232,8 @@ class _OrtRuntimeBase(Runtime):
             self._model_dir / "onnx" / "model_int8.onnx",
             self._model_dir / "model_uint8.onnx",
             self._model_dir / "onnx" / "model_uint8.onnx",
-        ):
+        ]
+        for candidate in candidates:
             if candidate.exists():
                 return candidate
         raise FileNotFoundError(f"model.onnx not found in {self._model_dir}")
@@ -227,7 +242,9 @@ class _OrtRuntimeBase(Runtime):
         try:
             if not HAS_ORT_RUNTIME_DEPS:
                 raise RuntimeError("onnxruntime/tokenizers not installed")
-            onnx_path = self._resolve_onnx_path()
+            # TRT + N 卡时优先 FP16 变体（配合 trt_fp16_enable）；回退 binding（CUDA）共用同一文件
+            prefer_fp16 = profile.provider == "TensorrtExecutionProvider"
+            onnx_path = self._resolve_onnx_path(prefer_fp16=prefer_fp16)
             tokenizer_path = self._model_dir / "tokenizer.json"
             if not tokenizer_path.exists():
                 raise FileNotFoundError(f"tokenizer.json not found in {self._model_dir}")

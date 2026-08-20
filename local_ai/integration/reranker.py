@@ -132,7 +132,13 @@ class LocalRerankerService:
                     )
                 instance_id, runtime = acquired
                 binding = (instance_id, route)
+        except (OSError, RuntimeError, ConnectionError, ValueError) as error:
+            logger.warning("local_reranker.acquire_failed error={}", str(error)[:200])
+            if isinstance(error, LocalRerankerUnavailableError):
+                raise
+            raise LocalRerankerUnavailableError(str(error)) from error
         except Exception as error:
+            logger.exception("local_reranker.acquire.unexpected_error")
             if isinstance(error, LocalRerankerUnavailableError):
                 raise
             raise LocalRerankerUnavailableError(str(error)) from error

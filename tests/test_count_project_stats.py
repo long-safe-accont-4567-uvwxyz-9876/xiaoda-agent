@@ -40,45 +40,45 @@ def cps():
 
 class TestCountPythonModules:
     def test_counts_py_files_recursively(self, cps, tmp_path):
-        (tmp_path / "a.py").write_text("x = 1\n")
+        (tmp_path / "a.py").write_text("x = 1\n", encoding="utf-8")
         (tmp_path / "sub").mkdir()
-        (tmp_path / "sub" / "b.py").write_text("y = 2\n")
+        (tmp_path / "sub" / "b.py").write_text("y = 2\n", encoding="utf-8")
         assert cps.count_python_modules(tmp_path) == 2
 
     def test_excludes_venv(self, cps, tmp_path):
-        (tmp_path / "good.py").write_text("x = 1\n")
+        (tmp_path / "good.py").write_text("x = 1\n", encoding="utf-8")
         (tmp_path / ".venv").mkdir()
         (tmp_path / ".venv" / "lib").mkdir()
-        (tmp_path / ".venv" / "lib" / "site.py").write_text("x = 1\n")
+        (tmp_path / ".venv" / "lib" / "site.py").write_text("x = 1\n", encoding="utf-8")
         assert cps.count_python_modules(tmp_path) == 1
 
     def test_excludes_node_modules(self, cps, tmp_path):
-        (tmp_path / "good.py").write_text("x = 1\n")
+        (tmp_path / "good.py").write_text("x = 1\n", encoding="utf-8")
         (tmp_path / "node_modules").mkdir()
-        (tmp_path / "node_modules" / "dep.py").write_text("x = 1\n")
+        (tmp_path / "node_modules" / "dep.py").write_text("x = 1\n", encoding="utf-8")
         assert cps.count_python_modules(tmp_path) == 1
 
     def test_excludes_pycache(self, cps, tmp_path):
-        (tmp_path / "good.py").write_text("x = 1\n")
+        (tmp_path / "good.py").write_text("x = 1\n", encoding="utf-8")
         (tmp_path / "__pycache__").mkdir()
-        (tmp_path / "__pycache__" / "skip.py").write_text("x = 1\n")
+        (tmp_path / "__pycache__" / "skip.py").write_text("x = 1\n", encoding="utf-8")
         assert cps.count_python_modules(tmp_path) == 1
 
     def test_excludes_web_frontend(self, cps, tmp_path):
-        (tmp_path / "good.py").write_text("x = 1\n")
+        (tmp_path / "good.py").write_text("x = 1\n", encoding="utf-8")
         (tmp_path / "web").mkdir()
-        (tmp_path / "web" / "backend.py").write_text("x = 1\n")
+        (tmp_path / "web" / "backend.py").write_text("x = 1\n", encoding="utf-8")
         (tmp_path / "web" / "frontend").mkdir()
         (tmp_path / "web" / "frontend" / "src").mkdir()
-        (tmp_path / "web" / "frontend" / "src" / "app.py").write_text("x = 1\n")
+        (tmp_path / "web" / "frontend" / "src" / "app.py").write_text("x = 1\n", encoding="utf-8")
         # good.py + web/backend.py = 2; web/frontend 排除
         assert cps.count_python_modules(tmp_path) == 2
 
     def test_excludes_nested_pycache(self, cps, tmp_path):
         (tmp_path / "core").mkdir()
-        (tmp_path / "core" / "a.py").write_text("x = 1\n")
+        (tmp_path / "core" / "a.py").write_text("x = 1\n", encoding="utf-8")
         (tmp_path / "core" / "__pycache__").mkdir()
-        (tmp_path / "core" / "__pycache__" / "a.cpython.py").write_text("x = 1\n")
+        (tmp_path / "core" / "__pycache__" / "a.cpython.py").write_text("x = 1\n", encoding="utf-8")
         assert cps.count_python_modules(tmp_path) == 1
 
     def test_empty_dir_returns_zero(self, cps, tmp_path):

@@ -30,7 +30,7 @@ def _get_local_now() -> datetime:
     tz_name = os.getenv("NUDGE_TIMEZONE", "Asia/Shanghai")
     try:
         tz = ZoneInfo(tz_name)
-    except Exception:
+    except (KeyError, ImportError):
         tz = ZoneInfo("Asia/Shanghai")
     return datetime.now(tz)
 
@@ -77,7 +77,7 @@ class MailPoller:
                 await self._tick()
             except asyncio.CancelledError:
                 raise
-            except Exception as e:
+            except (RuntimeError, OSError, ConnectionError, ValueError) as e:
                 logger.warning("mail.poller.tick_error error={}", str(e)[:200])
             await asyncio.sleep(self.TICK_SECONDS)
 
@@ -162,7 +162,7 @@ class MailPoller:
                 logger.warning("mail.poller.process_timeout id={}", msg_id)
                 # 超时的邮件不标记为已处理，下次轮询会重试
                 continue
-            except Exception as e:
+            except (RuntimeError, OSError, ValueError) as e:
                 logger.warning("mail.poller.process_failed id={} error={}", msg_id, str(e)[:200])
 
             self._processed_ids[msg_id] = None
@@ -225,7 +225,7 @@ class MailPoller:
         except TimeoutError:
             logger.warning("mail.poller.process_timeout id={}", msg_id)
             reply_text = "抱歉，处理你的邮件超时了，请稍后重试。"
-        except Exception as e:
+        except (RuntimeError, OSError, ValueError, TimeoutError) as e:
             logger.warning("mail.poller.process_error id={} error={}", msg_id, str(e)[:200])
             reply_text = f"处理邮件时遇到问题：{str(e)[:100]}"
 
@@ -243,7 +243,7 @@ class MailPoller:
             try:
                 from qq_bot_adapter import send_proactive_message
                 await send_proactive_message(f"收到来自 {from_name}({from_email}) 的邮件「{subject}」，已通过邮件回复。")
-            except Exception:
+            except (ImportError, RuntimeError, ConnectionError):
                 logger.debug("mail.qq_notify_error", exc_info=True)
 
     # ── 辅助 ──────────────────────────────────────────────────

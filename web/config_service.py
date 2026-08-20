@@ -51,7 +51,7 @@ class _TrackedDict(dict):
                 "config_service.data_mutation_direct path={}.{} op={} key={} value={} stack=\n{}",
                 self._track_path, op, str(key)[:50], val_str, stack,
             )
-        except Exception as e:
+        except (OSError, RuntimeError, ValueError) as e:
             logger.warning("config_service.mutation_logging_failed error={}", str(e))
 
     def __setitem__(self, key: Any, value: Any) -> None:
@@ -231,7 +231,7 @@ class ConfigService:
                 self._deep_merge(self._data, saved)
                 # 重新包装以确保加载的数据也是 TrackedDict
                 self._data = _wrap_tracked(dict(self._data), "root")
-            except Exception as e:
+            except (json.JSONDecodeError, OSError, ValueError) as e:
                 logger.warning("config_service.load_failed error={}", str(e))
 
     @staticmethod
@@ -322,7 +322,7 @@ class ConfigService:
             self._assign(path, value)
             try:
                 self._save()
-            except Exception:
+            except (OSError, RuntimeError):
                 # _save 失败：回滚 _data 到旧值，防止内存污染
                 self._assign(path, old_value)
                 logger.error("config_service.set_rollback path={} reason=save_failed", path)
@@ -352,7 +352,7 @@ class ConfigService:
                 self._assign(path, value)
             try:
                 self._save()
-            except Exception:
+            except (OSError, RuntimeError):
                 # _save 失败：回滚所有已修改路径
                 for path, old in old_values.items():
                     self._assign(path, old)
@@ -393,7 +393,7 @@ class ConfigService:
             node.pop(parts[-1], None)
             try:
                 self._save()
-            except Exception:
+            except (OSError, RuntimeError):
                 if existed:
                     self._assign(path, copy.deepcopy(old_value))
                 logger.error("config_service.delete_rollback path={} reason=save_failed", path)
@@ -410,7 +410,7 @@ class ConfigService:
             from utils.atomic_write import atomic_write
             self._path.parent.mkdir(parents=True, exist_ok=True)
             atomic_write(self._path, json.dumps(self._data, ensure_ascii=False, indent=2))
-        except Exception:
+        except (OSError, RuntimeError):
             logger.debug("config_service.atomic_write_fallback", exc_info=True)
             self._path.parent.mkdir(parents=True, exist_ok=True)
             tmp = self._path.with_suffix(".tmp")
@@ -432,7 +432,7 @@ class ConfigService:
                 for cb in cbs:
                     try:
                         cb(value)
-                    except Exception as e:
+                    except (RuntimeError, ValueError, OSError) as e:
                         logger.warning("config_service.watcher_error prefix={} error={}", prefix, str(e))
 
 

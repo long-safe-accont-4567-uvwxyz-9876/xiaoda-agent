@@ -162,6 +162,6 @@ class BridgeMemoryManager:
                 bridges.append(bridge)
                 existing.add(target_id)
 
-        logger.info(f"BridgeMemory.discover: found {len(bridges)} bridges "
-                     f"from {len(isolated_memories)} orphans")
+        logger.info("BridgeMemory.discover: found {} bridges "
+                     "from {} orphans", len(bridges), len(isolated_memories))
         return bridges

@@ -4,6 +4,8 @@ import asyncio
 import os
 from typing import Any, AsyncIterator, Mapping, Sequence
 
+from loguru import logger
+
 from local_ai.contracts import ModelPurpose
 from local_ai.integration.reranker import LocalModelUnavailableError
 
@@ -96,7 +98,11 @@ class LocalChatService:
                     acquired = await acquire_model(model_id, route)
                 else:
                     acquired = await acquire(ModelPurpose.CHAT, route)
+            except (OSError, RuntimeError, ConnectionError, ValueError) as error:
+                logger.warning("local_chat.acquire_failed error={}", str(error)[:200])
+                raise LocalModelUnavailableError(str(error)) from error
             except Exception as error:
+                logger.exception("local_chat.acquire.unexpected_error")
                 raise LocalModelUnavailableError(str(error)) from error
             if acquired is None:
                 raise LocalModelUnavailableError("no local chat model is selected")

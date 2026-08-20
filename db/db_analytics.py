@@ -36,7 +36,11 @@ class AnalyticsDB:
             if auto_commit:
                 await self._conn.commit()
             return usage_id
+        except (ImportError, OSError, RuntimeError, ValueError):
+            return ""
+
         except Exception:
+            logger.exception(".db.db_analytics.insert_api_usage_unexpected")
             return ""
 
     async def batch_insert_api_usage(self, records: list[dict],

@@ -84,7 +84,7 @@ class PreferenceDiscovery:
                 return []
             return [str(f).strip() for f in facts if f and str(f).strip()]
         except Exception as e:
-            logger.error(f"PreferenceDiscovery.stage_c failed: {e}")
+            logger.error("PreferenceDiscovery.stage_c failed: {}", e, exc_info=True)
             return []
 
     async def stage_s_synthesize(self, stage_c_outputs: list[str],
@@ -133,8 +133,9 @@ class PreferenceDiscovery:
                 "source_count": len(cluster_members),
             })
 
-        logger.info(f"PreferenceDiscovery.stage_s: {len(stage_c_outputs)} outputs → "
-                     f"{len(clusters)} clusters → {len(patterns)} patterns")
+        logger.info("PreferenceDiscovery.stage_s: {} outputs → "
+                     "{} clusters → {} patterns", len(stage_c_outputs),
+                     len(clusters), len(patterns))
         return patterns
 
     async def _distill_cluster(self, llm_client: Any,

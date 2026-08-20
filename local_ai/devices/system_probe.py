@@ -13,6 +13,8 @@ import sys
 from pathlib import Path
 from typing import Any
 
+from loguru import logger
+
 from local_ai.contracts import ComputeDevice, DeviceState
 
 _ARCHITECTURE_ALIASES = {
@@ -454,7 +456,11 @@ def _windows_payload() -> dict[str, Any]:
         for key, future in futures.items():
             try:
                 results[key] = future.result()
-            except Exception:  # noqa: BLE001
+            except (OSError, RuntimeError, ValueError) as e:
+                logger.debug("system_probe.ps_command_failed key={} error={}", key, str(e))
+                results[key] = ""
+            except Exception:
+                logger.exception("system_probe.ps_command.unexpected_error key={}", key)
                 results[key] = ""
     payload: dict[str, Any] = {}
     for key, raw in results.items():
@@ -699,7 +705,11 @@ def probe_npu_device(runner_path: str = "") -> ComputeDevice | None:
             ),
         )
         return probe_vip_backend(path)
-    except Exception:  # noqa: BLE001
+    except (OSError, RuntimeError, ValueError) as e:
+        logger.debug("system_probe.vip_probe_failed error={}", str(e))
+        return None
+    except Exception:
+        logger.exception("system_probe.probe_npu.unexpected_error")
         return None
 
 

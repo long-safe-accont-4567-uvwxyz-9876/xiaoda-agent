@@ -28,7 +28,10 @@ def _get_local_now() -> datetime.datetime:
     tz_name = os.getenv("NUDGE_TIMEZONE", "Asia/Shanghai")
     try:
         tz = ZoneInfo(tz_name)
+    except (KeyError, ImportError):
+        tz = ZoneInfo("Asia/Shanghai")
     except Exception:
+        logger.exception(".core.growth_narrative._get_local_now_unexpected")
         tz = ZoneInfo("Asia/Shanghai")
     return datetime.datetime.now(tz)
 
@@ -66,8 +69,10 @@ class GrowthNarrative:
             self._task.cancel()
             try:
                 await self._task
-            except (asyncio.CancelledError, Exception):
+            except asyncio.CancelledError:
                 pass
+            except Exception:
+                logger.debug("growth_narrative.stop_task_error")
         self._task = None
 
     async def _loop(self) -> None:
