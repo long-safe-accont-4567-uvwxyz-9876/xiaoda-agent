@@ -171,7 +171,7 @@ RERANKER_OVERSAMPLE_RATIO = _safe_int(os.getenv("RERANKER_OVERSAMPLE_RATIO"), 3)
 
 # Query Transform
 QUERY_TRANSFORM_ENABLED = os.getenv("QUERY_TRANSFORM_ENABLED", "true").lower() in ("1", "true", "yes")
-QUERY_EXPAND_COUNT = _safe_int(os.getenv("QUERY_EXPAND_COUNT"), 2)  # 默认开启多查询扩展（提升召回率），rewrite_query 仍保留。关闭设 QUERY_EXPAND_COUNT=0
+QUERY_EXPAND_COUNT = _safe_int(os.getenv("QUERY_EXPAND_COUNT"), 0)  # 默认关闭多查询扩展（实测不好用），rewrite_query 仍保留
 # HyDE（假设文档嵌入）：开启时生成假设答案文档，与原查询向量混合检索，提升语义召回率。
 # 默认开启（HYDE_ENABLED=true）：向量通道在 _hybrid_vec_search 中单独使用 HyDE，
 # 生成失败返回 None 自动降级为原始查询检索，不影响主路径。
