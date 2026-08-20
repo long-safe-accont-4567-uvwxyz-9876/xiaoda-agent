@@ -171,15 +171,16 @@ RERANKER_OVERSAMPLE_RATIO = _safe_int(os.getenv("RERANKER_OVERSAMPLE_RATIO"), 3)
 
 # Query Transform
 QUERY_TRANSFORM_ENABLED = os.getenv("QUERY_TRANSFORM_ENABLED", "true").lower() in ("1", "true", "yes")
-QUERY_EXPAND_COUNT = _safe_int(os.getenv("QUERY_EXPAND_COUNT"), 0)  # 默认关闭多查询扩展（实测不好用），rewrite_query 仍保留
-# HyDE（假设文档嵌入）：开启时生成假设答案文档，与原查询向量混合检索。
-# 默认关闭（HYDE_ENABLED=false）：避免查询变换跑偏（同多查询扩展教训），
-# 且每次检索多一次 LLM 调用（生成假设文档）有延迟成本。接入但可量化、可关闭。
-HYDE_ENABLED = os.getenv("HYDE_ENABLED", "false").lower() in ("1", "true", "yes")
+QUERY_EXPAND_COUNT = _safe_int(os.getenv("QUERY_EXPAND_COUNT"), 2)  # 默认开启多查询扩展（提升召回率），rewrite_query 仍保留。关闭设 QUERY_EXPAND_COUNT=0
+# HyDE（假设文档嵌入）：开启时生成假设答案文档，与原查询向量混合检索，提升语义召回率。
+# 默认开启（HYDE_ENABLED=true）：向量通道在 _hybrid_vec_search 中单独使用 HyDE，
+# 生成失败返回 None 自动降级为原始查询检索，不影响主路径。
+HYDE_ENABLED = os.getenv("HYDE_ENABLED", "true").lower() in ("1", "true", "yes")
 # 检索扩散开关：False=精准检索（搜什么就是什么，跳过 expand_query 和 _spreading_recall）
 # True=扩散检索（向后兼容，生成额外查询目标 + 概念图扩散）
-# 默认 False：与艾宾浩斯遗忘曲线协调，避免找回应被衰减归档的低 importance 记忆
-MEMORY_RETRIEVAL_DIFFUSION = os.getenv("MEMORY_RETRIEVAL_DIFFUSION", "false").lower() in ("1", "true", "yes")
+# 默认开启：配合 Reranker 精排兜底，扩散召回的结果可被交叉编码器过滤，
+# 仅当 Reranker 不可用时扩散结果才以最低优先级进入最终输出（权重 0.4，RAG_MIN_FINAL_SCORE 兜底）。
+MEMORY_RETRIEVAL_DIFFUSION = os.getenv("MEMORY_RETRIEVAL_DIFFUSION", "true").lower() in ("1", "true", "yes")
 # 意图分类 LLM 调用：默认开启（GLM-Z1-9B-0414 推理质量高，速度可接受）
 # 设置 INTENT_LLM_CLASSIFY=false 可关闭 LLM 分类，仅用规则匹配（更快）
 INTENT_LLM_CLASSIFY = os.getenv("INTENT_LLM_CLASSIFY", "false").lower() in ("1", "true", "yes")
@@ -257,8 +258,9 @@ RAG_KG_WEIGHT = _safe_float(os.getenv("RAG_KG_WEIGHT"), 0.15)
 RAG_IMPORTANCE_WEIGHT = _safe_float(os.getenv("RAG_IMPORTANCE_WEIGHT"), 0.20)
 
 # RAG 候选集大小（每路召回 Top-N，RRF 融合后送 Reranker 的数量）
-RAG_RECALL_LIMIT = _safe_int(os.getenv("RAG_RECALL_LIMIT"), 100)  # P0-1: 50→100，扩大每路召回候选池
-RAG_RERANK_LIMIT = _safe_int(os.getenv("RAG_RERANK_LIMIT"), 50)
+# 扩大候选池让 Reranker 有更多选择空间，从 100→150（每路），Reranker 限额从 50→80
+RAG_RECALL_LIMIT = _safe_int(os.getenv("RAG_RECALL_LIMIT"), 150)  # 默认150：扩大候选池，让Reranker有更大选择空间
+RAG_RERANK_LIMIT = _safe_int(os.getenv("RAG_RERANK_LIMIT"), 80)   # 默认80：Reranker精排候选上限，配合扩大召回池
 
 # RAG 最低相关分过滤：final_score 低于此值的结果被视为噪声丢弃
 # 根因（bench_rag_e2e 实测）：技术型 query 在向量库无精确命中时，RRF 融合会
@@ -273,8 +275,10 @@ RAG_MIN_FINAL_SCORE = _safe_float(os.getenv("RAG_MIN_FINAL_SCORE"), 0.08)
 # 直接丢弃，不进入 RRF 融合。
 # bge-m3 输出已 L2 归一化，distance 范围 0~2：
 #   < 0.8 = 相关, 0.8-1.0 = 弱相关, > 1.0 = 基本无关
-# 默认 1.0：严格过滤，宁可返回空也不注入噪声（用户核心诉求）
-RAG_VEC_MAX_DISTANCE = _safe_float(os.getenv("RAG_VEC_MAX_DISTANCE"), 1.0)
+# 默认 1.2：适度放宽软降权阈值，让远距候选不被过度压制，给 Reranker 更多候选空间。
+# 降级后 score 仍会被 RAG_MIN_FINAL_SCORE 过滤（0.08），不影响最终输出质量。
+# 若希望严格过滤噪声，设 RAG_VEC_MAX_DISTANCE=1.0。
+RAG_VEC_MAX_DISTANCE = _safe_float(os.getenv("RAG_VEC_MAX_DISTANCE"), 1.2)
 RAG_VEC_SOFT_PENALTY = _safe_float(os.getenv("RAG_VEC_SOFT_PENALTY"), 0.3)  # P0-2: 超阈值降权系数
 
 # ── 记忆/情绪阈值 (可环境变量覆盖) ──
