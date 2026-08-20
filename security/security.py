@@ -183,14 +183,43 @@ class SecurityFilter:
 
     @staticmethod
     def _load_owner_ids_from_env() -> list[str]:
-        """从环境变量自动加载主人 ID 列表（合并 OWNER_IDS + MASTER_QQ_OPENID，去重保序）"""
+        """从环境变量自动加载主人 ID 列表。
+
+        合并 OWNER_IDS + MASTER_QQ_OPENID + MASTER_WECHAT_OPENID（去重保序）。
+        - OWNER_IDS：通用主人 ID（可带 qq_ 前缀，见 is_owner 反向兼容）
+        - MASTER_QQ_OPENID：QQ 通道主人 openid（qq_bot_adapter 可自动写入）
+        - MASTER_WECHAT_OPENID：微信通道主人 from_user_id（手动填入 / 由 /whoami 查询）
+        """
         import os as _os
         ids: list[str] = []
-        for key in ("OWNER_IDS", "MASTER_QQ_OPENID"):
+        for key in ("OWNER_IDS", "MASTER_QQ_OPENID", "MASTER_WECHAT_OPENID"):
             raw = _os.getenv(key, "").strip()
             if raw:
                 ids.extend(x.strip() for x in raw.split(",") if x.strip())
         return list(dict.fromkeys(ids))  # 去重保序
+
+    def refresh_owner_ids_from_env(self) -> None:
+        """运行时热刷新主人 ID：重新从环境变量合并进 owner_ids。
+
+        用于 WebUI 重新绑定微信/QQ 后，无需重启服务即可让主人识别即时生效。
+        保留运行时通过其它途径（如邮件主人）已加入的 ID，仅追加 env 中的新 ID，
+        不清除既有条目（幂等、可重复调用）。
+        """
+        env_ids = self._load_owner_ids_from_env()
+        before = len(self.owner_ids)
+        self.owner_ids.update(env_ids)
+        if len(self.owner_ids) != before:
+            logger.info("security.owner_ids_refreshed total={}", len(self.owner_ids))
+
+    def add_owner_id(self, owner_id: str) -> None:
+        """运行时新增单个主人 ID（追加，幂等）。
+
+        绑定微信/QQ 主人时调用：先写 .env 持久化 + 更新 os.environ，
+        再调用本方法让当前进程的 SecurityFilter 立即生效。
+        """
+        if owner_id and owner_id not in self.owner_ids:
+            self.owner_ids.add(owner_id)
+            logger.info("security.owner_id_added id={} total={}", owner_id, len(self.owner_ids))
 
     # ── YAML 配置加载与热更新 ──────────────────────────────────
 
@@ -501,8 +530,15 @@ class SecurityFilter:
             bare_openid = user_id[3:]
             if bare_openid in self.owner_ids:
                 return True
-        # 反向兼容：如果 OWNER_IDS 配置了带 qq_ 前缀的，检查 user_id 加上前缀是否匹配
-        return f"qq_{user_id}" in self.owner_ids
+        # 兼容 wechat_{id} 格式：如果 user_id 以 wechat_ 开头，检查去掉前缀后是否匹配
+        if user_id.startswith("wechat_"):
+            bare_id = user_id[7:]
+            if bare_id in self.owner_ids:
+                return True
+        # 反向兼容：如果 owner_ids 配置了带 qq_ / wechat_ 前缀的，检查 user_id 加上前缀是否匹配
+        if f"qq_{user_id}" in self.owner_ids:
+            return True
+        return f"wechat_{user_id}" in self.owner_ids
 
     @property
     def is_stopped(self) -> bool:

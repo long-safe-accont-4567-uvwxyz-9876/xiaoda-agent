@@ -968,6 +968,23 @@ class WeChatBotAdapter(ChannelAdapterBase):
             logger.warning("wechat_bot.no_core text={}", text[:80])
             return
 
+        # ── /whoami 自助查询（对齐 QQ 通道）──────────────────────
+        # 微信 C2C 没有"拉群者"这种可信绑定信号，主人身份须显式绑定。
+        # 用户发 /whoami 即可拿到自己的 from_user_id，再填进 .env 的
+        # MASTER_WECHAT_OPENID 完成绑定（security 层会将其并入 owner_ids）。
+        if text.strip() == "/whoami":
+            reply = (
+                f"你的微信用户 ID（from_user_id）是：\n{from_user_id}\n\n"
+                f"在 .env 的「MASTER_WECHAT_OPENID」填入此值即可绑定主人身份"
+                f"（多个用逗号分隔）。绑定后重启服务生效。"
+            )
+            try:
+                await self.send_message(reply, to_user_id=from_user_id,
+                                        context_token=context_token)
+            except Exception as e:
+                logger.warning("wechat_bot.whoami_send_failed error={}", str(e)[:200])
+            return
+
         user_id = f"wechat_{from_user_id}" if from_user_id else "wechat_unknown"
         logger.info("wechat_bot.text_msg user_id={} text={}", user_id, text[:80])
 

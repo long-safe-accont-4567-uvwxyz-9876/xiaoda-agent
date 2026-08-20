@@ -88,7 +88,10 @@ class AgentCore(MessageProcessorMixin, ToolExecutorMixin, SubAgentManagerMixin):
         # 确保 _resolve_identity 能正确识别主人，即使 OWNER_IDS 未配置
         _master_qq = os.getenv("MASTER_QQ_OPENID", "").split(",")
         _master_qq = [x.strip() for x in _master_qq if x.strip()]
-        _owner_ids = list(dict.fromkeys(_owner_ids + _master_qq))  # 去重保序
+        # 合并 MASTER_WECHAT_OPENID（微信通道主人 from_user_id，手动填入 /whoami 查询）
+        _master_wechat = os.getenv("MASTER_WECHAT_OPENID", "").split(",")
+        _master_wechat = [x.strip() for x in _master_wechat if x.strip()]
+        _owner_ids = list(dict.fromkeys(_owner_ids + _master_qq + _master_wechat))  # 去重保序
         self.security = SecurityFilter(owner_ids=_owner_ids)
         self._principal_resolver = PrincipalResolver(self.security)
         # 子代理 A2A 共享黑板（在 context 创建前初始化，并注入 context 供子代理访问）

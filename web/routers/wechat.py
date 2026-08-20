@@ -16,6 +16,8 @@ HTTP 端点，供 WebUI 前端调用。
 from __future__ import annotations
 
 import asyncio
+import os
+from pathlib import Path
 from typing import Any
 
 from fastapi import APIRouter, Depends, Query, Request
@@ -25,6 +27,8 @@ from web.schemas import Envelope
 from web.routers.auth import get_current_user
 from ilink_client import ILinkClient
 from wechat_bot_adapter import save_credentials, load_credentials, clear_credentials
+from channel_adapter_base import upsert_env_file_line
+from config import ENV_PATH
 
 # 需认证的路由：所有端点默认走 get_current_user 依赖
 router = APIRouter(tags=["wechat"], dependencies=[Depends(get_current_user)])
@@ -38,6 +42,34 @@ public_router = APIRouter(tags=["wechat"])
 # _START_LOCK 的 M3 修复同因）。改为 per-loop 惰性创建。
 _lifecycle_locks: "dict" = {}
 _lifecycle_locks_guard = __import__("threading").Lock()
+
+
+def _save_master_wechat_id(user_id: str) -> None:
+    """扫码登录成功后，把微信 from_user_id 绑定为微信主人。
+
+    写入 .env 的 MASTER_WECHAT_OPENID（持久化）+ 更新 os.environ，并刷新当前进程
+    运行时 SecurityFilter.owner_ids，使主人识别即时生效（无需重启服务）。
+    """
+    try:
+        existing = os.getenv("MASTER_WECHAT_OPENID", "").strip()
+        ids = [x.strip() for x in existing.split(",") if x.strip()]
+        if user_id in ids:
+            return
+        ids.append(user_id)
+        value = ",".join(ids)
+        upsert_env_file_line(Path(ENV_PATH), "MASTER_WECHAT_OPENID", value)
+        os.environ["MASTER_WECHAT_OPENID"] = value
+        logger.info("wechat.master_wechat_id_saved user_id={} total={}", user_id, len(ids))
+        # 运行时即时生效
+        try:
+            from web.server import app as _web_app
+            core = getattr(_web_app, "state", None) and getattr(_web_app.state, "core", None)
+            if core is not None and getattr(core, "security", None) is not None:
+                core.security.add_owner_id(user_id)
+        except Exception as e:  # noqa: BLE001
+            logger.debug("wechat.refresh_runtime_owner_failed error={}", str(e)[:120])
+    except Exception as e:  # noqa: BLE001
+        logger.warning("wechat.save_master_wechat_id_failed error={}", str(e)[:200])
 
 
 def _get_lifecycle_lock() -> asyncio.Lock:
@@ -196,6 +228,8 @@ async def get_qrcode_status(
         # 保存凭证，供后续 /wechat/start 加载
         try:
             save_credentials(bot_token, ilink_bot_id, ilink_user_id, baseurl)
+            # 扫码登录成功即绑定为微信主人：持久化 + 运行时即时生效
+            _save_master_wechat_id(ilink_user_id)
         except Exception as e:
             logger.error(
                 "wechat.qrcode.save_credentials_failed error={}",

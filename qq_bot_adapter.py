@@ -232,6 +232,23 @@ _HIGH_RISK_OP_RE = re.compile(
 _msg_seq_counter = int(time.time())
 _msg_seq_lock = threading.Lock()
 _env_write_lock = threading.Lock()
+
+
+def _refresh_runtime_owner_id(owner_id: str) -> None:
+    """绑定主人后，刷新当前进程运行时 SecurityFilter 的主人集合，使识别即时生效。
+
+    延迟导入避免循环依赖（security → core → adapter 链）。core 单例不可用时
+    静默跳过（下次重启仍会从 .env 加载，不影响正确性）。
+    """
+    try:
+        from web.server import app as _web_app
+        core = getattr(_web_app, "state", None) and getattr(_web_app.state, "core", None)
+        if core is not None and getattr(core, "security", None) is not None:
+            core.security.add_owner_id(owner_id)
+    except Exception as e:  # noqa: BLE001
+        logger.debug("qq_bot.refresh_runtime_owner_failed error={}", str(e)[:120])
+
+
 # QQ API 要求 msg_seq 为 int32 范围（0~2147483647）。实测毫秒时间戳（13 位，
 # ~1.7e12）超范围被拒（40011000「请求数据异常」），导致所有回复发送失败。
 # 改用秒级时间戳（10 位，2038-01-19 前安全），仍保证：1) 单调递增；
@@ -247,7 +264,11 @@ def _next_msg_seq() -> int:
 
 
 def _save_master_openid(openid: str) -> None:
-    """将 openid 追加到 MASTER_QQ_OPENID（逗号分隔），并更新运行时环境变量。"""
+    """将 openid 追加到 MASTER_QQ_OPENID（逗号分隔），并更新运行时环境变量。
+
+    绑定后同步刷新运行时 SecurityFilter.owner_ids，使主人识别即时生效
+    （无需重启服务）。
+    """
     with _env_write_lock:
         existing = os.getenv("MASTER_QQ_OPENID", "").strip()
         ids = [x.strip() for x in existing.split(",") if x.strip()]
@@ -266,6 +287,8 @@ def _save_master_openid(openid: str) -> None:
         upsert_env_file_line(env_path, "MASTER_QQ_OPENID", value)
         os.environ["MASTER_QQ_OPENID"] = value
         logger.info("qq_bot.master_openid_saved", openid=openid, total=len(ids))
+        # 运行时即时生效：刷新当前进程 SecurityFilter 的主人集合
+        _refresh_runtime_owner_id(openid)
 
 
 def _parse_master_ids() -> list[str]:
