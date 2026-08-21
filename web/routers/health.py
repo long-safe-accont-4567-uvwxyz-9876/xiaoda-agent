@@ -5,6 +5,8 @@ from typing import Any
 import asyncio
 import json
 import os
+import shutil
+import subprocess
 import time
 
 from fastapi import APIRouter, Depends, HTTPException, Request
@@ -210,6 +212,57 @@ def _collect_cpu_mem_metrics(psutil: Any) -> dict:
     return data
 
 
+_gpu_probe_cache: dict = {"ts": 0.0, "present": False}
+_GPU_PROBE_TTL = 60.0  # 秒；仪表盘约每 5s 轮询一次，探测结果短缓存避免频繁起子进程
+
+
+def _system_has_gpu() -> bool:
+    """真实探测主机是否有可用 GPU（短 TTL 缓存，尽量零开销）。
+
+    判定顺序（任一命中即视为有 GPU）：
+      1) nvidia-smi 可执行且能列出 GPU（驱动在装但无卡时 nvidia-smi -L 会失败）
+      2) rocm-smi 可执行（AMD ROCm 存在）
+      3) lspci 存在 VGA/3D/Display 显示控制器（Intel/独显直通等）
+    全部不命中 → 视为无 GPU（SoC 芯片内的 gpu_thermal_zone 不是独立显卡）。
+    """
+    now = time.monotonic()
+    if now - _gpu_probe_cache["ts"] < _GPU_PROBE_TTL:
+        return _gpu_probe_cache["present"]
+
+    present = False
+    try:
+        nvidia = shutil.which("nvidia-smi")
+        if nvidia:
+            try:
+                # 无卡时 nvidia-smi -L 退出码非 0 且无输出，可区分"装了驱动但无卡"
+                proc = subprocess.run(
+                    [nvidia, "-L"], capture_output=True, text=True, timeout=3
+                )
+                present = proc.returncode == 0 and bool(proc.stdout.strip())
+            except (OSError, subprocess.SubprocessError):
+                present = False
+        if not present and shutil.which("rocm-smi"):
+            present = True  # AMD GPU 驱动存在（rocm-smi 与卡强绑定，装上即有 amdgpu）
+        if not present and shutil.which("lspci"):
+            try:
+                proc = subprocess.run(
+                    ["lspci", "-nn"], capture_output=True, text=True, timeout=3
+                )
+                out = proc.stdout.lower()
+                present = any(
+                    kw in out
+                    for kw in ("vga compatible", "3d controller", "display controller")
+                )
+            except (OSError, subprocess.SubprocessError):
+                present = False
+    except Exception:
+        logger.debug("health.gpu_probe_failed", exc_info=True)
+        present = False
+
+    _gpu_probe_cache.update(ts=now, present=present)
+    return present
+
+
 def _collect_disk_temp_metrics(psutil: Any) -> dict:
     """收集磁盘分区和温度传感器指标。"""
     data: dict = {}
@@ -235,15 +288,39 @@ def _collect_disk_temp_metrics(psutil: Any) -> dict:
         logger.warning("health.disks_failed error={}", str(e))
     except Exception:
         logger.exception("health._collect_disk_temp_metrics.unexpected_error")
-    # ── 温度（Windows 不支持 sensors_temperatures）──
+    # ── 温度（仪表盘展示：内核 zone 名映射为可读中文标签）──
+    # Linux 下 psutil 返回的是内核 sensor 名（如 gpu_thermal_zone）。
+    # gpu_thermal_zone 不是"存在独立显卡"的证据 —— 很多 SoC 主板上它只是
+    # 芯片内微型图形核心的温度。因此 GPU 相关 zone 的展示名不写死：
+    # 先真实探测主机是否有可用的 GPU（nvidia-smi / rocm-smi / lspci 显示类
+    # 设备），有才标 "GPU"，没有则用中性名「SoC(芯片)」，避免把无独显的
+    # 机器误读成有显卡。
+    # *_idle_zone 与同名主 zone 读数重复，直接跳过避免仪表盘重复展示。
+    gpu_label = "GPU(芯片集成)" if _system_has_gpu() else "SoC(芯片)"
+    _TEMP_ZONE_LABELS = {
+        "cpub_thermal_zone": "CPU·大核",
+        "cpul_thermal_zone": "CPU·小核",
+        "gpu_thermal_zone": gpu_label,
+        "npu_thermal_zone": "NPU(芯片)",
+        "ddr_thermal_zone": "DDR 内存",
+        "skin_zone": "机身",
+        "soc_thermal": "SoC",
+        "trip_point_0_thermal": "SoC",
+        "coretemp": "CPU",
+        "k10temp": "CPU",
+        "cpu_thermal": "CPU",
+        "gpu_temp_sensor": gpu_label,
+    }
     try:
         if hasattr(psutil, 'sensors_temperatures'):
             temps = psutil.sensors_temperatures()
             temp_list = []
             for name, entries in temps.items():
+                if name.endswith("_idle_zone"):
+                    continue  # 与同名单区重复读数
                 for entry in entries:
                     temp_list.append({
-                        "label": entry.label or name,
+                        "label": _TEMP_ZONE_LABELS.get(name, entry.label or name),
                         "current": entry.current,
                         "high": entry.high,
                         "critical": entry.critical,
