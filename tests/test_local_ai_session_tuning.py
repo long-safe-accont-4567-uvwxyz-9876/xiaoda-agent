@@ -179,6 +179,11 @@ def test_provider_rank_order():
     assert st.provider_rank("DmlExecutionProvider") == st.provider_rank(
         "CUDAExecutionProvider"
     )
+    # 本地 NPU（VIPLite）与 GPU 同等最优先，且必须优于 CPU（否则 NPU 永远选不上）
+    assert st.provider_rank("VIPLite") == st.provider_rank(
+        "TensorrtExecutionProvider"
+    )
+    assert st.provider_rank("VIPLite") < st.provider_rank("CPUExecutionProvider")
     # 未知 provider 落在 CPU 之后
     assert st.provider_rank("CPUExecutionProvider") < st.provider_rank("UnknownEP")
 

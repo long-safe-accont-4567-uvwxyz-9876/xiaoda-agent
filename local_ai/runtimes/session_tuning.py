@@ -36,7 +36,10 @@ _ENV_CPU_THREADS = "ORT_INTRA_OP_THREADS"
 _ENV_CACHE_DIR = "LOCAL_AI_CACHE_DIR"
 
 # 显式 EP 优先级：值越小越优先（recommend() 排序用）
+# VIPLite（VIP9000 NPU）为本地专用推理设备，优先级最高，避免设备可用时
+# 全部 embedding 推理落回 CPU（此前缺失导致 NPU 永远排在 CPU 之后）。
 _EP_RANK = {
+    "VIPLite": 0,
     "TensorrtExecutionProvider": 0,
     "CUDAExecutionProvider": 1,
     "ROCMExecutionProvider": 1,
@@ -183,7 +186,7 @@ def default_engine_cache_dir() -> Path:
 
 
 def provider_rank(provider: str) -> int:
-    """显式 EP 优先级（值越小越优先）：TRT<CUDA/ROCM/DML<CPU。"""
+    """显式 EP 优先级（值越小越优先）：VIPLite(NPU)/TRT 优先，其次 CUDA/ROCM/DML，CPU 兜底。"""
     return _EP_RANK.get(provider, _DEFAULT_RANK)
 
 
