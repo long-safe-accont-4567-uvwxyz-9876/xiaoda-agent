@@ -171,14 +171,22 @@ class ConceptDB:
         取边都要反复拉回巨量行；SpreadingActivationEngine 把整图快照缓存
         在内存，写入路径经 clear_cache() 失效重建。
         """
-        result: dict[str, dict[str, float]] = {}
         async with self._conn.execute(
             "SELECT source_id, target_id, weight FROM concept_edges"
         ) as cur:
             rows = await cur.fetchall()
-        for row in rows:
-            result.setdefault(row["source_id"], {})[row["target_id"]] = float(row["weight"])
-        return result
+        # 100 万行的 dict 组装是纯 CPU 密集（首载实测 3-4s），且 aiosqlite 仅
+        # 负责取行、组装回到事件循环线程执行——移线程池避免冻结主线程
+        # （检索方通常有 10-45s 的超时预算，但冻结事件循环是全服务级事故）。
+        def _build_snapshot() -> dict[str, dict[str, float]]:
+            result: dict[str, dict[str, float]] = {}
+            for row in rows:
+                result.setdefault(row["source_id"], {})[
+                    row["target_id"]
+                ] = float(row["weight"])
+            return result
+
+        return await asyncio.to_thread(_build_snapshot)
 
     async def update_edge(self, source_id: str, target_id: str,
                            weight: float | None = None,

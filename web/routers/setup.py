@@ -857,13 +857,13 @@ def _write_env_file(updates: Any, ENV_PATH: Any, ENV_EXAMPLE_PATH: Any, _parse_e
         if os.path.exists(ENV_EXAMPLE_PATH):
             shutil.copy2(ENV_EXAMPLE_PATH, ENV_PATH)
             with contextlib.suppress(OSError):
-                ENV_PATH.chmod(0o600)
+                os.chmod(ENV_PATH, 0o600)
             logger.info("setup.copied_env_example")
         else:
             with open(ENV_PATH, "w", encoding="utf-8") as f:
                 f.write("")
             with contextlib.suppress(OSError):
-                ENV_PATH.chmod(0o600)
+                os.chmod(ENV_PATH, 0o600)
             logger.info("setup.created_empty_env")
 
     existing_lines = _parse_env_lines(ENV_PATH)

@@ -332,7 +332,7 @@ class ModelScopeRepository:
             files = await self.list_files(repository, revision, token)
         except (InvalidRevisionError, PermissionError):
             raise
-        except (OSError, RuntimeError, ValueError, ConnectionError) as error:
+        except (OSError, RuntimeError, ValueError, ConnectionError, httpx.HTTPError) as error:
             logger.warning("modelscope.inspect_failed repo={} error={}", repository, str(error)[:200])
             return CatalogInspection(
                 repository=repository,

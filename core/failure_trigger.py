@@ -77,7 +77,7 @@ class FailureTrigger:
             # 注意：使用参数化查询，不拼接用户输入
             return await self._learning_manager.search_similar_errors(error, top_k=3)
         except Exception as e:
-            logger.warning("failure_trigger.search_experiences_failed: {}", e)
+            logger.warning("failure_trigger.search_experiences_failed: %s", e)
             return []
 
     async def _reflect(self, context: FailureContext, past_experiences: list) -> dict:
@@ -132,7 +132,7 @@ class FailureTrigger:
             logger.info("failure_trigger.experience_archived",
                          extra={"outcome": outcome, "error_type": context.error_type})
         except Exception as e:
-            logger.warning("failure_trigger.archive_failed: {}", e)
+            logger.warning("failure_trigger.archive_failed: %s", e)
 
     async def _count_similar(self, error_type: str) -> int:
         """统计同类错误出现次数"""
@@ -159,4 +159,4 @@ class FailureTrigger:
             logger.info("failure_trigger.promoted_to_rule",
                          extra={"error_type": context.error_type})
         except Exception as e:
-            logger.warning("failure_trigger.promote_failed: {}", e)
+            logger.warning("failure_trigger.promote_failed: %s", e)

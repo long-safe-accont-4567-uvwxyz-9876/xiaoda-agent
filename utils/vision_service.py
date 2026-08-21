@@ -20,10 +20,10 @@ def _parse_env_gpu_index() -> int | None:
         return None
     try:
         idx = int(env_idx)
-        logger.info("vulkan gpu index overridden by env XIAODA_GPU_INDEX={}", idx)
+        logger.info("vulkan gpu index overridden by env XIAODA_GPU_INDEX=%s", idx)
         return idx
     except ValueError:
-        logger.warning("invalid XIAODA_GPU_INDEX={!r}, ignoring", env_idx)
+        logger.warning("invalid XIAODA_GPU_INDEX=%r, ignoring", env_idx)
         return None
 
 
@@ -41,7 +41,7 @@ def _get_gpu_names_from_ncnn(ncnn_module, gpu_count: int) -> list[str]:
                 name = info.device_name() or ""
             gpu_names.append(name)
     except (RuntimeError, OSError, ValueError) as e:
-        logger.info("ncnn.get_gpu_info failed: {}, falling back to system commands", e)
+        logger.info("ncnn.get_gpu_info failed: %s, falling back to system commands", e)
     return gpu_names
 
 
@@ -92,7 +92,7 @@ _INTEGRATED_GPU_KEYWORDS = ("intel(r) uhd", "intel(r) iris", "intel hd graphics"
 
 def _select_discrete_gpu_index(gpu_names: list[str], gpu_count: int) -> int:
     """根据 GPU 名称列表选择独显索引。优先独显，次选非核显，否则返回 0。"""
-    logger.info("vulkan gpu list (count={}): {}", gpu_count, gpu_names)
+    logger.info("vulkan gpu list (count=%s): %s", gpu_count, gpu_names)
 
     # 优先选择独显
     for i, name in enumerate(gpu_names):
@@ -101,7 +101,7 @@ def _select_discrete_gpu_index(gpu_names: list[str], gpu_count: int) -> int:
         name_lower = name.lower()
         if any(kw in name_lower for kw in _DISCRETE_GPU_KEYWORDS):
             if not any(kw in name_lower for kw in _INTEGRATED_GPU_KEYWORDS):
-                logger.info("vulkan discrete gpu selected: device={} name={}", i, name)
+                logger.info("vulkan discrete gpu selected: device=%s name=%s", i, name)
                 return i
 
     # 次优选择：非核显的设备
@@ -110,7 +110,7 @@ def _select_discrete_gpu_index(gpu_names: list[str], gpu_count: int) -> int:
             break
         name_lower = name.lower()
         if not any(kw in name_lower for kw in _INTEGRATED_GPU_KEYWORDS):
-            logger.info("vulkan non-integrated gpu selected: device={} name={}", i, name)
+            logger.info("vulkan non-integrated gpu selected: device=%s name=%s", i, name)
             return i
 
     logger.info("vulkan no discrete gpu found, using device 0")
@@ -154,7 +154,7 @@ def _detect_discrete_gpu_index() -> int:
         gpu_names = _get_gpu_names_from_system()
 
     if not gpu_names:
-        logger.info("vulkan multi-gpu detected (count={}), but unable to identify devices, using device 0", gpu_count)
+        logger.info("vulkan multi-gpu detected (count=%s), but unable to identify devices, using device 0", gpu_count)
         return 0
 
     return _select_discrete_gpu_index(gpu_names, gpu_count)
@@ -282,13 +282,13 @@ class VisionService:
                         self._npu = NPUInference(model_path=model_path)
                         self.model_loaded = True
                         self.backend = "npu"
-                        logger.info("vision.npu_loaded model={}", model_path)
+                        logger.info("vision.npu_loaded model=%s", model_path)
                         return
-                    logger.warning("vision.npu_model_not_found path={}", model_path)
+                    logger.warning("vision.npu_model_not_found path=%s", model_path)
                 else:
                     logger.warning("vision.npu_not_available")
             except (RuntimeError, ImportError, OSError) as e:
-                logger.warning("vision.npu_init_failed error={}", e)
+                logger.warning("vision.npu_init_failed error=%s", e)
         try:
             import ncnn
         except ImportError:
@@ -332,9 +332,9 @@ class VisionService:
                 # 始终调用 set_vulkan_device，即使 index=0（独显可能就是设备 0）
                 gpu_index = _detect_discrete_gpu_index()
                 net.set_vulkan_device(gpu_index)
-                logger.info("vulkan compute enabled, using gpu device={}", gpu_index)
+                logger.info("vulkan compute enabled, using gpu device=%s", gpu_index)
             except (RuntimeError, OSError, ValueError) as e:
-                logger.warning("vulkan init failed, falling back to cpu: {}", e)
+                logger.warning("vulkan init failed, falling back to cpu: %s", e)
             net.load_param(param_file)
             net.load_model(bin_file)
             self.model = net
@@ -435,7 +435,7 @@ class VisionService:
                         valid_results.append(r)
                 return valid_results
             except (RuntimeError, ValueError, OSError) as e:
-                logger.warning("vision.npu_detect_failed error={}", e)
+                logger.warning("vision.npu_detect_failed error=%s", e)
                 return []
         if self.backend == "ncnn":
             return self._detect_ncnn(frame)

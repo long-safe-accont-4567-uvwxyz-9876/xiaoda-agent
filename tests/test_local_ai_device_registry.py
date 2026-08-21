@@ -26,6 +26,12 @@ from local_ai.devices.registry import (
 from memory import local_embed
 
 
+# local_embed._create_session 会对单 CUDA EP 自动注入默认 provider_options
+# （session_tuning.auto_provider_options：cudnn_conv_algo_search=HEURISTIC，
+# 比 ORT 默认 EXHAUSTIVE 建图更快）；显式传入的键（device_id 等）保留。
+_CUDA_AUTO_OPTS = {"cudnn_conv_algo_search": "HEURISTIC"}
+
+
 def _read_text_lookup(values):
     """按 posix 路径查 mock 值：Windows 上 Path 的 str() 用反斜杠，
     而测试 dict 用正斜杠 key，直接 str(path) 会全部 miss。"""
@@ -1873,7 +1879,7 @@ def test_local_embedding_consumes_runtime_profile_provider_chain(monkeypatch, tm
         ["CPUExecutionProvider"],
     ]
     assert [call[1]["provider_options"] for call in session_calls] == [
-        [{"device_id": 3}],
+        [{**_CUDA_AUTO_OPTS, "device_id": 3}],
         [{}],
     ]
 
@@ -1938,8 +1944,8 @@ def test_local_embedding_builds_provider_chain_from_fallback_bindings(monkeypatc
         ["CPUExecutionProvider"],
     ]
     assert [call[1]["provider_options"] for call in session_calls] == [
-        [{"device_id": 2}],
-        [{"device_id": 7}],
+        [{**_CUDA_AUTO_OPTS, "device_id": 2}],
+        [{**_CUDA_AUTO_OPTS, "device_id": 7}],
         [{}],
     ]
 
@@ -2004,8 +2010,8 @@ def test_local_embedding_creates_one_session_per_manifest_binding(monkeypatch, t
         ["CPUExecutionProvider"],
     ]
     assert [call[1]["provider_options"] for call in session_calls] == [
-        [{"device_id": 0}],
-        [{"device_id": 1}],
+        [{**_CUDA_AUTO_OPTS, "device_id": 0}],
+        [{**_CUDA_AUTO_OPTS, "device_id": 1}],
         [{}],
     ]
 
@@ -2196,7 +2202,7 @@ def test_local_embedding_ignores_non_manifest_provider_chain(monkeypatch, tmp_pa
     assert provider.load() is True
     assert len(session_calls) == 1
     assert session_calls[0]["providers"] == ["CUDAExecutionProvider"]
-    assert session_calls[0]["provider_options"] == [{"device_id": 0}]
+    assert session_calls[0]["provider_options"] == [{**_CUDA_AUTO_OPTS, "device_id": 0}]
 
 
 def test_local_embedding_directml_load_uses_supported_session_options(monkeypatch, tmp_path):

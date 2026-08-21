@@ -55,7 +55,7 @@ def _load_provider_metadata_cached() -> dict:
                 _PROVIDER_METADATA_CACHE = json.load(fp)
                 return _PROVIDER_METADATA_CACHE
     except (OSError, ValueError) as e:
-        logger.warning("config.provider_metadata_user_load_failed error={}", str(e))
+        logger.warning("config.provider_metadata_user_load_failed error=%s", str(e))
     # 2. 打包/源码目录（内置默认值）
     try:
         meta_path = Path(__file__).resolve().parent / "config" / "provider_metadata.json"
@@ -64,7 +64,7 @@ def _load_provider_metadata_cached() -> dict:
                 _PROVIDER_METADATA_CACHE = json.load(fp)
                 return _PROVIDER_METADATA_CACHE
     except (OSError, ValueError) as e:
-        logger.warning("config.provider_metadata_load_failed error={}", str(e))
+        logger.warning("config.provider_metadata_load_failed error=%s", str(e))
     # 3. 极端兜底
     logger.error("config.provider_metadata_all_load_failed using empty dict")
     _PROVIDER_METADATA_CACHE = {}

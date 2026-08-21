@@ -448,8 +448,13 @@ class InstanceManager:
             return updated
 
     async def refresh_health(self) -> list[ModelInstance]:
+        # scan(force=True) 内部做同步设备探测（/sys 遍历、subprocess、
+        # onnxruntime provider 验证含一次真实推理）——若某次探测 hang，
+        # 裸调会直接冻结事件循环数百秒且无法被 wait_for 取消（同步阻塞不响应
+        # CancelledError）。移入线程池：健康轮询只关心结果，不占事件循环。
         devices = {
-            device.id: device for device in self._device_registry.scan(force=True)
+            device.id: device
+            for device in await asyncio.to_thread(self._device_registry.scan, True)
         }
         with self._state_lock:
             instances = tuple(self._instances.items())

@@ -17,6 +17,7 @@ import asyncio
 import contextvars
 import json
 import sqlite3
+import threading as _threading
 import time
 from typing import Any, TYPE_CHECKING, ClassVar
 
@@ -728,43 +729,54 @@ class BackgroundTaskManager:
 #   extract_instincts/auto_note_after_message 同时报 task_slow elapsed=257.9s），
 #   _spawn 的 timeout=45s 无法取消（asyncio.wait_for 只能取消 await 点，
 #   同步阻塞不响应 CancelledError）。说明主事件循环被某个同步操作冻结。
-# 监控：每 5 秒心跳，若延迟 >10s 则打印所有线程栈定位阻塞点。
-_watchdog_task: asyncio.Task | None = None
+# 监控：独立守护线程 + call_soon_threadsafe 打点，若事件循环活跃调用间隔
+#   超过 10s 则打印所有线程栈。
+#
+# 为何是线程而非 async 任务：async 任务自身在事件循环里，循环被同步操作
+#   冻结时它也卡死，恢复后 dump 只能看到 watchdog 自己的栈，抓不到真凶。
+#   线程不依赖事件循环：call_soon_threadsafe 打点在循环空闲时立即执行
+#   （beat 更新），循环被同步操作占死时打点排队（beat 停滞）——线程检测到
+#   lag 即可在阻塞“进行中”dump 全部线程栈，主线程此刻正停留在阻塞点。
+_watchdog_thread: _threading.Thread | None = None
+_watchdog_stop: _threading.Event | None = None
 
 
-async def event_loop_watchdog() -> None:
-    """事件循环心跳监控：检测同步阻塞并打印线程栈定位根因。
-
-    每 5 秒打个心跳，如果实际延迟超过 10 秒，说明事件循环被同步操作阻塞
-    （如 sqlite 同步 commit、CPU 密集计算、C 扩展 GIL）。此时打印所有线程栈，
-    帮助定位阻塞点。
-    """
+def _watchdog_thread_main(
+    loop: asyncio.AbstractEventLoop, stop_flag: "_threading.Event"
+) -> None:
     import sys
     import traceback as _tb
     _CHECK_INTERVAL = 5.0
-    _BLOCK_THRESHOLD = 10.0  # 延迟超过 10 秒告警
-    last = time.time()
-    _last_warn = 0.0
-    while True:
+    _BLOCK_THRESHOLD = 10.0  # 活跃戳滞后超过 10 秒告警
+    _POLL_INTERVAL = 0.5      # 活跃戳探测粒度（同时缩小检测盲区）
+    _WARN_COOLDOWN = 300.0    # 同一阻塞事件 5 分钟内只告警一次
+
+    beat = [time.monotonic()]
+
+    def _mark_beat() -> None:
+        beat[0] = time.monotonic()
+
+    last_warn = 0.0
+    while not stop_flag.is_set():
         try:
-            await asyncio.sleep(_CHECK_INTERVAL)
-        except asyncio.CancelledError:
-            return
-        now = time.time()
-        lag = now - last - _CHECK_INTERVAL
-        last = now
+            loop.call_soon_threadsafe(_mark_beat)
+        except RuntimeError:
+            return  # loop 已关闭
+        stop_flag.wait(_POLL_INTERVAL)
+        now = time.monotonic()
+        lag = now - beat[0]
         if lag <= _BLOCK_THRESHOLD:
             continue
-        # 限频：同一阻塞事件 5 分钟内只告警一次
-        if _last_warn > 0 and now - _last_warn < 300:
+        if now - last_warn < _WARN_COOLDOWN:
             continue
-        _last_warn = now
+        last_warn = now
         logger.error(
             "event_loop.blocked lag={:.1f}s threshold={:.0f}s "
             "hint=事件循环被同步操作阻塞，打印线程栈定位根因",
             lag, _BLOCK_THRESHOLD,
         )
         try:
+            # 线程独立于事件循环：若阻塞尚未结束，主线程正停在真实阻塞点
             for tid, frame in sys._current_frames().items():
                 stack_lines = _tb.format_stack(frame)
                 # 只打印最后 40 行，避免日志爆炸
@@ -779,23 +791,29 @@ async def event_loop_watchdog() -> None:
 
 def start_event_loop_watchdog() -> None:
     """启动事件循环 watchdog（幂等，重复调用安全）。"""
-    global _watchdog_task
-    if _watchdog_task is not None and not _watchdog_task.done():
+    global _watchdog_thread, _watchdog_stop
+    if _watchdog_thread is not None and _watchdog_thread.is_alive():
         return
     try:
         loop = asyncio.get_running_loop()
     except RuntimeError:
         logger.warning("event_loop.watchdog_no_loop")
         return
-    _watchdog_task = loop.create_task(event_loop_watchdog())
-    _bg_tasks.add(_watchdog_task)
-    _watchdog_task.add_done_callback(_bg_tasks.discard)
+    _watchdog_stop = _threading.Event()
+    _watchdog_thread = _threading.Thread(
+        target=_watchdog_thread_main,
+        args=(loop, _watchdog_stop),
+        name="event-loop-watchdog",
+        daemon=True,
+    )
+    _watchdog_thread.start()
     logger.info("event_loop.watchdog_started interval=5s threshold=10s")
 
 
 def stop_event_loop_watchdog() -> None:
     """停止事件循环 watchdog。"""
-    global _watchdog_task
-    if _watchdog_task is not None and not _watchdog_task.done():
-        _watchdog_task.cancel()
-    _watchdog_task = None
+    global _watchdog_thread, _watchdog_stop
+    if _watchdog_stop is not None:
+        _watchdog_stop.set()
+    _watchdog_thread = None
+    _watchdog_stop = None

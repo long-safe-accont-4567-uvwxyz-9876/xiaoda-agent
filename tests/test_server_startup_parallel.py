@@ -111,8 +111,19 @@ def _patch_start_services_dependencies(monkeypatch) -> None:
         "GreetingScheduler": _FakeGreetingScheduler,
     })
     _install_fake_module(monkeypatch, "plugins.manager", {"PluginManager": _FakePluginManager})
-    # tool_engine.tool_registry（_start_services 内部 import；空模块即可）
-    _install_fake_module(monkeypatch, "tool_engine.tool_registry", {})
+    # tool_engine.tool_registry（_start_services 内部 import；tool_engine/__init__.py
+    # 会 from-import register_builtin_tools_lazy 并调用，需提供该符号）
+    _install_fake_module(monkeypatch, "tool_engine.tool_registry", {
+        "register_builtin_tools_lazy": lambda: None,
+        "get_tool": lambda *a, **kw: None,  # qq_bot_adapter import 时引用
+    })
+
+    # _ensure_wechat_bot_task：按本机 ~/.ai-agent 凭证文件状态决定是否启动，
+    # 不在本组测试目标内（且会摸 app.state.core），整体 mock 掉
+    async def _mock_ensure_wechat_bot_task(app):
+        return None
+
+    monkeypatch.setattr(server_module, "_ensure_wechat_bot_task", _mock_ensure_wechat_bot_task)
 
     # 关闭 QQ Bot 分支
     monkeypatch.delenv("QQBOT_APP_ID", raising=False)
@@ -164,20 +175,17 @@ async def test_start_services_parallelizes_independent_schedulers(monkeypatch):
     app = _make_app()
     core = _make_core()
 
-    t0 = time.monotonic()
     await server_module._start_services(app, core)
-    elapsed = time.monotonic() - t0
 
     # 4 个都跑了
     assert len(start_times) == 4, f"应有 4 个 _init_* 被调用，实际 {len(start_times)}"
 
-    # 并行验证：所有启动时间应接近（差距 < 30ms），且总耗时 < 0.15s（顺序需 ~0.2s）
+    # 并行验证：4 个 init 应在同一 ~30ms 窗口内开始；若顺序执行，间隔会
+    # 拉开到 ≥0.05s*3=0.15s 而被捕获。不做端到端总耗时断言——固定环境开销
+    # （onnxruntime 设备探测、插件发现等）会淹没总耗时，使其失去判别能力。
     start_spread = max(start_times) - min(start_times)
     assert start_spread < 0.03, (
         f"4 个 _init_* 启动时间差距 {start_spread*1000:.1f}ms 过大，未并行执行"
-    )
-    assert elapsed < 0.15, (
-        f"_start_services 总耗时 {elapsed*1000:.1f}ms，疑似顺序执行（并行应 < 150ms）"
     )
 
 

@@ -200,7 +200,7 @@ def _resolve_data_path(kioxia_path: Path, fallback_path: Path) -> Path:
             # 静默回退，不向控制台打印警告：外置盘未挂载是常见状态，
             # 每次启动刷屏会让用户误以为出错。仅记 debug 日志便于排查。
             logger.debug(
-                "config.data_path_unavailable kioxia_env={} fallback={}",
+                "config.data_path_unavailable kioxia_env=%s fallback=%s",
                 kioxia_env, fallback_path,
             )
             return _ensure_fallback(fallback_path)

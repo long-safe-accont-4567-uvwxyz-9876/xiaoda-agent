@@ -52,7 +52,7 @@ def get_secret(name: str, default: str = "") -> str:
     try:
         return credential_vault.decrypt(value)
     except credential_vault.DecryptionError as e:
-        logger.warning("config.decrypt_failed: {} ({})", name, e)
+        logger.warning("config.decrypt_failed: %s (%s)", name, e)
         return default
 
 
