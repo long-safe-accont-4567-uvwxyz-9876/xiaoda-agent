@@ -756,12 +756,19 @@ class RetrievalEngine(EntityKgBoostMixin, MemoryMetadataMixin):
             results = await self._mm.spreading_engine.recall(query, top_k=limit)
             if not results:
                 return []
-            # 映射回 episodic_memories，多 node 指向同一 memory 时取最高分
+            # 映射回 episodic_memories，多 node 指向同一 memory 时取最高分。
+            # recall() 结果已携带 source_mem_id（alive_nodes 内存直读），
+            # 逐条 get_node 是纯冗余 DB 往返（top_k=120 时最多 120 次串行
+            # 查询挤占共享 aiosqlite 连接）；仅结果缺该字段时回退查库，
+            # 兼容旧引擎/Mock。
             mem_ids = []
             for r in results:
-                node = await self._mm.spreading_engine.db.get_node(r["id"])
-                if node and node.get("source_mem_id"):
-                    mem_ids.append((node["source_mem_id"], r["score"]))
+                source_mem_id = r.get("source_mem_id")
+                if source_mem_id is None:
+                    node = await self._mm.spreading_engine.db.get_node(r["id"])
+                    source_mem_id = node.get("source_mem_id") if node else None
+                if source_mem_id:
+                    mem_ids.append((source_mem_id, r["score"]))
             if not mem_ids:
                 return []
             # 批量获取记忆

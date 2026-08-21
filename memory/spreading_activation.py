@@ -148,8 +148,8 @@ class SpreadingActivationEngine:
         # Step 5: 模式补全（无直接命中时用向量模糊匹配）
         if not direct:
             direct = await self._pattern_completion(query, alive_nodes)
-        if not direct:
-            return []
+            if not direct:
+                return []
 
         # Step 6: 扩散激活通道
         spread = await self._spreading_channel(direct, alive_nodes)
@@ -157,8 +157,9 @@ class SpreadingActivationEngine:
         # Step 7: RRF 融合
         fused = self._rrf_fusion(direct, spread)
 
-        # Step 8: 语义重排
-        fused = await self._semantic_rerank(query, fused, top_k)
+        # Step 8: 语义重排（alive_nodes 直读文本，免 N+1 查库）
+        fused = await self._semantic_rerank(query, fused, top_k,
+                                            alive_nodes=alive_nodes)
 
         # Step 9: 模式分离（去重）
         results = self._pattern_separation(fused, top_k)
@@ -173,6 +174,9 @@ class SpreadingActivationEngine:
                 "score": item["score"],
                 "weight": node.get("weight", 1.0),
                 "keys": node.get("keys", "[]"),
+                # source_mem_id 随 alive_nodes 已在内存，调用方映射
+                # episodic_memories 时无需再逐条 get_node（N+1 消除）
+                "source_mem_id": node.get("source_mem_id"),
             })
 
         # G13: 写入缓存（存深拷贝避免外部修改污染）
@@ -320,8 +324,15 @@ class SpreadingActivationEngine:
         return fused
 
     async def _semantic_rerank(self, query: str, fused: dict,
-                                 top_k: int) -> list:
-        """语义重排：用文本相似度对 fused 结果重排"""
+                                 top_k: int,
+                                 alive_nodes: Mapping[str, dict] | None = None) -> list:
+        """语义重排：用文本相似度对 fused 结果重排
+
+        alive_nodes 提供时直接从内存取节点文本（fused 的 id 全部来自
+        alive_nodes，逐条 get_node 是纯冗余 DB 往返——实测 360 候选
+        串行查询让扩散通道固定多付秒级延迟）。None 时回退逐条查库，
+        保持旧调用方（confirm_correct 等）语义不变。
+        """
         if not fused:
             return []
         # 取 fused 分数 top candidates
@@ -331,7 +342,9 @@ class SpreadingActivationEngine:
         # 计算文本相似度
         reranked = []
         for nid, rrf_score in candidates:
-            node = await self.db.get_node(nid)
+            node = alive_nodes.get(nid) if alive_nodes is not None else None
+            if node is None:
+                node = await self.db.get_node(nid)
             if not node:
                 continue
             # rapidfuzz text_ratio 返回 0-100，除以 100 转为 0-1（与原 difflib ratio 一致）

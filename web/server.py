@@ -760,10 +760,21 @@ async def _restore_generative_backends(core: Any, app: FastAPI) -> None:
 
 async def _local_ai_health_loop(instances: Any) -> None:
     import asyncio as _aio
+    refresh_task: _aio.Task | None = None
     while True:
         await _aio.sleep(60)
+        # 单飞 + 超时：refresh_health 内部做同步设备扫描（/sys 遍历、
+        # subprocess、onnxruntime provider 验证），实测出现过单次挂起
+        # 65001s（18h），期间健康状态整天不刷新。超时后放弃本轮，下轮
+        # 重试；上一轮未完成则跳过（避免任务堆积）。
+        if refresh_task is not None and not refresh_task.done():
+            logger.debug("local_ai.health_refresh_skipped_previous_running")
+            continue
+        refresh_task = _aio.create_task(instances.refresh_health())
         try:
-            await instances.refresh_health()
+            await _aio.wait_for(_aio.shield(refresh_task), timeout=120.0)
+        except _aio.TimeoutError:
+            logger.warning("local_ai.health_refresh_timeout timeout=120s")
         except (RuntimeError, OSError) as _e:
             logger.debug("local_ai.health_refresh_failed error={}", _e)
 
