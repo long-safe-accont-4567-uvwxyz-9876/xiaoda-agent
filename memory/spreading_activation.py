@@ -10,6 +10,7 @@ for memory candidates (degree-penalized propagation over weighted edges).
 """
 from __future__ import annotations
 
+import asyncio
 import heapq
 import json
 import math
@@ -39,6 +40,14 @@ class SpreadingActivationEngine:
     RECALL_CACHE_MAXSIZE = 256  # 最大缓存条目
     RECALL_CACHE_TTL = 300      # 5 分钟
 
+    # 整图边快照 TTL（2026-08-21）：快照实测 2381 节点 / 100 万边，
+    # 每次重建 3-10s。原实现写入路径每次 clear_cache() 都作废快照 →
+    # 每轮对话检索都要重建 → 每条消息固定多付 6-10s。
+    # 改为 TTL 内复用（最多 120s 陈旧）+ 过期后台重建（本次用旧快照兜底），
+    # 冷启动（无快照）才内联等待。
+    GRAPH_SNAPSHOT_TTL = 120.0  # 秒
+    GRAPH_BUILD_TIMEOUT = 300.0  # 重建兜底超时，防个别慢盘无限等
+
     def __init__(self, concept_db, vector_store, key_extractor):
         self.db = concept_db
         self.vec = vector_store     # 现有 VectorStore（可为 None）
@@ -46,14 +55,58 @@ class SpreadingActivationEngine:
         # G13: recall 结果 LRU+TTL 缓存
         # OrderedDict[cache_key=(query, top_k)] -> (expiry_monotonic, list[dict])
         self._recall_cache: "OrderedDict[tuple, tuple[float, list[dict]]]" = OrderedDict()
-        # 整图边快照缓存（稠密图 N+1 查询优化）：写入路径经 clear_cache() 失效
+        # 整图边快照缓存（稠密图 N+1 查询优化）：TTL 复用 + 后台重建，
+        # 记忆写入只清 recall 缓存（clear_cache），不再推倒图快照
         self._graph_snapshot: dict[str, dict[str, float]] | None = None
+        self._graph_ts = 0.0
+        self._graph_build_task: "asyncio.Task | None" = None
 
     async def _ensure_graph_snapshot(self) -> dict[str, dict[str, float]]:
-        """取整图边快照（{source: {target: weight}}），懒加载并缓存。"""
-        if self._graph_snapshot is None:
-            self._graph_snapshot = await self.db.get_edge_snapshot()
+        """取整图边快照（{source: {target: weight}}），TTL 内复用，过期后台重建。
+
+        - 快照存在且未超 TTL：直接返回（零等待）
+        - 快照存在已超 TTL：后台启动重建，本次返回旧快照（不阻塞检索）
+        - 无快照（冷启动）：等待重建完成
+        """
+        now = time.monotonic()
+        if self._graph_snapshot is not None:
+            if now - self._graph_ts < self.GRAPH_SNAPSHOT_TTL:
+                return self._graph_snapshot
+            # 过期：后台重建，本次先用旧快照
+            self._kick_graph_build()
+            return self._graph_snapshot
+        # 冷启动：等重建完成（并发请求共享同一任务）
+        if self._graph_build_task is None:
+            self._kick_graph_build()
+        if self._graph_build_task is not None:
+            task = self._graph_build_task
+            try:
+                await asyncio.wait_for(asyncio.shield(task),
+                                       timeout=self.GRAPH_BUILD_TIMEOUT)
+            except asyncio.TimeoutError:
+                logger.warning("memory.graph_snapshot_build_timeout "
+                               "timeout={}", self.GRAPH_BUILD_TIMEOUT)
         return self._graph_snapshot
+
+    def _kick_graph_build(self) -> None:
+        """后台重建快照（单飞：已有任务则复用）。"""
+        if self._graph_build_task is not None and not self._graph_build_task.done():
+            return
+        self._graph_build_task = asyncio.get_running_loop().create_task(
+            self._rebuild_graph()
+        )
+
+    async def _rebuild_graph(self) -> None:
+        try:
+            snap = await self.db.get_edge_snapshot()
+            self._graph_snapshot = snap
+            self._graph_ts = time.monotonic()
+            logger.info("memory.graph_snapshot_rebuilt nodes={}", len(snap))
+        except Exception as e:
+            logger.warning("memory.graph_snapshot_rebuild_failed error={}",
+                           str(e)[:200])
+        finally:
+            self._graph_build_task = None
 
     async def recall(self, query: str, top_k: int = 5) -> list[dict]:
         """扩散激活检索主入口
@@ -134,9 +187,13 @@ class SpreadingActivationEngine:
         return out
 
     def clear_cache(self) -> None:
-        """G13: 清空 recall 缓存（记忆写入后调用）；同时失效整图边快照。"""
+        """G13: 清空 recall 缓存（记忆写入后调用）。
+
+        2026-08-21 起不再作废整图边快照：快照重建 3-10s（100 万边），
+        每轮写入都推倒会让每条消息检索多付 6-10s。图快照由
+        _ensure_graph_snapshot 按 TTL 复用 + 后台重建，最多 120s 陈旧。
+        """
         self._recall_cache.clear()
-        self._graph_snapshot = None
 
     def _compute_idf(self, keys: set, alive_nodes: dict) -> dict:
         """计算每个 key 的 IDF 值
@@ -227,7 +284,7 @@ class SpreadingActivationEngine:
         wave = dict(direct)
         # 稠密图（实测 2381 节点 / 100 万边）N+1 优化：整图快照一次载入内存，
         # 逐节点 get_edges 是串行 DB 往返（实测 1973 节点 19s+）
-        graph = await self._ensure_graph_snapshot()
+        graph = await self._ensure_graph_snapshot() or {}
 
         for hop in range(self.RECALL_RADIUS + 1):
             nxt = defaultdict(float)
