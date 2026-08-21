@@ -132,6 +132,15 @@ class MessageProcessorMixin(StreamingMixin, ChatTargetMixin, VisionMixin, Person
     REPLY_DEDUP_MAX = 5                 # 每 session 保留最近 5 条回复用于去重
     REPLY_DEDUP_THRESHOLD = 70.0        # rapidfuzz 0-100 刻度，>=70 视为重复
     REPLY_DEDUP_RETRY_TIMEOUT = 30      # 去重重试超时（秒），对齐 agnes read=30s
+    # 2026-08-21 根因修复（用户"相同内容一直返回相同回复/重复度80%"）：
+    #   去重只跟"最近 1 条回复"对比，用户消息相同但隔了几轮再发时
+    #   旧回复早已滚出窗口（生产日志：09:51 与 11:43 两次"看看"回复完全相同，
+    #   max_sim 却只有 9.9 → 去重失效）。修复：DB 按交换对（user_message +
+    #   assistant_reply）取最近窗口，用户消息字面相似 >=95% 的交换对成为
+    #   候选（定位"同一个问题"的旧回复）；user 消息不同时仍退回 08-05
+    #   的"只跟最近 1 条对比"，避免"在吗/亲亲"类变体消息反复触发重试。
+    REPLY_DEDUP_USER_SIM = 95.0         # 用户消息字面相似度阈值（>=95% 视为同一内容重发）
+    REPLY_DEDUP_DB_WINDOW = 20          # DB 交换对查询窗口（最近 N 轮）
     # 治本修复（2026-08-05 用户"治标不治本"反馈）：6→10。
     # 根因：agnes-2.0-flash 正常响应 7s，但去重重试 timeout=6s < 7s →
     #   重试的 agnes 调用永远 6s 超时 → 用原回复（重复的）→ 去重机制完全失效！

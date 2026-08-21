@@ -75,6 +75,45 @@ class ConversationLogMixin:
                            user_id[:24] if user_id else "", str(e)[:200])
             return []
 
+    async def get_recent_exchanges(self, user_id: str, source: str = "",
+                                   limit: int = 5) -> list[tuple[str, str]]:
+        """查询最近 N 轮 (user_message, assistant_reply) 交换对，最新在前。
+
+        回复去重升级：仅取"最近 1 条回复"在多轮交替消息后窗口过早失效
+        （用户同类消息隔 5-10 轮后再发，重复回复已是 DB 里更早的一条），
+        导致相同输入仍生成相同回复。按交换对取出用户消息 + 回复，
+        由 _dedup_reply_against_recent 用用户消息相似度定位候选窗口。
+
+        Args:
+            user_id: 稳定用户标识，与写库时一致
+            source: 消息来源过滤，空串则不限来源
+            limit: 返回最近 N 轮（最新在前）
+
+        Returns:
+            [(user_message, assistant_reply), ...]；查询失败返回 []（降级跳过去重）
+        """
+        try:
+            if source:
+                cursor = await self._conn.execute(
+                    "SELECT user_message, assistant_reply FROM conversation_logs "
+                    "WHERE user_id=? AND source=? AND assistant_reply != '' "
+                    "ORDER BY timestamp DESC LIMIT ?",
+                    (user_id, source, limit),
+                )
+            else:
+                cursor = await self._conn.execute(
+                    "SELECT user_message, assistant_reply FROM conversation_logs "
+                    "WHERE user_id=? AND assistant_reply != '' "
+                    "ORDER BY timestamp DESC LIMIT ?",
+                    (user_id, limit),
+                )
+            rows = await cursor.fetchall()
+            return [(row[0] or "", row[1]) for row in rows]
+        except (OSError, RuntimeError, sqlite3.Error) as e:
+            logger.warning("database.get_recent_exchanges_failed user_id={} error={}",
+                           user_id[:24] if user_id else "", str(e)[:200])
+            return []
+
     async def insert_audit_log(self, event_type: str, user_id: str = "", detail: str = "",
                                 auto_commit: bool = True) -> None:
         await self._conn.execute(

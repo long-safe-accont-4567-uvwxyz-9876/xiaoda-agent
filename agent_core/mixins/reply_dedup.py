@@ -40,18 +40,41 @@ class ReplyDedupMixin:
     #   - 极端场景（>256 活跃 session）LRU 淘汰最久未访问者，该用户下次对话
     #     去重历史为空重新积累，是 graceful 行为而非功能损坏
     REPLY_DEDUP_SESSION_CAP = 256       # 最大缓存 session 数，LRU 淘汰
-    _recent_replies: ClassVar["OrderedDict[str, list[str]]"] = OrderedDict()  # session_id -> [reply1, ...]
+    _recent_replies: ClassVar["OrderedDict[str, list[tuple[str, str]]]"] = OrderedDict()  # user_id -> [(user_msg, reply), ...]
 
-    def _dedup_buf(self, user_id: str) -> list[str]:
-        """获取用户的去重缓冲（LRU 维护 + 上限淘汰）。
+    @staticmethod
+    def _extract_user_text(messages: Any) -> str:
+        """从消息列表末尾向前取最近一条 user 文本（新回复所响应的输入）。
 
-        根因修复（用户反馈"每段对话80%一样"）：去 key 从 session_id 改为 user_id。
-          - 微信 adapter 根本没传 session_id（空串）→ 原 key 退化为 user_openid
-          - QQ c2c 的 session_id 每小时换一次（SES-YYYYMMDD-XXXXX）→ key 频繁失效
-            → 内存缓存命中失败 → 去重对最易重复的场景完全失效
-          - 改用 user_id（wechat_{openid} / qq_{openid}），跨 session 稳定，重启前不换
-        LRU 维护不变：OrderedDict + move_to_end + popitem(last=False) 上限淘汰，
-        防止长期运行内存泄漏（原 session_id 含日期每天新增 key 的根因）。
+        兼容单字符串 content 与多块（图片+文本）content 两种结构。
+        """
+        if not messages:
+            return ""
+        for m in reversed(messages):
+            if not isinstance(m, dict):
+                continue
+            if m.get("role") != "user":
+                continue
+            content = m.get("content")
+            if isinstance(content, str):
+                return content.strip()
+            if isinstance(content, list):
+                parts: list[str] = []
+                for block in content:
+                    if isinstance(block, dict):
+                        parts.append(str(block.get("text", "") or block.get("content", "") or ""))
+                    elif isinstance(block, str):
+                        parts.append(block)
+                text = "".join(parts).strip()
+                if text:
+                    return text
+        return ""
+
+    def _dedup_buf(self, user_id: str) -> list[tuple[str, str]]:
+        """获取用户的去重缓冲（LRU 维护 + 上限淘汰），元素为 (user_msg, reply)。
+
+        2026-08-21：从元素字符串升级为交换对 (user_msg, reply)，去重窗口
+        需要 user 消息做相似度匹配；LRU/上限语义不变。
         """
         _dd = self._recent_replies
         buf = _dd.setdefault(user_id, [])
@@ -74,36 +97,44 @@ class ReplyDedupMixin:
           2. 持久化去重：从 conversation_logs 查最近回复，替代易失内存缓存：
              - 服务重启后内存清空 → 去重历史丢失 → 相同输入生成相同回复
              - 从 DB 按 user_id 查询，确保重启后/换 session 后去重状态不丢失
-          3. 内存缓存仍保留作为同进程快速路径：DB 写入是 fire-and-forget，
-             同进程内连续请求时 DB 可能还没写入，内存缓存补足这个时序窗口
+          3. 内存缓存仍保留作为同进程快速路径：DB 写入 fire-and-forget，
+             同进程连续请求时 DB 可能还没写入，内存缓存补足这个时序窗口
+
+        2026-08-21 窗口根因修复（用户"相同内容一直返回相同回复/重复度80%"）：
+          旧实现只对比"最近 1 条回复"（recent[:1] + DB limit=1），相同问题
+          隔 5-10 轮再发时旧回复早已滚出窗口，去重对重复场景失效（生产日志
+          09:51 与 11:53 两次"看看？"回复完全相同，dedup max_sim 仅 9.9）。
+          现按交换对 (user_message, assistant_reply) 维护最近窗口：
+          - 新回复先用「当前用户消息」与窗口内 user 消息做字面相似度匹配
+            （>= REPLY_DEDUP_USER_SIM 视为同一问题重发），命中的旧回复为候选
+          - 无 user 文本或无匹配候选时，退回"最近 1 条对比"（保持 08-05
+            "在吗"类变体消息不误触发重试的收益）
 
         机制：
-        1. recent = 内存缓存 ∪ 数据库最近回复（合并去重，最新在前）
-        2. 新回复与之比较 rapidfuzz 相似度
-        3. 超阈值则追加 system message 要求"完全不同的表达"重试一次
-        4. 重试后仍 >=70% → 返回相似度最低的版本（用户要求只重试一次，不无限重试）
-        5. 无论用哪个，都更新内存缓存（DB 由 background_tasks 写入）
+        1. recent = 内存缓存 ∪ 数据库最近交换对（最新在前，按 reply 去重）
+        2. 候选回复与它算 rapidfuzz 相似度
+        3. 超阈值则追加 system message 重试一次
+        4. 重试后仍 >=70% → 取相似度较低版本（用户要求只重试一次）
+        5. 无论哪个都更新内存缓存
         """
         from utils.similarity import ratio as text_ratio
 
-        # 根因修复：用 user_id（稳定标识）作为去 key，替代不稳定的 session_id
         ctx = _current_request_ctx.get()
         _user_id = getattr(ctx, "user_id", "") or user_openid or "_default"
         _source = getattr(ctx, "source", "") or ""
+        _cur_user_text = (getattr(ctx, "user_input", "") or "").strip()
+        if not _cur_user_text:
+            _cur_user_text = self._extract_user_text(messages)
 
-        # 1. 合并内存缓存 + 数据库最近回复（持久化去重）
-        # 治本（2026-08-05）：用户明确要求"去重只跟上一条消息对比，不是跟全部历史对比"。
-        # 根因：原先与最近 5 条历史逐一对比，用户反复发相似消息（"在吗""我要亲亲"）时
-        #   agnes 生成相似回复 → 高相似度 → 触发去重重试 → 第二次 LLM 调用 → 总耗时 20s+。
-        # 修复：只取最近 1 条回复对比（limit=1），从源头消除"与多条历史重复"的误判面，
-        #   从而大幅降低触发重试的概率，保持主 LLM 调用单次 8s 内的健康耗时。
+        # 1. 合并内存缓存 + DB 交换对（(user_msg, reply)，最新在前，reply 去重）
         mem_recent = self._dedup_buf(_user_id)  # 内存缓存（LRU 维护）
-        db_recent: list[str] = []
+        db_recent: list[tuple[str, str]] = []
         if self.db and _user_id != "_default":
             try:
                 db_recent = await asyncio.wait_for(
-                    self.db.get_recent_replies(_user_id, source=_source,
-                                               limit=1),
+                    self.db.get_recent_exchanges(
+                        _user_id, source=_source, limit=self.REPLY_DEDUP_DB_WINDOW,
+                    ),
                     timeout=3.0,
                 )
             except asyncio.TimeoutError:
@@ -111,55 +142,62 @@ class ReplyDedupMixin:
             except Exception as e:
                 logger.warning("reply.dedup_db_failed error={}", str(e)[:200])
 
-        # 合并：内存缓存 + DB（去重，保持最新在前，只保留最近 1 条用于对比）
         _seen: set[str] = set()
-        recent: list[str] = []
-        for r in list(mem_recent) + db_recent:
-            if r and r not in _seen:
-                _seen.add(r)
-                recent.append(r)
-        recent = recent[:1]
+        merged: list[tuple[str, str]] = []
+        for _um, _r in list(reversed(mem_recent)) + db_recent:
+            if not _r or _r in _seen:
+                continue
+            _seen.add(_r)
+            merged.append((_um or "", _r))
+        merged = merged[: self.REPLY_DEDUP_DB_WINDOW]
 
         logger.info("reply.dedup_probe | user={} | "
                     "mem_cnt={} | db_cnt={} | "
-                    "merged_cnt={} | reply_preview={}",
+                    "merged_cnt={} | user_input={} | reply_preview={}",
                     _user_id[:24], len(mem_recent), len(db_recent),
-                    len(recent), reply[:40])
+                    len(merged), _cur_user_text[:20], reply[:30])
 
-        # 无历史回复，直接记录并返回
-        if not recent:
+        # 2. 候选回复：同一问题（user 消息相似）的旧回复；否则退回最近 1 条
+        candidates: list[str] = []
+        if _cur_user_text:
+            candidates = [
+                r for um, r in merged
+                if um and text_ratio(_cur_user_text, um) >= self.REPLY_DEDUP_USER_SIM
+            ]
+        if not candidates and merged:
+            candidates = [merged[0][1]]  # user 消息不同/无：只跟最近 1 条对比
+
+        if not candidates:
             _buf = self._dedup_buf(_user_id)
-            _buf.append(reply)
-            if len(_buf) > self.REPLY_DEDUP_MAX:
-                del _buf[: len(_buf) - self.REPLY_DEDUP_MAX]
+            _buf.append((_cur_user_text, reply))
+            while len(_buf) > self.REPLY_DEDUP_MAX:
+                _buf.pop(0)
             return reply
 
-        # 计算与最近回复的最大相似度
-        max_sim = max(text_ratio(reply, r) for r in recent)
+        # 2. 计算与候选的最大相似度
+        max_sim = max(text_ratio(reply, r) for r in candidates)
         logger.info("reply.dedup_check | user={} | "
-                    "max_sim={:.1f} | merged_cnt={}",
-                    _user_id[:20], max_sim, len(recent))
+                    "max_sim={:.1f} | candidates={}",
+                    _user_id[:20], max_sim, len(candidates))
 
         if max_sim < self.REPLY_DEDUP_THRESHOLD:
             # 不重复，记录并返回（保持最近 N 条）
             _buf = self._dedup_buf(_user_id)
-            _buf.append(reply)
-            if len(_buf) > self.REPLY_DEDUP_MAX:
-                del _buf[: len(_buf) - self.REPLY_DEDUP_MAX]
+            _buf.append((_cur_user_text, reply))
+            while len(_buf) > self.REPLY_DEDUP_MAX:
+                _buf.pop(0)
             return reply
 
-        # 重复了，重试一次
+        # 3. 重复了，重试一次
         trace.warning("reply.duplicate_detected",
                       max_similarity=round(max_sim, 1),
-                      recent_count=len(recent),
+                      recent_count=len(candidates),
                       preview=reply[:60])
 
         try:
-            # 治本：重试时只传 system + 最近 2 轮历史，不传完整历史。
-            # 根因是模型看到历史里的重复回复跟风——截断历史让模型没有重复参考，
-            # 从源头防止生成重复回复。历史仍在数据库，主路径不受影响。
+            # 重试时只传 system + 最近 2 轮历史，截断重试参考让小妲换一种说法
             _retry_messages = [messages[0]] if messages else []  # system prompt
-            _retry_messages += messages[-4:]  # 最近 2 轮（user+assistant 各 2）
+            _retry_messages += (messages or [])[-4:]  # 最近 2 轮（user+assistant 各 2）
             _retry_messages += [{
                 "role": "system",
                 "content": (
@@ -169,7 +207,6 @@ class ReplyDedupMixin:
                     "换一种全新的表达方式。"
                 ),
             }]
-            # 尊重 WebUI temperature 设定，不篡改（用户明确要求不许自动调整 temperature）
             _retry_result = await asyncio.wait_for(
                 self.router.route(
                     task_type, _retry_messages,
@@ -188,17 +225,14 @@ class ReplyDedupMixin:
                 _retry_reply = self._clean_reply(_retry_reply)
 
             if _retry_reply and len(_retry_reply) > 20:
-                _retry_sim = max(text_ratio(_retry_reply, r) for r in recent)
+                _retry_sim = max(text_ratio(_retry_reply, r) for r in candidates)
                 if _retry_sim < self.REPLY_DEDUP_THRESHOLD:
-                    # 重试成功：相似度 <70%，用重试回复
                     _buf = self._dedup_buf(_user_id)
-                    _buf.append(_retry_reply)
-                    if len(_buf) > self.REPLY_DEDUP_MAX:
-                        del _buf[: len(_buf) - self.REPLY_DEDUP_MAX]
+                    _buf.append((_cur_user_text, _retry_reply))
+                    while len(_buf) > self.REPLY_DEDUP_MAX:
+                        _buf.pop(0)
                     logger.info("reply.dedup_retry_ok retry_sim={:.1f}", _retry_sim)
                     return _retry_reply
-                # 重试后仍 >=70%（用户要求"重试后必须 <70%，不然就是bug"）
-                # 只允许重试一次，取相似度较低的版本作为兜底，并告警便于排查
                 if _retry_sim < max_sim:
                     reply = _retry_reply
                     max_sim = _retry_sim
@@ -213,7 +247,7 @@ class ReplyDedupMixin:
             logger.warning("reply.dedup_retry_failed error={}", str(e)[:200])
 
         _buf = self._dedup_buf(_user_id)
-        _buf.append(reply)
-        if len(_buf) > self.REPLY_DEDUP_MAX:
-            del _buf[: len(_buf) - self.REPLY_DEDUP_MAX]
+        _buf.append((_cur_user_text, reply))
+        while len(_buf) > self.REPLY_DEDUP_MAX:
+            _buf.pop(0)
         return reply

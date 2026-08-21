@@ -23,7 +23,8 @@ from loguru import logger
 from agent_core._shared import DEGRADED_REPLY, ProcessResult, is_degraded_reply
 from agent_core.mixins.verification import _system_context_var
 from agent_core.mixins.voice import _get_temperature
-from config import AGENT_CONFIG, STREAM_TEXT_PUSH, build_safe_system_prompt
+from config import (AGENT_CONFIG, STREAM_TEXT_PUSH,
+                    build_safe_system_prompt, get_reply_dedup_enabled)
 from core.background_tasks import _spawn
 from core.circuit_breaker import CircuitState
 from core.degradation_strategy import get_degradation_strategy
@@ -704,14 +705,18 @@ class MainPathMixin:
             #   这类最易重复的回复却被排除在去重之外，导致去重对最严重场景完全失效。
             # reply 是 LLM 最终回复文本，与是否调用工具无关，应统一参与去重。
             if reply and len(reply) > 20:
-                _dedup_t0 = time.time()
-                logger.info("pipeline.dedup.start reply_len={}", len(reply))
-                reply = await self._dedup_reply_against_recent(
-                    reply, messages, task_type, _model_cfg,
-                    _cb_max_tokens, user_openid, session_id, trace,
-                )
-                logger.info("pipeline.dedup.done elapsed_ms={} reply_len={}",
-                            int((time.time() - _dedup_t0) * 1000), len(reply))
+                # WebUI 开关：models.reply_dedup_enabled（默认开），关闭则跳过去重
+                if not get_reply_dedup_enabled():
+                    trace.info("reply.dedup_skipped", reason="webui_switch_off")
+                else:
+                    _dedup_t0 = time.time()
+                    logger.info("pipeline.dedup.start reply_len={}", len(reply))
+                    reply = await self._dedup_reply_against_recent(
+                        reply, messages, task_type, _model_cfg,
+                        _cb_max_tokens, user_openid, session_id, trace,
+                    )
+                    logger.info("pipeline.dedup.done elapsed_ms={} reply_len={}",
+                                int((time.time() - _dedup_t0) * 1000), len(reply))
             if circuit_state == CircuitState.HALF_OPEN:
                 self._circuit_breaker.on_half_open_success(self._cognitive_state)
             else:

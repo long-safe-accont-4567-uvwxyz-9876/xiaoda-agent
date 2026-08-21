@@ -148,6 +148,18 @@ def get_presence_penalty(default: float = 1.0) -> float:
     return default
 
 
+def get_reply_dedup_enabled(default: bool = True) -> bool:
+    """读取跨对话回复去重开关：优先 webui_overrides，回退 default（默认开启）。"""
+    try:
+        from web.config_service import get_config_service
+        override = get_config_service().get("models.reply_dedup_enabled")
+        if override is not None:
+            return bool(override)
+    except Exception:
+        logger.debug("get_reply_dedup_enabled.webui_read_failed", exc_info=True)
+    return default
+
+
 def _strip_json5_comments(text: str) -> str:
     result = []
     in_string = False
