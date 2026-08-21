@@ -1,10 +1,107 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
-import { NButton, NEmpty, NProgress, NTag, useMessage } from 'naive-ui'
+import { NButton, NEmpty, NProgress, NTag, NSelect, NModal, NTabs, NTabPane, NSpin, useMessage } from 'naive-ui'
 import { useLocalAiStore } from '../../stores/localAi'
+import { localDeployApi, fetchLocalDeployStatus } from '../../api/localAi'
+import type { LocalDeployStatus } from '../../api/localAi'
 
 const store = useLocalAiStore()
 const message = useMessage()
+
+const showLogsModal = ref(false)
+const logsLoading = ref(false)
+const logsTopic = ref<'deploy' | 'device'>('device')
+const logsLines = ref<string[]>([])
+const showEnginePanel = ref(false)
+const deployStatus = ref<LocalDeployStatus | null>(null)
+const deployLoading = ref(false)
+const engineBusy = ref('')
+const selectedDevice = ref('')
+const deviceList = ref<Array<{ id: string; name: string; kind: string; available: boolean }>>([])
+const runtimeBackend = ref('')
+
+async function loadDeployStatus() {
+  try {
+    deployStatus.value = await fetchLocalDeployStatus()
+  } catch { /* 静默 */ }
+}
+
+async function loadDeviceList() {
+  try {
+    const data = await localDeployApi.loadDevices()
+    deviceList.value = data.devices
+    selectedDevice.value = data.current
+    runtimeBackend.value = data.runtime_backend
+  } catch { /* 静默 */ }
+}
+
+async function loadLogs() {
+  logsLoading.value = true
+  try {
+    logsLines.value = await localDeployApi.loadLogs(logsTopic.value, 120)
+  } catch (e: any) {
+    message.error(e.message)
+  } finally {
+    logsLoading.value = false
+  }
+}
+
+async function setDevice(id: string) {
+  try {
+    await localDeployApi.setDevice(id)
+    selectedDevice.value = id
+    message.success('设备选择已保存，切换后需重启服务生效')
+  } catch (e: any) {
+    message.error(e.message)
+  }
+}
+
+async function setMode(mode: 'local' | 'remote') {
+  engineBusy.value = mode
+  try {
+    deployStatus.value = await localDeployApi.setMode(mode)
+    message.success(mode === 'local' ? '已切换到本地引擎' : '已切换到远程 API')
+  } catch (e: any) {
+    message.error(e.message)
+  } finally {
+    engineBusy.value = ''
+  }
+}
+
+async function startEngine() {
+  engineBusy.value = 'start'
+  try {
+    deployStatus.value = await localDeployApi.startEngine()
+    message.success('本地引擎已启动')
+  } catch (e: any) {
+    message.error(e.message)
+  } finally {
+    engineBusy.value = ''
+  }
+}
+
+async function stopEngine() {
+  engineBusy.value = 'stop'
+  try {
+    deployStatus.value = await localDeployApi.stopEngine()
+    message.success('本地引擎已停止')
+  } catch (e: any) {
+    message.error(e.message)
+  } finally {
+    engineBusy.value = ''
+  }
+}
+
+function openLogs() {
+  showLogsModal.value = true
+  loadLogs()
+}
+
+function openEnginePanel() {
+  showEnginePanel.value = true
+  loadDeployStatus()
+  loadDeviceList()
+}
 
 const KIND_TEXT: Record<string, string> = { cpu: 'CPU', gpu: 'GPU', npu: 'NPU' }
 const STATE_TEXT: Record<string, string> = { available: '可用', degraded: '降级', unavailable: '不可用' }
@@ -65,6 +162,8 @@ const devices = computed(() => store.devices)
     <div class="device-toolbar">
       <span class="toolbar-note">仅展示后端实际探测到的设备与运行提供程序</span>
       <span class="toolbar-time" :class="{ fresh: lastUpdated }">最后更新 {{ lastUpdated ?? '—' }} · 每 5s 自动刷新负载</span>
+      <n-button secondary size="small" @click="openEnginePanel">⚙ 引擎控制</n-button>
+      <n-button secondary size="small" @click="openLogs">📋 检测日志</n-button>
       <n-button :loading="store.rescanning" @click="rescan">重新扫描</n-button>
     </div>
 
@@ -124,6 +223,63 @@ const devices = computed(() => store.devices)
 
       <n-empty v-if="!devices.length" description="尚未探测到算力设备，请点击「重新扫描」" style="grid-column: 1 / -1;" />
     </div>
+
+    <n-modal v-model:show="showLogsModal" preset="card" title="📋 设备检测日志" style="width: min(720px, 94vw)">
+      <n-tabs v-model:value="logsTopic" type="line" @update:value="loadLogs">
+        <n-tab-pane name="device" tab="算力设备" />
+        <n-tab-pane name="deploy" tab="部署引擎" />
+      </n-tabs>
+      <div class="logs-toolbar">
+        <n-button size="small" :loading="logsLoading" @click="loadLogs">刷新</n-button>
+      </div>
+      <n-spin :show="logsLoading">
+        <pre class="logs-box">{{ logsLines.join('\n') || '暂无相关日志' }}</pre>
+      </n-spin>
+    </n-modal>
+
+    <n-modal v-model:show="showEnginePanel" preset="card" title="⚙ 引擎控制" style="width: min(520px, 94vw)">
+      <div class="engine-section">
+        <h4>Embedding 引擎</h4>
+        <div class="engine-status" v-if="deployStatus">
+          <div class="stat-row">
+            <span>模式</span>
+            <n-tag :type="deployStatus.mode === 'local' ? 'success' : 'info'" round>{{ deployStatus.mode === 'local' ? '本地' : '远程 API' }}</n-tag>
+          </div>
+          <div class="stat-row">
+            <span>引擎状态</span>
+            <n-tag :type="deployStatus.engine_running ? 'success' : 'warning'" round>{{ deployStatus.engine_running ? '运行中' : '未启动' }}</n-tag>
+          </div>
+          <div class="stat-row" v-if="deployStatus.backend">
+            <span>后端</span>
+            <b>{{ deployStatus.backend }}</b>
+          </div>
+          <div class="stat-row" v-if="deployStatus.dimensions">
+            <span>向量维度</span>
+            <b>{{ deployStatus.dimensions }}</b>
+          </div>
+        </div>
+        <div class="engine-ops">
+          <n-button type="primary" :loading="engineBusy === 'start'" :disabled="deployStatus?.engine_running" @click="startEngine">启动本地引擎</n-button>
+          <n-button type="warning" :loading="engineBusy === 'stop'" :disabled="!deployStatus?.engine_running" @click="stopEngine">停止本地引擎</n-button>
+          <n-button :loading="engineBusy === 'local'" :disabled="deployStatus?.mode === 'local'" @click="setMode('local')">切换本地</n-button>
+          <n-button :loading="engineBusy === 'remote'" :disabled="deployStatus?.mode === 'remote'" @click="setMode('remote')">切换远程</n-button>
+        </div>
+      </div>
+      <div class="engine-section">
+        <h4>算力设备选择</h4>
+        <div class="stat-row" v-if="runtimeBackend">
+          <span>运行时后端</span>
+          <b>{{ runtimeBackend }}</b>
+        </div>
+        <n-select
+          :value="selectedDevice"
+          :options="deviceList.map(d => ({ label: `${d.name}（${d.kind}）${d.available ? '' : ' ✗ 不可用'}`, value: d.id, disabled: !d.available }))"
+          @update:value="setDevice"
+          placeholder="选择算力设备"
+        />
+        <p class="engine-hint">切换设备后需重启服务生效</p>
+      </div>
+    </n-modal>
   </div>
 </template>
 
@@ -147,4 +303,23 @@ const devices = computed(() => store.devices)
 .mem-detail { color: var(--moon-dim); font-size: 11px; margin-top: 4px; }
 .no-load { color: var(--moon-dim); font-size: 12px; padding: 2px 0 6px; }
 .backend-list { display: flex; flex-wrap: wrap; gap: 6px; }
+.logs-toolbar { display: flex; justify-content: flex-end; margin: 8px 0; }
+.logs-box {
+  background: rgba(10, 20, 14, 0.85);
+  border-radius: 8px;
+  padding: 12px;
+  font-size: 11px;
+  font-family: 'JetBrains Mono', monospace;
+  color: var(--moon-dim);
+  max-height: 400px;
+  overflow: auto;
+  white-space: pre-wrap;
+  word-break: break-all;
+  margin: 0;
+}
+.engine-section { margin-bottom: 18px; }
+.engine-section h4 { font-size: 14px; color: var(--dendro); margin-bottom: 10px; }
+.engine-status { margin-bottom: 12px; }
+.engine-ops { display: flex; gap: 8px; flex-wrap: wrap; }
+.engine-hint { font-size: 12px; color: var(--moon-dim); margin-top: 8px; }
 </style>

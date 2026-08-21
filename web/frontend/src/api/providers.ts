@@ -63,6 +63,8 @@ export const providerApi = {
   delete: (id: string) => del<{ deleted: string }>(`/providers/${id}`, true),
   capabilities: (id: string) => get<CapabilityReport>(`/providers/${id}` + "/capabilities"),
   models: (id: string) => get<{ provider: string; models: string[] }>(`/providers/${id}` + "/models"),
+  setKey: (pid: string, apiKey: string) => post<{ id: string; key_masked: string }>(`/models/providers/${pid}/key`, { api_key: apiKey }),
+  reorder: (order: string[]) => post<{ ok: boolean }>('/models/providers/reorder', { order }),
 }
 
 function ordered(value: unknown): unknown {

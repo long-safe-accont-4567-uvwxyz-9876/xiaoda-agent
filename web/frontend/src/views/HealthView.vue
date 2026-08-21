@@ -45,6 +45,29 @@ async function load() {
   }
 }
 
+const connectivity = ref<Record<string, { ok: boolean; latency_ms?: number; error?: string }>>({})
+const connectivityLoading = ref(false)
+
+async function checkConnectivity() {
+  connectivityLoading.value = true
+  try {
+    const res = await get<Record<string, { ok: boolean; latency_ms?: number; error?: string }>>('/health/connectivity')
+    connectivity.value = res
+  } catch (e: any) {
+    message.error(e.message)
+  } finally {
+    connectivityLoading.value = false
+  }
+}
+
+const CONNECTIVITY_LABELS: Record<string, string> = {
+  tts: 'TTS 语音合成',
+  video: '视频生成',
+  mcp: 'MCP 工具服务',
+  embedding: '向量嵌入',
+  llm: 'LLM 大模型',
+}
+
 function onProgress(e: any) {
   const card = probes.value.find(p => p.id === e.item)
   if (card) {
@@ -103,7 +126,17 @@ const stateIcon: Record<string, string> = {
           {{ t('healthView.lastCheck') }}：{{ new Date(lastReport.run_at * 1000).toLocaleString('zh-CN') }}
           · {{ lastReport.passed }}/{{ lastReport.total }} {{ t('healthView.pass') }}
         </span>
+        <n-button secondary :loading="connectivityLoading" @click="checkConnectivity">🔗 连通性检查</n-button>
         <n-button type="primary" :loading="runningAll" @click="runAll">🩺 {{ t('healthView.fullCheck') }}</n-button>
+      </div>
+    </div>
+
+    <div v-if="Object.keys(connectivity).length" class="connectivity-bar glass-panel">
+      <div v-for="(info, key) in connectivity" :key="key" class="conn-item">
+        <span class="conn-dot" :class="info.ok ? 'ok' : 'fail'"></span>
+        <span class="conn-label">{{ CONNECTIVITY_LABELS[key] || key }}</span>
+        <span v-if="info.latency_ms" class="conn-latency">{{ info.latency_ms }}ms</span>
+        <span v-if="!info.ok && info.error" class="conn-error">{{ info.error }}</span>
       </div>
     </div>
 
@@ -145,6 +178,18 @@ const stateIcon: Record<string, string> = {
 .view-header h2 { font-family: 'Noto Serif SC', serif; }
 .header-right { display: flex; align-items: center; gap: 14px; }
 .last-report { font-size: 12.5px; color: var(--moon-dim); }
+
+.connectivity-bar {
+  display: flex; flex-wrap: wrap; gap: 16px;
+  padding: 12px 16px; margin-bottom: 14px; border-radius: 12px;
+}
+.conn-item { display: flex; align-items: center; gap: 6px; font-size: 13px; }
+.conn-dot { width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; }
+.conn-dot.ok { background: var(--dendro); box-shadow: 0 0 6px var(--dendro); }
+.conn-dot.fail { background: var(--alert); box-shadow: 0 0 6px var(--alert); }
+.conn-label { font-weight: 500; }
+.conn-latency { font-size: 11px; color: var(--wisdom); font-family: 'JetBrains Mono', monospace; }
+.conn-error { font-size: 11px; color: var(--alert); }
 
 .probe-grid {
   display: grid;

@@ -250,6 +250,21 @@ export interface BenchmarkResult {
   dimensions?: number
 }
 
+export interface LocalDeployDeviceList {
+  current: string
+  devices: Array<{ id: string; name: string; kind: string; available: boolean }>
+  runtime_backend: string
+}
+
+export const localDeployApi = {
+  loadDevices: () => get<LocalDeployDeviceList>('/local-deploy/devices'),
+  setDevice: (device: string) => post<{ device: string }>('/local-deploy/device', { device }),
+  setMode: (mode: 'local' | 'remote') => post<LocalDeployStatus>('/local-deploy/mode', { mode }),
+  startEngine: () => post<LocalDeployStatus>('/local-deploy/start'),
+  stopEngine: () => post<LocalDeployStatus>('/local-deploy/stop'),
+  loadLogs: (topic: 'deploy' | 'device' = 'deploy', limit = 60) => get<string[]>(`/local-deploy/logs?topic=${topic}&limit=${limit}`),
+}
+
 export const localAiApi = {
   loadDevices: () => get<ComputeDevice[]>('/local-ai/devices'),
   loadCatalog: (advanced = false) => get<CatalogModel[]>(`/local-ai/catalog${advanced ? '?advanced=true' : ''}`),

@@ -133,6 +133,38 @@ async function loadLogs() {
   }
 }
 
+const doctorResult = ref<any>(null)
+const doctorLoading = ref(false)
+const fixLoading = ref(false)
+
+async function runDoctor() {
+  doctorLoading.value = true
+  try {
+    doctorResult.value = await get<any>('/system/doctor')
+  } catch (e: any) {
+    message.error(e.message)
+  } finally {
+    doctorLoading.value = false
+  }
+}
+
+async function doctorFix() {
+  fixLoading.value = true
+  try {
+    const res = await post<any>('/system/doctor/fix', {})
+    if (res.fixed?.length) {
+      message.success(`已自动修复 ${res.fixed.length} 个问题`)
+    } else {
+      message.info('无需修复')
+    }
+    await runDoctor()
+  } catch (e: any) {
+    message.error(e.message)
+  } finally {
+    fixLoading.value = false
+  }
+}
+
 async function doRestart() {
   if (restartConfirmText.value !== 'RESTART') return
   try {
@@ -476,6 +508,35 @@ const permLabel = computed<Record<string, string>>(() => ({
           <pre class="log-box">{{ logs.join('\n') || t('settings.logEmpty') }}</pre>
         </section></Tilt3D>
 
+        <Tilt3D :max-x="4" :max-y="6"><section class="glass-panel section">
+          <div class="section-head">
+            <h3>🏥 系统自诊断</h3>
+            <div class="log-ops">
+              <n-button size="small" type="primary" :loading="doctorLoading" @click="runDoctor">运行诊断</n-button>
+              <n-button size="small" type="warning" :loading="fixLoading" :disabled="!doctorResult" @click="doctorFix">自动修复</n-button>
+            </div>
+          </div>
+          <div v-if="doctorResult" class="doctor-result">
+            <div v-if="doctorResult.healthy" class="doctor-ok">✓ 系统状态健康</div>
+            <div v-else class="doctor-warn">⚠ 发现 {{ doctorResult.issues?.length || 0 }} 个问题</div>
+            <div v-if="doctorResult.issues?.length" class="doctor-issues">
+              <div v-for="(issue, i) in doctorResult.issues" :key="i" class="doctor-issue">
+                <n-tag size="small" :type="issue.severity === 'error' ? 'error' : 'warning'" :bordered="false">{{ issue.severity }}</n-tag>
+                <span class="issue-text">{{ issue.message }}</span>
+                <span v-if="issue.fixable" class="issue-fixable">可自动修复</span>
+              </div>
+            </div>
+            <div v-if="doctorResult.checks?.length" class="doctor-checks">
+              <div v-for="(check, i) in doctorResult.checks" :key="i" class="doctor-check">
+                <span :class="check.ok ? 'check-ok' : 'check-fail'">{{ check.ok ? '✓' : '✗' }}</span>
+                <span>{{ check.name }}</span>
+                <span v-if="check.detail" class="check-detail">{{ check.detail }}</span>
+              </div>
+            </div>
+          </div>
+          <div v-else class="doctor-empty">点击「运行诊断」检查系统健康状态</div>
+        </section></Tilt3D>
+
         <Tilt3D :max-x="4" :max-y="6"><section class="glass-panel section danger">
           <h3>{{ t('settings.dangerZone') }}</h3>
           <div class="setting-row">
@@ -722,4 +783,17 @@ const permLabel = computed<Record<string, string>>(() => ({
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+.doctor-result { margin-top: 10px; }
+.doctor-ok { color: var(--dendro); font-weight: 600; margin-bottom: 8px; }
+.doctor-warn { color: #e6a23c; font-weight: 600; margin-bottom: 8px; }
+.doctor-issues { display: flex; flex-direction: column; gap: 6px; margin-bottom: 10px; }
+.doctor-issue { display: flex; align-items: center; gap: 8px; font-size: 13px; }
+.issue-text { flex: 1; }
+.issue-fixable { font-size: 11px; color: var(--dendro); background: rgba(76,175,80,0.1); padding: 1px 6px; border-radius: 4px; }
+.doctor-checks { display: flex; flex-direction: column; gap: 4px; }
+.doctor-check { display: flex; align-items: center; gap: 6px; font-size: 12.5px; }
+.check-ok { color: var(--dendro); font-weight: 700; }
+.check-fail { color: #e74c3c; font-weight: 700; }
+.check-detail { color: var(--moon-dim); font-size: 11px; }
+.doctor-empty { color: var(--moon-dim); font-size: 13px; padding: 8px 0; }
 </style>

@@ -2,7 +2,7 @@
 import { ref, computed, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
 import {
-  NButton, NSwitch, NInput, NSelect, NPopconfirm, NTag, NSpin, NEmpty, useMessage,
+  NButton, NSwitch, NInput, NSelect, NPopconfirm, NTag, NSpin, NEmpty, NModal, NTabs, NTabPane, useMessage,
 } from 'naive-ui'
 import { api, type Workflow, type WorkflowNode, type WorkflowSummary } from '../api'
 import { useChatStore } from '../stores/chat'
@@ -230,6 +230,63 @@ function onNodeSelect(node: WorkflowNode, value: string) {
   const found = opts.find(o => o.value === value)
   if (found) node.label = found.label.split(' — ')[0].split(' / ').pop() || found.label
 }
+
+const showRunsModal = ref(false)
+const runsWfId = ref('')
+const runsWfName = ref('')
+const runsList = ref<any[]>([])
+const runsLoading = ref(false)
+
+const showRevisionsModal = ref(false)
+const revisionsWfId = ref('')
+const revisionsWfName = ref('')
+const revisionsList = ref<any[]>([])
+const revisionsLoading = ref(false)
+
+const publishing = ref('')
+
+async function openRuns(wfId: string, wfName: string) {
+  runsWfId.value = wfId
+  runsWfName.value = wfName
+  runsLoading.value = true
+  showRunsModal.value = true
+  try {
+    runsList.value = await api.listWorkflowRuns(wfId)
+  } catch (e: any) { message.error(e.message) } finally {
+    runsLoading.value = false
+  }
+}
+
+async function cancelRun(runId: string) {
+  try {
+    await api.cancelWorkflowRun(runId)
+    message.success('运行已取消')
+    runsList.value = await api.listWorkflowRuns(runsWfId.value)
+  } catch (e: any) { message.error(e.message) }
+}
+
+async function openRevisions(wfId: string, wfName: string) {
+  revisionsWfId.value = wfId
+  revisionsWfName.value = wfName
+  revisionsLoading.value = true
+  showRevisionsModal.value = true
+  try {
+    revisionsList.value = await api.listWorkflowRevisions(wfId)
+  } catch (e: any) { message.error(e.message) } finally {
+    revisionsLoading.value = false
+  }
+}
+
+async function publishWorkflow(wfId: string) {
+  publishing.value = wfId
+  try {
+    await api.publishWorkflow(wfId)
+    message.success('工作流已发布')
+    await load()
+  } catch (e: any) { message.error(e.message) } finally {
+    publishing.value = ''
+  }
+}
 </script>
 
 <template>
@@ -260,6 +317,9 @@ function onNodeSelect(node: WorkflowNode, value: string) {
               </div>
               <div class="wf-card-actions">
                 <n-button size="tiny" type="primary" @click="editWorkflow(wf)">{{ t('workflowView.edit') }}</n-button>
+                <n-button size="tiny" quaternary @click="openRuns(wf.id, wf.name)">📊 运行</n-button>
+                <n-button size="tiny" quaternary @click="openRevisions(wf.id, wf.name)">📝 版本</n-button>
+                <n-button size="tiny" quaternary :loading="publishing === wf.id" @click="publishWorkflow(wf.id)">🚀 发布</n-button>
                 <n-popconfirm @positive-click="deleteWorkflow(wf)">
                   <template #trigger>
                     <n-button size="tiny" type="error" quaternary>{{ t('workflowView.delete') }}</n-button>
@@ -352,6 +412,41 @@ function onNodeSelect(node: WorkflowNode, value: string) {
         <n-button type="primary" :loading="saving" @click="save">{{ t('workflowView.save') }}</n-button>
       </div>
     </div>
+
+    <n-modal v-model:show="showRunsModal" preset="card" :title="`📊 ${runsWfName} — 运行记录`" style="width: min(640px, 94vw)">
+      <n-spin :show="runsLoading">
+        <div v-if="runsList.length" class="runs-list">
+          <div v-for="run in runsList" :key="run.id" class="run-item">
+            <div class="run-head">
+              <n-tag size="small" :type="run.status === 'completed' ? 'success' : run.status === 'failed' ? 'error' : 'info'" :bordered="false">{{ run.status }}</n-tag>
+              <span class="run-id mono">{{ run.id.slice(0, 8) }}</span>
+              <span class="run-time">{{ run.started_at ? new Date(run.started_at).toLocaleString('zh-CN') : '—' }}</span>
+            </div>
+            <div v-if="run.error" class="run-error">{{ run.error }}</div>
+            <div class="run-actions">
+              <n-button v-if="run.status === 'running'" size="tiny" type="warning" @click="cancelRun(run.id)">取消</n-button>
+            </div>
+          </div>
+        </div>
+        <n-empty v-else description="暂无运行记录" />
+      </n-spin>
+    </n-modal>
+
+    <n-modal v-model:show="showRevisionsModal" preset="card" :title="`📝 ${revisionsWfName} — 版本历史`" style="width: min(580px, 94vw)">
+      <n-spin :show="revisionsLoading">
+        <div v-if="revisionsList.length" class="revisions-list">
+          <div v-for="rev in revisionsList" :key="rev.revision" class="rev-item">
+            <div class="rev-head">
+              <n-tag size="small" :bordered="false">v{{ rev.version || rev.revision }}</n-tag>
+              <span class="rev-time">{{ rev.created_at ? new Date(rev.created_at).toLocaleString('zh-CN') : '—' }}</span>
+              <n-tag v-if="rev.published" size="tiny" type="success" :bordered="false">已发布</n-tag>
+            </div>
+            <div v-if="rev.description" class="rev-desc">{{ rev.description }}</div>
+          </div>
+        </div>
+        <n-empty v-else description="暂无版本记录" />
+      </n-spin>
+    </n-modal>
   </div>
 </template>
 
@@ -429,6 +524,15 @@ function onNodeSelect(node: WorkflowNode, value: string) {
 
 /* ── 操作栏 ── */
 .action-bar { display: flex; justify-content: flex-end; gap: 10px; padding-top: 4px; }
+
+.runs-list, .revisions-list { display: flex; flex-direction: column; gap: 8px; }
+.run-item, .rev-item { padding: 8px 12px; border-radius: 8px; border: 1px solid var(--glass-border); }
+.run-head, .rev-head { display: flex; align-items: center; gap: 8px; }
+.run-id { font-size: 12px; }
+.run-time, .rev-time { font-size: 12px; color: var(--moon-dim); flex: 1; }
+.run-error { font-size: 12px; color: var(--alert); margin-top: 4px; }
+.run-actions { margin-top: 4px; }
+.rev-desc { font-size: 12px; color: var(--moon-dim); margin-top: 4px; }
 
 @media (max-width: 768px) {
   .info-row { flex-direction: column; align-items: stretch; }

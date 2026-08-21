@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { ref, onMounted, computed } from 'vue'
-import { NButton, NTag, NPopconfirm, NSpin, NInput, NEmpty, NTabs, NTabPane, useMessage } from 'naive-ui'
-import { get, post } from '../api'
+import { NButton, NTag, NPopconfirm, NSpin, NInput, NEmpty, NTabs, NTabPane, NModal, NForm, NFormItem, useMessage } from 'naive-ui'
+import { get, post, put } from '../api'
 import { t, tf } from '../i18n'
 import Tilt3D from '../components/fx/Tilt3D.vue'
 
@@ -164,6 +164,44 @@ async function testMarketPlugin(item: any) {
 // ── Tab 切换时按需加载 ────────────────────────────────────
 const activeTab = ref('installed')
 
+const showConfigModal = ref(false)
+const configPluginId = ref('')
+const configPluginName = ref('')
+const configSchema = ref<Record<string, any>>({})
+const configValues = ref<Record<string, any>>({})
+const configLoading = ref(false)
+const configSaving = ref(false)
+
+async function openConfig(pid: string, pname: string) {
+  configPluginId.value = pid
+  configPluginName.value = pname
+  configLoading.value = true
+  showConfigModal.value = true
+  try {
+    const res = await get<any>(`/plugins/${pid}/config`)
+    configSchema.value = res.schema || {}
+    configValues.value = res.values || {}
+  } catch (e: any) {
+    message.error(e.message)
+  } finally {
+    configLoading.value = false
+  }
+}
+
+async function saveConfig() {
+  configSaving.value = true
+  try {
+    await put(`/plugins/${configPluginId.value}/config`, configValues.value)
+    message.success('插件配置已保存')
+    showConfigModal.value = false
+    await load()
+  } catch (e: any) {
+    message.error(e.message)
+  } finally {
+    configSaving.value = false
+  }
+}
+
 function onTabChange(name: string | number) {
   if (name === 'market' && marketItems.value.length === 0) loadMarket()
 }
@@ -204,6 +242,8 @@ onMounted(() => { load(); loadMarket() })
                         @click="doAction(p.id, 'disable')">{{ t('pluginsView.disable') }}</n-button>
               <n-button v-if="p.state === 'enabled'" size="tiny"
                         @click="doAction(p.id, 'reload')">{{ t('pluginsView.reload') }}</n-button>
+              <n-button v-if="p.state === 'enabled' || p.state === 'loaded'" size="tiny" quaternary
+                        @click="openConfig(p.id, p.name)">⚙ 配置</n-button>
               <n-button size="tiny" :type="pluginTestResult[p.id]?.ok === false ? 'error' : 'success'"
                         :loading="testingPlugin[p.id]" @click="testPlugin(p.id)">
                 {{ pluginTestResult[p.id]?.ok === false ? t('pluginsView.retry') : t('pluginsView.test') }}
@@ -292,6 +332,27 @@ onMounted(() => { load(); loadMarket() })
       </n-tab-pane>
 
     </n-tabs>
+
+    <n-modal v-model:show="showConfigModal" preset="card" :title="`⚙ ${configPluginName} — 插件配置`" style="width: min(520px, 94vw)">
+      <n-spin :show="configLoading">
+        <div v-if="Object.keys(configSchema).length" class="config-form">
+          <div v-for="(schema, key) in configSchema" :key="key" class="config-field">
+            <label class="config-label">{{ schema.label || key }}</label>
+            <n-input v-if="schema.type === 'string'" v-model:value="configValues[key]"
+                     :type="schema.secret ? 'password' : 'text'" :placeholder="schema.description || ''" />
+            <n-input v-else-if="schema.type === 'number'" v-model:value="configValues[key]"
+                     type="text" :placeholder="String(schema.default ?? '')" @blur="configValues[key] = Number(configValues[key])" />
+            <n-input v-else v-model:value="configValues[key]" :placeholder="String(schema.default ?? '')" />
+            <span v-if="schema.description" class="config-desc">{{ schema.description }}</span>
+          </div>
+        </div>
+        <n-empty v-else description="该插件无可配置项" />
+      </n-spin>
+      <div class="config-footer">
+        <n-button type="primary" :loading="configSaving" @click="saveConfig">保存配置</n-button>
+        <n-button @click="showConfigModal = false">取消</n-button>
+      </div>
+    </n-modal>
   </div>
 </template>
 
@@ -357,4 +418,9 @@ onMounted(() => { load(); loadMarket() })
 .card-tags { display: flex; gap: 4px; flex-wrap: wrap; margin-bottom: 6px; }
 .card-footer { display: flex; align-items: center; justify-content: space-between; }
 .card-actions { display: flex; gap: 6px; }
+.config-form { display: flex; flex-direction: column; gap: 14px; }
+.config-field { display: flex; flex-direction: column; gap: 3px; }
+.config-label { font-size: 13px; font-weight: 600; color: var(--dendro); }
+.config-desc { font-size: 11px; color: var(--moon-dim); }
+.config-footer { display: flex; gap: 8px; justify-content: flex-end; margin-top: 16px; }
 </style>

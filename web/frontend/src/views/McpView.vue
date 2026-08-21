@@ -155,14 +155,34 @@ const statusType: Record<string, any> = { running: 'success', stopped: 'default'
 
 // ── 模板功能 ──────────────────────────────────────────────
 const showTemplates = ref(false)
-const TEMPLATES = computed(() => [
-  { name: 'filesystem', command: 'npx', args: ['-y', '@modelcontextprotocol/server-filesystem', t('mcpView.selectDir')], desc: t('mcpView.templateFs') },
-  { name: 'fetch', command: 'npx', args: ['-y', '@modelcontextprotocol/server-fetch'], desc: t('mcpView.templateHttp') },
-  { name: 'memory', command: 'npx', args: ['-y', '@modelcontextprotocol/server-memory'], desc: t('mcpView.templateKg') },
-  { name: 'brave-search', command: 'npx', args: ['-y', '@modelcontextprotocol/server-brave-search'], desc: t('mcpView.templateBrave'), env: { BRAVE_API_KEY: '' } },
-  { name: 'sqlite', command: 'uvx', args: ['mcp-server-sqlite', '--db-path', t('mcpView.selectDb')], desc: t('mcpView.templateSqlite') },
-  { name: 'github', command: 'npx', args: ['-y', '@modelcontextprotocol/server-github'], desc: t('mcpView.templateGithub'), env: { GITHUB_TOKEN: '' } },
-])
+const backendTemplates = ref<any[]>([])
+const templatesLoading = ref(false)
+const TEMPLATES = computed(() => {
+  if (backendTemplates.value.length) return backendTemplates.value
+  return [
+    { name: 'filesystem', command: 'npx', args: ['-y', '@modelcontextprotocol/server-filesystem', t('mcpView.selectDir')], desc: t('mcpView.templateFs') },
+    { name: 'fetch', command: 'npx', args: ['-y', '@modelcontextprotocol/server-fetch'], desc: t('mcpView.templateHttp') },
+    { name: 'memory', command: 'npx', args: ['-y', '@modelcontextprotocol/server-memory'], desc: t('mcpView.templateKg') },
+    { name: 'brave-search', command: 'npx', args: ['-y', '@modelcontextprotocol/server-brave-search'], desc: t('mcpView.templateBrave'), env: { BRAVE_API_KEY: '' } },
+    { name: 'sqlite', command: 'uvx', args: ['mcp-server-sqlite', '--db-path', t('mcpView.selectDb')], desc: t('mcpView.templateSqlite') },
+    { name: 'github', command: 'npx', args: ['-y', '@modelcontextprotocol/server-github'], desc: t('mcpView.templateGithub'), env: { GITHUB_TOKEN: '' } },
+  ]
+})
+
+async function loadBackendTemplates() {
+  templatesLoading.value = true
+  try {
+    const data = await get<any[]>('/mcp/templates')
+    if (data?.length) backendTemplates.value = data
+  } catch { /* fallback to hardcoded */ } finally {
+    templatesLoading.value = false
+  }
+}
+
+function openTemplates() {
+  showTemplates.value = true
+  loadBackendTemplates()
+}
 
 async function applyTemplate(tpl: any) {
   try {
@@ -284,7 +304,7 @@ function onMcpTabChange(tab: string) {
         <div class="view-header">
           <h2>🔌 {{ t('mcpView.title') }}</h2>
           <div style="display:flex; gap:8px">
-            <n-button @click="showTemplates = true">📦 {{ t('mcpView.template') }}</n-button>
+            <n-button @click="openTemplates">📦 {{ t('mcpView.template') }}</n-button>
             <n-button type="primary" @click="showImport = true">📋 {{ t('mcpView.importJson') }}</n-button>
             <n-button @click="openForm(null)">＋ {{ t('mcpView.addManual') }}</n-button>
           </div>

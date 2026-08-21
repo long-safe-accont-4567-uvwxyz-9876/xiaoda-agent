@@ -1,9 +1,10 @@
 <script setup lang="ts">
 import { ref, onMounted, onBeforeUnmount, computed } from 'vue'
 import {
-  NButton, NSwitch, NInputNumber, NSelect, NTag, NPopconfirm, NSlider, useMessage,
+  NButton, NSwitch, NInputNumber, NSelect, NTag, NPopconfirm, NSlider, NInput, NModal, useMessage,
 } from 'naive-ui'
-import { api, get, put } from '../api'
+import { api, get, put, post } from '../api'
+import { providerApi } from '../api/providers'
 import type { CapabilityReport, ProviderDefinition } from '../api/providers'
 import ProviderWizard from '../components/models/ProviderWizard.vue'
 import { useProvidersStore } from '../stores/providers'
@@ -341,6 +342,62 @@ function setPresPreset(val: number) {
   presPenalty.value = val
   _doSavePresPenalty()
 }
+
+const showKeyModal = ref(false)
+const keyProviderId = ref('')
+const keyProviderLabel = ref('')
+const keyValue = ref('')
+const keySaving = ref(false)
+const keyResult = ref('')
+
+function openKeyModal(pid: string, label: string) {
+  keyProviderId.value = pid
+  keyProviderLabel.value = label
+  keyValue.value = ''
+  keyResult.value = ''
+  showKeyModal.value = true
+}
+
+async function saveKey() {
+  keySaving.value = true
+  try {
+    const res = await providerApi.setKey(keyProviderId.value, keyValue.value)
+    keyResult.value = `已保存：${res.key_masked}`
+    message.success('API Key 已更新')
+    await loadAll()
+  } catch (e: any) {
+    keyResult.value = e.message
+    message.error(e.message)
+  } finally {
+    keySaving.value = false
+  }
+}
+
+async function reorderProviders() {
+  const order = providers.value.map(p => p.id)
+  try {
+    await providerApi.reorder(order)
+    message.success('Provider 顺序已保存')
+  } catch (e: any) {
+    message.error(e.message)
+  }
+}
+
+async function moveProvider(pid: string, dir: -1 | 1) {
+  const list = [...providers.value]
+  const idx = list.findIndex(p => p.id === pid)
+  if (idx < 0) return
+  const target = idx + dir
+  if (target < 0 || target >= list.length) return
+  ;[list[idx], list[target]] = [list[target], list[idx]]
+  try {
+    await providerApi.reorder(list.map(p => p.id))
+    await loadAll()
+    message.success('顺序已调整')
+  } catch (e: any) {
+    message.error(e.message)
+  }
+}
 </script>
 
 <template>
@@ -369,6 +426,9 @@ function setPresPreset(val: number) {
               {{ providerTestResults[p.id].available ? `✓ ${providerTestResults[p.id].models.length} 个模型` : `✗ ${providerTestResults[p.id].error?.slice(0, 60)}` }}
             </span>
             <n-button size="tiny" :loading="testingId === p.id" @click="testProvider(p.id)">{{ t('modelsView.test') }}</n-button>
+            <n-button size="tiny" quaternary @click="openKeyModal(p.id, p.label)">🔑 Key</n-button>
+            <n-button size="tiny" quaternary @click="moveProvider(p.id, -1)" :disabled="builtinProviders.indexOf(p) === 0">↑</n-button>
+            <n-button size="tiny" quaternary @click="moveProvider(p.id, 1)" :disabled="builtinProviders.indexOf(p) === builtinProviders.length - 1">↓</n-button>
           </div>
         </div>
         <div v-for="p in customProviders" :key="p.id" class="provider-row">
@@ -385,7 +445,10 @@ function setPresPreset(val: number) {
                   {{ providerTestResults[p.id].available ? `✓ ${providerTestResults[p.id].models.length} 个模型` : `✗ ${providerTestResults[p.id].error?.slice(0, 60)}` }}
                 </span>
                 <n-button size="tiny" :loading="testingId === p.id" @click="testProvider(p.id)">{{ t('modelsView.test') }}</n-button>
-                <n-button v-if="!p.builtin" size="tiny" @click="openProviderForm(p)">{{ t('modelsView.edit') }}</n-button>
+                <n-button size="tiny" quaternary @click="openKeyModal(p.id, p.label)">🔑 Key</n-button>
+                <n-button size="tiny" @click="openProviderForm(p)">{{ t('modelsView.edit') }}</n-button>
+                <n-button size="tiny" quaternary @click="moveProvider(p.id, -1)">↑</n-button>
+                <n-button size="tiny" quaternary @click="moveProvider(p.id, 1)">↓</n-button>
                 <n-popconfirm v-if="!p.builtin" @positive-click="removeProvider(p.id)">
                   <template #trigger><n-button size="tiny" type="error" quaternary>{{ t('modelsView.delete') }}</n-button></template>
                   {{ t('modelsView.confirmDelete') }} provider {{ p.id }}？
@@ -532,6 +595,14 @@ function setPresPreset(val: number) {
     </Tilt3D>
 
     <provider-wizard v-model:show="providerWizardOpen" :provider="editingProvider" @saved="loadAll" />
+
+    <n-modal v-model:show="showKeyModal" preset="card" :title="`🔑 ${keyProviderLabel} — API Key`" style="width: min(440px, 92vw)">
+      <n-input v-model:value="keyValue" type="password" show-password-on="click" placeholder="输入新的 API Key" />
+      <div class="key-modal-footer">
+        <n-button type="primary" :loading="keySaving" :disabled="!keyValue" @click="saveKey">保存</n-button>
+        <span v-if="keyResult" class="key-result">{{ keyResult }}</span>
+      </div>
+    </n-modal>
   </div>
 </template>
 
@@ -598,6 +669,8 @@ function setPresPreset(val: number) {
 @keyframes pulse { 0%,100% { opacity: 1; } 50% { opacity: 0.4; } }
 
 .usage-chart { height: 260px; }
+.key-modal-footer { display: flex; align-items: center; gap: 10px; margin-top: 12px; }
+.key-result { font-size: 12px; color: var(--dendro); }
 
 @media (max-width: 768px) {
   .route-table { display: block; overflow-x: auto; }

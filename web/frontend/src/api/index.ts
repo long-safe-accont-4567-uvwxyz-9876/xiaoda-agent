@@ -228,6 +228,12 @@ export const api = {
   deleteWorkflow: (id: string) => del<void>('/workflows/' + id),
   previewWorkflow: (id: string) => get<{prompt: string}>('/workflows/' + id + '/preview'),
 
+  listWorkflowRuns: (wfId: string) => get<any[]>(`/workflows/${wfId}/runs`),
+  getWorkflowRun: (runId: string) => get<any>(`/workflows/runs/${runId}`),
+  listWorkflowRevisions: (wfId: string) => get<any[]>(`/workflows/${wfId}/revisions`),
+  publishWorkflow: (wfId: string) => post<any>(`/workflows/${wfId}/publish`),
+  cancelWorkflowRun: (runId: string) => post<any>(`/workflows/runs/${runId}/cancel`),
+
   // 品牌署名与免责协议
   getBrandSignature: () => get<{ signature: string; author: string; version: string }>('/brand/signature'),
   getDisclaimerStatus: () => get<{ agreed: boolean; agreed_at: string; text: string }>('/setup/disclaimer-status'),
