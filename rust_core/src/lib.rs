@@ -13,7 +13,7 @@
 
 use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
-use pyo3::types::{PyDict, PyList};
+use pyo3::types::PyDict;
 use std::collections::{HashMap, HashSet};
 
 /// 解析节点 keys 字段（JSON 数组字符串），失败返回 None——与 Python
@@ -111,141 +111,6 @@ fn push_char(buf: &mut Option<String>, c: char) {
 fn push_codepoint(buf: &mut Option<String>, cp: u32) {
     let c = char::from_u32(cp).unwrap_or('\u{FFFD}');
     push_char(buf, c);
-}
-
-/// 解析节点 keys 字段（JSON 数组字符串），失败返回空集——与 Python
-/// `except (JSONDecodeError, TypeError): node_keys = set()` 行为一致。
-fn parse_keys(raw: Option<&str>) -> Vec<String> {
-    match raw {
-        Some(s) => parse_json_keys(s).unwrap_or_default(),
-        None => Vec::new(),
-    }
-}
-
-/// IDF 计算：idf(k) = ln(N / (1 + df(k)))，N=存活节点总数。
-/// keys_json_list 与 nodes_weight/nodes_text 按下标一一对应。
-fn compute_idf_impl(
-    query_keys: &[String],
-    keys_json_list: &[&str],
-) -> HashMap<String, f64> {
-    let n = keys_json_list.len() as f64;
-    if n == 0.0 {
-        return HashMap::new();
-    }
-    let qset: HashSet<&str> = query_keys.iter().map(|s| s.as_str()).collect();
-    let mut df: HashMap<&str, usize> = HashMap::new();
-    for raw in keys_json_list {
-        for k in parse_keys(Some(raw)) {
-            if qset.contains(k.as_str()) {
-                *df.entry(Box::leak(k.clone().into_boxed_str())).or_insert(0) += 1;
-            }
-        }
-    }
-    query_keys
-        .iter()
-        .map(|k| {
-            let d = *df.get(k.as_str()).unwrap_or(&0) as f64;
-            (k.clone(), (n / (1.0 + d)).ln())
-        })
-        .collect()
-}
-
-/// 直接命中通道：IDF 加权 key 重叠 + 双向子串包含（len>=4）。
-/// 返回 {node_id: score}，仅含得分 > 0 的节点——与 Python 版一致。
-#[pyfunction]
-#[pyo3(signature = (query, query_keys, node_ids, node_keys_json, node_texts, node_weights))]
-fn direct_channel(
-    _py: Python<'_>,
-    query: &str,
-    query_keys: Vec<String>,
-    node_ids: Vec<String>,
-    node_keys_json: Vec<String>,
-    node_texts: Vec<String>,
-    node_weights: Vec<f64>,
-) -> PyResult<Py<PyDict>> {
-    if node_ids.len() != node_keys_json.len()
-        || node_ids.len() != node_texts.len()
-        || node_ids.len() != node_weights.len()
-    {
-        return Err(PyValueError::new_err(
-            "node_ids/node_keys_json/node_texts/node_weights length mismatch",
-        ));
-    }
-    let idf = compute_idf_impl(&query_keys, &node_keys_json.iter().map(|s| s.as_str()).collect::<Vec<_>>());
-    let qset: HashSet<&str> = query_keys.iter().map(|s| s.as_str()).collect();
-    let long_keys: Vec<&str> = query_keys
-        .iter()
-        .map(|s| s.as_str())
-        .filter(|k| k.chars().count() >= 4)
-        .collect();
-    let q_lower = query.to_lowercase();
-
-    let mut direct: HashMap<String, f64> = HashMap::new();
-    for (i, nid) in node_ids.iter().enumerate() {
-        let node_keys_vec = parse_keys(Some(node_keys_json[i].as_str()));
-        let node_keys: HashSet<&str> = node_keys_vec.iter().map(|s| s.as_str()).collect();
-        let w_bias = 0.35 + 0.65 * node_weights[i];
-
-        // key 重叠 → IDF 加权
-        let shared_score: f64 = node_keys
-            .intersection(&qset)
-            .map(|k| idf.get(*k).copied().unwrap_or(0.0))
-            .sum();
-        if shared_score > 0.0 {
-            *direct.entry(nid.clone()).or_insert(0.0) += shared_score * w_bias;
-        }
-
-        // 子串包含：query 关键词出现在节点文本（substr）+ 节点关键词出现在 query（reverse）
-        let n_text = node_texts[i].to_lowercase();
-        let substr = long_keys.iter().filter(|w| n_text.contains(**w)).count() as f64;
-        let long_node_keys: Vec<&str> = node_keys
-            .iter()
-            .filter(|k| k.chars().count() >= 4)
-            .copied()
-            .collect();
-        let reverse = long_node_keys.iter().filter(|k| q_lower.contains(**k)).count() as f64;
-        if substr + reverse > 0.0 {
-            *direct.entry(nid.clone()).or_insert(0.0) += (substr + reverse) * 0.6 * w_bias;
-        }
-    }
-
-    let out = PyDict::new(_py);
-    for (nid, score) in direct {
-        out.set_item(nid, score)?;
-    }
-    Ok(out.into())
-}
-
-/// 批量余弦相似度 Top-K（纯 Python 热点备选下沉位，本 PoC 仅提供实现与基准，
-/// 未接入业务路径）：queries x candidates 全量打分，返回每查询的 (idx, sim) 列表。
-#[pyfunction]
-fn cosine_topk(
-    py: Python<'_>,
-    queries: Vec<Vec<f32>>,
-    candidates: Vec<Vec<f32>>,
-    top_k: usize,
-) -> PyResult<Py<PyList>> {
-    let result = PyList::empty(py);
-    for q in &queries {
-        let q_norm: f32 = q.iter().map(|x| x * x).sum::<f32>().sqrt();
-        let mut scored: Vec<(usize, f32)> = candidates
-            .iter()
-            .enumerate()
-            .map(|(i, c)| {
-                let dot: f32 = q.iter().zip(c.iter()).map(|(a, b)| a * b).sum();
-                let c_norm: f32 = c.iter().map(|x| x * x).sum::<f32>().sqrt();
-                (i, dot / (q_norm * c_norm + 1e-9))
-            })
-            .collect();
-        scored.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
-        scored.truncate(top_k);
-        let item = PyList::empty(py);
-        for (i, s) in scored {
-            item.append((i, s))?;
-        }
-        result.append(item)?;
-    }
-    Ok(result.into())
 }
 
 /// 常驻节点索引：数据一次加载驻留 Rust 侧，每查询零数据拷贝。
@@ -366,8 +231,6 @@ impl NodeIndex {
 
 #[pymodule]
 fn rust_core(m: &Bound<'_, PyModule>) -> PyResult<()> {
-    m.add_function(wrap_pyfunction!(direct_channel, m)?)?;
-    m.add_function(wrap_pyfunction!(cosine_topk, m)?)?;
     m.add_class::<NodeIndex>()?;
     Ok(())
 }
