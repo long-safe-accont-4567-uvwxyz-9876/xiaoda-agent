@@ -7,16 +7,19 @@
 - metadata endpoint 拒绝
 - 白名单可配置
 """
+import asyncio
 import os
 import socket
 import sys
 import unittest
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 import ipaddress
+
+import httpx
 
 from security.ssrf_guard import (
     validate_url,
@@ -24,6 +27,8 @@ from security.ssrf_guard import (
     check_ip,
     resolve_and_pin,
     _PIN_CACHE,
+    _PIN_RESULT_CACHE,
+    SecureAsyncTransport,
 )
 
 
@@ -256,6 +261,90 @@ class TestSSRFGuard(unittest.TestCase):
         """IPv6 多播地址拒绝"""
         ok, _ = check_ip("ff02::1")
         self.assertFalse(ok)
+
+
+class _StubTransport:
+    """记录 handle_async_request 收到的 request，返回固定 Response。"""
+
+    def __init__(self) -> None:
+        self.requests: list = []
+
+    async def handle_async_request(self, request):
+        self.requests.append(request)
+        return httpx.Response(200, text="ok")
+
+
+class TestSecureAsyncTransport(unittest.TestCase):
+    """SecureAsyncTransport：TTL 缓存 + 线程池 DNS，不阻塞事件循环。"""
+
+    def setUp(self):
+        _PIN_RESULT_CACHE.clear()
+
+    def _make_request(self, base_url: str) -> httpx.Request:
+        """构造一个发往 base_url 路径的 httpx.Request。"""
+        return httpx.Request("GET", f"{base_url}/chat")
+
+    def test_secure_transport_pins_and_caches(self):
+        """首次请求解析 DNS 并缓存，第二次命中缓存不重复解析。"""
+        stub = _StubTransport()
+        transport = SecureAsyncTransport("https://example.com", http_transport=stub)
+        mock_dns = Mock(side_effect=_make_getaddrinfo(["93.184.216.34"]))
+        with patch("security.ssrf_guard.socket.getaddrinfo", mock_dns):
+            asyncio.run(transport.handle_async_request(self._make_request("https://example.com")))
+            self.assertEqual(mock_dns.call_count, 1)
+            # 第二次应命中缓存，不再次 DNS
+            asyncio.run(transport.handle_async_request(self._make_request("https://example.com")))
+            self.assertEqual(mock_dns.call_count, 1)
+        # 两次请求都改写 netloc 为 pinned IP，并注入 Host 头
+        self.assertEqual(len(stub.requests), 2)
+        for req in stub.requests:
+            self.assertEqual(req.url.host, "93.184.216.34")
+            self.assertEqual(req.headers["host"], "example.com")
+
+    def test_secure_transport_cache_expiry_re_resolves(self):
+        """缓存过期后重新解析 DNS。"""
+        stub = _StubTransport()
+        transport = SecureAsyncTransport("https://example.com", http_transport=stub)
+        mock_dns = Mock(side_effect=_make_getaddrinfo(["93.184.216.34"]))
+        with patch("security.ssrf_guard.socket.getaddrinfo", mock_dns):
+            asyncio.run(transport.handle_async_request(self._make_request("https://example.com")))
+            self.assertEqual(mock_dns.call_count, 1)
+        # 手动让缓存过期（倒拨 expires_at 时间戳）
+        from security.ssrf_guard import _pin_cache_key
+        key = _pin_cache_key("https://example.com")
+        _PIN_RESULT_CACHE[key] = (
+            "https://93.184.216.34", "example.com", -1.0,
+        )
+        mock_dns2 = Mock(side_effect=_make_getaddrinfo(["1.2.3.4"]))
+        with patch("security.ssrf_guard.socket.getaddrinfo", mock_dns2):
+            asyncio.run(transport.handle_async_request(self._make_request("https://example.com")))
+            self.assertEqual(mock_dns2.call_count, 1)
+        # 过期后用了新 IP
+        self.assertEqual(stub.requests[-1].url.host, "1.2.3.4")
+
+    def test_secure_transport_propagates_value_error(self):
+        """DNS 解析到危险 IP 时 ValueError 正常传播。"""
+        stub = _StubTransport()
+        transport = SecureAsyncTransport("https://example.com", http_transport=stub)
+        with patch("security.ssrf_guard.socket.getaddrinfo",
+                   _make_getaddrinfo(["10.0.0.1"])):
+            with self.assertRaises(ValueError):
+                asyncio.run(transport.handle_async_request(
+                    self._make_request("https://example.com")))
+        # 校验失败不缓存
+        self.assertEqual(len(_PIN_RESULT_CACHE), 0)
+        self.assertEqual(len(stub.requests), 0)
+
+    def test_secure_transport_whitelist_host_no_pin(self):
+        """白名单主机 host 为空，请求原样透传不改写 netloc。"""
+        stub = _StubTransport()
+        transport = SecureAsyncTransport("http://internal.svc", http_transport=stub)
+        with patch.dict(os.environ, {"SSRF_ALLOW_HOSTS": "internal.svc"}):
+            asyncio.run(transport.handle_async_request(
+                self._make_request("http://internal.svc")))
+        self.assertEqual(len(stub.requests), 1)
+        # netloc 未改写，仍指向原主机名（白名单 host=空串，不改写）
+        self.assertEqual(stub.requests[0].url.host, "internal.svc")
 
 
 if __name__ == "__main__":

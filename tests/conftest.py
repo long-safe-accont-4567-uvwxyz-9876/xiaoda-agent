@@ -38,6 +38,20 @@ def _isolate_permission_persistence(tmp_path, monkeypatch):
         pm.set_mode(saved_mode)
 
 
+@pytest.fixture(autouse=True)
+def _isolate_ssrf_pin_result_cache():
+    """每个测试前清空 SSRF resolve_and_pin 结果 TTL 缓存。
+
+    SecureAsyncTransport 的 TTL 缓存是模块级全局（_PIN_RESULT_CACHE）。测试若
+    不清理会跨用例共享：某用例 mock resolve_and_pin 缓存了结果（甚至放行危险 IP
+    的异常场景），后续用例命中缓存会绕过 mock 走真实网络而卡死（如
+    test_provider_transports 组合跑时 connect 超时）。此处统一在测试间隔离。
+    """
+    from security import ssrf_guard as _ssrf
+    _ssrf._PIN_RESULT_CACHE.clear()
+    yield
+
+
 @pytest.fixture
 def project_root() -> Path:
     """返回项目根目录路径"""

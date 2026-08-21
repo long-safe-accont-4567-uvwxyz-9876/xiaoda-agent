@@ -12,11 +12,13 @@
 白名单: 环境变量 ``SSRF_ALLOW_HOSTS`` (逗号分隔) 可放行指定的内部受信主机名,
 此类主机跳过 IP 检查 (仍必须是 http/https 协议)。
 """
+import asyncio
 import ipaddress
 import os
 import re
 import socket
 import threading as _threading
+import time
 import urllib.parse
 from collections import OrderedDict
 from typing import Any
@@ -87,6 +89,50 @@ _BLOCKED_NETWORKS = [
 _PIN_CACHE: "OrderedDict[str, str]" = OrderedDict()
 _PIN_CACHE_MAX_SIZE = 1000
 _PIN_CACHE_LOCK = _threading.Lock()
+
+# ── resolve_and_pin 结果 TTL 缓存（SecureAsyncTransport 专用）──
+# 根因修复：SecureAsyncTransport.handle_async_request 每次请求同步调用
+# resolve_and_pin → socket.getaddrinfo，直接阻塞事件循环。DNS 服务器无响应时
+# glibc 默认 timeout×retries×nameservers ≈ 60s 全局冻结（实测 lag=62.6s），
+# wait_for(30s) 形同虚设。双保险修复：
+#   1) TTL 缓存：正常情况命中缓存，零 DNS、零阻塞
+#   2) asyncio.to_thread：缓存 miss 时同步 DNS 移到线程池，事件循环不冻结
+# 安全性：缓存的 pinned IP 已通过 check_ip 校验为安全公网 IP；缓存复用时
+# 实际 TCP 连接目标仍是这个已校验的 IP（httpx 连接 connect_url 里的 IP，不
+# 重新解析 hostname），DNS rebinding 无法改变已 pin 的连接目标。
+_PIN_RESULT_CACHE: "OrderedDict[str, tuple[str, str]]" = OrderedDict()
+_PIN_RESULT_TTL = 60.0  # 秒
+_PIN_RESULT_MAX_SIZE = 256
+_PIN_RESULT_LOCK = _threading.Lock()
+
+
+def _pin_cache_key(base_url: str) -> str:
+    """缓存 key：scheme://host:port（与 path 无关，pin 的是 IP）。"""
+    parsed = urllib.parse.urlparse(_normalize_url(base_url))
+    return f"{parsed.scheme}://{parsed.netloc}"
+
+
+def _get_pin_result_cached(base_url: str) -> tuple[str, str] | None:
+    with _PIN_RESULT_LOCK:
+        key = _pin_cache_key(base_url)
+        entry = _PIN_RESULT_CACHE.get(key)
+        if entry is None:
+            return None
+        connect_url, host, expires_at = entry
+        if time.monotonic() >= expires_at:
+            _PIN_RESULT_CACHE.pop(key, None)
+            return None
+        _PIN_RESULT_CACHE.move_to_end(key)
+        return connect_url, host
+
+
+def _set_pin_result_cached(base_url: str, connect_url: str, host: str) -> None:
+    with _PIN_RESULT_LOCK:
+        key = _pin_cache_key(base_url)
+        _PIN_RESULT_CACHE[key] = (connect_url, host, time.monotonic() + _PIN_RESULT_TTL)
+        _PIN_RESULT_CACHE.move_to_end(key)
+        while len(_PIN_RESULT_CACHE) > _PIN_RESULT_MAX_SIZE:
+            _PIN_RESULT_CACHE.popitem(last=False)
 
 
 def _load_whitelist() -> set[str]:
@@ -353,11 +399,16 @@ def resolve_and_pin(base_url: str) -> tuple[str, str]:
 class SecureAsyncTransport(httpx.AsyncBaseTransport):
     """统一安全异步传输层：请求期把连接目标绑定为锁定 IP，保留原始 Host 与 HTTPS SNI。
 
-    每次请求前对 base_url 做全新解析 + 校验（resolve_and_pin），任一 IP 命中危险网段
-    即抛 ValueError，关闭「解析后到请求前被篡改」的 DNS rebinding TOCTOU。校验通过后
+    对 base_url 做解析 + 校验（resolve_and_pin），任一 IP 命中危险网段即抛
+    ValueError，关闭「解析后到请求前被篡改」的 DNS rebinding TOCTOU。校验通过后
     把请求 URL 的主机名替换为锁定 IP（TCP 实际连接目标），注入原始 Host 头，并通过
     sni_hostname extension 保留原始主机名供 TLS SNI / 证书校验使用。白名单主机
     （host 为空）原样直连不改写。
+
+    根因修复（事件循环冻结）：原实现在 handle_async_request 中直接同步调用
+    resolve_and_pin → socket.getaddrinfo，阻塞事件循环。现改为 TTL 缓存 +
+    线程化双保险：正常请求命中缓存零阻塞，缓存 miss 时 DNS 移到线程池执行，
+    事件循环不冻结。
     """
 
     def __init__(self, base_url: str, http_transport: Any | None = None) -> None:
@@ -365,7 +416,12 @@ class SecureAsyncTransport(httpx.AsyncBaseTransport):
         self._http_transport = http_transport if http_transport is not None else httpx.AsyncHTTPTransport()
 
     async def handle_async_request(self, request: httpx.Request) -> httpx.Response:
-        connect_url, host = resolve_and_pin(self._base_url)
+        cached = _get_pin_result_cached(self._base_url)
+        if cached is None:
+            connect_url, host = await asyncio.to_thread(resolve_and_pin, self._base_url)
+            _set_pin_result_cached(self._base_url, connect_url, host)
+        else:
+            connect_url, host = cached
         if host:
             netloc = urllib.parse.urlparse(connect_url).netloc
             request.url = request.url.copy_with(netloc=netloc.encode("ascii"))
