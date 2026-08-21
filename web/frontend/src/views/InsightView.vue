@@ -26,6 +26,7 @@ import { GridComponent, TooltipComponent, LegendComponent } from 'echarts/compon
 import { CanvasRenderer } from 'echarts/renderers'
 import { t } from '../i18n'
 import Tilt3D from '../components/fx/Tilt3D.vue'
+import JSpacePanel from '../components/jspace/JSpacePanel.vue'
 
 echarts.use([LineChart, PieChart, GraphChart, GridComponent, TooltipComponent, LegendComponent, CanvasRenderer])
 
@@ -899,6 +900,10 @@ function fmtTs(ts: number): string {
             </template>
           </div>
         </div>
+      </n-tab-pane>
+
+      <n-tab-pane name="jspace" :tab="'⬡ ' + t('jspace.title')">
+        <JSpacePanel />
       </n-tab-pane>
     </n-tabs>
 

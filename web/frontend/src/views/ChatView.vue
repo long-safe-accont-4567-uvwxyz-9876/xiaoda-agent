@@ -17,6 +17,7 @@ import PromptInput from '../components/chat/PromptInput.vue'
 import SumeruIcon from '../components/fx/SumeruIcon.vue'
 import ModelSelector from '../components/chat/ModelSelector.vue'
 import CmdConfirmCard from '../components/workspace/CmdConfirmCard.vue'
+import JSpacePanel from '../components/jspace/JSpacePanel.vue'
 import { useWorkspaceStore } from '../stores/workspace'
 import { t } from '../i18n'
 
@@ -41,6 +42,7 @@ const playingUrl = ref('')
 const lightboxUrl = ref('')
 const lightboxRef = ref<HTMLElement | null>(null)
 const paletteDismissed = ref(false)
+const showJSpacePanel = ref(false)
 
 watch(lightboxUrl, (url) => {
   if (url) nextTick(() => lightboxRef.value?.focus())
@@ -447,10 +449,35 @@ const emotionColors: Record<string, string> = {
 
     <!-- 小妲终端（右侧浮动面板，Teleport to body） -->
     <ChatTerminal />
+
+    <!-- J-Space 浮窗切换按钮 -->
+    <button class="jspace-fab" :class="{ active: showJSpacePanel }"
+      :title="t('jspace.togglePanel')" @click="showJSpacePanel = !showJSpacePanel">
+      ⬡
+    </button>
+
+    <!-- J-Space 浮窗抽屉 -->
+    <n-drawer v-model:show="showJSpacePanel" :width="380" placement="right">
+      <n-drawer-content :title="t('jspace.floatingPanel')" closable>
+        <JSpacePanel :compact="true" />
+      </n-drawer-content>
+    </n-drawer>
   </div>
 </template>
 
 <style scoped>
+.jspace-fab {
+  position: fixed; bottom: 80px; right: 20px; z-index: 100;
+  width: 40px; height: 40px; border-radius: 50%;
+  border: 1px solid var(--moon-border, #333);
+  background: var(--moon-bg-soft, #1a1a2e);
+  color: var(--moon-dim);
+  font-size: 18px; cursor: pointer;
+  transition: all .2s; display: flex; align-items: center; justify-content: center;
+}
+.jspace-fab:hover { border-color: var(--moon-accent, #7c6fff); color: var(--moon-accent, #7c6fff); }
+.jspace-fab.active { background: var(--moon-accent, #7c6fff); color: #fff; border-color: var(--moon-accent, #7c6fff); }
+
 .chat-view {
   display: flex;
   flex-direction: column;

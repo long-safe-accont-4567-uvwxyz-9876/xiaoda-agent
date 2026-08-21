@@ -70,6 +70,11 @@ class BehavioralSignalStream:
             entries = list(self._buffer)
         return entries[-last_n:]
 
+    @property
+    def buffer_size(self) -> int:
+        """当前缓冲区中的信号数量。"""
+        return len(self._buffer)
+
     def aggregate(self, signal_type: str, strategy: str = "mean_of_means") -> float:
         """聚合信号 — 对齐 reprobe/monitor.py: Monitor.score() 的三种策略"""
         entries = [e for e in self._buffer if e.signal_type == signal_type]

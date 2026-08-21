@@ -170,6 +170,16 @@ NODES: list[dict[str, Any]] = [
         "local_desc": "本地部署的对话小模型",
         "default": "api",
     },
+    {
+        "id": "intent_decomposition",
+        "name": "意图分解",
+        "kind": "generative",
+        "desc": "J-Space 意图分解：将输出分解为知识/情感/安全/创意等意图因子",
+        "api_model": "硅基流动免费模型",
+        "local_model": "",
+        "local_desc": "本地部署的对话小模型",
+        "default": "api",
+    },
 ]
 
 _NODE_MAP = {node["id"]: node for node in NODES}

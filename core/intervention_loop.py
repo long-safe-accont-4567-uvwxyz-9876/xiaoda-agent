@@ -123,3 +123,28 @@ class InterventionLoop:
             "intervention_count": len(self._intervention_history),
             "recent_scores": scores,
         }
+
+    @property
+    def rules_count(self) -> int:
+        """已注册的干预规则数量。"""
+        return len(self._rules)
+
+    def list_rules(self) -> list[dict]:
+        """返回所有干预规则的摘要信息。"""
+        return [
+            {
+                "signal_type": r.signal_type,
+                "threshold": r.threshold,
+                "direction_name": r.direction_name,
+                "alpha": r.alpha,
+                "mode": r.mode,
+                "trigger_above": r.trigger_above,
+                "cooldown": r.cooldown,
+            }
+            for r in self._rules
+        ]
+
+    @property
+    def recent_interventions(self) -> list[dict]:
+        """最近 20 条干预历史。"""
+        return list(self._intervention_history)[-20:]

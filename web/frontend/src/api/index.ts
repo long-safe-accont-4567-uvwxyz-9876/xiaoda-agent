@@ -378,3 +378,55 @@ export const updateKnowledgeRelation = (id: string, data: { relation: string }) 
 
 export const getKnowledgeGraph = (entity = '', depth = 1) =>
   get<{ nodes: any[]; edges: any[] }>(`/insight/knowledge/graph?entity=${encodeURIComponent(entity)}&depth=${depth}`)
+
+// ── J-Space API ──
+export interface JSpaceStatus {
+  enabled: boolean
+  signal_stream: { active: boolean; buffer_size: number }
+  direction_registry: { active: boolean; directions: string[] }
+  intervention_loop: { active: boolean; rules_count: number }
+  structured_blackboard: { active: boolean }
+  enhanced_router: { active: boolean }
+  intent_decomposer: { active: boolean; use_llm: boolean }
+}
+
+export interface JSpaceSignalEntry {
+  signal_type: string
+  value: number
+  source: string
+  timestamp: number
+  meta: Record<string, unknown>
+}
+
+export interface JSpaceDirection {
+  dimensions: Record<string, number>
+  source: string
+  magnitude: number
+}
+
+export interface JSpaceConfig {
+  enabled: boolean
+  signal_max_history: number
+  intent_use_llm: boolean
+  intent_llm_timeout: number
+}
+
+export interface IntentFactorResult {
+  name: string
+  activation: number
+  evidence: string
+  confidence: number
+}
+
+export const jspaceGetStatus = () => get<JSpaceStatus>('/jspace/status')
+export const jspaceGetSignals = (signal_type = '', last_n = 50) =>
+  get<{ entries: JSpaceSignalEntry[]; total: number }>(`/jspace/signals?signal_type=${encodeURIComponent(signal_type)}&last_n=${last_n}`)
+export const jspaceGetSignalAggregate = (signal_type: string, strategy = 'mean_of_means') =>
+  get<{ value: number; signal_type: string; strategy: string }>(`/jspace/signals/aggregate?signal_type=${encodeURIComponent(signal_type)}&strategy=${strategy}`)
+export const jspaceGetDirections = () => get<{ directions: Record<string, JSpaceDirection> }>('/jspace/directions')
+export const jspaceGetInterventions = () =>
+  get<{ rules: any[]; convergence: any; history: any[] }>('/jspace/interventions')
+export const jspaceDecompose = (text: string, use_llm = true) =>
+  post<{ factors: IntentFactorResult[]; residual: number; dominant: string | null; sparsity: number }>('/jspace/decompose', { text, use_llm })
+export const jspaceGetConfig = () => get<JSpaceConfig>('/jspace/config')
+export const jspaceSetConfig = (config: Partial<JSpaceConfig>) => put<{ updated: string[] }>('/jspace/config', config)

@@ -14,7 +14,12 @@ SAE 将 d_model 维残差流编码为 d_sae 维稀疏特征:
 - SAELens/sae_lens/saes/sae.py: SAE.encode()/decode()
 - SAELens/sae_lens/training/activations_store.py: ActivationsStore
 """
-from typing import ClassVar
+from __future__ import annotations
+
+import asyncio
+import json
+import time
+from typing import Any, ClassVar
 from dataclasses import dataclass, field
 from loguru import logger
 
@@ -81,8 +86,37 @@ class IntentDecomposer:
                        "step", "first", "then", "finally"],
     }
 
-    def __init__(self, use_llm_decomposition: bool = False):
+    LLM_TIMEOUT: ClassVar[float] = 10.0
+    LLM_MAX_TOKENS: ClassVar[int] = 512
+    LLM_TEMPERATURE: ClassVar[float] = 0.3
+
+    _SYSTEM_PROMPT: ClassVar[str] = (
+        "你是一个意图分析专家。分析文本中包含的意图成分，返回严格 JSON。\n\n"
+        "可选意图维度：knowledge（知识引用）、emotional（情感回应）、"
+        "safety（安全警示）、creative（创意建议）、factual（事实陈述）、"
+        "social（社交寒暄）、procedural（步骤指导）。\n\n"
+        "返回格式（严格 JSON，不要 markdown）：\n"
+        '{"factors": [{"name": "意图名", "activation": 0.0~1.0, '
+        '"evidence": "支持该意图的原文片段"}], "residual": 0.0~1.0}\n\n'
+        "规则：\n"
+        "- activation 表示该意图在文本中的强度，0=不存在，1=极强\n"
+        "- residual 表示无法被任何意图解释的比例\n"
+        "- 只列出 activation > 0.1 的意图\n"
+        "- evidence 必须是原文中的实际片段"
+    )
+
+    def __init__(self, use_llm_decomposition: bool = True):
         self._use_llm = use_llm_decomposition
+        self._free_backend: Any = None
+
+    @property
+    def use_llm(self) -> bool:
+        """是否启用 LLM 分解。"""
+        return self._use_llm
+
+    def set_free_backend(self, backend: Any) -> None:
+        """注入 FreeModelBackend，供 _llm_encode 调用硅基流动免费模型。"""
+        self._free_backend = backend
 
     async def encode(self, output: str, context: dict | None = None) -> DecomposedOutput:
         """将输出编码为意图因子 — 对齐 SAE.encode()"""
@@ -121,6 +155,102 @@ class IntentDecomposer:
         return min(1.0, hits * 0.3)
 
     async def _llm_encode(self, output: str, context: dict | None = None) -> DecomposedOutput:
-        """LLM 基分解 — Phase 2 实现（未实现），fallback 到规则编码。"""
-        logger.warning("intent_decomposition.llm_encode_fallback: LLM decomposition not implemented, using rules")
-        return self._rule_encode(output, context)
+        """LLM 基分解 — 通过硅基流动免费模型做结构化意图分析。
+
+        调用链：FreeModelBackend.call() → 硅基流动 API / 本地模型。
+        失败/超时/格式异常时静默 fallback 到 _rule_encode，不抛异常。
+        """
+        if not output:
+            return DecomposedOutput(raw_output=output, factors=[], residual=1.0)
+
+        backend = self._free_backend
+        if backend is None:
+            try:
+                from utils.free_model_backend import FreeModelBackend
+                backend = FreeModelBackend()
+            except Exception as e:
+                logger.debug("intent_decomposition.no_free_backend: {}", e)
+                return self._rule_encode(output, context)
+
+        if backend.disabled:
+            logger.debug("intent_decomposition.backend_disabled")
+            return self._rule_encode(output, context)
+
+        messages = [
+            {"role": "system", "content": self._SYSTEM_PROMPT},
+            {"role": "user", "content": f"分析以下文本的意图成分：\n\n{output}"},
+        ]
+
+        try:
+            raw = await asyncio.wait_for(
+                backend.call(
+                    messages,
+                    temperature=self.LLM_TEMPERATURE,
+                    max_tokens=self.LLM_MAX_TOKENS,
+                ),
+                timeout=self.LLM_TIMEOUT,
+            )
+            if not raw:
+                logger.debug("intent_decomposition.llm_empty_response")
+                return self._rule_encode(output, context)
+            return self._parse_llm_response(raw, output)
+        except asyncio.TimeoutError:
+            logger.debug("intent_decomposition.llm_timeout")
+            return self._rule_encode(output, context)
+        except Exception as e:
+            logger.debug("intent_decomposition.llm_failed: {}", e)
+            return self._rule_encode(output, context)
+
+    def _parse_llm_response(self, raw: str, original_output: str) -> DecomposedOutput:
+        """解析 LLM 返回的 JSON，构造 DecomposedOutput。解析失败 fallback 到规则编码。"""
+        cleaned = raw.strip()
+        if cleaned.startswith("```"):
+            first_newline = cleaned.find("\n")
+            if first_newline != -1:
+                cleaned = cleaned[first_newline + 1:]
+            last_fence = cleaned.rfind("```")
+            if last_fence != -1:
+                cleaned = cleaned[:last_fence]
+            cleaned = cleaned.strip()
+
+        try:
+            data = json.loads(cleaned)
+        except json.JSONDecodeError:
+            logger.debug("intent_decomposition.json_parse_failed: raw={}", raw[:200])
+            return self._rule_encode(original_output)
+
+        factors_raw = data.get("factors", [])
+        if not isinstance(factors_raw, list):
+            return self._rule_encode(original_output)
+
+        valid_names = set(self.INTENT_DIMENSIONS)
+        factors: list[IntentFactor] = []
+        for item in factors_raw:
+            if not isinstance(item, dict):
+                continue
+            name = str(item.get("name", ""))
+            if name not in valid_names:
+                continue
+            activation = float(item.get("activation", 0.0))
+            activation = max(0.0, min(1.0, activation))
+            if activation <= 0.1:
+                continue
+            evidence = str(item.get("evidence", ""))
+            confidence = float(item.get("confidence", 1.0))
+            confidence = max(0.0, min(1.0, confidence))
+            factors.append(IntentFactor(name=name, activation=activation,
+                                        evidence=evidence, confidence=confidence))
+
+        residual = float(data.get("residual", 0.0))
+        residual = max(0.0, min(1.0, residual))
+
+        if not factors:
+            logger.debug("intent_decomposition.llm_no_valid_factors")
+            return self._rule_encode(original_output)
+
+        return DecomposedOutput(
+            raw_output=original_output,
+            factors=factors,
+            residual=residual,
+            total_dimensions=len(self.INTENT_DIMENSIONS),
+        )
