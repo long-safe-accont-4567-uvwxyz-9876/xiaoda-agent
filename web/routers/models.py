@@ -442,6 +442,30 @@ async def set_temperature(request: Request) -> Any:
     return Envelope(data={"temperature": value})
 
 
+@router.get("/models/reply_dedup", response_model=Envelope[dict])
+async def get_reply_dedup(request: Request) -> Any:
+    """获取跨对话回复去重开关（默认开启，优先 webui_overrides）。"""
+    cfg = _cfg(request)
+    override = cfg.get("models.reply_dedup_enabled")
+    source = "override" if override is not None else "default"
+    value = bool(override) if override is not None else True
+    return Envelope(data={"enabled": value, "source": source})
+
+
+@router.put("/models/reply_dedup", response_model=Envelope[dict])
+async def set_reply_dedup(request: Request) -> Any:
+    """设置跨对话回复去重开关，写入 webui_overrides.json 热生效。"""
+    body = await request.json()
+    enabled = body.get("enabled")
+    if not isinstance(enabled, bool):
+        raise HTTPException(400, "enabled must be a boolean")
+    cfg = _cfg(request)
+    cfg.set("models.reply_dedup_enabled", enabled)
+    await _audit(request, "reply_dedup.set", f"enabled={enabled}")
+    await _broadcast_changed()
+    return Envelope(data={"enabled": enabled})
+
+
 @router.get("/models/frequency_penalty", response_model=Envelope[dict])
 async def get_frequency_penalty(request: Request) -> Any:
     """获取当前 frequency_penalty 设置（优先 webui_overrides，回退默认 1.0）。"""

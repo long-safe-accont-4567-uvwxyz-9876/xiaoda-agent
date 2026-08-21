@@ -198,6 +198,7 @@ async function loadTemperature() {
     temperature.value = res.temperature ?? 0.7
     tempSource.value = res.source ?? 'config'
   } catch { /* use default */ }
+  await loadDedup()
 }
 
 async function _doSaveTemperature() {
@@ -221,6 +222,34 @@ function onTempChange() {
 function setTempPreset(val: number) {
   temperature.value = val
   _doSaveTemperature()
+}
+
+// 跨对话回复去重开关（跟随温度一起保存，热生效）
+const dedupEnabled = ref(true)
+const dedupLoading = ref(false)
+let _dedupSaveTimer: ReturnType<typeof setTimeout> | null = null
+
+async function loadDedup() {
+  try {
+    const res = await get<any>('/models/reply_dedup')
+    dedupEnabled.value = res.enabled ?? true
+  } catch { /* use default */ }
+}
+
+async function _doSaveDedup() {
+  dedupLoading.value = true
+  try {
+    await put<any>('/models/reply_dedup', { enabled: dedupEnabled.value })
+  } catch (e: any) {
+    message.error(e.message)
+  } finally {
+    dedupLoading.value = false
+  }
+}
+
+function onDedupChange() {
+  if (_dedupSaveTimer) clearTimeout(_dedupSaveTimer)
+  _dedupSaveTimer = setTimeout(_doSaveDedup, 400)
 }
 
 // Frequency Penalty 控制
@@ -425,6 +454,11 @@ function setPresPreset(val: number) {
           {{ p.label }} {{ p.value }}
         </n-button>
       </div>
+      <div class="dedup-row">
+        <span class="hint">自动去重：回复内容与近期历史高度相似时自动重写一次</span>
+        <n-switch v-model:value="dedupEnabled" size="medium"
+                  :loading="dedupLoading" @update:value="onDedupChange" />
+      </div>
     </section>
     </Tilt3D>
 
@@ -549,6 +583,10 @@ function setPresPreset(val: number) {
 }
 .temp-presets {
   display: flex; gap: 6px; flex-wrap: wrap; margin-bottom: 6px;
+}
+.dedup-row {
+  display: flex; align-items: center; justify-content: space-between; gap: 12px;
+  margin-top: 10px; padding-top: 10px; border-top: 1px dashed rgba(255,255,255,.12);
 }
 .temp-source {
   font-size: 12px; color: var(--moon-dim); margin-top: 4px;
