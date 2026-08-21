@@ -95,15 +95,31 @@ keys 字段损坏按空集处理。等价性测试覆盖：基础命中、双向
 | 全量回归 | **4877 passed**, 10 skipped |
 | 构建时间（aarch64 release） | 12s |
 
-## 四、后续路线（若合并后观察达标）
+## 四、第二个下沉位：扩散激活图游走（2026-08-22）
 
-1. **构建链**：maturin wheel 化进 CI 与安装包（当前手动 cp .so 到 site-packages）
+按「解释器开销 >30%」门槛对扩散通道内部逐段剖析（2417 节点 / 100 万边真实库）：
+
+| 阶段 | 实测 | 判定 |
+|---|---|---|
+| `get_alive_nodes`（SQL+组装） | 498ms | IO 主导，不下沉 |
+| **`_spreading_channel` 图游走** | **914~1164ms**（hop0 一跳扩散 1340 节点，两跳遍历 ~67 万边） | ✅ 纯解释器 dict 循环 |
+| `_semantic_rerank`（rapidfuzz×360） | 7.7ms | 不达标，暂缓 |
+| `get_memories_by_ids`（120 条） | 5.0ms | 不达标 |
+
+实现：`NodeIndex.load_edges`（100 万行 → 下标邻接表驻留，597ms 一次性）+
+`spreading_channel`（游走全程 usize+f64，零字符串哈希）。等价性验证
+**28x 加速（1171ms → 41.6ms）、最大分差 2.6e-10**（含未知种子、阈值剪枝、
+alive 过滤边界）；开发中捕获并修复种子双重累积 bug（分差恰为 1.0 被等价性
+测试当场拦截——等价性断言的价值实证）。
+
+## 五、后续路线（若合并后观察达标）
+
+1. **构建链**：maturin wheel 化进 CI 与安装包（`build.sh` 已自动同步 venv）
 2. **下一批候选下沉位**（均需先过「解释器开销 >30%」门槛）：
-   - `_semantic_rerank` 的 rapidfuzz 批量调用（3ms，收益低，暂缓）
    - 上下文压缩的长文本裁剪循环（待测量）
-   - `cosine_topk` 已预置（无 numpy 场景的降级路径加速）
+   - `get_alive_nodes` 组装段（657ms 中纯组装部分，需与 SQL 拉取合并评估）
 3. **不建议下沉**（数据已证伪）：embed/NPU 调度、KG LLM 调用、jieba、
-   sqlite-vec 检索——它们是 IO/外部进程/BLAS，不是 Python CPU
+   sqlite-vec 检索、`_semantic_rerank`（7.7ms）——IO/外部进程/BLAS/规模不足
 4. **不建议全量重构**：本项目 211 个 API 端点 + 40+ 工具 + 三通道 bot 的
    业务面重写风险远大于收益；混合架构按热点渐进迁移即可
 

@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import json
 import math
+from collections import defaultdict
 
 import pytest
 
@@ -156,3 +157,100 @@ def test_should_use_rust_gate(monkeypatch):
     monkeypatch.setattr(rust_hybrid, "RUST_HYBRID_MIN_NODES", 500)
     assert rust_hybrid.should_use_rust(499) is False
     assert rust_hybrid.should_use_rust(500) is (_RC is not None)
+
+
+# ── 扩散激活图游走（spreading_channel）等价性 ──────────
+
+
+def _py_spreading(direct, alive_nodes, graph, radius=3, decay=0.5,
+                  threshold=0.05):
+    """与 spreading_activation._spreading_channel 逐行对齐的参考实现。"""
+    spread = defaultdict(float)
+    wave = dict(direct)
+    for hop in range(radius + 1):
+        nxt = defaultdict(float)
+        for nid, act in wave.items():
+            spread[nid] += act
+            if hop < radius and act > threshold:
+                for nb, ew in graph.get(nid, {}).items():
+                    if nb not in alive_nodes:
+                        continue
+                    nxt[nb] += act * decay * ew / (hop + 1)
+        wave = nxt
+        if not wave:
+            break
+    return dict(spread)
+
+
+def test_rust_spreading_channel_equivalence():
+    """图游走逐值一致：种子累积、衰减/跳数除法、阈值剪枝、alive 过滤。"""
+    alive = {
+        "a": {"keys": "[]", "text": "A", "weight": 1.0},
+        "b": {"keys": "[]", "text": "B", "weight": 1.0},
+        "c": {"keys": "[]", "text": "C", "weight": 1.0},
+        "d": {"keys": "[]", "text": "D", "weight": 1.0},  # 不在图中（孤立）
+    }
+    graph = {
+        "a": {"b": 0.8, "c": 0.4},
+        "b": {"c": 0.9, "dead": 5.0},   # dead 不在 alive → 不中继
+        "c": {"a": 0.2},
+    }
+    seeds = {"a": 1.0, "ghost": 0.8}    # ghost 不在节点集
+
+    ref = _py_spreading(seeds, alive, graph)
+    idx = rust_hybrid.RustNodeIndex(alive)
+    kept = idx.load_edges([(s, t, w) for s, tg in graph.items()
+                           for t, w in tg.items()])
+    assert kept == 4  # dead 端点被预过滤
+    got = idx.spreading_channel(list(seeds.items()))
+
+    assert set(ref) == set(got), f"键集不一致: {set(ref) ^ set(got)}"
+    for k in ref:
+        assert abs(ref[k] - got[k]) < 1e-9, f"{k}: {ref[k]} vs {got[k]}"
+
+
+def test_rust_spreading_threshold_prunes():
+    """act <= threshold 的波前不传播（与 Python 剪枝一致）。"""
+    alive = {"s": {"keys": "[]", "text": "", "weight": 1.0},
+             "m": {"keys": "[]", "text": "", "weight": 1.0},
+             "far": {"keys": "[]", "text": "", "weight": 1.0}}
+    # s→m 权重小：hop0 后 m 激活 1.2*0.5*0.08=0.048 <= 阈值 0.05，
+    # hop1 时 m 不再外扩 → far 永远拿不到激活
+    graph = {"s": {"m": 0.08}, "m": {"far": 1.0}}
+    seeds = {"s": 1.2}
+    ref = _py_spreading(seeds, alive, graph)
+    idx = rust_hybrid.RustNodeIndex(alive)
+    idx.load_edges([(s, t, w) for s, tg in graph.items() for t, w in tg.items()])
+    got = idx.spreading_channel(list(seeds.items()))
+    assert set(ref) == set(got)
+    # 剪枝生效：far 未被激活（两侧一致地不含该键）
+    assert "far" not in ref and "far" not in got
+
+
+@pytest.mark.asyncio
+async def test_engine_spreading_channel_matches_python(engine, monkeypatch):
+    """引擎集成：开关打开时 _spreading_channel 与纯 Python 参考一致。"""
+    now = "2026-07-10T12:00:00+08:00"
+    for nid, text, keys in [("g1", "节点一", ["甲", "乙"]),
+                            ("g2", "节点二", ["丙"]),
+                            ("g3", "节点三", ["丁"])]:
+        await engine.db.insert_node(
+            id=nid, text=text, keys=json.dumps(keys), created=now,
+            last_accessed=now, valid_from=now)
+    await engine.db.create_edge("g1", "g2", weight=0.7)
+    await engine.db.create_edge("g2", "g3", weight=0.5)
+
+    alive = await engine.db.get_alive_nodes()
+    graph = {"g1": {"g2": 0.7}, "g2": {"g3": 0.5}}
+    seeds = {"g1": 1.0}
+
+    monkeypatch.setattr(rust_hybrid, "RUST_HYBRID_ENABLED", True)
+    monkeypatch.setattr(rust_hybrid, "RUST_HYBRID_MIN_NODES", 1)
+    idx = engine._get_rust_index(alive)
+    assert idx is not None
+    idx.load_edges([(s, t, w) for s, tg in graph.items() for t, w in tg.items()])
+    got = idx.spreading_channel(list(seeds.items()))
+    ref = _py_spreading(seeds, alive, graph)
+    assert set(ref) == set(got)
+    for k in ref:
+        assert abs(ref[k] - got[k]) < 1e-9

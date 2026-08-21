@@ -85,6 +85,20 @@ class RustNodeIndex:
         """语义与 spreading_activation._direct_channel 一致（含 IDF）。"""
         return self._index.direct_channel(query, query_keys)
 
+    def load_edges(self, rows: list[tuple[str, str, float]]) -> int:
+        """驻留边快照（一次性），返回保留的边数。
+
+        rows 与 db_concept.get_edge_snapshot 的行同构；两端 id 均在
+        节点集内的边才保留（与游走期 alive 过滤等价）。
+        """
+        return self._index.load_edges(rows)
+
+    def spreading_channel(self, seeds: list[tuple[str, float]],
+                          radius: int = 3, decay: float = 0.5,
+                          threshold: float = 0.05) -> dict[str, float]:
+        """扩散激活图游走，语义与 spreading_activation._spreading_channel 一致。"""
+        return self._index.spreading_channel(seeds, radius, decay, threshold)
+
 
 def should_use_rust(alive_nodes_count: int) -> bool:
     """判定当前是否走 Rust 路径（开关 + 模块可用 + 规模阈值）。"""

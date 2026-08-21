@@ -127,6 +127,13 @@ struct NodeIndex {
     /// 预 lowercase 文本（加载时一次）
     texts_lower: Vec<String>,
     weights: Vec<f64>,
+    /// 驻留边快照（load_edges 后可用）：邻接表按节点下标组织
+    /// adj[i] = Vec<(neighbor_idx, weight)>，图游走零字符串哈希
+    adj: Vec<Vec<(usize, f64)>>,
+    /// id → 下标（load_edges 时构建）
+    id_index: HashMap<String, usize>,
+    /// 边快照是否已加载
+    has_graph: bool,
 }
 
 #[pymethods]
@@ -152,11 +159,15 @@ impl NodeIndex {
             .map(|s| parse_json_keys(s).unwrap_or_default().into_iter().collect())
             .collect();
         let texts_lower: Vec<String> = node_texts.iter().map(|t| t.to_lowercase()).collect();
+        let n = node_ids.len();
         Ok(NodeIndex {
             ids: node_ids,
             keys,
             texts_lower,
             weights: node_weights,
+            adj: vec![Vec::new(); n],
+            id_index: HashMap::with_capacity(n),
+            has_graph: false,
         })
     }
 
@@ -226,6 +237,106 @@ impl NodeIndex {
             let _ = out.set_item(nid, score);
         }
         out.into()
+    }
+
+    /// 驻留边快照：rows = [(source_id, target_id, weight), ...]。
+    /// 一次性把 Python 行列表转成按下标组织的邻接表，之后图游走
+    /// 全程 usize 下标 + f64 运算，零字符串哈希、零跨语言拷贝。
+    /// 两端 id 均不在节点集的边跳过（与 Python 版 alive 过滤等价——
+    /// 游走时邻居必须 alive 才入队，加载期预过滤结果一致）。
+    #[pyo3(signature = (rows,))]
+    fn load_edges(&mut self, rows: Vec<(String, String, f64)>) -> PyResult<usize> {
+        self.id_index.clear();
+        for (i, id) in self.ids.iter().enumerate() {
+            self.id_index.insert(id.clone(), i);
+        }
+        for v in self.adj.iter_mut() {
+            v.clear();
+        }
+        let mut kept = 0usize;
+        for (src, dst, w) in rows {
+            let (si, di) = match (self.id_index.get(&src), self.id_index.get(&dst)) {
+                (Some(&s), Some(&d)) => (s, d),
+                _ => continue,
+            };
+            self.adj[si].push((di, w));
+            kept += 1;
+        }
+        self.has_graph = true;
+        Ok(kept)
+    }
+
+    /// 扩散激活通道：从种子沿边传播激活值（语义与
+    /// spreading_activation._spreading_channel 逐位一致）：
+    /// spread[nid] += act（含种子）；传播条件 hop < radius 且 act > threshold；
+    /// propagated = act * decay * edge_weight / (hop + 1)；邻居必须已驻留。
+    /// seeds: [(node_id, activation)]；返回 {node_id: accumulated}。
+    #[pyo3(signature = (seeds, radius=3, decay=0.5, threshold=0.05))]
+    fn spreading_channel(
+        &self,
+        py: Python<'_>,
+        seeds: Vec<(String, f64)>,
+        radius: usize,
+        decay: f64,
+        threshold: f64,
+    ) -> PyResult<Py<PyDict>> {
+        if !self.has_graph {
+            return Err(PyValueError::new_err("edges not loaded; call load_edges first"));
+        }
+        // 种子映射为下标激活（不在节点集的种子忽略——Python 版 graph.get(nid,{})
+        // 对未知 nid 无边可走，仅 spread[nid]+=act；此处保持一致：先记录再判断）
+        let mut spread = vec![0.0f64; self.ids.len()];
+        let mut wave: HashMap<usize, f64> = HashMap::new();
+        for (nid, act) in &seeds {
+            if let Some(&i) = self.id_index.get(nid) {
+                // 注意：种子激活只在 hop0 循环里 spread[idx] += act 累积一次
+                //（与 Python 版一致），此处仅入队，不预累积
+                wave.insert(i, *act);
+            } else {
+                // 与 Python 一致：未知种子也累积进 spread 输出
+                // （graph.get(nid, {}) 为空 → 不传播）
+                let _ = nid; // 输出阶段统一处理
+            }
+        }
+        // 未知种子的累积：单独记录（数量极少，通常 0）
+        let mut unknown_spread: HashMap<&str, f64> = HashMap::new();
+        for (nid, act) in &seeds {
+            if !self.id_index.contains_key(nid) {
+                *unknown_spread.entry(nid.as_str()).or_insert(0.0) += act;
+            }
+        }
+
+        let mut current = wave;
+        for hop in 0..=radius {
+            let mut next: HashMap<usize, f64> = HashMap::new();
+            for (&idx, &act) in current.iter() {
+                spread[idx] += act;
+                if hop < radius && act > threshold {
+                    // adj 与 ids 同长，idx 恒在界内；用安全索引避免 unsafe
+                    if let Some(edges) = self.adj.get(idx) {
+                        for &(nb, ew) in edges {
+                            let propagated = act * decay * ew / ((hop + 1) as f64);
+                            *next.entry(nb).or_insert(0.0) += propagated;
+                        }
+                    }
+                }
+            }
+            current = next;
+            if current.is_empty() {
+                break;
+            }
+        }
+
+        let out = PyDict::new(py);
+        for (i, &v) in spread.iter().enumerate() {
+            if v != 0.0 {
+                let _ = out.set_item(self.ids[i].as_str(), v);
+            }
+        }
+        for (nid, v) in unknown_spread {
+            let _ = out.set_item(nid, v);
+        }
+        Ok(out.into())
     }
 }
 
