@@ -46,6 +46,14 @@ class SpreadingActivationEngine:
         # G13: recall 结果 LRU+TTL 缓存
         # OrderedDict[cache_key=(query, top_k)] -> (expiry_monotonic, list[dict])
         self._recall_cache: "OrderedDict[tuple, tuple[float, list[dict]]]" = OrderedDict()
+        # 整图边快照缓存（稠密图 N+1 查询优化）：写入路径经 clear_cache() 失效
+        self._graph_snapshot: dict[str, dict[str, float]] | None = None
+
+    async def _ensure_graph_snapshot(self) -> dict[str, dict[str, float]]:
+        """取整图边快照（{source: {target: weight}}），懒加载并缓存。"""
+        if self._graph_snapshot is None:
+            self._graph_snapshot = await self.db.get_edge_snapshot()
+        return self._graph_snapshot
 
     async def recall(self, query: str, top_k: int = 5) -> list[dict]:
         """扩散激活检索主入口
@@ -126,8 +134,9 @@ class SpreadingActivationEngine:
         return out
 
     def clear_cache(self) -> None:
-        """G13: 清空 recall 缓存（记忆写入后调用）。"""
+        """G13: 清空 recall 缓存（记忆写入后调用）；同时失效整图边快照。"""
         self._recall_cache.clear()
+        self._graph_snapshot = None
 
     def _compute_idf(self, keys: set, alive_nodes: dict) -> dict:
         """计算每个 key 的 IDF 值
@@ -216,18 +225,21 @@ class SpreadingActivationEngine:
         """从种子节点沿边传播激活值，3跳"""
         spread = defaultdict(float)
         wave = dict(direct)
+        # 稠密图（实测 2381 节点 / 100 万边）N+1 优化：整图快照一次载入内存，
+        # 逐节点 get_edges 是串行 DB 往返（实测 1973 节点 19s+）
+        graph = await self._ensure_graph_snapshot()
 
         for hop in range(self.RECALL_RADIUS + 1):
             nxt = defaultdict(float)
             for nid, act in wave.items():
                 spread[nid] += act  # 累积激活
                 if hop < self.RECALL_RADIUS and act > self.SPREADING_THRESHOLD:
-                    edges = await self.db.get_edges(nid)
-                    for neighbor_id, edge in edges.items():
+                    edges = graph.get(nid, {})
+                    for neighbor_id, edge_weight in edges.items():
                         if neighbor_id not in alive_nodes:
                             continue  # closed 事实不中继
                         propagated = (act * self.ACTIVATION_DECAY
-                                      * edge["weight"] / (hop + 1))
+                                      * edge_weight / (hop + 1))
                         nxt[neighbor_id] += propagated
             wave = nxt
             if not wave:

@@ -164,6 +164,22 @@ class ConceptDB:
             rows = await cur.fetchall()
             return {row["target_id"]: dict(row) for row in rows}
 
+    async def get_edge_snapshot(self) -> dict[str, dict[str, float]]:
+        """一次取回全部概念边（{source_id: {target_id: weight}}）。
+
+        扩散激活在稠密图（实测 2381 节点 / 100 万边）逐节点或按 hop 批量
+        取边都要反复拉回巨量行；SpreadingActivationEngine 把整图快照缓存
+        在内存，写入路径经 clear_cache() 失效重建。
+        """
+        result: dict[str, dict[str, float]] = {}
+        async with self._conn.execute(
+            "SELECT source_id, target_id, weight FROM concept_edges"
+        ) as cur:
+            rows = await cur.fetchall()
+        for row in rows:
+            result.setdefault(row["source_id"], {})[row["target_id"]] = float(row["weight"])
+        return result
+
     async def update_edge(self, source_id: str, target_id: str,
                            weight: float | None = None,
                            relation: str | None = None,

@@ -175,6 +175,27 @@ async def test_update_edge(concept_db):
 
 
 @pytest.mark.asyncio
+async def test_get_edge_snapshot(concept_db):
+    """整图快照与逐节点 get_edges 结果一致（含 weight 数值化）。"""
+    now = "2026-07-10T12:00:00+08:00"
+    for nid in ["n1", "n2", "n3"]:
+        await concept_db.insert_node(
+            id=nid, text=f"text_{nid}", keys='["k"]',
+            created=now, last_accessed=now, valid_from=now,
+        )
+    await concept_db.create_edge("n1", "n2", "co-occurrence", 1.0, now)
+    await concept_db.create_edge("n1", "n3", "related", 0.5, now)
+    await concept_db.create_edge("n2", "n1", "defined", 0.8, now)
+
+    snap = await concept_db.get_edge_snapshot()
+    assert "n1" in snap and "n2" in snap
+    assert snap["n1"]["n2"] == 1.0
+    assert snap["n1"]["n3"] == 0.5
+    assert snap["n2"]["n1"] == 0.8
+    assert isinstance(snap["n1"]["n2"], float)
+
+
+@pytest.mark.asyncio
 async def test_auto_link_3_shared_keys(concept_db):
     now = "2026-07-10T12:00:00+08:00"
     # 节点 A 有 3 个 keys
