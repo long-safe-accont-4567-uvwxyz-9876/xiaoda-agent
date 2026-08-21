@@ -104,3 +104,6 @@ scripts/npu/*.bak-*
 # === Test artifacts ===
 _test.py
 tests/benchmark_results.json
+# === Rust hybrid PoC build artifacts ===
+rust_core/target/
+*.so
