@@ -480,7 +480,11 @@ class GreetingScheduler:
             from qq_bot_adapter import send_proactive_message
             await send_proactive_message(text)
             return None
-        except (RuntimeError, OSError, ConnectionError) as e:
+        except (ImportError, AttributeError, RuntimeError, OSError,
+                ConnectionError) as e:
+            # ImportError/AttributeError：botpy 缺失或 botpy_compat 契约预检
+            # 判定 SDK 漂移（install 抛 ImportError）——单通道降级，
+            # 不得中断整个问候/提醒投递流程
             logger.warning("greeting.qq_send_failed error={}", str(e))
             return str(e)[:120]
 
@@ -490,6 +494,7 @@ class GreetingScheduler:
             from wechat_bot_adapter import send_proactive_message
             await send_proactive_message(text)
             return None
-        except (RuntimeError, OSError, ConnectionError) as e:
+        except (ImportError, AttributeError, RuntimeError, OSError,
+                ConnectionError) as e:
             logger.warning("greeting.wechat_send_failed error={}", str(e))
             return str(e)[:120]

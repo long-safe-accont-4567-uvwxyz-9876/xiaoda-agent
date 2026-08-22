@@ -25,8 +25,12 @@ from local_ai.runtimes.base import RuntimeValidationError
 
 try:
     import sqlite_vec
+    # 契约探针：只验可导入不验符号——陈旧 sqlite_vec 缺 load 时会在
+    # _init_db_sync 使用点爆 AttributeError（同 rust_core 案例）
+    if not hasattr(sqlite_vec, "load"):
+        raise AttributeError("sqlite_vec.load missing")
     HAS_SQLITE_VEC = True
-except ImportError:
+except (ImportError, AttributeError):
     HAS_SQLITE_VEC = False
 
 try:

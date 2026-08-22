@@ -26,13 +26,31 @@ done
 [ "$PUSHED_ANY" = "1" ] || exit 0
 
 PYTHON="$PWD/.venv/bin/python"
-[ -x "$PYTHON" ] || PYTHON="$(command -v python3)"
+# 必须用 venv：系统 python3 会混载 dist-packages 的旧 Pillow(9.4) 等原生库，全量跑会段错误
+if [ ! -x "$PYTHON" ]; then
+    echo "[pre-push] 错误：找不到 $PWD/.venv/bin/python（不要用系统 python3 跑测试，旧 PIL/依赖混载会 segfault）" >&2
+    exit 1
+fi
+
+# ── 前端构建物新鲜度（廉价检查，毫秒级；完整重建校验见 scripts/check_dist_freshness.sh）
+# 改了 web/frontend 源码却没重新 build + 提交 web/dist → FastAPI 会静默服务旧 UI。
+# 判据：源码最后一次提交晚于 dist 最后一次提交即为失同步嫌疑。
+FRONTEND_LAST=$(git log -1 --format=%ct -- web/frontend 2>/dev/null || true)
+DIST_LAST=$(git log -1 --format=%ct -- web/dist 2>/dev/null || true)
+if [ -n "$FRONTEND_LAST" ] && [ -n "$DIST_LAST" ] && [ "$FRONTEND_LAST" -gt "$DIST_LAST" ]; then
+    echo "[pre-push] 错误：web/frontend 源码比 web/dist 新——改了前端但未重新构建提交产物。" >&2
+    echo "  修复：cd web/frontend && npm run build && git add web/dist && git commit" >&2
+    echo "  （完整重建校验：scripts/check_dist_freshness.sh）" >&2
+    exit 1
+fi
 
 if [ "${PUSH_FULL_TESTS:-0}" = "1" ]; then
     echo "[pre-push] 全集测试门禁（约 5 分钟，--no-verify 可跳过）..."
-    exec "$PYTHON" -m pytest tests/ -q --timeout=60 \
+    # 不用 exec：测试全绿后还要跑构建物新鲜度校验
+    "$PYTHON" -m pytest tests/ -q --timeout=60 \
         -m "not slow and not e2e_real" \
         --deselect "tests/test_a4_rag_root_fix.py::TestIntentClassifyDefault::test_intent_llm_classify_default_false"
+    bash "$PWD/scripts/check_dist_freshness.sh"
 fi
 
 echo "[pre-push] critical 子集门禁（18 文件，--no-verify 可跳过）..."

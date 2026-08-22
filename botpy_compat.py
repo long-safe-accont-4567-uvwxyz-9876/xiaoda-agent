@@ -205,18 +205,49 @@ async def _patched_pool_init(self, token: Any, session_interval: Any) -> Any:
 
 _PATCH_INSTALLED = False
 
+# 补丁挂载点（类级符号，可 hasattr 精确校验）——install 与探针共用一份清单，
+# 防止"安装路径"与"自检路径"各自维护漂移。
+def _patch_targets() -> list[tuple[Any, str, str]]:
+    return [
+        (BotWebSocket, "_is_system_event", "BotWebSocket._is_system_event"),
+        (BotWebSocket, "_send_heart", "BotWebSocket._send_heart"),
+        (BotWebSocket, "on_closed", "BotWebSocket.on_closed"),
+        (Client, "_pool_init", "Client._pool_init"),
+    ]
+
+# 补丁方法体运行时依赖的成员。其中 _conn/_session/_ws_ap/_connection/
+# ret_coro/_closed/_bot_login 是 __init__ 动态赋值的实例属性——类上
+# hasattr 恒 False，只能做源码名称级探测；SDK 升级改名时提前在此暴露，
+# 而不是等心跳/会话循环跑到一半才 AttributeError 断连。
+_PATCH_BODY_MEMBERS: dict[str, tuple[str, ...]] = {
+    "BotWebSocket": ("WS_HEARTBEAT", "WS_HEARTBEAT_ACK", "_conn", "_session"),
+    "Client": ("_ws_ap", "_connection", "ret_coro", "_closed", "_bot_login"),
+}
+
 
 def install_botpy_patches() -> None:
     """安装全部私有 API 补丁（幂等：重复调用安全）。
 
     原实现位于 qq_bot_adapter.py 模块顶层直接赋值；抽离后由
     qq_bot_adapter 在首个 Client 实例化前调用一次即可。
+
+    契约预检：先验证全部挂载点再打补丁（validate-then-apply）。
+    SDK 升级漂移统一抛 ImportError——调用方按"botpy 不兼容"降级，
+    而不是 AttributeError 从模块导入处炸穿；同时杜绝半安装状态
+    （前 N 个已打上、标志位未置位 → 重装时把已补丁函数存为
+    _original_*，原实现引用永久丢失的双重包裹）。
     """
     global _PATCH_INSTALLED
     if _PATCH_INSTALLED:
         return
     if Client is None or BotWebSocket is None:
         raise ImportError("botpy 不可用，无法安装 QQ Bot 兼容补丁")
+    missing = [label for owner, attr, label in _patch_targets()
+               if not hasattr(owner, attr)]
+    if missing:
+        raise ImportError(
+            "botpy 私有 API 漂移，请跑 python botpy_compat.py 自检后对齐适配清单："
+            + ", ".join(missing))
     global _original_is_system_event, _original_send_heart
     global _original_on_closed, _original_pool_init
     _original_is_system_event = BotWebSocket._is_system_event
@@ -281,19 +312,34 @@ def reset_redirect_flag() -> None:
 # ── SDK 兼容性自检 ──────────────────────────────────────────────
 
 def check_sdk_compat() -> list[str]:
-    """返回与当前 botpy 私有 API 的适配漂移列表（空 = 全部对齐）。"""
+    """返回与当前 botpy 私有 API 的适配漂移列表（空 = 全部对齐）。
+
+    两层探针：
+    - 挂载点（类级符号）：hasattr 精确校验，与 install 同一份清单；
+    - 补丁方法体依赖的成员（多为 __init__ 动态赋值的实例属性，
+      类上 hasattr 恒 False）：inspect.getsource 做名称存在性检查。
+      漏检后果不是启动失败而是长连中途 AttributeError 断连。
+    """
+    import inspect
+
     issues: list[str] = []
     if Client is None or BotWebSocket is None:
         issues.append("botpy 导入失败：Client/BotWebSocket 不可用")
         return issues
-    for owner, attr, label in [
-        (BotWebSocket, "_is_system_event", "BotWebSocket._is_system_event"),
-        (BotWebSocket, "_send_heart", "BotWebSocket._send_heart"),
-        (BotWebSocket, "on_closed", "BotWebSocket.on_closed"),
-        (Client, "_pool_init", "Client._pool_init"),
-    ]:
+    for owner, attr, label in _patch_targets():
         if not hasattr(owner, attr):
             issues.append(f"{label} 已不存在（SDK 升级请评估：修复则删补丁，改名则先对齐）")
+    for cls_name, members in _PATCH_BODY_MEMBERS.items():
+        cls = {"BotWebSocket": BotWebSocket, "Client": Client}[cls_name]
+        try:
+            src = inspect.getsource(cls)
+        except (OSError, TypeError):  # pragma: no cover —— 源码不可得时跳过该层
+            continue
+        for member in members:
+            if member not in src:
+                issues.append(
+                    f"{cls_name}.{member} 在 SDK 源码中已消失"
+                    "（补丁方法体依赖，升级请对齐）")
     return issues
 
 

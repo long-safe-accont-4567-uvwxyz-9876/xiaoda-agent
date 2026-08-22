@@ -671,7 +671,13 @@ class AgentCoreBootstrapper:
 
     async def _register_sub_agents(self) -> None:
         from agent_dispatcher import SubAgentConfig
-        from config import XIAOLI_STICKER_DIR
+        import config as _cfg_mod
+        # 同函数内 AGENTS_CONFIG_DIR 有 ImportError 兜底，此符号同等对待：
+        # config 重构删除常量时不致启动崩溃（兜底取源头定义 config_paths）
+        XIAOLI_STICKER_DIR = getattr(_cfg_mod, "XIAOLI_STICKER_DIR", None)
+        if XIAOLI_STICKER_DIR is None:
+            from config_paths import XIAOLI_STICKER_DIR as _xsd
+            XIAOLI_STICKER_DIR = _xsd
         # frozen 模式下使用用户目录中的 agents 配置（_init_user_resources 已复制模板）
         try:
             from config import AGENTS_CONFIG_DIR as _agents_dir

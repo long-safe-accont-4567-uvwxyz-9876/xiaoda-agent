@@ -20,9 +20,11 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 # 测试（无 pytest 配置，测试是独立脚本，直接运行）
 .venv/bin/python tests/e2e_test.py
 
-# pre-push 测试门禁（每个 clone 一次性启用。仓库在 Gitee，.github/workflows 不会执行，
-# 本地门禁是唯一自动化防线：push 前 18 文件 critical 子集约 20s；
-# PUSH_FULL_TESTS=1 git push 跑全集约 5 分钟；--no-verify 紧急跳过）
+# pre-push 门禁（每个 clone 一次性启用。仓库在 Gitee，.github/workflows 不会执行，
+# 本地门禁是唯一自动化防线）：push 前 18 文件 critical 子集约 20s + 前端构建物
+# 新鲜度时间戳检查（改了 web/frontend 必须重新 build 并提交 web/dist，否则拦截）；
+# PUSH_FULL_TESTS=1 git push 跑全集约 5 分钟，全绿后追加 scripts/check_dist_freshness.sh
+# 完整重建校验（约 +1 分钟）；--no-verify 紧急跳过
 git config core.hooksPath scripts/git-hooks
 
 # 生产服务：nahida-web 单进程承载 WebUI + QQ Bot + WS（共享 AgentCore，需 sudo）
@@ -40,7 +42,7 @@ curl -s http://127.0.0.1:8080/api/v1/agents -H "Authorization: Bearer $TOKEN"
 sqlite3 /mnt/usb2/nahida-data/db/agent.db ".tables"
 ```
 
-注意：**WebUI 与 QQ Bot 已合并为单进程**——`agent.py --web` 启动后在 `web/server.py:556` 内联 `run_qq_bot()` 异步任务，共享同一 AgentCore。改后端代码只需重启 nahida-web；改了前端只需 `npm run build`（dist 由运行中的 FastAPI 直接服务，无需重启，浏览器强刷即可）。旧双进程形态的 `deploy/qq-agent.service` 单元文件已废弃未安装。
+注意：**WebUI 与 QQ Bot 已合并为单进程**——`agent.py --web` 启动后在 `web/server.py:556` 内联 `run_qq_bot()` 异步任务，共享同一 AgentCore。改后端代码只需重启 nahida-web；改了前端只需 `npm run build`（dist 由运行中的 FastAPI 直接服务，无需重启，浏览器强刷即可），**但必须把重建后的 dist 一并提交**——pre-push 会拦截"源码新、dist 旧"的推送。旧双进程形态的 `deploy/qq-agent.service` 单元文件已废弃未安装。
 
 ## 架构
 

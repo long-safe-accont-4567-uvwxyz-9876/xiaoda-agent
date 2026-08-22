@@ -139,8 +139,12 @@ def _detect_discrete_gpu_index() -> int:
 
     try:
         import ncnn
+        # 契约探针：ncnn 是编译二进制，可导入但缺符号（API/ABI 变更）时
+        # AttributeError 不得逃出——与 rust_core 案例同构，视同不可用走 CPU/API
+        if not hasattr(ncnn, "get_gpu_count"):
+            return 0
         gpu_count = ncnn.get_gpu_count()
-    except (ImportError, OSError, RuntimeError):
+    except (ImportError, AttributeError, OSError, RuntimeError):
         return 0
 
     if gpu_count <= 1:
@@ -333,7 +337,7 @@ class VisionService:
                 gpu_index = _detect_discrete_gpu_index()
                 net.set_vulkan_device(gpu_index)
                 logger.info("vulkan compute enabled, using gpu device=%s", gpu_index)
-            except (RuntimeError, OSError, ValueError) as e:
+            except (RuntimeError, OSError, ValueError, AttributeError) as e:
                 logger.warning("vulkan init failed, falling back to cpu: %s", e)
             net.load_param(param_file)
             net.load_model(bin_file)
@@ -341,7 +345,9 @@ class VisionService:
             self.backend = "ncnn"
             self.model_loaded = True
             logger.info("ncnn model loaded from %s", param_file)
-        except (RuntimeError, OSError, ValueError, ImportError) as e:
+        except (RuntimeError, OSError, ValueError, ImportError,
+                AttributeError) as e:
+            # AttributeError：陈旧 ncnn 二进制缺符号（同 rust_core 契约漂移案例）
             logger.warning("failed to load ncnn model: %s, falling back to API", e)
             self.backend = "api_fallback"
             self.model_loaded = True

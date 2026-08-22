@@ -243,7 +243,8 @@ class MailPoller:
             try:
                 from qq_bot_adapter import send_proactive_message
                 await send_proactive_message(f"收到来自 {from_name}({from_email}) 的邮件「{subject}」，已通过邮件回复。")
-            except (ImportError, RuntimeError, ConnectionError):
+            except (ImportError, AttributeError, RuntimeError, ConnectionError):
+                # AttributeError：botpy SDK 升级漂移（补丁安装路径）——通知是可选通道，静默降级
                 logger.debug("mail.qq_notify_error", exc_info=True)
 
     # ── 辅助 ──────────────────────────────────────────────────

@@ -139,12 +139,15 @@ do_build() {
         die "Expected output directory not found: $dist_dir"
     fi
 
-    # --- Verify CLI interactive modules bundled ---------------------------------
-    # cli_palette / cli_menu 在 cli.py 中是 try/except 守卫导入，PyInstaller 静态
-    # 分析可能漏掉；未打包会导致打包版 CLI 静默回退到基础输入，命令面板/滚动失效。
+    # --- Verify dynamically imported modules bundled ----------------------------
+    # 动态/守卫导入（import_module / __import__ / LazyLoader / try-except）对
+    # PyInstaller 静态分析不可见，漏打包会在运行期静默降级（CLI 命令面板失效、
+    # 本地 embed 回退远程 API 等）且构建期无任何报错。期望清单由
+    # scripts/gen_dynamic_imports.py 从源码自动提取（含基线条目），新增守卫式
+    # 导入自动纳入校验，替代过去手工维护的硬编码白名单。
     # PyInstaller 6.x onedir 下 PYZ 归档嵌入主可执行文件的 CArchive（条目 PYZ.pyz），
     # dist 下没有独立 .pyz 文件；需用 pyi-archive_viewer 打开内嵌 PYZ.pyz 检查模块清单。
-    info "Verifying CLI interactive modules bundled..."
+    info "Verifying dynamically imported modules bundled..."
     local exe_file
     exe_file=$(find "$dist_dir" -maxdepth 1 -type f \
         \( -name "xiaoda-agent" -o -name "xiaoda-agent.exe" \) \
@@ -156,13 +159,22 @@ do_build() {
         die "pyi-archive_viewer not found (is PyInstaller installed?)"
     fi
     printf 'O PYZ.pyz\nq\n' | pyi-archive_viewer "$exe_file" > /tmp/pyz_contents.txt
-    for _m in cli_palette cli_menu prompt_toolkit; do
+    local _required_modules
+    _required_modules=$(python3 "$SCRIPT_DIR/gen_dynamic_imports.py") || {
+        die "gen_dynamic_imports.py failed"; }
+    while IFS= read -r _m; do
+        [ -n "$_m" ] || continue
+        # 可选重依赖在构建环境未安装时无法进包——告警跳过而非卡死发布流程
+        if ! python3 -c "import importlib.util as u,sys; sys.exit(0 if u.find_spec('$_m') else 1)" 2>/dev/null; then
+            red "  ⚠ $_m not importable in build env (optional), skipped"
+            continue
+        fi
         if grep -q "'$_m" /tmp/pyz_contents.txt; then
             green "  ✓ $_m bundled"
         else
-            die "Module $_m NOT bundled! Interactive slash-command panel/menu will be disabled."
+            die "Module $_m NOT bundled! 动态导入目标漏打包——运行期会静默降级。请在 xiaoda-agent.spec hiddenimports 显式声明。"
         fi
-    done
+    done <<< "$_required_modules"
     rm -f /tmp/pyz_contents.txt
 
     info "Verifying ORT GenAI frozen runtime..."
