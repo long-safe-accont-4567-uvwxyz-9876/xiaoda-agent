@@ -31,14 +31,14 @@ def _stub_botpy_logging(monkeypatch):
 @pytest.mark.asyncio
 async def test_4008_rate_limit_preserves_session_for_resume(monkeypatch):
     """4008 限频不应清空 session_id，保留 RESUME 能力（不丢消息）。"""
-    import qq_bot_adapter
+    import botpy_compat
 
     async def fake_original(self, code, msg):
         pass
-    monkeypatch.setattr(qq_bot_adapter, "_original_on_closed", fake_original)
+    monkeypatch.setattr(botpy_compat, "_original_on_closed", fake_original)
 
     self_mock = SimpleNamespace(_session={"session_id": "sess-123", "last_seq": 42})
-    await qq_bot_adapter._patched_on_closed(self_mock, 4008, "rate limited")
+    await botpy_compat._patched_on_closed(self_mock, 4008, "rate limited")
 
     assert self_mock._session["session_id"] == "sess-123", "4008 限频应保留 session_id 走 RESUME"
     assert self_mock._session["last_seq"] == 42, "4008 限频应保留 last_seq"
@@ -47,14 +47,14 @@ async def test_4008_rate_limit_preserves_session_for_resume(monkeypatch):
 @pytest.mark.asyncio
 async def test_4007_invalid_session_resets_for_identify(monkeypatch):
     """4007 无效 session 应清空 session_id，重连走 IDENTIFY。"""
-    import qq_bot_adapter
+    import botpy_compat
 
     async def fake_original(self, code, msg):
         pass
-    monkeypatch.setattr(qq_bot_adapter, "_original_on_closed", fake_original)
+    monkeypatch.setattr(botpy_compat, "_original_on_closed", fake_original)
 
     self_mock = SimpleNamespace(_session={"session_id": "sess-123", "last_seq": 42})
-    await qq_bot_adapter._patched_on_closed(self_mock, 4007, "invalid session")
+    await botpy_compat._patched_on_closed(self_mock, 4007, "invalid session")
 
     assert self_mock._session["session_id"] == "", "4007 应清空 session_id 走 IDENTIFY"
     assert self_mock._session["last_seq"] == 0
@@ -63,14 +63,14 @@ async def test_4007_invalid_session_resets_for_identify(monkeypatch):
 @pytest.mark.asyncio
 async def test_4009_session_timeout_resets_for_identify(monkeypatch):
     """4009 session 超时应清空 session_id，重连走 IDENTIFY。"""
-    import qq_bot_adapter
+    import botpy_compat
 
     async def fake_original(self, code, msg):
         pass
-    monkeypatch.setattr(qq_bot_adapter, "_original_on_closed", fake_original)
+    monkeypatch.setattr(botpy_compat, "_original_on_closed", fake_original)
 
     self_mock = SimpleNamespace(_session={"session_id": "sess-123", "last_seq": 42})
-    await qq_bot_adapter._patched_on_closed(self_mock, 4009, "session timeout")
+    await botpy_compat._patched_on_closed(self_mock, 4009, "session timeout")
 
     assert self_mock._session["session_id"] == "", "4009 应清空 session_id 走 IDENTIFY"
     assert self_mock._session["last_seq"] == 0
