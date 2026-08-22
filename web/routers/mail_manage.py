@@ -20,7 +20,8 @@ from web.schemas import Envelope
 
 router = APIRouter(tags=["mail"], dependencies=[Depends(get_current_user)])
 
-_auth_status_cache: dict = {}
+_auth_status_cache: dict = {}  # {payload: dict, ts: float}
+_AUTH_STATUS_TTL = 60.0  # 秒：agently-cli 子进程探测 ~0.8s，授权状态低频变化
 _AUTH_CACHE_TTL = 300
 _auth_status_lock = threading.Lock()
 
@@ -257,7 +258,15 @@ async def get_mail_auth_status(request: Request) -> Any:
       - email: Agent 注册的邮箱地址（未授权时为空）
       - error: 错误信息
     """
+    import time as _time
     from tools.mail_tools import _resolve_agently_cli, _run_agently
+
+    # TTL 缓存：子进程探测 ~0.8s/次，页面每次打开都要等；授权状态低频变化
+    now = _time.monotonic()
+    with _auth_status_lock:
+        cached = _auth_status_cache.get("payload")
+        if cached is not None and (now - _auth_status_cache.get("ts", 0)) < _AUTH_STATUS_TTL:
+            return Envelope(data=dict(cached))
 
     cli_path = _resolve_agently_cli()
     if not cli_path:
@@ -322,13 +331,17 @@ async def get_mail_auth_status(request: Request) -> Any:
             "error": error,
         })
 
-    return Envelope(data={
+    payload = {
         "installed": True,
         "cli_path": cli_path,
         "authorized": True,
         "email": email,
         "error": "",
-    })
+    }
+    with _auth_status_lock:
+        _auth_status_cache["payload"] = payload
+        _auth_status_cache["ts"] = __import__("time").monotonic()
+    return Envelope(data=payload)
 
 
 # ── 触发邮箱授权登录 ──────────────────────────────────────────
@@ -347,6 +360,10 @@ async def trigger_mail_auth_login(request: Request) -> Any:
     import asyncio
 
     from tools.mail_tools import _resolve_agently_cli
+
+    # 登录动作即将改变授权状态：清掉 auth-status TTL 缓存，
+    # 避免 OAuth 完成后前端轮询仍读到 60s 内的旧「未授权」
+    _clear_auth_status_cache()
 
     cli_path = _resolve_agently_cli()
     if not cli_path:
