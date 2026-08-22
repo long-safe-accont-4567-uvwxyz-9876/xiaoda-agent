@@ -352,7 +352,7 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
             logger.info(
                 "rate_limit.states_loaded user={} write={}", restored_user, restored_write,
             )
-        except (OSError, RuntimeError, ValueError) as e:
+        except (OSError, RuntimeError, ValueError, sqlite3.Error) as e:
             logger.warning("rate_limit.load_states_failed: {}", e)
 
     def _save_states(self) -> None:
@@ -379,7 +379,7 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
                 )
                 c.commit()
             self._last_save = now
-        except (OSError, RuntimeError, ValueError) as e:
+        except (OSError, RuntimeError, ValueError, sqlite3.Error) as e:
             logger.warning("rate_limit.save_states_failed: {}", e)
 
     def _evict_inactive_buckets(self) -> int:
