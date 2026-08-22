@@ -322,11 +322,45 @@ async def send_proactive_message(text: str, openid: str = "") -> bool:
     return True
 
 
+_BOTPY_LOG_REDIRECTED = False
+
+
+def _redirect_botpy_file_log(log_dir: Path | None = None) -> None:
+    """把 botpy SDK 的文件日志从 cwd/botpy.log 重定向到项目 LOG_DIR。
+
+    背景：botpy.Client 构造时默认以 ext_handlers=True 追加 DEFAULT_FILE_HANDLER，
+    文件固定在 os.getcwd()/botpy.log（TimedRotatingFileHandler），导致日志散落
+    启动目录、脱离项目轮转体系。基于 SDK configure_logging 的判空幂等
+    （_ext_handlers 非空即跳过追加），在首个 Client 实例化前配置一次即可生效。
+    重定向失败不阻断启动，回退 SDK 默认行为。
+    """
+    global _BOTPY_LOG_REDIRECTED
+    if _BOTPY_LOG_REDIRECTED:
+        return
+    _BOTPY_LOG_REDIRECTED = True
+    try:
+        from botpy import logging as _botpy_logging
+
+        from config_paths import LOG_DIR as _LOG_DIR
+        target = Path(log_dir or _LOG_DIR)
+        target.mkdir(parents=True, exist_ok=True)
+        handler_cfg = dict(_botpy_logging.DEFAULT_FILE_HANDLER)
+        handler_cfg["filename"] = str(target / "botpy.log")
+        _botpy_logging.configure_logging(ext_handlers=[handler_cfg])
+        # SDK 只会给 logs 中已存在的 logger 补挂 handler；这里显式获取一次，
+        # 确保重定向 handler 一定挂载（也兼容某些导入顺序下 logger 尚未创建）。
+        _botpy_logging.get_logger()
+        logger.info("botpy_log.redirected_dir={}", target)
+    except Exception as exc:  # noqa: BLE001 —— 日志重定向失败仅告警并回退
+        logger.warning("botpy_log.redirect_skip error={}", str(exc)[:150])
+
+
 async def run_qq_bot(agent: "AgentCore", *, sandbox: bool = False) -> None:
     """在现有事件循环中运行 QQ client（与 WebUI 同进程模式）。
 
     内部带指数退避重连；任务被取消时干净退出。
     """
+    _redirect_botpy_file_log()
     # P0 修复：实时从 env 读取 APP_ID/APP_SECRET，而非依赖模块级变量。
     # 根因：模块级 APP_ID 在 import 时一次性读取，若 load_dotenv 未读到 .env（如
     # Windows 安装包 CWD 不对），APP_ID 永远为空。即使后续 restart_qq_bot_task
