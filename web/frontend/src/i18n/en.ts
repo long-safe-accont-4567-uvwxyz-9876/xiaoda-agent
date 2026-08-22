@@ -498,6 +498,7 @@ export default {
     save: 'Save',
     imgTooLarge: 'Image cannot exceed 8MB',
     wpUnsupported: 'Only images (png/jpg/webp), GIF, or video (mp4/webm) are supported',
+    wpExternalBlocked: 'External URLs are not loaded in preview (renderer only allows local media paths)',
     gifTooLarge: 'GIF cannot exceed 20MB',
     videoTooLarge: 'Video cannot exceed 50MB (auto-optimized server-side)',
     stickerWarn: 'Please select an image and fill in the description',

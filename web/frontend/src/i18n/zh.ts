@@ -499,6 +499,7 @@ export default {
     save: '保存',
     imgTooLarge: '图片不能超过 8MB',
     wpUnsupported: '仅支持图片（png/jpg/webp）、GIF 或视频（mp4/webm）',
+    wpExternalBlocked: '外域 URL 不在预览中加载（渲染层同样仅允许本站媒体路径）',
     gifTooLarge: 'GIF 不能超过 20MB',
     videoTooLarge: '视频不能超过 50MB（服务端会自动转低配副本）',
     stickerWarn: '请选择图片并填写描述',

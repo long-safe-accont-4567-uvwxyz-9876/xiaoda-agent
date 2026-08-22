@@ -305,7 +305,8 @@ async def _transcode_video_lowperf(src: Path, dst: Path) -> Path:
         )
         _, stderr = await asyncio.wait_for(proc.communicate(), timeout=_FFMPEG_TIMEOUT)
     except asyncio.TimeoutError as exc:
-        proc.kill()  # type: ignore[union-attr]
+        proc.kill()
+        await proc.wait()  # 回收，防僵尸进程；PIPE 缓冲随进程退出释放
         raise RuntimeError("视频转码超时") from exc
     except OSError as exc:
         raise RuntimeError(f"视频转码启动失败: {exc}") from exc

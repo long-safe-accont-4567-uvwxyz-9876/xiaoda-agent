@@ -190,6 +190,14 @@ function isVideoWallpaper(url: string): boolean {
   return /\.(mp4|webm)(\?|$)/i.test(url)
 }
 
+// 与 AgentBackdrop.sanitizeUrl 同规则：仅本站媒体路径可直接渲染，
+// 手输的外域 URL 在预览中显示占位而非直接加载
+function sanitizeWallpaperUrl(url: string): string | null {
+  if (url.startsWith('/media/wallpapers/') || url.startsWith('/media/agents/')) return url
+  if (url.startsWith('data:image/')) return url
+  return null
+}
+
 const WP_LIMITS: Record<string, number> = {
   image: 8 * 1024 * 1024,
   gif: 20 * 1024 * 1024,
@@ -625,15 +633,20 @@ async function uploadVoiceForAgent() {
                          style="display: none" @change="pickWallpaper" />
                 </div>
                 <template v-if="editing.wallpaper">
-                  <video v-if="isVideoWallpaper(editing.wallpaper)"
-                         class="wallpaper-preview" :src="editing.wallpaper"
-                         autoplay loop muted playsinline />
-                  <iframe v-else-if="/\.html?(\?|$)/i.test(editing.wallpaper)"
-                          class="wallpaper-preview" :src="editing.wallpaper"
-                          sandbox="allow-scripts" referrerpolicy="no-referrer"
-                          title="wallpaper preview" />
-                  <div v-else class="wallpaper-preview"
-                       :style="{ backgroundImage: `url('${editing.wallpaper}')` }" />
+                  <template v-if="sanitizeWallpaperUrl(editing.wallpaper)">
+                    <video v-if="isVideoWallpaper(editing.wallpaper)"
+                           class="wallpaper-preview" :src="editing.wallpaper"
+                           autoplay loop muted playsinline />
+                    <iframe v-else-if="/\.html?(\?|$)/i.test(editing.wallpaper)"
+                            class="wallpaper-preview" :src="editing.wallpaper"
+                            sandbox="allow-scripts" referrerpolicy="no-referrer"
+                            title="wallpaper preview" />
+                    <div v-else class="wallpaper-preview"
+                         :style="{ backgroundImage: `url('${editing.wallpaper}')` }" />
+                  </template>
+                  <div v-else class="wallpaper-preview wallpaper-preview-blocked">
+                    {{ t('agentsView.wpExternalBlocked') }}
+                  </div>
                 </template>
                 <span v-else class="wallpaper-hint">{{ t('agentsView.wallpaperHint') }}</span>
               </div>
