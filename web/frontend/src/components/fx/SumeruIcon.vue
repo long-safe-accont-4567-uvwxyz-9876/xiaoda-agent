@@ -62,7 +62,9 @@ const PATHS: Record<string, string> = {
 
 <template>
   <svg :width="size" :height="size" viewBox="0 0 24 24" fill="none"
-       stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
+       stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"
+       style="filter: drop-shadow(0 1px 1.5px rgba(0, 0, 0, 0.35)); flex: 0 0 auto;"
+       aria-hidden="true">
     <path :d="PATHS[name] || PATHS.chat" />
   </svg>
 </template>
