@@ -176,6 +176,12 @@ wf_id 在白名单内 → 该流可用;否则前端隐藏"启动"按钮(占位�
      端到端(TOOL→MODEL→END 全链路),全套 56 通过。
 **M2(前端 revision 模型)**:§4;验收: 浏览器走查 发布→运行→回滚→再次运行;
   typecheck + vue 构建通过。
+   - 状态: ✅ 2026-08-22 落地 — `POST /revisions` 显式快照(不升 current)、
+     `PATCH /current` 回滚(If-Match etag CAS,404/409 区分)、
+     `list_revisions` 富化 current/etag;service 拆出 snapshot_revision_from_v1。
+     WebUI: 发布 popconfirm 二次确认、版本弹窗(编号/时间戳/哈希/当前 Tag/
+     回滚 popconfirm)、运行弹窗非终态 2.5s 轮询自停、启动 tooltip。
+     测试: 服务层 6 + 路由层 3(发布→回滚→409 全链路),全套 65 通过;
 **M3(迁移/回滚/灰度)**:§6;验收: CLI dry-run 对真实工作区零失败; 双
  引擎一致性抽查脚本。
 **M4(加固/可观测)**:高级 DAG 节点 REVIEW、PRINCIPI 文档 + 负载节流、
