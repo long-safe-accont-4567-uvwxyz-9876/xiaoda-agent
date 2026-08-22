@@ -245,7 +245,73 @@ async def test_production_services_follow_instances_started_after_bootstrap(tmp_
 
 
 @pytest.mark.asyncio
-async def test_production_bootstrap_keeps_default_local_vector_store_enabled(tmp_path, monkeypatch):
+async def test_production_bootstrap_skips_vec_store_without_embed_key(tmp_path, monkeypatch):
+    """新契约（22f1c96a）：默认 remote 且无任何远程 Key → 不建向量库，
+    检索禁用并显式告警（用户配 Key 后重启即恢复）。"""
+    monkeypatch.delenv("EMBED_MODE", raising=False)
+    monkeypatch.delenv("EMBED_API_KEY", raising=False)
+    monkeypatch.delenv("SILICONFLOW_API_KEY", raising=False)
+    # 隔离宿主机真实配置：webui_overrides.json 的 local_deploy.mode 会覆盖 env 默认
+    monkeypatch.setattr(Path, "exists", lambda self: False)
+    core = SimpleNamespace(
+        db=SimpleNamespace(
+            init=AsyncMock(),
+            analytics=object(),
+            db_path=tmp_path / "agent.db",
+        ),
+        router=SimpleNamespace(set_db=MagicMock(), set_local_transport=MagicMock()),
+        local_ai_instances=FakeInstanceManager(),
+    )
+
+    await bootstrap.AgentCoreBootstrapper(core)._init_infrastructure()
+
+    assert core._vec_store is None
+
+
+@pytest.mark.asyncio
+async def test_production_bootstrap_creates_vec_store_with_embed_key(tmp_path, monkeypatch):
+    """配置远程 Key 后，默认 remote 模式创建向量库且模式透传。"""
+    created = []
+
+    class FakeVectorStore:
+        def __init__(self, **kwargs):
+            self._embed_mode = kwargs["embed_mode"]
+            self.embedding_service = kwargs["embedding_service"]
+            self.initialized = False
+            created.append(self)
+
+        async def init(self):
+            # remote 模式下 embedding_service 是懒加载包装（工厂返回 None），
+            # 不做维度断言；本地路径的维度契约由下方 local 场景守护。
+            self.initialized = True
+
+    bundled = LocalEmbeddingService(FakeEmbeddingRuntime(), source="bundled")
+    monkeypatch.delenv("EMBED_MODE", raising=False)
+    monkeypatch.delenv("SILICONFLOW_API_KEY", raising=False)
+    monkeypatch.setenv("EMBED_API_KEY", "k-test")
+    monkeypatch.setattr("memory.vector_store.VectorStore", FakeVectorStore)
+    monkeypatch.setattr(LocalEmbeddingService, "bundled", lambda *args, **kwargs: bundled)
+    monkeypatch.setattr(Path, "exists", lambda self: False)
+    core = SimpleNamespace(
+        db=SimpleNamespace(
+            init=AsyncMock(),
+            analytics=object(),
+            db_path=tmp_path / "agent.db",
+        ),
+        router=SimpleNamespace(set_db=MagicMock(), set_local_transport=MagicMock()),
+        local_ai_instances=FakeInstanceManager(),
+    )
+
+    await bootstrap.AgentCoreBootstrapper(core)._init_infrastructure()
+
+    assert core._vec_store is created[0]
+    assert created[0].initialized
+    assert created[0]._embed_mode == "remote"
+
+
+@pytest.mark.asyncio
+async def test_production_bootstrap_local_mode_keeps_dimension_contract(tmp_path, monkeypatch):
+    """EMBED_MODE=local 强制本地推理：向量库创建且嵌入维度契约不回退。"""
     created = []
 
     class FakeVectorStore:
@@ -260,8 +326,9 @@ async def test_production_bootstrap_keeps_default_local_vector_store_enabled(tmp
             assert await self.embedding_service.resolve_dimensions() == 1
 
     bundled = LocalEmbeddingService(FakeEmbeddingRuntime(), source="bundled")
-    monkeypatch.delenv("EMBED_MODE", raising=False)
+    monkeypatch.setenv("EMBED_MODE", "local")
     monkeypatch.delenv("EMBED_API_KEY", raising=False)
+    monkeypatch.delenv("SILICONFLOW_API_KEY", raising=False)
     monkeypatch.setattr("memory.vector_store.VectorStore", FakeVectorStore)
     monkeypatch.setattr(LocalEmbeddingService, "bundled", lambda *args, **kwargs: bundled)
     monkeypatch.setattr(Path, "exists", lambda self: False)
@@ -552,7 +619,13 @@ async def test_stopped_local_reranker_reports_unavailable():
 
 @pytest.mark.asyncio
 async def test_remote_embedding_path_remains_compatible(tmp_path):
-    vector_store = VectorStore(tmp_path / "vectors.db", embed_mode="remote")
+    """显式 remote + 有效 Key：保持远程引擎不回退。
+
+    （无 Key 时 VectorStore 会自动降级本地模型——该降级契约由
+    test_remote_fallback 场景覆盖，此处守护的是 remote 路径本身。）
+    """
+    vector_store = VectorStore(
+        tmp_path / "vectors.db", embed_mode="remote", embed_api_key="k-test")
 
     assert vector_store.embed_engine_status()["mode"] == "remote"
 
