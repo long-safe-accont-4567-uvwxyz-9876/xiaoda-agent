@@ -123,13 +123,29 @@ alive 过滤边界）；开发中捕获并修复种子双重累积 bug（分差�
 收割完毕；剩余耗时均为 IO / 外部进程 / LLM 网络，Rust 无收益。
 后续仅当出现新的实测热点（新功能引入的解释器循环）时再按本判定法评估。
 
-## 六、后续路线（若合并后观察达标）
+## 六、历史阻塞点全量挖掘（2026-08-22，应"能否加入候选队列"之问）
+
+对 08-21 全天日志的 `task_slow`(13 类) / `stage_slow`(5 阶段) / timeout 逐类根因判定：
+
+| 阻塞点 | 频次/量级 | 根因 | Rust 候选？ |
+|---|---|---|---|
+| `_local_ai_health_loop` | n=30 avg 5643s max 38693s | 设备扫描挂起（已修：单飞+120s 超时） | ❌ 已修，非 CPU |
+| `portrait_consolidate_failed` | n=52，5 分钟风暴持续 5h | **httpx.TimeoutException 穿透窄 except**（不属 OSError，str 为空）→ 本批已修 | ❌ 是 bug 非 CPU |
+| notebook 加载 avg 3658ms n=104 | 每消息必付 | 无竞争实测 0.9ms——纯共享 aiosqlite 连接排队 + USB 盘争抢 | ❌ IO/调度 |
+| `llm_verify` 16.1s avg | n=52 | LLM 网络调用 | ❌ 网络 |
+| `query_cache.embed_timeout` n=42 | 集中于 11 点/19 点 | NPU embed 排队（后台批量编码占满会话） | ❌ 外部进程 |
+| `memory_retrieval` 8.7s avg n=94 | — | 已被本 PR 三项优化大幅压缩 | ✅ 已收割 |
+| `build_messages` 15.7s n=6 | 低频尖峰 | 与 notebook/embed 排队同源 | ❌ |
+
+**结论：历史阻塞点中没有新的达标 Rust 候选**——它们分属「已修复 bug」「连接池调度」「外部进程/网络」三类；但挖出并修复了 1 个真实缺陷（窄 except 漏捕 httpx 超时族，影响 free_model_backend / result_wrapper / xiaoli_agent 共 4 处调用点）。
+
+## 七、后续路线（若合并后观察达标）
 
 1. **构建链**：maturin wheel 化进 CI 与安装包（`build.sh` 已自动同步 venv）
 2. **线上验证**：合并后开启 `RUST_HYBRID_ENABLED=true` 观察一个流量周期
 3. **不建议下沉**（数据已证伪归档）：embed/NPU 调度、KG LLM 调用、jieba、
    sqlite-vec 检索、`_semantic_rerank`（7.7ms）、上下文压缩（0.1ms+零触发）、
-   alive_nodes 组装（24ms）
+   alive_nodes 组装（24ms）、notebook 加载（连接排队）
 4. **不建议全量重构**：本项目 211 个 API 端点 + 40+ 工具 + 三通道 bot 的
    业务面重写风险远大于收益
 

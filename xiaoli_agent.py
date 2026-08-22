@@ -5,6 +5,7 @@ import time
 from pathlib import Path
 from openai import AsyncOpenAI
 
+import httpx
 from loguru import logger
 from tool_engine.tool_registry import to_openai_tools
 from tool_engine.tool_executor import ToolExecutor, ToolResult
@@ -144,7 +145,8 @@ class XiaoliAgent:
             for model in models:
                 try:
                     return await self._chat_loop(client, model, messages, tools, provider_name)
-                except (RuntimeError, OSError, ValueError, ConnectionError) as e:
+                except (RuntimeError, OSError, ValueError, ConnectionError,
+                        httpx.TimeoutException, httpx.RequestError) as e:
                     error_str = str(e)
                     if "429" in error_str or "rate" in error_str.lower():
                         logger.warning("xiaoli.rate_limited", provider=provider_name, model=model)
@@ -153,7 +155,8 @@ class XiaoliAgent:
                         logger.warning("xiaoli.tools_not_supported", provider=provider_name, model=model)
                         try:
                             return await self._chat_loop(client, model, messages, None, provider_name)
-                        except (RuntimeError, OSError, ValueError, ConnectionError) as e2:
+                        except (RuntimeError, OSError, ValueError, ConnectionError,
+                                httpx.TimeoutException, httpx.RequestError) as e2:
                             logger.warning("xiaoli.fallback_failed", provider=provider_name, model=model, error=str(e2))
                             continue
                     logger.warning("xiaoli.chat.error", provider=provider_name, model=model, error=error_str)

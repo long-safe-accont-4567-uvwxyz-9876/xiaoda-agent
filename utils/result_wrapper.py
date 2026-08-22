@@ -60,8 +60,11 @@ class ResultWrapper:
             response.raise_for_status()
             data = response.json()
             return data.get("choices", [{}])[0].get("message", {}).get("content", "")
-        except (RuntimeError, OSError, ValueError, ConnectionError) as e:
-            logger.warning("result_wrapper.free_model_failed", error=str(e))
+        except (RuntimeError, OSError, ValueError, ConnectionError,
+                httpx.TimeoutException, httpx.RequestError) as e:
+            # httpx 超时不属 OSError，穿透会中断上层降级链（同 free_model_backend 修复）
+            logger.warning("result_wrapper.free_model_failed",
+                           error=repr(e), error_type=type(e).__name__)
             return None
 
     async def wrap(self, tool_name: str, result: Any, user_context: str = "") -> str:
