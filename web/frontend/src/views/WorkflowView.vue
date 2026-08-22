@@ -282,6 +282,10 @@ async function openRuns(wfId: string, wfName: string) {
   showRunsModal.value = true
   try {
     runsList.value = await api.listWorkflowRuns(wfId)
+    // 打开即预拉待审审批单（waiting_input 的 run）
+    for (const run of runsList.value) {
+      if (run.status === 'waiting_input') await loadReviews(run.run_id)
+    }
     startRunsPollingIfActive()
   } catch (e: any) { message.error(e.message) } finally {
     runsLoading.value = false
@@ -306,6 +310,12 @@ function startRunsPollingIfActive() {
   runsPollTimer = setInterval(async () => {
     try {
       runsList.value = await api.listWorkflowRuns(runsWfId.value)
+      // waiting_input 的 run 同步拉审批单（新进入等待的 run 补卡）
+      for (const run of runsList.value) {
+        if (run.status === 'waiting_input' && !reviewsMap.value[run.run_id]) {
+          await loadReviews(run.run_id)
+        }
+      }
       if (!hasQueuedRuns()) stopRunsPolling()
     } catch { stopRunsPolling() }
   }, 2500)
@@ -319,6 +329,36 @@ async function cancelRun(runId: string) {
     message.success('运行已取消')
     runsList.value = await api.listWorkflowRuns(runsWfId.value)
   } catch (e: any) { message.error(e.message) }
+}
+
+// ── REVIEW 审批（M5）：waiting_input 的 run 拉取审批单，批准/拒绝即续跑或停流 ──
+const reviewsMap = ref<Record<string, any[]>>({})
+const deciding = ref('')
+const noteDetail = ref<Record<string, string>>({})
+
+async function loadReviews(runId: string) {
+  try {
+    const list = await api.listWorkflowReviews(runId)
+    reviewsMap.value = { ...reviewsMap.value, [runId]: list }
+  } catch (e: any) { message.error(e.message) }
+}
+
+async function decideReview(run: any, review: any, decision: 'approve' | 'reject') {
+  deciding.value = review.review_id
+  try {
+    await api.decideWorkflowReview(run.run_id, review.review_id, decision,
+                                   noteDetail.value[review.review_id] || undefined)
+    message.success(decision === 'approve' ? '已批准，流程继续' : '已拒绝，流程停止')
+    if (noteDetail.value[review.review_id]) {
+      noteDetail.value = { ...noteDetail.value, [review.review_id]: '' }
+    }
+    // 决策后刷新：批准→run 续跑、拒绝→run FAILED；审批单随之下架/销单
+    runsList.value = await api.listWorkflowRuns(runsWfId.value)
+    await loadReviews(run.run_id)
+    if (!hasQueuedRuns()) stopRunsPolling()
+  } catch (e: any) { message.error(e.message) } finally {
+    deciding.value = ''
+  }
 }
 
 async function openRevisions(wfId: string, wfName: string) {
@@ -507,6 +547,21 @@ async function rollbackRevision(rev: any) {
               <span class="run-time">{{ run.created_at ? new Date(run.created_at * 1000).toLocaleString('zh-CN') : '—' }}</span>
             </div>
             <div v-if="run.output?.error_message" class="run-error">{{ run.output.error_message }}</div>
+            <div v-if="run.status === 'waiting_input'" class="run-review-cards">
+              <div v-for="review in (reviewsMap[run.run_id] || []).filter(r => r.status === 'pending')"
+                   :key="review.review_id" class="review-card">
+                <div class="review-title">审批：{{ review.title || review.node_id }}</div>
+                <div v-if="review.note" class="review-note">{{ review.note }}</div>
+                <n-input v-model:value="noteDetail[review.review_id]" type="textarea" :rows="1"
+                         placeholder="决策备注（可选）" size="small" class="review-note-input" />
+                <div class="review-actions">
+                  <n-button size="small" type="success" :loading="deciding === review.review_id"
+                            @click="decideReview(run, review, 'approve')">批准</n-button>
+                  <n-button size="small" type="error" :loading="deciding === review.review_id"
+                             @click="decideReview(run, review, 'reject')">拒绝</n-button>
+                </div>
+              </div>
+            </div>
             <div class="run-actions">
               <n-button v-if="['queued', 'running', 'waiting_input', 'paused', 'cancelling'].includes(run.status)" size="tiny" type="warning" @click="cancelRun(run.run_id)">取消</n-button>
             </div>
@@ -626,6 +681,14 @@ async function rollbackRevision(rev: any) {
 .run-error { font-size: 12px; color: var(--alert); margin-top: 4px; }
 .run-actions, .rev-actions { margin-top: 4px; }
 .rev-desc { font-size: 12px; color: var(--moon-dim); margin-top: 4px; }
+
+/* REVIEW 审批卡片（M5）：waiting_input 的 run 内嵌待批单 */
+.run-review-cards { display: flex; flex-direction: column; gap: 6px; margin-top: 8px; }
+.review-card { padding: 8px 10px; border-radius: 8px; border: 1px dashed var(--glass-border); background: var(--glass-bg); }
+.review-title { font-size: 13px; font-weight: 600; }
+.review-note { font-size: 12px; color: var(--moon-dim); margin-top: 2px; white-space: pre-wrap; }
+.review-note-input { margin-top: 6px; }
+.review-actions { display: flex; gap: 8px; justify-content: flex-end; margin-top: 6px; }
 
 @media (max-width: 768px) {
   .info-row { flex-direction: column; align-items: stretch; }

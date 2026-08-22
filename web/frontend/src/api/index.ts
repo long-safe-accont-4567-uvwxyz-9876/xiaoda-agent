@@ -244,6 +244,15 @@ export const api = {
   getWorkflowV2Status: (wfId: string) =>
     get<{ enabled: boolean; global_enabled: boolean; whitelisted: boolean }>(`/workflows/${wfId}/v2-status`),
 
+  // ── 工作流 REVIEW 审批（M4 服务端 + M5 前端卡片） ──
+  listWorkflowReviews: (runId: string) => get<any[]>(`/workflow-runs/${runId}/reviews`),
+  decideWorkflowReview: (runId: string, reviewId: string,
+                         decision: 'approve' | 'reject', note?: string) => {
+    const body: Record<string, unknown> = { decision }
+    if (note) body.note = note
+    return post<any>(`/workflow-runs/${runId}/reviews/${reviewId}/decide`, body)
+  },
+
   // 品牌署名与免责协议
   getBrandSignature: () => get<{ signature: string; author: string; version: string }>('/brand/signature'),
   getDisclaimerStatus: () => get<{ agreed: boolean; agreed_at: string; text: string }>('/setup/disclaimer-status'),
