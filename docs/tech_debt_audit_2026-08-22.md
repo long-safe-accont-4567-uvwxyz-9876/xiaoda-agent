@@ -102,7 +102,8 @@ legacy 唯一生产入口导航注释、idempotent_migrator 弃用声明、repai
 
 1. **continue-on-error 制度化 → 重新定性：根本没有 CI（2026-08-22 晚复核）**
    仓库唯一 remote 是 **Gitee**，`.github/workflows/*.yml` 在 Gitee 上不会执行，也无 `.workflow/`（Gitee Go）配置——严格 critical 门禁与 COE 全集**从未真正运行过**，"两段制测试策略"是纸面防线。COE 的 5 处中仅 2 处是全集容忍红（ci-tests.yml:62、build-release.yml:777），其余 3 处为覆盖率评论报告步骤（可接受容错）。
-   **本地全集基线已建立**：`4911 passed / 0 failed / 9 skipped / 5m09s`（ARM 裸机）。首跑暴露的 3 个失败**全部是陈旧契约而非 flaky**——22f1c96a 改嵌入架构未同步测试 + a0431f71 起前端源码契约背离，均因无 CI 静默红着；已在 `9965352e` 修复归零。这意味着：**一旦真 CI 就位，全集可直接严格门禁**，无需先治 flaky。选型三选一待决策：GitHub mirror remote 跑 Actions / Gitee Go 流水线 / pre-push hook（5 分钟成本完全可承受）。
+   **本地全集基线已建立**：`4911 passed / 0 failed / 9 skipped / 5m09s`（ARM 裸机）。首跑暴露的 3 个失败**全部是陈旧契约而非 flaky**——22f1c96a 改嵌入架构未同步测试 + a0431f71 起前端源码契约背离，均因无 CI 静默红着；已在 `9965352e` 修复归零。这意味着：**一旦真 CI 就位，全集可直接严格门禁**，无需先治 flaky。
+   **选型落地（用户拍板）**：pre-push hook 先行——`scripts/git-hooks/pre-push`（`git config core.hooksPath scripts/git-hooks` 启用）：push 前 18 文件 critical 子集约 20s 实测 173 passed；`PUSH_FULL_TESTS=1` 跑全集；`--no-verify` 紧急跳过。GitHub mirror / Gitee Go 可后续叠加。
 2. **workflow_v2 定性修正**：`web/routers/workflows_v2.py` 已挂 server.py:1077（原报告"仅包内互引"过时），但前端 api/index.ts 只调 `/workflows` v1，v2 仍零消费者；legacy_migrations v27 每次启动照旧建表。**另一会话正在改造中**（新增 app.py、改 repository/service/routers，前端 api/index.ts 的 `/workflow-runs` 端点已就位）。
 3. **web/dist 96 文件入库**：出库前置条件是解决离线部署模式（SETUP.md 承诺），否则继续付 hash 翻动成本。
 4. ~~双进程并发写 SQLite~~ → **已消解**：架构已合并单进程（见三.2 副产物发现）；外挂盘现为 btrfs（非 vfat），WAL 降级风险随之解除。

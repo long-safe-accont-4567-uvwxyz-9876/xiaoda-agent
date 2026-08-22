@@ -20,6 +20,11 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 # 测试（无 pytest 配置，测试是独立脚本，直接运行）
 .venv/bin/python tests/e2e_test.py
 
+# pre-push 测试门禁（每个 clone 一次性启用。仓库在 Gitee，.github/workflows 不会执行，
+# 本地门禁是唯一自动化防线：push 前 18 文件 critical 子集约 20s；
+# PUSH_FULL_TESTS=1 git push 跑全集约 5 分钟；--no-verify 紧急跳过）
+git config core.hooksPath scripts/git-hooks
+
 # 生产服务：nahida-web 单进程承载 WebUI + QQ Bot + WS（共享 AgentCore，需 sudo）
 sudo systemctl restart nahida-web && journalctl -u nahida-web -f
 
