@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { ref, reactive, computed, onMounted, onBeforeUnmount, nextTick, watch } from 'vue'
+import SumeruIcon from '../components/fx/SumeruIcon.vue'
 import {
   NTabs, NTabPane, NButton, NInput, NSlider, NTag, NPopconfirm,
   NCollapse, NCollapseItem, NModal, NForm, NFormItem, NSelect,
@@ -636,17 +637,17 @@ const _sourceLabels: Record<string, string> = {
   daily_login: '每日登录',
 }
 const _sourceIcons: Record<string, string> = {
-  chat: '💬',
-  deep_chat: '📖',
-  support: '💝',
-  task_collab: '🤝',
-  daily_login: '🌅',
+  chat: 'chat',
+  deep_chat: 'note',
+  support: 'insight',
+  task_collab: 'agents',
+  daily_login: 'sprout',
 }
 function getSourceLabel(source: string): string {
   return _sourceLabels[source] || source || '未知来源'
 }
 function getSourceIcon(source: string): string {
-  return _sourceIcons[source] || '✨'
+  return _sourceIcons[source] || 'sparkle'
 }
 
 function onXpLevelUp(e: any) {
@@ -657,7 +658,7 @@ function onXpLevelUp(e: any) {
 }
 
 const kindIcon: Record<string, string> = {
-  memory: '🌱', event: '⚙️', note: '📝', greeting: '💌',
+  memory: 'sprout', event: 'tools', note: 'note', greeting: 'mail',
 }
 
 function fmtTs(ts: number): string {
@@ -667,7 +668,7 @@ function fmtTs(ts: number): string {
 
 <template>
   <div class="insight-view">
-    <h2 class="view-title">🌱 {{ t('insightView.title') }}</h2>
+    <h2 class="view-title view-title-icon"><SumeruIcon name="insight" :size="20" /> {{ t('insightView.title') }}</h2>
     <n-tabs type="line" animated v-model:value="activeTab">
       <n-tab-pane name="emotion" :tab="t('insightView.emotion')">
         <Tilt3D :max-x="4" :max-y="6"><div class="emotion-current glass-panel">
@@ -950,7 +951,7 @@ function fmtTs(ts: number): string {
           <h4>{{ t('insightView.xpHistoryTitle') }}</h4>
           <div class="xp-history-list" v-if="xpState.history?.length">
             <div v-for="entry in xpState.history" :key="entry.timestamp" class="xp-history-item">
-              <span class="xp-history-icon">{{ getSourceIcon(entry.source) }}</span>
+              <span class="xp-history-icon"><SumeruIcon :name="getSourceIcon(entry.source)" :size="14" /></span>
               <div class="xp-history-body">
                 <span class="xp-history-label">{{ getSourceLabel(entry.source) }}</span>
                 <span class="xp-history-time">{{ formatTime(entry.timestamp) }}</span>

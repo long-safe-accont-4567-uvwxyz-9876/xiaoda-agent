@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { ref, onMounted, onBeforeUnmount, computed } from 'vue'
+import SumeruIcon from '../components/fx/SumeruIcon.vue'
 import {
   NButton, NSwitch, NInputNumber, NSelect, NTag, NPopconfirm, NSlider, NInput, NModal, useMessage,
 } from 'naive-ui'
@@ -403,8 +404,8 @@ async function moveProvider(pid: string, dir: -1 | 1) {
 <template>
   <div class="models-view">
     <div class="view-header">
-      <h2>🧠 {{ t('modelsView.title') }}</h2>
-      <n-button type="primary" @click="openProviderForm(null)">＋ {{ t('modelsView.customProvider') }}</n-button>
+      <h2 class="view-title-icon"><SumeruIcon name="models" :size="20" /> {{ t('modelsView.title') }}</h2>
+      <n-button type="primary" @click="openProviderForm(null)"><SumeruIcon name="plus" :size="14" /> {{ t('modelsView.customProvider') }}</n-button>
     </div>
 
     <Tilt3D :max-x="4" :max-y="6">

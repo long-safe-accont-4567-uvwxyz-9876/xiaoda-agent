@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { ref, onMounted, onBeforeUnmount, nextTick } from 'vue'
+import SumeruIcon from '../components/fx/SumeruIcon.vue'
 import { useMessage, NButton } from 'naive-ui'
 import { get, put } from '../api'
 import Tilt3D from '../components/fx/Tilt3D.vue'
@@ -176,7 +177,7 @@ function diskLabel(d: any): string {
 
 <template>
   <div class="dashboard-view">
-    <h2 class="view-title">📊 {{ t('dashboardView.title') }}</h2>
+    <h2 class="view-title view-title-icon"><SumeruIcon name="chart" :size="20" /> {{ t('dashboardView.title') }}</h2>
 
     <div v-if="permissionMode === 'bypass'" class="bypass-warning">
       {{ t('dashboardView.bypassWarning') }}

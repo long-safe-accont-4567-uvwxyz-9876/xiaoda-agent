@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { ref, computed, onMounted } from 'vue'
+import SumeruIcon from '../components/fx/SumeruIcon.vue'
 import { useRouter } from 'vue-router'
 import {
   NButton, NSwitch, NInput, NSelect, NPopconfirm, NTag, NSpin, NEmpty, NModal, NTabs, NTabPane, useMessage,
@@ -31,12 +32,12 @@ const resourceOptions = ref<{
 }>({ tools: [], skills: [], mcpTools: [], agents: [], models: [] })
 
 const NODE_META: Record<string, { icon: string; label: string; color: string }> = {
-  tool:  { icon: '🔧', label: '工具',     color: '#7fd650' },
-  skill: { icon: '📜', label: '技能',     color: '#e8d5a3' },
-  mcp:   { icon: '🔌', label: 'MCP',      color: '#5fb3d9' },
-  agent: { icon: '🤖', label: '子智能体',  color: '#d97fd9' },
-  model: { icon: '🧠', label: '模型',     color: '#5fd9c4' },
-  step:  { icon: '📝', label: '步骤说明',  color: '#d96a5f' },
+  tool:  { icon: 'tools', label: '工具',     color: '#7fd650' },
+  skill: { icon: 'note', label: '技能',     color: '#e8d5a3' },
+  mcp:   { icon: 'mcp', label: 'MCP',      color: '#5fb3d9' },
+  agent: { icon: 'agents', label: '子智能体',  color: '#d97fd9' },
+  model: { icon: 'models', label: '模型',     color: '#5fd9c4' },
+  step:  { icon: 'note', label: '步骤说明',  color: '#d96a5f' },
 }
 
 onMounted(() => {
@@ -317,9 +318,9 @@ async function publishWorkflow(wfId: string) {
               </div>
               <div class="wf-card-actions">
                 <n-button size="tiny" type="primary" @click="editWorkflow(wf)">{{ t('workflowView.edit') }}</n-button>
-                <n-button size="tiny" quaternary @click="openRuns(wf.id, wf.name)">📊 运行</n-button>
-                <n-button size="tiny" quaternary @click="openRevisions(wf.id, wf.name)">📝 版本</n-button>
-                <n-button size="tiny" quaternary :loading="publishing === wf.id" @click="publishWorkflow(wf.id)">🚀 发布</n-button>
+                <n-button size="tiny" quaternary @click="openRuns(wf.id, wf.name)"><SumeruIcon name="chart" :size="12" /> 运行</n-button>
+                <n-button size="tiny" quaternary @click="openRevisions(wf.id, wf.name)"><SumeruIcon name="note" :size="12" /> 版本</n-button>
+                <n-button size="tiny" quaternary :loading="publishing === wf.id" @click="publishWorkflow(wf.id)"><SumeruIcon name="rocket" :size="12" /> 发布</n-button>
                 <n-popconfirm @positive-click="deleteWorkflow(wf)">
                   <template #trigger>
                     <n-button size="tiny" type="error" quaternary>{{ t('workflowView.delete') }}</n-button>
@@ -359,7 +360,7 @@ async function publishWorkflow(wfId: string) {
             <!-- 节点头部 -->
             <div class="node-head">
               <span class="node-num">{{ idx + 1 }}</span>
-              <span class="node-icon">{{ NODE_META[node.type]?.icon }}</span>
+              <span class="node-icon"><SumeruIcon :name="NODE_META[node.type]?.icon || 'note'" :size="14" /></span>
               <span class="node-type" :style="{ color: NODE_META[node.type]?.color }">
                 {{ t('workflowView.nodeType.' + node.type) }}
               </span>
@@ -413,7 +414,7 @@ async function publishWorkflow(wfId: string) {
       </div>
     </div>
 
-    <n-modal v-model:show="showRunsModal" preset="card" :title="`📊 ${runsWfName} — 运行记录`" style="width: min(640px, 94vw)">
+    <n-modal v-model:show="showRunsModal" preset="card" :title="`${runsWfName} — 运行记录`" style="width: min(640px, 94vw)">
       <n-spin :show="runsLoading">
         <div v-if="runsList.length" class="runs-list">
           <div v-for="run in runsList" :key="run.id" class="run-item">
@@ -432,7 +433,7 @@ async function publishWorkflow(wfId: string) {
       </n-spin>
     </n-modal>
 
-    <n-modal v-model:show="showRevisionsModal" preset="card" :title="`📝 ${revisionsWfName} — 版本历史`" style="width: min(580px, 94vw)">
+    <n-modal v-model:show="showRevisionsModal" preset="card" :title="`${revisionsWfName} — 版本历史`" style="width: min(580px, 94vw)">
       <n-spin :show="revisionsLoading">
         <div v-if="revisionsList.length" class="revisions-list">
           <div v-for="rev in revisionsList" :key="rev.revision" class="rev-item">

@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { ref, onMounted, computed } from 'vue'
+import SumeruIcon from '../components/fx/SumeruIcon.vue'
 import {
   NButton, NModal, NForm, NFormItem, NInput, NTag, NPopconfirm,
   NDynamicInput, NSwitch, NSpace, useMessage, NTabs, NTabPane, NEmpty, NTooltip,
@@ -302,11 +303,11 @@ function onMcpTabChange(tab: string) {
     <n-tabs v-model:value="mcpTab" type="line" animated @update:value="onMcpTabChange">
       <n-tab-pane name="installed" :tab="t('installed')">
         <div class="view-header">
-          <h2>🔌 {{ t('mcpView.title') }}</h2>
+          <h2 class="view-title-icon"><SumeruIcon name="mcp" :size="20" /> {{ t('mcpView.title') }}</h2>
           <div style="display:flex; gap:8px">
             <n-button @click="openTemplates">📦 {{ t('mcpView.template') }}</n-button>
             <n-button type="primary" @click="showImport = true">📋 {{ t('mcpView.importJson') }}</n-button>
-            <n-button @click="openForm(null)">＋ {{ t('mcpView.addManual') }}</n-button>
+            <n-button @click="openForm(null)"><SumeruIcon name="plus" :size="14" /> {{ t('mcpView.addManual') }}</n-button>
           </div>
         </div>
 

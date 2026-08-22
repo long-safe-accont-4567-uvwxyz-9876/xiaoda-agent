@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { ref, computed, nextTick, watch, onMounted, onBeforeUnmount } from 'vue'
+import SumeruIcon from '../../components/fx/SumeruIcon.vue'
 import { useMessage } from 'naive-ui'
 import { api } from '../../api'
 import { getWsClient } from '../../api/ws'
@@ -406,7 +407,7 @@ watch(() => props.modelValue, () => {
       <div class="toolbar-left">
         <!-- 附件上传 -->
         <button class="tool-btn" :title="t('promptInput.uploadAttachment')" :aria-label="t('promptInput.uploadAttachment')" @click="triggerFileInput" :disabled="disabled || uploadState === 'uploading'">
-          📎
+          <SumeruIcon name="paperclip" :size="15" />
         </button>
         <input
           ref="fileInputRef"
@@ -428,7 +429,7 @@ watch(() => props.modelValue, () => {
           @click="toggleSearch"
           :disabled="disabled"
         >
-          🌐
+          <SumeruIcon name="flow" :size="15" />
           <transition name="label-fade">
             <span v-if="showSearch" class="mode-label search-label">Search</span>
           </transition>
@@ -446,7 +447,7 @@ watch(() => props.modelValue, () => {
           @click="toggleThink"
           :disabled="disabled"
         >
-          🧠
+          <SumeruIcon name="models" :size="15" />
             <transition name="label-fade">
               <span v-if="showThink" class="mode-label think-label">Think</span>
             </transition>
@@ -492,7 +493,7 @@ watch(() => props.modelValue, () => {
           :title="t('promptInput.abort')"
           :aria-label="t('promptInput.abort')"
         >
-          ⏹
+          <SumeruIcon name="stop" :size="15" />
         </button>
       </div>
     </div>

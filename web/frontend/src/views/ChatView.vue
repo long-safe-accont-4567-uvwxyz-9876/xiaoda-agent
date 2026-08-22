@@ -344,7 +344,7 @@ const emotionColors: Record<string, string> = {
 
           <!-- 生成产物区（工具产出的图/视频/语音，与表情包分离） -->
           <div v-if="msg.imageUrls?.length || msg.videoUrl || msg.audioUrl" class="artifact-block">
-            <span class="artifact-label">🎨 {{ t('chatView.artifacts') }}</span>
+            <span class="artifact-label"><SumeruIcon name="palette" :size="14" /> {{ t('chatView.artifacts') }}</span>
             <div v-if="msg.imageUrls?.length" class="media-grid">
               <img v-for="url in msg.imageUrls" :key="url" :src="url" class="media-image"
                    :class="{ loaded: imgSettled.has(url) }"
@@ -433,7 +433,7 @@ const emotionColors: Record<string, string> = {
               <span>{{ s.message_count }} {{ t('chatView.messages') }} · {{ new Date(s.updated_at * 1000).toLocaleString('zh-CN') }}</span>
               <n-popconfirm @positive-click.stop="removeSession(s.session_id)">
                 <template #trigger>
-                  <button class="footer-btn" @click.stop>🗑</button>
+                  <button class="footer-btn" @click.stop><SumeruIcon name="trash" :size="13" /></button>
                 </template>
                 {{ t('chatView.deleteConfirm') }}
               </n-popconfirm>

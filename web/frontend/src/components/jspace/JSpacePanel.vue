@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { ref, computed, onMounted, onBeforeUnmount, onDeactivated, onActivated } from 'vue'
+import SumeruIcon from '../../components/fx/SumeruIcon.vue'
 import { NTag, NButton, NInput, NSwitch, NSpin, NEmpty, useMessage } from 'naive-ui'
 import {
   jspaceGetStatus, jspaceGetSignals, jspaceGetDirections,
@@ -222,7 +223,7 @@ function formatTime(ts: number) {
                 <div class="bar-fill" :class="'bar-' + factor.name" :style="{ width: `${factor.activation * 100}%` }"></div>
               </div>
               <span class="factor-val">{{ factor.activation.toFixed(2) }}</span>
-              <span v-if="factor.evidence" class="factor-evidence" :title="factor.evidence">📝</span>
+              <span v-if="factor.evidence" class="factor-evidence" :title="factor.evidence"><SumeruIcon name="note" :size="13" /></span>
             </div>
           </div>
         </div>

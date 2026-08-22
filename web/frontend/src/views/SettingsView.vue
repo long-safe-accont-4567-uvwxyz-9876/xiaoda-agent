@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { ref, onMounted, computed } from 'vue'
+import SumeruIcon from '../components/fx/SumeruIcon.vue'
 import {
   NButton, NSwitch, NRadioGroup, NRadioButton, NInput, NModal,
   NSelect, NSlider, NCheckbox, NCheckboxGroup, NPopconfirm, NTag, NTabs, NTabPane, useMessage,
@@ -393,7 +394,7 @@ const permLabel = computed<Record<string, string>>(() => ({
           <template v-if="ws.authorized">
             <div class="setting-row">
               <span class="s-label">{{ t('settings.workspaceCurrent') }}</span>
-              <span class="ws-path" :title="ws.currentPath">📁 {{ ws.currentPath }}</span>
+              <span class="ws-path" :title="ws.currentPath"><SumeruIcon name="folder" :size="13" /> {{ ws.currentPath }}</span>
             </div>
             <div class="setting-row">
               <span class="s-label">{{ t('settings.workspaceAuthorizedAt') }}</span>

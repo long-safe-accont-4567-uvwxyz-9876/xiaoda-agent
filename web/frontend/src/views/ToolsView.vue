@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { ref, onMounted, computed } from 'vue'
+import SumeruIcon from '../components/fx/SumeruIcon.vue'
 import {
   NButton, NSwitch, NModal, NInput, NInputNumber, NSelect, NTag, NPopconfirm, NSpin, NEmpty,
   NTabs, NTabPane, useMessage,
@@ -324,7 +325,7 @@ async function testSkill(item: any) {
         <Tilt3D>
         <div class="skills-section glass-panel">
           <div class="skills-head">
-            <span class="skills-title">📜 Skills（{{ t('toolsView.skillHint') }}）</span>
+            <span class="skills-title"><SumeruIcon name="note" :size="14" /> Skills（{{ t('toolsView.skillHint') }}）</span>
             <div style="display:flex; gap:8px">
               <n-button size="small" type="primary" @click="skillInput?.click()">⬆ {{ t('toolsView.uploadSkill') }}</n-button>
               <n-button size="small" @click="openSkill(null)">＋ {{ t('toolsView.createNew') }}</n-button>
@@ -413,7 +414,7 @@ async function testSkill(item: any) {
             <Tilt3D v-for="item in filteredSkillMarket" :key="item.id">
             <div class="market-card glass-panel glass-panel-hover">
               <div class="card-head">
-                <span class="card-icon">{{ item.icon || '📝' }}</span>
+                <span class="card-icon"><SumeruIcon :name="item.icon || 'note'" :size="16" /></span>
                 <div class="card-title-group">
                   <span class="card-name">{{ item.name }}</span>
                   <div class="card-meta">

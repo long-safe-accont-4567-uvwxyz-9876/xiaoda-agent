@@ -448,3 +448,25 @@ body .m-item:hover {
     transform: none;
   }
 }
+
+/* ---------- 线稿图标对齐辅助：emoji → SumeruIcon 替换后的行内排版 ---------- */
+.inline-ic {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  vertical-align: middle;
+}
+.inline-ic svg { color: inherit; }
+
+h2.view-title-icon {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+h2.view-title-icon svg { color: var(--dendro, #8fe560); }
+
+/* n-button 内的 SumeruIcon 与文字基线对齐 */
+.n-button .n-button__content svg,
+.dbtn .l-body svg {
+  vertical-align: middle;
+}
