@@ -8,8 +8,8 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 - Python 3.11 + asyncio + aiosqlite，虚拟环境 `.venv`
 - LLM：小米 MiMo（mimo-v2.5 / -pro），降级链见 `model_router.py` 的 `ROUTE_TABLE`/`FALLBACK_ROUTE`
-- 数据库：SQLite + sqlite-vec，**位于外挂存储** `/media/orangepi/KIOXIA/xiaoda-data/`（未挂载则服务拒绝启动）
-- 配置/人格等 workspace 文件也在外挂存储（`config.py` 的 `WORKSPACE_DIR` 解析，回退 `~/.ai-agent/workspace`）
+- 数据库：SQLite + sqlite-vec，**位于外挂存储** `/mnt/usb2/nahida-data/db/`（KIOXIA 盘现挂载在 /mnt/usb2，btrfs；由 nahida-web.service 的 `KIOXIA_DATA_DIR` 指定，未挂载则服务拒绝启动）
+- workspace 人格文件（MD）刻意放系统盘 `~/.ai-agent/config/workspace`——每次请求都要读入提示词，放 U 盘会拖慢响应（见 `config_paths.py` 尾部注释）；只有数据库走外挂盘
 
 ## 常用命令
 
@@ -20,11 +20,8 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 # 测试（无 pytest 配置，测试是独立脚本，直接运行）
 .venv/bin/python tests/e2e_test.py
 
-# QQ Bot 生产服务（systemd，需 sudo）
-sudo systemctl restart qq-agent && journalctl -u qq-agent -f
-
-# Web UI 服务（独立进程，端口 8080，目前手动启动、无 systemd 单元）
-setsid nohup .venv/bin/python agent.py --web > /tmp/webui.log 2>&1 < /dev/null & disown
+# 生产服务：nahida-web 单进程承载 WebUI + QQ Bot + WS（共享 AgentCore，需 sudo）
+sudo systemctl restart nahida-web && journalctl -u nahida-web -f
 
 # 前端构建（产物输出到 web/dist/，由 FastAPI 静态托管）
 cd web/frontend && npm run build
@@ -35,10 +32,10 @@ TOKEN=$(curl -s -X POST http://127.0.0.1:8080/api/v1/auth/login -H 'Content-Type
 curl -s http://127.0.0.1:8080/api/v1/agents -H "Authorization: Bearer $TOKEN"
 
 # 数据库
-sqlite3 /media/orangepi/KIOXIA/xiaoda-data/db/agent.db ".tables"
+sqlite3 /mnt/usb2/nahida-data/db/agent.db ".tables"
 ```
 
-注意：**QQ Bot（qq_bot_adapter.py）和 Web UI（agent.py --web → web/server.py）是两个独立进程**，各自持有一个 AgentCore 实例。改了后端代码两个都要重启；改了前端只需 `npm run build`（dist 由运行中的 FastAPI 直接服务，无需重启，浏览器强刷即可）。
+注意：**WebUI 与 QQ Bot 已合并为单进程**——`agent.py --web` 启动后在 `web/server.py:556` 内联 `run_qq_bot()` 异步任务，共享同一 AgentCore。改后端代码只需重启 nahida-web；改了前端只需 `npm run build`（dist 由运行中的 FastAPI 直接服务，无需重启，浏览器强刷即可）。旧双进程形态的 `deploy/qq-agent.service` 单元文件已废弃未安装。
 
 ## 架构
 
@@ -94,7 +91,7 @@ web/agent_registry.py Agent CRUD + 权限矩阵 + 壁纸（DEFAULT_WALLPAPERS）
 2. **`ToolResult` 只有 `success/data/error`**，没有 `output` 属性
 3. **prompt 模板字面花括号**：用 `.replace()` 不要用 `.format()`
 4. **DSML 工具调用**：推理模型可能用 DSML 文本格式而非标准 `tool_calls`，`text_utils.py` 负责解析；新工具如需 DSML 支持要加进 `FAKE_XML_TOOL_PATTERN`
-5. **botpy 被大量 monkey-patch**（qq_bot_adapter.py），升级 SDK 前先核对 patch 点
+5. **botpy 被大量 monkey-patch**（已收敛至 `botpy_compat.py` 单模块，含 SDK 探针 `python botpy_compat.py`），升级 SDK 前先跑探针对照适配清单
 6. **静态文件符号链接**：Starlette `StaticFiles` 默认不跟随 symlink，新挂载点若内容含软链必须传 `follow_symlink=True`
 7. **后台启动进程要 `setsid`**：直接 `nohup ... &` 会随当前 shell 会话被杀
 8. **`config.py` 在 import 时执行 `load_dotenv()` 并解析外挂盘路径**——单元测试/脚本里 import 项目模块前先确认环境
