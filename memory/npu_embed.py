@@ -364,8 +364,8 @@ class NpuEmbeddingProvider:
         if self._proc is not None or self._stderr_f is not None:
             try:
                 self.close()
-            except Exception:
-                pass
+            except Exception as exc:  # 析构路径清理失败仅记录
+                logger.debug("npu_embed.del_close_failed: {}", str(exc)[:120])
 
 
 class AdaptiveEmbeddingProvider:

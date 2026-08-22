@@ -557,8 +557,8 @@ class NPUModel:
         """析构时释放资源 (推荐使用 close() 显式释放)。"""
         try:
             self.close()
-        except Exception:
-            pass
+        except Exception as exc:  # 析构清理失败仅记录
+            logger.debug("npu_inference.close_failed: {}", str(exc)[:120])
 
 
 def _sigmoid(x: Any) -> Any:

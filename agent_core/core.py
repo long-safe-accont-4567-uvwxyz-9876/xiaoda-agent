@@ -332,8 +332,9 @@ class AgentCore(MessageProcessorMixin, ToolExecutorMixin, SubAgentManagerMixin):
                 return user_id
             shared_key = cfg.get("context.shared_key", "shared") or "shared"
             return f"shared_context:{shared_key}"
-        except Exception:
+        except Exception as exc:
             # 配置读取失败时保持原行为（各平台独立），绝不阻断主流程
+            logger.debug("core.context_key_cfg_failed: {}", str(exc)[:120])
             return user_id
 
     async def process(self, user_input: str, user_id: str = "qq_user",

@@ -38,8 +38,8 @@ async def jspace_status(request: Request) -> Any:
     try:
         from config import ENABLE_J_SPACE_HOOKS
         status["enabled"] = ENABLE_J_SPACE_HOOKS
-    except Exception:
-        pass
+    except Exception as exc:  # 配置缺失时保持默认 False，仅记录不阻断状态接口
+        logger.debug("jspace.status_config_skipped: {}", str(exc)[:120])
 
     try:
         from core.j_space_bootstrap import (

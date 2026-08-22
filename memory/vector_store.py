@@ -410,7 +410,8 @@ class VectorStore:
                 if not getattr(self._local_provider, "ready", False):
                     self._local_provider.load()
                 target_dims = getattr(self._local_provider, "dimensions", 0) or 0
-            except Exception:  # noqa: BLE001
+            except Exception as exc:  # noqa: BLE001
+                logger.debug("vector_store.dim_probe_skipped: {}", str(exc)[:120])
                 return
         if target_dims <= 0:
             return  # 无法确定目标维度，跳过
@@ -630,8 +631,8 @@ class VectorStore:
             if self._brute is not None:
                 try:
                     self._brute.close()
-                except Exception:  # noqa: BLE001
-                    pass
+                except Exception as exc:  # noqa: BLE001 —— 清理失败仅记录，索引下次重建
+                    logger.debug("vector_store.brute_close_failed: {}", str(exc)[:120])
                 self._brute = None
             brute_dir = Path(self._db_path).parent / (Path(self._db_path).stem + "_brute")
             if brute_dir.exists():
