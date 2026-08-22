@@ -38,7 +38,9 @@ watchdog() {
     while true; do
         # 启动 agent
         echo "[start] 启动 Xiaoda Agent..."
-        if [ -x "${INSTALL_DIR}/xiaoda-agent" ]; then
+        # -f 必须：构建残留的同名目录（xiaoda-agent/）同样满足 -x，
+        # 会导致"执行目录"126 错误并耗尽看门狗重启预算
+        if [ -f "${INSTALL_DIR}/xiaoda-agent" ] && [ -x "${INSTALL_DIR}/xiaoda-agent" ]; then
             "${INSTALL_DIR}/xiaoda-agent" "$@"
         else
             "$PYTHON" "${INSTALL_DIR}/agent.py" "$@"
