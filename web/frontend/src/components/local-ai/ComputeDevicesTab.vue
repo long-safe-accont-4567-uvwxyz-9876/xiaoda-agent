@@ -1,9 +1,7 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
 import { NButton, NEmpty, NProgress, NTag, NSelect, NModal, NTabs, NTabPane, NSpin, useMessage } from 'naive-ui'
-import { useLocalAiStore } from '../../stores/localAi'
-import { localDeployApi, fetchLocalDeployStatus } from '../../api/localAi'
-import type { LocalDeployStatus } from '../../api/localAi'
+import { useLocalAiStore, type LocalDeployStatus } from '../../stores/localAi'
 
 const store = useLocalAiStore()
 const message = useMessage()
@@ -22,13 +20,13 @@ const runtimeBackend = ref('')
 
 async function loadDeployStatus() {
   try {
-    deployStatus.value = await fetchLocalDeployStatus()
+    deployStatus.value = await store.fetchLocalDeployStatus()
   } catch { /* 静默 */ }
 }
 
 async function loadDeviceList() {
   try {
-    const data = await localDeployApi.loadDevices()
+    const data = await store.loadLocalDeployDevices()
     deviceList.value = data.devices
     selectedDevice.value = data.current
     runtimeBackend.value = data.runtime_backend
@@ -38,7 +36,7 @@ async function loadDeviceList() {
 async function loadLogs() {
   logsLoading.value = true
   try {
-    logsLines.value = await localDeployApi.loadLogs(logsTopic.value, 120)
+    logsLines.value = await store.loadLocalDeployLogs(logsTopic.value, 120)
   } catch (e: any) {
     message.error(e.message)
   } finally {
@@ -48,7 +46,7 @@ async function loadLogs() {
 
 async function setDevice(id: string) {
   try {
-    await localDeployApi.setDevice(id)
+    await store.setLocalDeployDevice(id)
     selectedDevice.value = id
     message.success('设备选择已保存，切换后需重启服务生效')
   } catch (e: any) {
@@ -59,7 +57,7 @@ async function setDevice(id: string) {
 async function setMode(mode: 'local' | 'remote') {
   engineBusy.value = mode
   try {
-    deployStatus.value = await localDeployApi.setMode(mode)
+    deployStatus.value = await store.setLocalDeployMode(mode)
     message.success(mode === 'local' ? '已切换到本地引擎' : '已切换到远程 API')
   } catch (e: any) {
     message.error(e.message)
@@ -71,7 +69,7 @@ async function setMode(mode: 'local' | 'remote') {
 async function startEngine() {
   engineBusy.value = 'start'
   try {
-    deployStatus.value = await localDeployApi.startEngine()
+    deployStatus.value = await store.startLocalDeployEngine()
     message.success('本地引擎已启动')
   } catch (e: any) {
     message.error(e.message)
@@ -83,7 +81,7 @@ async function startEngine() {
 async function stopEngine() {
   engineBusy.value = 'stop'
   try {
-    deployStatus.value = await localDeployApi.stopEngine()
+    deployStatus.value = await store.stopLocalDeployEngine()
     message.success('本地引擎已停止')
   } catch (e: any) {
     message.error(e.message)

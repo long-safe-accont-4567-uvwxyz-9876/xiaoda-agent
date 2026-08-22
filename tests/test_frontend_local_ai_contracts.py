@@ -755,11 +755,11 @@ def test_local_deploy_has_six_tabs_and_no_fixed_device_copy():
 
 
 def test_local_ai_tabs_consume_store_without_raw_http():
-    # 契约（2026-08-22 修订）：禁止裸 HTTP 客户端 `'../../api'`，状态消费必须
-    # 走 useLocalAiStore；命令式交互（引擎生命周期/设备切换等）允许走类型化
-    # 模块 '../../api/localAi'——ComputeDevicesTab 自 a0431f71 起即此形态，
-    # 原"一刀切禁 localAi 模块"与实现长期背离且无 CI 拦截。
-    # 后续如需彻底 store 化：先在 stores/localAi.ts 补齐 deploy 引擎动作再收敛。
+    # 契约：状态消费必须走 useLocalAiStore，禁止直连 API 模块
+    # （'../../api' 裸客户端与 '../../api/localAi' 类型化模块均禁）。
+    # 2026-08-22 曾放宽允许 localAi 模块（当时 ComputeDevicesTab 直连引擎
+    # 生命周期接口）；随后组件完成 store 化（新增 loadLocalDeploy* 六个
+    # store 动作），恢复原始严格契约。类型统一从 store 再导出入口取。
     component_paths = (
         "web/frontend/src/components/local-ai/DeploymentsTab.vue",
         "web/frontend/src/components/local-ai/ModelMarketTab.vue",
@@ -774,6 +774,7 @@ def test_local_ai_tabs_consume_store_without_raw_http():
         component = source(path)
         assert "useLocalAiStore" in component
         assert "from '../../api'" not in component
+        assert "from '../../api/localAi'" not in component
 
 
 def test_local_ai_storage_and_installation_flows_are_explicit():

@@ -112,6 +112,23 @@ PRO_MODEL_NAME = os.getenv("PRO_MODEL_NAME", "")
 FLASH_MODEL_NAME = os.getenv("FLASH_MODEL_NAME", "")
 
 
+# ── webui_overrides 读取失败告警（warn-once）──
+# 原审计点名的静默失效点：config_service 初始化失败（如 webui_overrides.json
+# 损坏）时，用户在 WebUI 改的所有配置都不生效，而这里只记 debug 级日志等于
+# 无感。改为 warning 且每函数每进程只报一次——可见但不刷屏。
+_webui_read_warned: set = set()
+
+
+def _warn_once_webui_read_failed(fn: str, exc: BaseException) -> None:
+    if fn in _webui_read_warned:
+        return
+    _webui_read_warned.add(fn)
+    logger.warning(
+        "{}.webui_read_failed error={} —— WebUI 配置覆盖本进程内不生效（后续同类失败不再重复告警）",
+        fn, str(exc)[:150],
+    )
+
+
 def get_temperature(default: float = 0.7) -> float:
     """读取全局 temperature：优先 webui_overrides，回退 default。"""
     try:
@@ -119,8 +136,8 @@ def get_temperature(default: float = 0.7) -> float:
         override = get_config_service().get("models.temperature")
         if override is not None:
             return float(override)
-    except Exception:
-        logger.debug("get_global_temperature.webui_read_failed", exc_info=True)
+    except Exception as e:  # noqa: BLE001
+        _warn_once_webui_read_failed("get_temperature", e)
     return default
 
 
@@ -131,8 +148,8 @@ def get_frequency_penalty(default: float = 1.0) -> float:
         override = get_config_service().get("models.frequency_penalty")
         if override is not None:
             return float(override)
-    except Exception:
-        logger.debug("get_frequency_penalty.webui_read_failed", exc_info=True)
+    except Exception as e:  # noqa: BLE001
+        _warn_once_webui_read_failed("get_frequency_penalty", e)
     return default
 
 
@@ -143,8 +160,8 @@ def get_presence_penalty(default: float = 1.0) -> float:
         override = get_config_service().get("models.presence_penalty")
         if override is not None:
             return float(override)
-    except Exception:
-        logger.debug("get_presence_penalty.webui_read_failed", exc_info=True)
+    except Exception as e:  # noqa: BLE001
+        _warn_once_webui_read_failed("get_presence_penalty", e)
     return default
 
 
@@ -155,8 +172,8 @@ def get_reply_dedup_enabled(default: bool = True) -> bool:
         override = get_config_service().get("models.reply_dedup_enabled")
         if override is not None:
             return bool(override)
-    except Exception:
-        logger.debug("get_reply_dedup_enabled.webui_read_failed", exc_info=True)
+    except Exception as e:  # noqa: BLE001
+        _warn_once_webui_read_failed("get_reply_dedup_enabled", e)
     return default
 
 

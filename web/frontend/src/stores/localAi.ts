@@ -2,6 +2,7 @@ import { computed, ref } from 'vue'
 import { defineStore } from 'pinia'
 import {
   localAiApi,
+  localDeployApi,
   fetchModelNodes as fetchModelNodesApi,
   setModelNodeBackend as setModelNodeBackendApi,
   fetchLocalDeployStatus as fetchLocalDeployStatusApi,
@@ -263,6 +264,31 @@ export const useLocalAiStore = defineStore('localAi', () => {
     return fetchLocalDeployStatusApi()
   }
 
+  // ── 本地部署引擎生命周期（ComputeDevicesTab 消费，收敛走 store）──
+  function loadLocalDeployDevices() {
+    return localDeployApi.loadDevices()
+  }
+
+  function setLocalDeployDevice(device: string) {
+    return localDeployApi.setDevice(device)
+  }
+
+  function setLocalDeployMode(mode: 'local' | 'remote') {
+    return localDeployApi.setMode(mode)
+  }
+
+  function startLocalDeployEngine() {
+    return localDeployApi.startEngine()
+  }
+
+  function stopLocalDeployEngine() {
+    return localDeployApi.stopEngine()
+  }
+
+  function loadLocalDeployLogs(topic: 'deploy' | 'device', limit = 120) {
+    return localDeployApi.loadLogs(topic, limit)
+  }
+
   async function download(request: DownloadRequest) {
     const response = await localAiApi.createDownload(request)
     upsertDownload(response.task)
@@ -352,6 +378,8 @@ export const useLocalAiStore = defineStore('localAi', () => {
     refreshModels, refreshCatalog, browseStorage, validateStorage, saveDefaultStorage,
     hubCategories, searchHub, inspectRemote, downloadHubRepository, resolveHubRevision,
     benchmarkModel, refreshDevices, fetchModelNodes, setModelNodeBackend, fetchLocalDeployStatus,
+    loadLocalDeployDevices, setLocalDeployDevice, setLocalDeployMode,
+    startLocalDeployEngine, stopLocalDeployEngine, loadLocalDeployLogs,
     createRequestId, upsertDevice, upsertDownload, upsertInstance, connectWebSocket, disconnectWebSocket,
   }
 })
