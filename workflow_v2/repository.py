@@ -1,4 +1,5 @@
 from __future__ import annotations
+
 import json
 import time
 from uuid import uuid4
@@ -6,8 +7,12 @@ from uuid import uuid4
 import aiosqlite
 
 from workflow_v2.models import (
-    WorkflowRun, WorkflowStepRun, WorkflowRunEvent, WorkflowRevision,
-    RunStatus, StepStatus,
+    RunStatus,
+    StepStatus,
+    WorkflowRevision,
+    WorkflowRun,
+    WorkflowRunEvent,
+    WorkflowStepRun,
 )
 
 

@@ -22,7 +22,13 @@ def _v1(name: str, label: str) -> dict:
     }
 
 
-async def _make_svc(tmp_path):
+@pytest.fixture
+async def svc_env(tmp_path):
+    """内存库 + 假 v1 路径解析器。
+
+    连接必须随测试结束关闭：aiosqlite 的 worker 线程若在事件循环关闭后
+    仍存活，会在 loop 上投递结果时崩溃（PytestUnhandledThreadExceptionWarning）。
+    """
     conn = await aiosqlite.connect(":memory:")
     conn.row_factory = aiosqlite.Row
     await create_schema(conn)
@@ -31,12 +37,13 @@ async def _make_svc(tmp_path):
     workspace = tmp_path / "workflows"
     workspace.mkdir(parents=True, exist_ok=True)
     svc._v1_path = lambda wf_id: (workspace / f"{wf_id}.json").exists() and (workspace / f"{wf_id}.json")
-    return svc, workspace
+    yield svc, workspace
+    await conn.close()
 
 
 @pytest.mark.asyncio
-async def test_snapshot_creates_revision_without_promoting(tmp_path):
-    svc, workspace = await _make_svc(tmp_path)
+async def test_snapshot_creates_revision_without_promoting(svc_env):
+    svc, workspace = svc_env
     (workspace / "a.json").write_text(json.dumps(_v1("a", "查询")), encoding="utf-8")
     snap = await svc.snapshot_revision_from_v1("a")
     assert snap is not None
@@ -48,8 +55,8 @@ async def test_snapshot_creates_revision_without_promoting(tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_publish_promotes_current(tmp_path):
-    svc, workspace = await _make_svc(tmp_path)
+async def test_publish_promotes_current(svc_env):
+    svc, workspace = svc_env
     (workspace / "a.json").write_text(json.dumps(_v1("a", "查询")), encoding="utf-8")
     published = await svc.publish_from_v1("a")
     definition = await svc.get_definition("a")
@@ -57,8 +64,8 @@ async def test_publish_promotes_current(tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_rollback_switches_current_with_fresh_etag(tmp_path):
-    svc, workspace = await _make_svc(tmp_path)
+async def test_rollback_switches_current_with_fresh_etag(svc_env):
+    svc, workspace = svc_env
     (workspace / "a.json").write_text(json.dumps(_v1("a", "v1")), encoding="utf-8")
     first = await svc.publish_from_v1("a")          # rev1 置为当前
     # 修改 v1 再发布 → rev2
@@ -85,8 +92,8 @@ async def test_rollback_switches_current_with_fresh_etag(tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_rollback_rejects_foreign_revision(tmp_path):
-    svc, workspace = await _make_svc(tmp_path)
+async def test_rollback_rejects_foreign_revision(svc_env):
+    svc, workspace = svc_env
     (workspace / "a.json").write_text(json.dumps(_v1("a", "x")), encoding="utf-8")
     await svc.publish_from_v1("a")
     (workspace / "b.json").write_text(json.dumps(_v1("b", "y")), encoding="utf-8")
@@ -100,8 +107,8 @@ async def test_rollback_rejects_foreign_revision(tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_list_revisions_marks_current_and_etag(tmp_path):
-    svc, workspace = await _make_svc(tmp_path)
+async def test_list_revisions_marks_current_and_etag(svc_env):
+    svc, workspace = svc_env
     (workspace / "a.json").write_text(json.dumps(_v1("a", "v1")), encoding="utf-8")
     first = await svc.publish_from_v1("a")
     (workspace / "a.json").write_text(json.dumps(_v1("a", "v2")), encoding="utf-8")
@@ -117,8 +124,8 @@ async def test_list_revisions_marks_current_and_etag(tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_rollback_flow_end_to_end(tmp_path):
-    svc, workspace = await _make_svc(tmp_path)
+async def test_rollback_flow_end_to_end(svc_env):
+    svc, workspace = svc_env
     (workspace / "a.json").write_text(json.dumps(_v1("a", "v1")), encoding="utf-8")
     first = await svc.publish_from_v1("a")
     (workspace / "a.json").write_text(json.dumps(_v1("a", "v2")), encoding="utf-8")

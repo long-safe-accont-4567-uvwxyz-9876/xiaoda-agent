@@ -1,9 +1,11 @@
 # workflow_v2/migrate.py
 from __future__ import annotations
+
 import time
 import uuid
-from workflow_v2.models import NodeSpec, EdgeSpec, NodeType, WorkflowRevision
+
 from workflow_v2.graph import compute_content_hash
+from workflow_v2.models import EdgeSpec, NodeSpec, NodeType, WorkflowRevision
 
 
 def _convert(node: dict) -> tuple[NodeSpec, dict | None]:

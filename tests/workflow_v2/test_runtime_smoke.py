@@ -11,8 +11,14 @@ from db.db_workflow import create_schema
 from tool_engine.tool_registry import ToolResult
 from workflow_v2.app import build_runtime
 from workflow_v2.models import (
-    EdgeSpec, NodeSpec, NodeType, RunStatus, StepStatus,
-    WorkflowRevision, WorkflowRun, WorkflowRunEvent,
+    EdgeSpec,
+    NodeSpec,
+    NodeType,
+    RunStatus,
+    StepStatus,
+    WorkflowRevision,
+    WorkflowRun,
+    WorkflowRunEvent,
 )
 from workflow_v2.repository import WorkflowRepository
 

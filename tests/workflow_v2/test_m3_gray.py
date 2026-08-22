@@ -199,8 +199,9 @@ def _v1(name: str, label: str) -> dict:
     }
 
 
-@pytest.mark.asyncio
-async def _migrate_svc(tmp_path):
+@pytest.fixture
+async def migrate_env(tmp_path):
+    """内存库 + 假 v1 路径解析器；测试结束确保连接关闭（同 conftest.repo）。"""
     conn = await aiosqlite.connect(":memory:")
     conn.row_factory = aiosqlite.Row
     await create_schema(conn)
@@ -209,12 +210,12 @@ async def _migrate_svc(tmp_path):
     workspace.mkdir(parents=True, exist_ok=True)
     svc._v1_path = lambda wf_id: (
         (workspace / f"{wf_id}.json") if (workspace / f"{wf_id}.json").exists() else None)
-    return svc, workspace
+    yield svc, workspace
+    await conn.close()
 
 
-@pytest.mark.asyncio
-async def test_migrate_workflow_creates_rev_first_run(tmp_path):
-    svc, workspace = await _migrate_svc(tmp_path)
+async def test_migrate_workflow_creates_rev_first_run(migrate_env):
+    svc, workspace = migrate_env
     (workspace / "a.json").write_text(json.dumps(_v1("a", "v1")), encoding="utf-8")
     r1 = await svc.migrate_workflow("a")
     assert r1["action"] == "migrated"
@@ -227,8 +228,8 @@ async def test_migrate_workflow_creates_rev_first_run(tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_migrate_workflow_dry_run_writes_nothing(tmp_path):
-    svc, workspace = await _migrate_svc(tmp_path)
+async def test_migrate_workflow_dry_run_writes_nothing(migrate_env):
+    svc, workspace = migrate_env
     (workspace / "b.json").write_text(json.dumps(_v1("b", "x")), encoding="utf-8")
     rep = await svc.migrate_workflow("b", dry_run=True)
     assert rep["action"] == "migrated" and rep["dry_run"] is True
@@ -237,8 +238,8 @@ async def test_migrate_workflow_dry_run_writes_nothing(tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_migrate_workflow_invalid_graph_reported(tmp_path):
-    svc, workspace = await _migrate_svc(tmp_path)
+async def test_migrate_workflow_invalid_graph_reported(migrate_env):
+    svc, workspace = migrate_env
     # 重复节点 id → 图校验失败
     v1 = _v1("c", "dup")
     v1["nodes"] = [{"id": "dup", "type": "tool", "note": "a"},
@@ -251,8 +252,8 @@ async def test_migrate_workflow_invalid_graph_reported(tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_migrate_workflow_respects_manual_rollback(tmp_path):
-    svc, workspace = await _migrate_svc(tmp_path)
+async def test_migrate_workflow_respects_manual_rollback(migrate_env):
+    svc, workspace = migrate_env
     (workspace / "d.json").write_text(json.dumps(_v1("d", "v1")), encoding="utf-8")
     r1 = await svc.migrate_workflow("d")
     (workspace / "d.json").write_text(json.dumps(_v1("d", "v2")), encoding="utf-8")

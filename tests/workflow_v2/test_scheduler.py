@@ -1,12 +1,24 @@
 # tests/workflow_v2/test_scheduler.py
-import pytest, time, aiosqlite
-from workflow_v2.models import (
-    NodeSpec, EdgeSpec, NodeType, StepStatus, RunStatus,
-    WorkflowRevision, WorkflowRun, WorkflowStepRun, WorkflowRunEvent, Idempotency,
-)
+import time
+
+import aiosqlite
+import pytest
+
 from db.db_workflow import create_schema
+from workflow_v2.models import (
+    EdgeSpec,
+    Idempotency,
+    NodeSpec,
+    NodeType,
+    RunStatus,
+    StepStatus,
+    WorkflowRevision,
+    WorkflowRun,
+    WorkflowRunEvent,
+    WorkflowStepRun,
+)
 from workflow_v2.repository import WorkflowRepository
-from workflow_v2.scheduler import Scheduler, NodeResult, compute_ready
+from workflow_v2.scheduler import NodeResult, Scheduler, compute_ready
 
 
 def _rev():
@@ -74,6 +86,7 @@ async def test_recover_fails_leftover_running_non_idempotent():
     await sched.recover("r1")
     steps = await repo.events_after("r1", 0)
     assert any(e.event_type == "step_failed" and e.step_id == "a" for e in steps)
+    await conn.close()
 
 
 @pytest.mark.asyncio

@@ -1,5 +1,6 @@
 # workflow_v2/scheduler.py
 from __future__ import annotations
+
 import time
 from dataclasses import dataclass, field
 from typing import Any, Awaitable, Callable
@@ -7,8 +8,14 @@ from typing import Any, Awaitable, Callable
 from loguru import logger
 
 from workflow_v2.models import (
-    NodeSpec, WorkflowRevision, WorkflowStepRun, WorkflowRunEvent,
-    RunStatus, StepStatus, NodeType, FailurePolicy,
+    FailurePolicy,
+    NodeSpec,
+    NodeType,
+    RunStatus,
+    StepStatus,
+    WorkflowRevision,
+    WorkflowRunEvent,
+    WorkflowStepRun,
 )
 from workflow_v2.repository import WorkflowRepository
 
@@ -26,11 +33,9 @@ RevisionProvider = Callable[[str], Awaitable[WorkflowRevision]]
 
 
 def compute_ready(revision: WorkflowRevision, steps: list[WorkflowStepRun]) -> list[NodeSpec]:
-    by_id = {n.id: n for n in revision.nodes}
     incoming: dict[str, list[str]] = {n.id: [] for n in revision.nodes}
     for e in revision.edges:
         incoming[e.target].append(e.source)
-    terminal = {(s.node_id, s.status) for s in steps}
     done = {s.node_id for s in steps if s.status in (StepStatus.SUCCEEDED, StepStatus.SKIPPED)}
     started = {s.node_id for s in steps}
     ready = []
