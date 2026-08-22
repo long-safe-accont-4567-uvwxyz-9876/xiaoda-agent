@@ -435,6 +435,35 @@ async def _start_services(app: Any, core: Any) -> None:
     # 服务重启后自动恢复，保持登录状态；无凭证时静默跳过
     await _ensure_wechat_bot_task(app)
     app.state.last_emotion = None
+    # Workflow V2 引擎（转正 2026-08-22）：依赖主 DB 连接 + LLM 路由，失败仅
+    # 降级为 503 提示，不影响其他服务启动
+    await _init_workflow_v2(app, core)
+
+
+async def _init_workflow_v2(app: Any, core: Any) -> None:
+    """装配 workflow_v2 运行时：repository/service/executor + 后台驱动循环。
+
+    - 主 DB 独立 aiosqlite 连接（workflow 表由 legacy_migration v27 幂等创建）；
+    - app.state.workflow_v2 = service（路由经 _svc guard 读取，降级模式 503）；
+    - app.state.workflow_driver = 后台驱动（shutdown 时 stop）。
+    任何一步失败都不阻断 WebUI —— 工作流功能降级，其他服务照常。
+    """
+    try:
+        from workflow_v2.app import build_runtime
+        db_path = getattr(core.db, "db_path", None)
+        if not db_path:
+            logger.warning("webui.workflow_v2_init_skipped no_db_path")
+            app.state.workflow_v2 = None
+            app.state.workflow_driver = None
+            return
+        svc, driver = await build_runtime(core, str(db_path))
+        app.state.workflow_v2 = svc
+        app.state.workflow_driver = driver
+        logger.info("webui.workflow_v2_ready")
+    except Exception as e:  # noqa: BLE001 —— 降级不阻断其他服务
+        logger.warning("webui.workflow_v2_init_failed error={}", str(e)[:300])
+        app.state.workflow_v2 = None
+        app.state.workflow_driver = None
 
 
 def _qq_credential_fingerprint() -> str:
@@ -945,6 +974,13 @@ async def _shutdown_lifespan(app: FastAPI, core: Any, owns_core: bool) -> None:
     mail_poller = getattr(app.state, "mail_poller", None)
     if mail_poller:
         await mail_poller.stop()
+    # 停止 workflow_v2 后台驱动（避免 shutdown 后继续调度访问已关闭连接）
+    wf_driver = getattr(app.state, "workflow_driver", None)
+    if wf_driver is not None:
+        try:
+            await wf_driver.stop()
+        except (RuntimeError, OSError):
+            logger.debug("server.workflow_driver_stop_error", exc_info=True)
     # 停止自发回忆和成长叙事后台任务（避免 shutdown 后继续访问已关闭的 db/memory）
     for attr in ("spontaneous_recall", "growth_narrative"):
         obj = getattr(app.state, attr, None)

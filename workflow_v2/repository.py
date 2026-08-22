@@ -3,7 +3,8 @@ import json
 import time
 import aiosqlite
 from workflow_v2.models import (
-    WorkflowRun, WorkflowStepRun, WorkflowRunEvent, RunStatus, StepStatus,
+    WorkflowRun, WorkflowStepRun, WorkflowRunEvent, WorkflowRevision,
+    RunStatus, StepStatus,
 )
 
 
@@ -198,3 +199,110 @@ class WorkflowRepository:
             )
             for r in rows
         ]
+    # ── 转正运行时扩展（2026-08-22 决策"转正"）：驱动循环 / v1 桥接 / WebUI 视图 ──
+
+    async def list_active_runs(self, limit: int = 50) -> list[WorkflowRun]:
+        """非终态 run（queued/running/waiting_input/paused/cancelling）驱动轮询用。"""
+        cur = await self.conn.execute(
+            "SELECT * FROM wf_run WHERE status NOT IN ('succeeded','failed','cancelled') "
+            "ORDER BY created_at LIMIT ?", (limit,)
+        )
+        rows = await cur.fetchall()
+        return [await self.get_run(r["run_id"]) for r in rows]
+
+    async def list_runs_by_wf(self, workflow_id: str, limit: int = 200) -> list[WorkflowRun]:
+        """WebUI 运行记录：按工作流倒序取最近运行。"""
+        cur = await self.conn.execute(
+            "SELECT run_id FROM wf_run WHERE workflow_id=? ORDER BY created_at DESC LIMIT ?",
+            (workflow_id, limit),
+        )
+        rows = await cur.fetchall()
+        return [await self.get_run(r["run_id"]) for r in rows]
+
+    async def insert_revision(self, rev) -> None:
+        """持久化一个不可变 revision（转正：publish 后立即固化）。"""
+        await self.conn.execute(
+            "INSERT OR IGNORE INTO wf_revision"
+            "(revision_id, workflow_id, graph_json, content_hash, created_at) "
+            "VALUES(?,?,?,?,?)",
+            (rev.revision_id, rev.workflow_id, json.dumps(rev.model_dump(mode="json")),
+             rev.content_hash or "", rev.created_at),
+        )
+        await self.conn.commit()
+
+    async def get_revision(self, revision_id: str):
+        cur = await self.conn.execute(
+            "SELECT * FROM wf_revision WHERE revision_id=?", (revision_id,)
+        )
+        row = await cur.fetchone()
+        if row is None:
+            return None
+        data = json.loads(row["graph_json"])
+        return WorkflowRevision(**data)
+
+    async def list_revisions(self, workflow_id: str, limit: int = 100) -> list[dict]:
+        cur = await self.conn.execute(
+            "SELECT revision_id, content_hash, created_at FROM wf_revision "
+            "WHERE workflow_id=? ORDER BY created_at DESC LIMIT ?", (workflow_id, limit)
+        )
+        rows = await cur.fetchall()
+        return [
+            {"revision_id": r["revision_id"], "content_hash": r["content_hash"],
+             "created_at": r["created_at"]}
+            for r in rows
+        ]
+
+    async def upsert_definition(self, *, workflow_id: str, name: str, description: str = "",
+                                enabled: bool = True, current_revision_id: str | None = None) -> None:
+        """v1 迁移首次落地 wf_definition（INSERT OR IGNORE 幂等）。"""
+        await self.conn.execute(
+            "INSERT OR IGNORE INTO wf_definition"
+            "(workflow_id, name, description, enabled, current_revision_id, etag, created_at, updated_at) "
+            "VALUES(?,?,?,?,?,?,?,?)",
+            (workflow_id, name, description, int(enabled), current_revision_id,
+             f"etag-{time.time():.0f}", time.time(), time.time()),
+        )
+        await self.conn.commit()
+
+    async def set_current_revision(self, workflow_id: str, revision_id: str) -> None:
+        """发布：原子置 current_revision_id + 翻转 etag（PATCH If-Match 语义下视为新版本）。"""
+        await self.conn.execute(
+            "UPDATE wf_definition SET current_revision_id=?, etag=?, updated_at=? "
+            "WHERE workflow_id=?",
+            (revision_id, f"etag-{int(time.time())}", time.time(), workflow_id),
+        )
+        await self.conn.commit()
+
+    async def cancel_run(self, run_id: str) -> bool:
+        """终止一个未终态的 run（幂等）：置 status=cancelled + 未完成 steps 置 cancelled + 事件。
+
+        与 CAS 提交一致的事务性：取消判定 + 状态写入 + 事件在单事务内完成；
+        已是终态的 run 不做任何变更并返回 False。
+        """
+        cur = await self.conn.execute(
+            "SELECT status FROM wf_run WHERE run_id=?", (run_id,)
+        )
+        row = await cur.fetchone()
+        if row is None or row["status"] in ("succeeded", "failed", "cancelled"):
+            return False
+        await self.conn.execute("BEGIN")
+        try:
+            await self.conn.execute(
+                "UPDATE wf_run SET status='cancelled', updated_at=? WHERE run_id=?",
+                (time.time(), run_id),
+            )
+            await self.conn.execute(
+                "UPDATE wf_step_run SET status='cancelled' "
+                "WHERE run_id=? AND status NOT IN ('succeeded','failed','cancelled')",
+                (run_id,),
+            )
+            await self._insert_event(WorkflowRunEvent(
+                run_id=run_id, seq=await self.next_seq(run_id),
+                event_type="run_cancelled", run_status=RunStatus.CANCELLED,
+                timestamp=time.time(),
+            ))
+            await self.conn.commit()
+            return True
+        except (aiosqlite.Error, ValueError):
+            await self.conn.rollback()
+            raise

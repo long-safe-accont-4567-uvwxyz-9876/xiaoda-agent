@@ -245,6 +245,18 @@ const revisionsList = ref<any[]>([])
 const revisionsLoading = ref(false)
 
 const publishing = ref('')
+const starting = ref('')
+
+async function startWorkflow(wf: WorkflowSummary) {
+  starting.value = wf.id
+  try {
+    await api.runWorkflow(wf.id)
+    message.success('已启动运行')
+    await openRuns(wf.id, wf.name)
+  } catch (e: any) { message.error(e.message) } finally {
+    starting.value = ''
+  }
+}
 
 async function openRuns(wfId: string, wfName: string) {
   runsWfId.value = wfId
@@ -318,8 +330,9 @@ async function publishWorkflow(wfId: string) {
               </div>
               <div class="wf-card-actions">
                 <n-button size="tiny" type="primary" @click="editWorkflow(wf)">{{ t('workflowView.edit') }}</n-button>
-                <n-button size="tiny" quaternary @click="openRuns(wf.id, wf.name)"><SumeruIcon name="chart" :size="12" variant="duo" tone="view" interactive /> 运行</n-button>
-                <n-button size="tiny" quaternary @click="openRevisions(wf.id, wf.name)"><SumeruIcon name="note" :size="12" variant="duo" tone="edit" interactive /> 版本</n-button>
+                <n-button size="tiny" :loading="starting === wf.id" @click="startWorkflow(wf)"><SumeruIcon name="sprout" :size="11" variant="duo" tone="add" interactive /> 启动</n-button>
+                <n-button size="tiny" quaternary @click="openRuns(wf.id, wf.name)"><SumeruIcon name="chart" :size="11" variant="duo" tone="view" interactive /> 记录</n-button>
+                <n-button size="tiny" quaternary @click="openRevisions(wf.id, wf.name)"><SumeruIcon name="note" :size="11" variant="duo" tone="edit" interactive /> 版本</n-button>
                 <n-button size="tiny" quaternary :loading="publishing === wf.id" @click="publishWorkflow(wf.id)"><SumeruIcon name="rocket" :size="12" variant="duo" tone="add" interactive /> 发布</n-button>
                 <n-popconfirm @positive-click="deleteWorkflow(wf)">
                   <template #trigger>
@@ -417,15 +430,15 @@ async function publishWorkflow(wfId: string) {
     <n-modal v-model:show="showRunsModal" preset="card" :title="`${runsWfName} — 运行记录`" style="width: min(640px, 94vw)">
       <n-spin :show="runsLoading">
         <div v-if="runsList.length" class="runs-list">
-          <div v-for="run in runsList" :key="run.id" class="run-item">
+          <div v-for="run in runsList" :key="run.run_id" class="run-item">
             <div class="run-head">
-              <n-tag size="small" :type="run.status === 'completed' ? 'success' : run.status === 'failed' ? 'error' : 'info'" :bordered="false">{{ run.status }}</n-tag>
-              <span class="run-id mono">{{ run.id.slice(0, 8) }}</span>
-              <span class="run-time">{{ run.started_at ? new Date(run.started_at).toLocaleString('zh-CN') : '—' }}</span>
+              <n-tag size="small" :type="run.status === 'succeeded' ? 'success' : (run.status === 'failed' || run.status === 'cancelled') ? 'error' : 'info'" :bordered="false">{{ run.status }}</n-tag>
+              <span class="run-id mono">{{ run.run_id.slice(0, 8) }}</span>
+              <span class="run-time">{{ run.created_at ? new Date(run.created_at * 1000).toLocaleString('zh-CN') : '—' }}</span>
             </div>
-            <div v-if="run.error" class="run-error">{{ run.error }}</div>
+            <div v-if="run.output?.error_message" class="run-error">{{ run.output.error_message }}</div>
             <div class="run-actions">
-              <n-button v-if="run.status === 'running'" size="tiny" type="warning" @click="cancelRun(run.id)">取消</n-button>
+              <n-button v-if="['queued', 'running', 'waiting_input', 'paused', 'cancelling'].includes(run.status)" size="tiny" type="warning" @click="cancelRun(run.run_id)">取消</n-button>
             </div>
           </div>
         </div>

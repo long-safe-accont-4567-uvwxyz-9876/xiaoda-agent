@@ -3,6 +3,9 @@ from __future__ import annotations
 import time
 from dataclasses import dataclass, field
 from typing import Any, Awaitable, Callable
+
+from loguru import logger
+
 from workflow_v2.models import (
     NodeSpec, WorkflowRevision, WorkflowStepRun, WorkflowRunEvent,
     RunStatus, StepStatus, NodeType, FailurePolicy,
@@ -19,7 +22,7 @@ class NodeResult:
 
 
 ExecutorFn = Callable[[NodeSpec, WorkflowStepRun, dict], Awaitable[NodeResult]]
-RevisionProvider = Callable[[str], WorkflowRevision]
+RevisionProvider = Callable[[str], Awaitable[WorkflowRevision]]
 
 
 def compute_ready(revision: WorkflowRevision, steps: list[WorkflowStepRun]) -> list[NodeSpec]:
@@ -52,7 +55,12 @@ class Scheduler:
         run = await self.repo.get_run(run_id)
         if run is None or run.status in (RunStatus.SUCCEEDED, RunStatus.FAILED, RunStatus.CANCELLED):
             return run.status if run else RunStatus.FAILED
-        rev = self.revision_provider(run.revision_id)
+        rev = await self.revision_provider(run.revision_id)
+        if rev is None:
+            # 数据不一致（如 revision 被清理）：跳过本轮，等写侧修复，不炸驱动
+            logger.warning("workflow.tick_revision_missing run_id={} revision={}",
+                           run_id, run.revision_id)
+            return run.status
         steps = await self._steps(run_id)
         ready = compute_ready(rev, steps)
         if not ready:
@@ -108,7 +116,10 @@ class Scheduler:
                              event_type=f"run_{status.value}", run_status=status, timestamp=time.time()))
 
     async def recover(self, run_id: str) -> None:
-        rev = self.revision_provider((await self.repo.get_run(run_id)).revision_id)
+        rev = await self.revision_provider((await self.repo.get_run(run_id)).revision_id)
+        if rev is None:
+            logger.warning("workflow.recover_revision_missing run_id={}", run_id)
+            return
         by_id = {n.id: n for n in rev.nodes}
         steps = await self._steps(run_id)
         for s in steps:

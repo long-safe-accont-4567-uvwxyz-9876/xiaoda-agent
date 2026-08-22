@@ -19,6 +19,13 @@ def _rev():
     return WorkflowRevision(revision_id="rev1", workflow_id="w1", nodes=nodes, edges=edges)
 
 
+def _rev_provider(rev):
+    """RevisionProvider 契约是可等待回调：直接透传固定 revision。"""
+    async def provider(revision_id: str):
+        return rev
+    return provider
+
+
 def test_compute_ready_returns_start_first():
     rev = _rev()
     steps = []
@@ -37,7 +44,7 @@ async def test_run_completes_with_fake_executor():
     async def fake_exec(node, step, ctx):
         return NodeResult(status=StepStatus.SUCCEEDED, output={"node": node.id})
 
-    sched = Scheduler(repo, fake_exec, revision_provider=lambda rid: rev)
+    sched = Scheduler(repo, fake_exec, revision_provider=_rev_provider(rev))
     run = WorkflowRun(run_id="r1", workflow_id="w1", revision_id="rev1", created_at=time.time())
     await repo.create_run(run, [], WorkflowRunEvent(run_id="r1", seq=1, event_type="run_queued", run_status=RunStatus.QUEUED))
     status = RunStatus.QUEUED
@@ -63,7 +70,7 @@ async def test_recover_fails_leftover_running_non_idempotent():
     async def never(node, step, ctx):  # should not be called during recovery
         raise AssertionError("executor must not run during recovery")
 
-    sched = Scheduler(repo, never, revision_provider=lambda rid: rev)
+    sched = Scheduler(repo, never, revision_provider=_rev_provider(rev))
     await sched.recover("r1")
     steps = await repo.events_after("r1", 0)
     assert any(e.event_type == "step_failed" and e.step_id == "a" for e in steps)
@@ -95,7 +102,7 @@ async def test_recover_resets_leftover_running_idempotent_node():
     async def never(node, step, ctx):  # should not be called during recovery
         raise AssertionError("executor must not run during recovery")
 
-    sched = Scheduler(repo, never, revision_provider=lambda rid: rev)
+    sched = Scheduler(repo, never, revision_provider=_rev_provider(rev))
     await sched.recover("r1")
     steps = await repo.list_steps("r1")
     a_step = next(s for s in steps if s.node_id == "a")
@@ -132,7 +139,7 @@ async def test_diamond_failed_branch_keeps_run_failed():
             return NodeResult(status=StepStatus.FAILED, error_code="ERR", error_message="boom")
         return NodeResult(status=StepStatus.SUCCEEDED, output={"node": node.id})
 
-    sched = Scheduler(repo, fake_exec, revision_provider=lambda rid: rev)
+    sched = Scheduler(repo, fake_exec, revision_provider=_rev_provider(rev))
     run = WorkflowRun(run_id="r1", workflow_id="w1", revision_id="rev1", created_at=time.time())
     await repo.create_run(run, [], WorkflowRunEvent(run_id="r1", seq=1,
                           event_type="run_queued", run_status=RunStatus.QUEUED))

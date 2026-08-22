@@ -7,9 +7,12 @@ DDL, see db/db_workflow.py).
 """
 from __future__ import annotations
 
+import json
 import sqlite3
 import time
 import uuid
+
+from loguru import logger
 
 from workflow_v2.models import WorkflowRun, WorkflowRunEvent, RunStatus
 from workflow_v2.repository import WorkflowRepository
@@ -175,3 +178,66 @@ class WorkflowV2Service:
             )
             await self.repo.conn.commit()
         return {"cancel_requested": True, "status": run.status.value}
+
+    # ── 转正：v1 JSON 桥接 + WebUI 视图（2026-08-22 决策"转正"） ────────────
+
+    def _v1_path(self, wf_id: str):
+        from pathlib import Path
+        from config import WORKSPACE_DIR
+        p = Path(WORKSPACE_DIR) / "workflows" / f"{wf_id}.json"
+        return p if p.exists() else None
+
+    async def _publish_v1_revision(self, wf_id: str) -> dict | None:
+        """核心逻辑：读取 v1 JSON → 迁移为 v2 revision → 落库并设为当前。
+
+        返回 revision dict；v1 文件不存在时返回 None。定义行缺失时自动创建。
+        """
+        fp = self._v1_path(wf_id)
+        if fp is None:
+            return None
+        try:
+            v1 = json.loads(fp.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            logger.warning("workflow.v1_read_failed wf_id={}", wf_id)
+            return None
+        from workflow_v2.migrate import migrate_v1
+        rev, warnings = migrate_v1(v1)
+        if warnings:
+            logger.info("workflow.v1_migrate_warnings wf_id={} count={}",
+                        wf_id, len(warnings))
+        definition = await self._definition_row(wf_id)
+        if definition is None:
+            await self.repo.upsert_definition(
+                workflow_id=wf_id,
+                name=str(v1.get("name") or wf_id),
+                description=str(v1.get("description") or ""),
+                enabled=bool(v1.get("enabled", True)),
+            )
+        await self.repo.insert_revision(rev)
+        await self.repo.set_current_revision(wf_id, rev.revision_id)
+        return {"revision": rev.model_dump(mode="json"), "warnings": warnings}
+
+    async def ensure_published(self, wf_id: str) -> dict | None:
+        """确保 wf_definition 存在且 current_revision_id 非空（首次运行自动接入）。
+
+        三种情形：定义不存在 → 从 v1 完整迁移并发布；定义在但无当前版本 →
+        从 v1 发布一个版本；两者都就绪 → 直接返回现状。v1 文件也不存在 → None。
+        """
+        definition = await self.get_definition(wf_id)
+        if definition is not None and definition.get("current_revision_id"):
+            return definition
+        published = await self._publish_v1_revision(wf_id)
+        if published is None:
+            return None
+        return await self.get_definition(wf_id)
+
+    async def publish_from_v1(self, wf_id: str) -> dict | None:
+        """发布新版本：把当前 v1 JSON 固化为新的不可变 revision（WebUI 发布按钮）。"""
+        return await self._publish_v1_revision(wf_id)
+
+    async def list_runs(self, workflow_id: str) -> list[dict]:
+        runs = await self.repo.list_runs_by_wf(workflow_id)
+        return [_run_dict(r) for r in runs]
+
+    async def list_revisions(self, workflow_id: str) -> list[dict]:
+        return await self.repo.list_revisions(workflow_id)

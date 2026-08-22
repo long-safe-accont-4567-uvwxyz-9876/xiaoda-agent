@@ -229,10 +229,11 @@ export const api = {
   previewWorkflow: (id: string) => get<{prompt: string}>('/workflows/' + id + '/preview'),
 
   listWorkflowRuns: (wfId: string) => get<any[]>(`/workflows/${wfId}/runs`),
-  getWorkflowRun: (runId: string) => get<any>(`/workflows/runs/${runId}`),
+  runWorkflow: (wfId: string, input?: Record<string, unknown>) => post<any>(`/workflows/${wfId}/runs`, { input: input || {} }),
+  getWorkflowRun: (runId: string) => get<any>(`/workflow-runs/${runId}`),
   listWorkflowRevisions: (wfId: string) => get<any[]>(`/workflows/${wfId}/revisions`),
   publishWorkflow: (wfId: string) => post<any>(`/workflows/${wfId}/publish`),
-  cancelWorkflowRun: (runId: string) => post<any>(`/workflows/runs/${runId}/cancel`),
+  cancelWorkflowRun: (runId: string) => post<any>(`/workflow-runs/${runId}/cancel`),
 
   // 品牌署名与免责协议
   getBrandSignature: () => get<{ signature: string; author: string; version: string }>('/brand/signature'),
