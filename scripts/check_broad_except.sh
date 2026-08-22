@@ -12,7 +12,9 @@ cd "$(git rev-parse --show-toplevel)"
 
 BASELINE_FILE="scripts/broad_except_baseline.txt"
 BASELINE=$(cat "$BASELINE_FILE" 2>/dev/null || echo 0)
-COUNT=$(grep -rn "except Exception" --include="*.py" . 2>/dev/null \
+# 三种形态都计入（review 补漏）：字面 except Exception / 元组首位的
+# except (Exception, ...) / 更宽的 except BaseException，堵住换形态旁路
+COUNT=$(grep -rnE "except Exception|except \(Exception|except BaseException" --include="*.py" . 2>/dev/null \
     | grep -v "/\.git/\|/tests/\|/\.venv/\|/build/\|/dist/" | wc -l)
 
 echo "[broad-except] 当前 $COUNT / 基线 $BASELINE"

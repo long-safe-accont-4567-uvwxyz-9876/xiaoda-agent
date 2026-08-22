@@ -248,11 +248,23 @@ async def test_production_services_follow_instances_started_after_bootstrap(tmp_
 async def test_production_bootstrap_skips_vec_store_without_embed_key(tmp_path, monkeypatch):
     """新契约（22f1c96a）：默认 remote 且无任何远程 Key → 不建向量库，
     检索禁用并显式告警（用户配 Key 后重启即恢复）。"""
+    created = []
+
+    class FakeVectorStore:
+        def __init__(self, **kwargs):
+            # 记录构造：区分"走跳过分支"与"走了创建分支但 init 失败被兜底置 None"
+            # （后者同样最终 _vec_store=None，但语义完全不同——review 补漏）
+            created.append(self)
+
+        async def init(self):
+            pass
+
     monkeypatch.delenv("EMBED_MODE", raising=False)
     monkeypatch.delenv("EMBED_API_KEY", raising=False)
     monkeypatch.delenv("SILICONFLOW_API_KEY", raising=False)
     # 隔离宿主机真实配置：webui_overrides.json 的 local_deploy.mode 会覆盖 env 默认
     monkeypatch.setattr(Path, "exists", lambda self: False)
+    monkeypatch.setattr("memory.vector_store.VectorStore", FakeVectorStore)
     core = SimpleNamespace(
         db=SimpleNamespace(
             init=AsyncMock(),
@@ -266,6 +278,7 @@ async def test_production_bootstrap_skips_vec_store_without_embed_key(tmp_path, 
     await bootstrap.AgentCoreBootstrapper(core)._init_infrastructure()
 
     assert core._vec_store is None
+    assert created == [], "无 Key 时必须走跳过分支，不得尝试创建向量库"
 
 
 @pytest.mark.asyncio

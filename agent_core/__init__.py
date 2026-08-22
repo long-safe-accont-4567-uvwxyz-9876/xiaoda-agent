@@ -19,7 +19,10 @@ if getattr(_sys, 'frozen', False):
     _env_path = str(Path.home() / ".ai-agent" / ".env")
 else:
     _env_path = str(Path(_PROJECT_ROOT) / ".env")
-load_dotenv(_env_path, override=True)
+# override=False 与全项目 dotenv 策略统一（2026-08-22 review 补漏）：进程环境优先。
+# 此处曾是 override=True——web/server 与 qq_bot_adapter 都 import agent_core，
+# 导致 systemd 显式 env 在单进程形态下仍被 .env 静默覆盖，535ed7af 的统一存在漏网。
+load_dotenv(_env_path, override=False)
 
 # 日志初始化（延迟到首次使用时触发，避免导入副作用）
 _logging_initialized = False

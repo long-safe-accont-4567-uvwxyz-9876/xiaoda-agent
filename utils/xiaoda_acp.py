@@ -13,7 +13,8 @@ from pathlib import Path
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from dotenv import load_dotenv
-load_dotenv()
+# 与全局 dotenv 策略统一：显式项目根 .env（不依赖 CWD）+ override=False
+load_dotenv(os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), ".env"), override=False)
 
 from utils.logging_config import setup_logging
 setup_logging()

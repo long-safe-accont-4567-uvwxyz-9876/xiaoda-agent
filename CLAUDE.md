@@ -42,7 +42,7 @@ curl -s http://127.0.0.1:8080/api/v1/agents -H "Authorization: Bearer $TOKEN"
 sqlite3 /mnt/usb2/nahida-data/db/agent.db ".tables"
 ```
 
-注意：**WebUI 与 QQ Bot 已合并为单进程**——`agent.py --web` 启动后在 `web/server.py:556` 内联 `run_qq_bot()` 异步任务，共享同一 AgentCore。改后端代码只需重启 nahida-web；改了前端只需 `npm run build`（dist 由运行中的 FastAPI 直接服务，无需重启，浏览器强刷即可），**但必须把重建后的 dist 一并提交**——pre-push 会拦截"源码新、dist 旧"的推送。旧双进程形态的 `deploy/qq-agent.service` 单元文件已废弃未安装。
+注意：**WebUI 与 QQ Bot 已合并为单进程**——`agent.py --web` 启动后在 `web/server.py:559` 内联 `run_qq_bot()` 异步任务，共享同一 AgentCore。改后端代码只需重启 nahida-web；改了前端只需 `npm run build`（dist 由运行中的 FastAPI 直接服务，无需重启，浏览器强刷即可），**但必须把重建后的 dist 一并提交**——pre-push 会拦截"源码新、dist 旧"的推送。旧双进程形态的 `deploy/qq-agent.service` 单元文件已废弃未安装。
 
 ## 架构
 

@@ -336,8 +336,16 @@ async def _extract_video_poster(video: Path, poster: Path) -> bool:
             stderr=asyncio.subprocess.DEVNULL,
         )
         await asyncio.wait_for(proc.communicate(), timeout=30)
-    except (asyncio.TimeoutError, OSError):
+    except asyncio.TimeoutError:
+        # 超时必须杀掉 ffmpeg，否则大码率/损坏视频会留下无限挂留的孤儿进程
+        proc.kill()
+        await proc.wait()
         poster.unlink(missing_ok=True)
+        logger.warning("agents.poster_extract_timeout video={} timeout=30s", video.name)
+        return False
+    except OSError as exc:
+        poster.unlink(missing_ok=True)
+        logger.warning("agents.poster_extract_failed video={} error={}", video.name, str(exc)[:150])
         return False
     return poster.exists() and poster.stat().st_size > 0
 
@@ -407,11 +415,9 @@ async def upload_wallpaper(name: str, body: dict, request: Request, _user: str =
         src.unlink(missing_ok=True)  # 原始大文件不保留（设计稿策略一）
         fp = dst
         # 首帧海报：头像 chip 用静态首帧替代 <img> 加载视频失败的文字回退
+        # URL 由前端按 {stem}_poster.jpg 约定解析（agent_registry.wallpaper_poster）
         poster = _WALLPAPER_DIR / f"{name}_{ts}_poster.jpg"
-        if await _extract_video_poster(dst, poster):
-            poster_url = f"/media/wallpapers/{poster.name}"
-        else:
-            poster_url = ""
+        if not await _extract_video_poster(dst, poster):
             poster.unlink(missing_ok=True)
     elif hm:
         # HTML 动画壁纸：轻量粒子/时钟/天气类（设计稿第二阶段）。
@@ -425,11 +431,14 @@ async def upload_wallpaper(name: str, body: dict, request: Request, _user: str =
         fp.write_bytes(raw)
 
     url = f"/media/wallpapers/{fp.name}"
-    # 清理该 agent 的旧上传壁纸文件（保留最新一张，不删除默认壁纸 {name}.ext）
+    # 清理该 agent 的旧上传壁纸文件（保留最新一张，不删除默认壁纸 {name}.ext）。
+    # poster 文件（{name}_{ts}_poster.jpg）同属本代产物，必须与 fp 一起豁免——
+    # 否则清理循环会把刚抽出的首帧海报当场删除（review 发现的功能死路）。
     known_exts = set(_EXT.values()) | set(_VIDEO_EXT.values()) | {"gif", "html"}
+    keep = {fp} | ({poster} if kind == "video" else set())
     try:
         for old in _WALLPAPER_DIR.glob(f"{name}_*.*"):
-            if old != fp and old.suffix.lstrip(".") in known_exts:
+            if old not in keep and old.suffix.lstrip(".") in known_exts:
                 old.unlink(missing_ok=True)
     except OSError:
         logger.debug("agents.old_config_unlink_failed", exc_info=True)

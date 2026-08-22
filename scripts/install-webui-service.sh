@@ -54,15 +54,27 @@ fi
 # 以当前调用用户运行服务。不能用 systemd 说明符 %u/%h：system 管理器下
 # %u 恒解析为 "root"、%h 解析为 /root（man systemd.unit SPECIFIERS，实证于
 # systemd 252），会导致 WebUI 以 root 运行——故安装时把真实用户写进 unit。
-RUN_USER="$(id -un)"
+# SUDO_USER 防护（review 补漏）：sudo bash 本脚本时 id -un 是 root，
+# 必须取发起 sudo 的真实用户，否则恰好复活本脚本要消灭的 root 运行。
+if [ "$(id -u)" = "0" ] && [ -n "${SUDO_USER:-}" ]; then
+    RUN_USER="$SUDO_USER"
+else
+    RUN_USER="$(id -un)"
+    if [ "$RUN_USER" = "root" ]; then
+        echo "错误：检测到以 root 身份安装。请用普通用户 + sudo 运行本脚本" >&2
+        exit 1
+    fi
+fi
 RUN_USER_HOME="$(getent passwd "$RUN_USER" | cut -d: -f6)"
 if [ -z "$RUN_USER_HOME" ]; then
     RUN_USER_HOME="$(eval echo "~${RUN_USER}")"
 fi
 
-# 冲突防护：已有其他 systemd 单元托管 agent.py --web 时拒绝安装，防止双单元
+# 冲突防护：已有其他 systemd 单元托管 WebUI 时拒绝安装，防止双单元
 # 并存开机抢端口（实际案例：nahida-web 与 xiaoda-webui 并存互杀）。
-CONFLICT_UNITS="$(grep -ls "agent.py --web" /etc/systemd/system/*.service 2>/dev/null | grep -v "$SERVICE_FILE" || true)"
+# 两种形态都拦：直写 agent.py --web 的手写单元 + 经 start-linux.sh --web
+# 的 tarball 安装单元（install-linux.sh 产物，字面无 agent.py）。
+CONFLICT_UNITS="$(grep -lsE "agent\.py --web|start-linux\.sh --web" /etc/systemd/system/*.service /usr/lib/systemd/system/*.service 2>/dev/null | grep -v "$SERVICE_FILE" || true)"
 if [ -n "$CONFLICT_UNITS" ]; then
     echo "错误：检测到已托管 WebUI 的 systemd 单元，请先停用/删除再安装：" >&2
     printf '%s\n' "$CONFLICT_UNITS" >&2

@@ -555,7 +555,6 @@ def initialize_config() -> None:
     global _INITIALIZED
     if _INITIALIZED:
         return
-    _INITIALIZED = True
     WORKSPACE_DIR.mkdir(parents=True, exist_ok=True)
     CONFIG_DIR.mkdir(parents=True, exist_ok=True)
     STICKER_DIR.mkdir(parents=True, exist_ok=True)
@@ -565,5 +564,8 @@ def initialize_config() -> None:
     MEMORY_STATE_DIR.mkdir(parents=True, exist_ok=True)
     PLUGINS_CONFIG_DIR.mkdir(parents=True, exist_ok=True)
     AGENTS_CONFIG_DIR.mkdir(parents=True, exist_ok=True)
-    # 路径常量已全部定义（函数体调用时执行），_ensure_workspace 的迁移逻辑可安全引用
+    # 路径常量已全部定义（函数体调用时执行），_ensure_workspace 的迁移逻辑可安全引用。
+    # _INITIALIZED 置位放最后：中途失败不短路，下次调用可重试（review 补漏），
+    # mkdir(exist_ok)/迁移逻辑自身幂等，重试安全。
     _ensure_workspace()
+    _INITIALIZED = True

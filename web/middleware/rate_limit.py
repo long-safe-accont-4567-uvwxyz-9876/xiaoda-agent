@@ -295,11 +295,22 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
         self._persist_path: Path | None = Path(persist_path) if persist_path else None
         self._last_save: float = time.time()
         if self._persist_path is not None:
-            self._init_persist_db()
-            self._load_states()
-            logger.info(
-                "rate_limit.persistence_enabled path={}", self._persist_path,
-            )
+            # 损坏/不可写的持久化文件不应阻断应用启动（review 补漏）：
+            # 降级为纯内存限流并显式告警，与 _load_states/_save_states 的
+            # warn-and-continue 语义一致。
+            try:
+                self._init_persist_db()
+                self._load_states()
+            except (OSError, RuntimeError, ValueError, sqlite3.Error) as e:
+                logger.warning(
+                    "rate_limit.persistence_init_failed path={} error={} —— 降级为内存限流，"
+                    "重启后桶状态不恢复", self._persist_path, str(e)[:150],
+                )
+                self._persist_path = None
+            else:
+                logger.info(
+                    "rate_limit.persistence_enabled path={}", self._persist_path,
+                )
 
         logger.info(
             "rate_limit.middleware_init global={}/min user={}/min write={}/min",

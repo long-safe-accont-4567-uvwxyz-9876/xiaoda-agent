@@ -47,6 +47,14 @@ fi
 # ── 宽口径 except 棘轮（毫秒级）：存量 1136 冻结，增量拦截（技术债专项 #2）
 bash "$PWD/scripts/check_broad_except.sh"
 
+# ── i18n 双字典 key 一致性（秒级；review 补漏——原只接了不运行的 GH workflow）
+if [ -d "$PWD/web/frontend/node_modules" ]; then
+    (cd "$PWD/web/frontend" && npm run --silent check:i18n) || {
+        echo "[pre-push] ✗ i18n key 不一致，推送被拦（npm run check:i18n 查看明细）" >&2
+        exit 1
+    }
+fi
+
 if [ "${PUSH_FULL_TESTS:-0}" = "1" ]; then
     echo "[pre-push] 全集测试门禁（约 5 分钟，--no-verify 可跳过）..."
     # 不用 exec：测试全绿后还要跑构建物新鲜度校验

@@ -11,7 +11,7 @@
  *
  * 渲染层仍各自独立（echarts 力导 vs three WebGL），合并渲染引擎不在本阶段范围。
  */
-import { ref, type Ref } from 'vue'
+import { markRaw, ref, type Ref } from 'vue'
 
 export const kgEdgeKey = (e: { from?: unknown; source?: unknown; relation: unknown; to?: unknown; target?: unknown }) =>
   `${String(e.from ?? e.source)}||${String(e.relation)}||${String(e.to ?? e.target)}`
@@ -30,7 +30,7 @@ export interface KnowledgeGraphAccumulator<TNode, TEdge> {
   markExpanded(id: string): void
 }
 
-export function useKnowledgeGraphData<TNode, TEdge>(
+export function useKnowledgeGraphData<TNode extends object, TEdge extends object>(
   makeNode: (raw: any, degree: number) => TNode,
   makeEdge: (raw: any) => TEdge,
 ): KnowledgeGraphAccumulator<TNode, TEdge> {
@@ -49,6 +49,9 @@ export function useKnowledgeGraphData<TNode, TEdge>(
   }
 
   function merge(rawNodes: any[], rawEdges: any[]) {
+    // markRaw（review 补漏）：3D 引擎（d3-force 每 tick 写 x/y/z/vx/vy/vz）与
+    // echarts 全量重绘都是命令式消费，节点/边对象不需要 Vue 深响应代理——
+    // 不加 markRaw 时 2000 节点场景每帧数千次属性写会穿过 Proxy trap。
     const degree = new Map<string, number>()
     for (const e of rawEdges) {
       const f = String(e.from), t = String(e.to)
@@ -58,7 +61,7 @@ export function useKnowledgeGraphData<TNode, TEdge>(
     for (const n of rawNodes) {
       const name = String(n.name)
       if (nodeIdx.has(name)) continue
-      const node = makeNode(n, degree.get(name) || 0)
+      const node = markRaw(makeNode(n, degree.get(name) || 0))
       nodeIdx.set(name, node)
       nodes.value.push(node)
     }
@@ -66,7 +69,7 @@ export function useKnowledgeGraphData<TNode, TEdge>(
       const k = kgEdgeKey(e)
       if (edgeKeys.has(k)) continue
       edgeKeys.add(k)
-      edges.value.push(makeEdge(e))
+      edges.value.push(markRaw(makeEdge(e)))
     }
   }
 
