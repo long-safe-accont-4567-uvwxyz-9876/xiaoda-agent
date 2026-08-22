@@ -11,6 +11,7 @@ from __future__ import annotations
 from typing import Any, ClassVar
 
 import asyncio
+import httpx
 import json
 import os
 import random
