@@ -44,6 +44,9 @@ if [ -n "$FRONTEND_LAST" ] && [ -n "$DIST_LAST" ] && [ "$FRONTEND_LAST" -gt "$DI
     exit 1
 fi
 
+# ── 宽口径 except 棘轮（毫秒级）：存量 1136 冻结，增量拦截（技术债专项 #2）
+bash "$PWD/scripts/check_broad_except.sh"
+
 if [ "${PUSH_FULL_TESTS:-0}" = "1" ]; then
     echo "[pre-push] 全集测试门禁（约 5 分钟，--no-verify 可跳过）..."
     # 不用 exec：测试全绿后还要跑构建物新鲜度校验
