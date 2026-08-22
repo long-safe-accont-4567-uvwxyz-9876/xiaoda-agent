@@ -211,3 +211,34 @@ hybrid_rerank ~0.8s（reranker API）——均为外部依赖，Rust 无收益�
 RUST_HYBRID_ENABLED=1        # 默认 0
 # 可选：RUST_HYBRID_MIN_NODES=500
 ```
+
+## 六、前端 3D 知识图谱 Rust/WASM 优化评估（2026-08-22）
+
+**结论：当前不下沉。** 分层加载设计落地后，3D 图谱实际规模 31-77 节点
+（depth=12 极限实测 40 节点，按需展开上限 ~300），远未触及性能瓶颈。
+
+### 实测数据（d3-force-3d 每 tick，octree 加速已内置，本机基准）
+
+| 规模 | 每 tick | 60fps 预算判定 |
+|---|---|---|
+| 31 节点/217 边（默认） | 0.93ms | ✅ 无压力 |
+| 77 节点/273 边（depth=3） | 1.94ms | ✅ 无压力 |
+| 300 节点/800 边 | 6.19ms | ✅ 可行 |
+| 1000 节点/2500 边 | 33.8ms | ❌ ~30fps 掉帧 |
+| 2400 节点/6000 边 | 84.6ms | ❌ ~12fps 卡顿 |
+
+### 若未来需要（>1000 节点场景）的路线
+
+- 热点确认：3d-force-graph 无 worker，d3-force-3d 布局在**主线程**每帧执行，
+  many-body 力虽经 octree（Barnes-Hut）加速仍是大头
+- 生态现状：无 drop-in 的 Rust/WASM d3-force 替换。可参考：
+  - [WebCola 用 Rust+WASM 重写热路径的案例](https://cprimozic.net/blog/speeding-up-webcola-with-webassembly/)
+  - [vibe-graph-layout-gpu](https://lib.rs/crates/vibe-graph-layout-gpu)：Rust+WebGPU，声称 10k+ 节点 60fps
+  - [fdg 框架](https://github.com/grantshandy/fdg)（Rust 原生力导向）
+- 更低成本的替代：Web Worker 化布局（迁移现有 tick 到 worker，零 WASM 依赖）
+  或 forceEngine 切 ngraph 引擎对比——建议作为第一步，WASM 作为二步
+
+### 判定法（延续「解释器开销 >30%」门槛）
+
+前端场景的对应门槛应为「布局 tick 超 16.6ms（60fps 预算）」：当前 0.9-6.2ms，
+余量 3-18 倍。等实际规模逼近 1000 节点再启动（届时按需展开也自然会限制规模）。
