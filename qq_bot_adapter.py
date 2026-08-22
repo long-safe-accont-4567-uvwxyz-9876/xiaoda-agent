@@ -29,7 +29,9 @@ from dotenv import load_dotenv
 # 修复：显式使用 config.ENV_PATH，与 config.py 保持一致。
 try:
     from config import ENV_PATH as _ENV_PATH
-    load_dotenv(_ENV_PATH, override=True)
+    # override=False 与 config_paths/agent.py 统一：进程环境优先，.env 只补缺
+    # （P0 修复的要点是显式 ENV_PATH 路径解析，与 override 策略无关）
+    load_dotenv(_ENV_PATH, override=False)
 except ImportError:
     # config 模块不可用时兜底（如独立运行模式），退化为无参数 load_dotenv
     load_dotenv()

@@ -63,6 +63,9 @@ ENV_PATH = get_env_path()
 # KIOXIA_DATA_DIR=/mnt/usb2/nahida-data 强制覆盖外部环境变量，导致换机器部署时
 # 无法用环境变量指定数据盘，且本机 U 盘路径被锁死。改为 False 后：系统环境变量
 # 优先，.env 仅兜底（未设环境变量时才生效），兼顾本机特殊 U 盘与可移植部署。
+# 全项目唯一的 .env 基准加载点（策略：override=False，进程环境变量优先）。
+# agent.py / qq_bot_adapter / cli.py 的同名调用均已对齐此策略；override=True
+# 仅允许出现在"用户动作后的显式重载点"（setup 向导完成/凭证保存后刷新）。
 load_dotenv(ENV_PATH, override=False)
 
 # 确保 PyInstaller 打包后 HTTPS 请求能找到 CA 证书

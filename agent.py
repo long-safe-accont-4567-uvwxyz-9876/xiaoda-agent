@@ -24,7 +24,10 @@ try:
         _env_path = str(_env_dir / ".env")
     else:
         _env_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), ".env")
-    load_dotenv(_env_path, override=True)
+    # 统一策略（2026-08-22 dotenv 收敛）：override=False——进程已有环境变量优先
+    # （systemd 单元/部署环境的显式配置是最高真相），.env 只补缺。
+    # 例外仅限用户动作后的显式重载点（向导完成/凭证保存，见 :88/:371）。
+    load_dotenv(_env_path, override=False)
 except Exception:
     # dotenv 加载失败时写日志，防止 exe 静默崩溃
     import pathlib
