@@ -56,10 +56,32 @@ def get_secret(name: str, default: str = "") -> str:
         return default
 
 
-DEEPSEEK_API_KEY = get_secret("DEEPSEEK_API_KEY")
+# ── 密钥类常量懒解密（2026-08-22 config import 副作用瘦身）──────────
+# 原本 7 处 get_secret() 在模块顶层执行——任何 import 都触发凭证库解密 IO。
+# 现改为 PEP 562 模块级 __getattr__ 首次访问时求值并缓存到 globals()
+# （与 config.py 转发 prompt_builder 的既有模式一致）。
+# 语义保持：from config import DEEPSEEK_API_KEY 仍在消费方 import 时快照，
+# 与原顶层赋值的绑定时机等价；纯路径/开关类 import 不再触碰凭证库。
+_SECRET_CONSTANTS = {
+    "DEEPSEEK_API_KEY": lambda: get_secret("DEEPSEEK_API_KEY"),
+    # MIMO_API_KEY：先 get_secret 解密 enc:v1: 密文，再 protect_credential 内存态保护
+    "MIMO_API_KEY": lambda: protect_credential(get_secret("MIMO_API_KEY", "")),
+    "AGNES_API_KEY": lambda: get_secret("AGNES_API_KEY", ""),
+    # ASR 主 key 缺失时回退硅基流动（同一凭证库）
+    "ASR_API_KEY": lambda: get_secret("ASR_API_KEY", "") or get_secret("SILICONFLOW_API_KEY", ""),
+    "JINA_API_KEY": lambda: get_secret("JINA_API_KEY", ""),
+    "RERANKER_API_KEY": lambda: get_secret("RERANKER_API_KEY", ""),
+}
 
-# MIMO_API_KEY：先用 get_secret 解密 enc:v1: 密文，再交给 protect_credential 做内存态保护
-MIMO_API_KEY = protect_credential(get_secret("MIMO_API_KEY", ""))
+
+def __getattr__(name: str):
+    factory = _SECRET_CONSTANTS.get(name)
+    if factory is None:
+        raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+    value = factory()
+    globals()[name] = value  # 缓存，后续直接命中
+    return value
+
 
 # ── 反代客户端 IP 解析 ──
 # 默认 False：使用 TCP 对端 request.client.host（最安全）。
@@ -69,7 +91,6 @@ TRUST_FORWARDED_FOR = os.getenv("TRUST_FORWARDED_FOR", "").strip().lower() in ("
 
 
 # Agnes AI 配置（在 get_provider_config 之前定义，避免前向引用）
-AGNES_API_KEY = get_secret("AGNES_API_KEY", "")
 AGNES_BASE_URL = get_base_url_for_provider("agnes")
 AGNES_TEXT_MODEL = get_default_model_for_provider("agnes")
 AGNES_IMAGE_MODEL = os.getenv("AGNES_IMAGE_MODEL", "agnes-image-2.1-flash")
@@ -77,12 +98,8 @@ AGNES_VIDEO_MODEL = os.getenv("AGNES_VIDEO_MODEL", "agnes-video-v2.0")
 
 
 # ── ASR 语音识别配置 ──
-ASR_API_KEY = get_secret("ASR_API_KEY", "") or get_secret("SILICONFLOW_API_KEY", "")
 ASR_BASE_URL = os.getenv("ASR_BASE_URL", "https://api.siliconflow.cn/v1")
 ASR_MODEL = os.getenv("ASR_MODEL", "FunAudioLLM/SenseVoiceSmall")
-
-# Jina Reader API key（可选）：有则 500 RPM，无则免费 20 RPM
-JINA_API_KEY = get_secret("JINA_API_KEY", "")
 
 
 # ── 路由关键词常量 ──────────────────────────────────────────────
@@ -144,7 +161,6 @@ AGENT_TASK_MAP = {
 }
 
 # ── RAG 优化配置（SiliconFlow 免费常驻） ──
-RERANKER_API_KEY = get_secret("RERANKER_API_KEY", "")
 RERANKER_BASE_URL = os.getenv("RERANKER_BASE_URL", "https://api.siliconflow.cn/v1")
 RERANKER_MODEL = os.getenv("RERANKER_MODEL", "BAAI/bge-reranker-v2-m3")
 RERANKER_ENABLED = os.getenv("RERANKER_ENABLED", "true").lower() in ("1", "true", "yes")

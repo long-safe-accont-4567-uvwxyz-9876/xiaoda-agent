@@ -1753,6 +1753,9 @@ class AIQQBot(ChannelAdapterBase, botpy.Client):
 
 
 if __name__ == "__main__":
+    # 配置初始化收口（独立运行模式；单进程形态下由 web lifespan 覆盖）
+    from config_paths import initialize_config
+    initialize_config()
     # P0 修复：实时从 env 读取（与 run_qq_bot 保持一致，防止模块级变量未更新）
     _main_app_id = os.getenv("QQBOT_APP_ID", "").strip() or APP_ID
     _main_app_secret = os.getenv("QQBOT_APP_SECRET", "").strip() or APP_SECRET

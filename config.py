@@ -55,13 +55,15 @@ from config_agents import (  # noqa: F401,E402
 
 # ── Phase 4 拆分：env 开关/常量表抽为 config_constants（逐字节搬移）──
 # 同名 re-export 保持兼容（契约见 tests/test_config_constants_module.py）。
+# 例外（2026-08-22 副作用瘦身）：DEEPSEEK/MIMO/AGNES/ASR/JINA/RERANKER 六个
+# *_API_KEY 已改为经模块 __getattr__ 懒转发（凭证解密不再发生在 import 期）。
 from config_constants import (  # noqa: F401,E402
     get_secret, _safe_positive_float, _safe_float,
-    TRUST_FORWARDED_FOR, DEEPSEEK_API_KEY, MIMO_API_KEY,
-    AGNES_API_KEY, AGNES_BASE_URL, AGNES_TEXT_MODEL, AGNES_IMAGE_MODEL, AGNES_VIDEO_MODEL,
-    ASR_API_KEY, ASR_BASE_URL, ASR_MODEL, JINA_API_KEY,
+    TRUST_FORWARDED_FOR,
+    AGNES_BASE_URL, AGNES_TEXT_MODEL, AGNES_IMAGE_MODEL, AGNES_VIDEO_MODEL,
+    ASR_BASE_URL, ASR_MODEL,
     AGENT_ROUTE_KEYWORDS, AGENT_TASK_MAP,
-    RERANKER_API_KEY, RERANKER_BASE_URL, RERANKER_MODEL, RERANKER_ENABLED,
+    RERANKER_BASE_URL, RERANKER_MODEL, RERANKER_ENABLED,
     RERANKER_OVERSAMPLE_RATIO,
     QUERY_TRANSFORM_ENABLED, QUERY_EXPAND_COUNT, MEMORY_RETRIEVAL_DIFFUSION, HYDE_ENABLED,
     INTENT_LLM_CLASSIFY, INTENT_CLASSIFY_TIMEOUT,
@@ -238,10 +240,9 @@ def load_agent_config() -> dict:
 #   load_skills / _ensure_workspace_template 等
 
 
-AGENT_CONFIG = load_agent_config()
-
-# MCP_SERVERS：使用 shutil.which() 动态解析命令路径，兼容 Windows/Linux/macOS
-# 不再硬编码 Orange Pi 上的绝对路径，避免在其他设备上失效
+# AGENT_CONFIG 与 MCP_SERVERS 原为模块顶层急切构建（JSON5 读取 + shutil.which×2
+# + GITHUB token 凭证解密）——2026-08-22 收口为按需构建，经模块 __getattr__
+# 首次访问时执行并缓存（见文件末尾 _CONFIG_CONSTANTS_LAZY）。
 
 
 def _resolve_command(name: str) -> str:
@@ -268,23 +269,27 @@ def _resolve_command(name: str) -> str:
     return name  # fallback: 返回命令名本身
 
 
-MCP_SERVERS = {
-    "git": {
-        "command": _resolve_command("uvx"),
-        # 根因修复：uvx 默认解析到最新 mcp 版本，但 mcp 2.0.0 移除了 Server.list_tools() 装饰器 API，
-        # 导致 mcp-server-git 2026.7.10 子进程在 initialize 前瞬崩（AttributeError）。
-        # 用 --with "mcp<2" 钉版本到 1.x，已实测 8s 内完成握手并返回 12 个 git 工具。
-        "args": ["--with", "mcp<2", "mcp-server-git", "--repository", str(Path.home() / "Desktop")],
-        "env": {"UV_INDEX_URL": "https://pypi.tuna.tsinghua.edu.cn/simple"},
-        "agents": ["xiaolang"],  # which agents can use this MCP server's tools
-    },
-    "github": {
-        "command": _resolve_command("npx"),
-        "args": ["-y", "@modelcontextprotocol/server-github"],
-        "env": {"GITHUB_PERSONAL_ACCESS_TOKEN": get_secret("GITHUB_PERSONAL_ACCESS_TOKEN", "")},
-        "agents": ["xiaolang"],
-    },
-}
+def _build_mcp_servers() -> dict:
+    """构建 MCP 服务器配置表（首次访问 config.MCP_SERVERS 时执行一次）。"""
+    # MCP_SERVERS：使用 shutil.which() 动态解析命令路径，兼容 Windows/Linux/macOS
+    # 不再硬编码 Orange Pi 上的绝对路径，避免在其他设备上失效
+    return {
+        "git": {
+            "command": _resolve_command("uvx"),
+            # 根因修复：uvx 默认解析到最新 mcp 版本，但 mcp 2.0.0 移除了 Server.list_tools() 装饰器 API，
+            # 导致 mcp-server-git 2026.7.10 子进程在 initialize 前瞬崩（AttributeError）。
+            # 用 --with "mcp<2" 钉版本到 1.x，已实测 8s 内完成握手并返回 12 个 git 工具。
+            "args": ["--with", "mcp<2", "mcp-server-git", "--repository", str(Path.home() / "Desktop")],
+            "env": {"UV_INDEX_URL": "https://pypi.tuna.tsinghua.edu.cn/simple"},
+            "agents": ["xiaolang"],  # which agents can use this MCP server's tools
+        },
+        "github": {
+            "command": _resolve_command("npx"),
+            "args": ["-y", "@modelcontextprotocol/server-github"],
+            "env": {"GITHUB_PERSONAL_ACCESS_TOKEN": get_secret("GITHUB_PERSONAL_ACCESS_TOKEN", "")},
+            "agents": ["xiaolang"],
+        },
+    }
 
 __all__ = [
     "AGENTS_CONFIG_DIR",
@@ -392,16 +397,40 @@ _PROMPT_BUILDER_REEXPORTS = frozenset({
 })
 
 
-def __getattr__(name: str) -> Any:
-    """模块级 __getattr__ — 从 prompt_builder 延迟导入, 避免循环导入.
+# 经模块 __getattr__ 懒求值的名称（2026-08-22 副作用瘦身）：
+# - 六个 *_API_KEY → 转发 config_constants（凭证解密延迟到首次访问）
+# - AGENT_CONFIG / MCP_SERVERS → 本模块构建函数（JSON 读取/which/凭证解密延迟）
+_CONFIG_CONSTANTS_LAZY = frozenset({
+    "DEEPSEEK_API_KEY", "MIMO_API_KEY", "AGNES_API_KEY",
+    "ASR_API_KEY", "JINA_API_KEY", "RERANKER_API_KEY",
+    "AGENT_CONFIG", "MCP_SERVERS",
+})
 
-    只有访问 _PROMPT_BUILDER_REEXPORTS 中的名称时才触发 prompt_builder 加载.
+
+def __getattr__(name: str) -> Any:
+    """模块级 __getattr__ — 懒加载转发，避免 import 期副作用与循环导入.
+
+    两个来源：
+    1. _PROMPT_BUILDER_REEXPORTS → prompt_builder（打破循环导入）
+    2. _CONFIG_CONSTANTS_LAZY → 凭证密钥/config_constants + 本地构建
+       （消除 import 期解密与文件 IO）
+
     首次访问后将结果缓存到 globals(), 后续直接命中, 无 import 开销.
     """
     if name in _PROMPT_BUILDER_REEXPORTS:
         from importlib import import_module
         _pb = import_module("prompt_builder")
         value = getattr(_pb, name)
+        globals()[name] = value  # 缓存, 下次直接访问
+        return value
+    if name in _CONFIG_CONSTANTS_LAZY:
+        if name == "AGENT_CONFIG":
+            value = load_agent_config()
+        elif name == "MCP_SERVERS":
+            value = _build_mcp_servers()
+        else:
+            from importlib import import_module
+            value = getattr(import_module("config_constants"), name)
         globals()[name] = value  # 缓存, 下次直接访问
         return value
     raise AttributeError(f"module 'config' has no attribute {name!r}")

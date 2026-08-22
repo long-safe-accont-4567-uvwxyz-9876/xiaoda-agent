@@ -607,6 +607,10 @@ async def _ensure_wechat_bot_task(app: FastAPI) -> None:
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncIterator[Any]:
     logger.info("webui.lifespan.start")
+    # 配置初始化收口：建目录 + workspace 迁移（原 config import 副作用）。
+    # 放 lifespan 而非模块级——测试直接 import web.server 不应触发落盘。
+    from config_paths import initialize_config
+    initialize_config()
     _warn_unresolvable_web_master()
     try:
         core, owns_core = await _init_lifespan_resources(app)

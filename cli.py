@@ -894,6 +894,8 @@ class CLIInterface:
 
 
 def main() -> None:
+    from config_paths import initialize_config
+    initialize_config()
     cli = CLIInterface()
     cli.run()
 

@@ -17,6 +17,18 @@ os.environ.setdefault("AGENT_DEV_MODE", "1")
 os.environ.setdefault("TEST_MODE", "true")
 
 
+@pytest.fixture(scope="session", autouse=True)
+def _config_initialized():
+    """配置初始化的测试侧等价物（2026-08-22 import 副作用收口后必需）。
+
+    生产环境由真实入口调用 initialize_config()（agent.py/cli.py/web lifespan/
+    qq 独立运行）；测试进程没有这些入口，在首个用例前统一触发一次，
+    保持与旧行为（import 即建目录+workspace 迁移播种）一致的目录状态。
+    """
+    from config_paths import initialize_config
+    initialize_config()
+
+
 @pytest.fixture(autouse=True)
 def _isolate_permission_persistence(tmp_path, monkeypatch):
     """全局隔离权限模式落盘：任何测试 set_mode() 都写入临时文件。

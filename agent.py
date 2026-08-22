@@ -740,6 +740,9 @@ def _run_desktop(host: str, port: int) -> None:
 
 if __name__ == "__main__":
     try:
+        # 配置初始化收口：建目录 + workspace 迁移（原 config import 副作用，见 config_paths）
+        from config_paths import initialize_config
+        initialize_config()
         main()
     except Exception:
         # 顶层异常兜底：写日志文件，防止 exe 静默崩溃

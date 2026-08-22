@@ -252,12 +252,18 @@ def _ensure_fallback(fallback_path: Path) -> Path:
 
 DATA_DIR = _resolve_data_path(_KIOXIA_BASE / "db", _FALLBACK_BASE / "db")
 LOG_DIR = _resolve_data_path(_KIOXIA_BASE / "logs", _FALLBACK_BASE / "logs")
+# 是否实际使用外置盘：仅当显式配置 KIOXIA_DATA_DIR 且 DATA_DIR 落在其上时。
+# 原在 _ensure_workspace 内经 global 回写（2026-08-22 收口后改为模块级纯计算，
+# 消除对初始化调用时序的隐式依赖）。修复：原 (_KIOXIA_BASE/"db").exists() 在
+# 未设 KIOXIA_DATA_DIR 时查询 ~/.ai-agent/data/db，与 DATA_DIR 实际位置可能矛盾。
+_KIOXIA_AVAILABLE = bool(os.getenv("KIOXIA_DATA_DIR", "")) and (
+    DATA_DIR == _KIOXIA_BASE / "db"
+)
 # MD 文件（workspace）固定存放到系统盘用户目录，不再随 KIOXIA_DATA_DIR 走：
 # USER.md/MEMORY.md/HEARTBEAT.md 每次请求都会读取注入提示词，放 U 盘会拖慢响应。
 # 数据库（DATA_DIR）仍按 KIOXIA_DATA_DIR 解析——只有数据库用 U 盘。
 # 所有模式（dev/frozen/远程）统一该路径，与项目根 config/workspace（git 模板源）分离。
 WORKSPACE_DIR = Path.home() / ".ai-agent" / "config" / "workspace"
-WORKSPACE_DIR.mkdir(parents=True, exist_ok=True)
 CREDENTIALS_DIR = get_credentials_dir()
 
 
@@ -423,7 +429,7 @@ def _ensure_workspace() -> None:
 
     仅在首次显式调用时执行一次，避免模块导入时产生 IO 副作用。
     """
-    global _workspace_initialized, _KIOXIA_AVAILABLE
+    global _workspace_initialized
     if _workspace_initialized:
         return
     _workspace_initialized = True
@@ -494,9 +500,6 @@ def _ensure_workspace() -> None:
     # 是否实际使用外置盘：仅当显式配置 KIOXIA_DATA_DIR 且 DATA_DIR 落在其上时。
     # 修复：原 (_KIOXIA_BASE/"db").exists() 在未设 KIOXIA_DATA_DIR 时查询
     # ~/.ai-agent/data/db，与 DATA_DIR 实际位置可能矛盾。
-    _KIOXIA_AVAILABLE = bool(os.getenv("KIOXIA_DATA_DIR", "")) and (
-        DATA_DIR == _KIOXIA_BASE / "db"
-    )
 
 
 # 路径定义必须在 _ensure_workspace() 之前：迁移逻辑引用这些变量
@@ -508,7 +511,6 @@ def _ensure_workspace() -> None:
 # 都是每次请求或高频读取的小文件，放 U 盘会拖慢响应并因 USB IO 卡住引发事件循环冻结
 # （见 agent_context.build_messages 的 P0 修复注释）。只有数据库（DATA_DIR）保留 U 盘。
 CONFIG_DIR = Path.home() / ".ai-agent" / "config"
-CONFIG_DIR.mkdir(parents=True, exist_ok=True)
 AGENT_CONFIG_PATH = CONFIG_DIR / "agent.json5"
 # ── 6c11c84 迁移遗漏补全：小体积热路径目录固定系统盘，仅数据库与大体积内容用 U 盘 ──
 # 每轮回复都要列表情包目录/读参考音频/读记忆状态/读插件配置，放 U 盘会拖慢响应
@@ -516,12 +518,9 @@ AGENT_CONFIG_PATH = CONFIG_DIR / "agent.json5"
 # _ensure_workspace() 幂等迁移到系统盘；大体积内容（files/media/tts_cache/logs）
 # 仍留在 U 盘（系统盘仅剩 3.8G，eMMC 空间有限）。
 STICKER_DIR = Path.home() / ".ai-agent" / "stickers"
-STICKER_DIR.mkdir(parents=True, exist_ok=True)
 XIAOLI_STICKER_DIR = Path.home() / ".ai-agent" / "xiaoli-stickers"
-XIAOLI_STICKER_DIR.mkdir(parents=True, exist_ok=True)
 # 通用智能体表情包根目录：每个子智能体的表情包存放在 {AGENT_STICKER_BASE}/{agent_name}/
 AGENT_STICKER_BASE = Path.home() / ".ai-agent" / "agent-stickers"
-AGENT_STICKER_BASE.mkdir(parents=True, exist_ok=True)
 FILE_DIR = _resolve_data_path(_KIOXIA_BASE / "files", _FALLBACK_BASE / "files")
 # 媒体目录（用户上传图片、生成的 TTS/图片/视频、壁纸等可写资源）。
 # 固定系统盘用户目录，不参与 _resolve_data_path 的 U 盘分支：壁纸/小图资源仅 5 张、
@@ -530,17 +529,41 @@ FILE_DIR = _resolve_data_path(_KIOXIA_BASE / "files", _FALLBACK_BASE / "files")
 MEDIA_DIR = Path.home() / ".ai-agent" / "media"
 # 参考音频目录（用户上传的 TTS 参考音频，按 agent 分子目录）——每次 TTS 热读，迁系统盘
 VOICE_REF_DIR = Path.home() / ".ai-agent" / "voice_refs"
-VOICE_REF_DIR.mkdir(parents=True, exist_ok=True)
 # 记忆状态目录（记忆编码状态等运行时可写数据）——高频读写，迁系统盘
 MEMORY_STATE_DIR = Path.home() / ".ai-agent" / "memory_state"
-MEMORY_STATE_DIR.mkdir(parents=True, exist_ok=True)
 # 插件配置目录——启动与鉴权读取，迁系统盘
 PLUGINS_CONFIG_DIR = Path.home() / ".ai-agent" / "plugins"
-PLUGINS_CONFIG_DIR.mkdir(parents=True, exist_ok=True)
 # 子 Agent 配置目录（人格文件、配置 JSON）
 # 从统一 CONFIG_DIR 派生，确保与 AGENT_CONFIG_PATH 和 _init_user_resources 同源
 AGENTS_CONFIG_DIR = CONFIG_DIR / "agents"
-AGENTS_CONFIG_DIR.mkdir(parents=True, exist_ok=True)
 
-# 在路径定义后执行初始化：frozen 模式下的资源复制和数据迁移引用上方变量
-_ensure_workspace()
+# ── 初始化收口（2026-08-22 config import 副作用瘦身）──────────────
+# 原：9 个目录 mkdir + _ensure_workspace()（迁移扫描×7 + frozen 迁移×11 +
+# 模板播种）在模块顶层执行——任何 import 都产生目录创建与文件 IO，
+# 测试/工具脚本被迫依赖预播种的 ~/.ai-agent。
+# 现：全部收进幂等的 initialize_config()，由真实入口（agent.py/cli.py/
+# web server 启动/qq 独立运行）调用；纯 import 只得到纯路径常量。
+_INITIALIZED = False
+
+
+def initialize_config() -> None:
+    """幂等配置初始化：建目录 + workspace 迁移/模板播种。入口必须早调。
+
+    多次调用安全；并发场景下最坏情况是重复 mkdir(exist_ok=True) 与一次
+    冗余迁移扫描（_ensure_workspace 自身按存在性跳过），无正确性影响。
+    """
+    global _INITIALIZED
+    if _INITIALIZED:
+        return
+    _INITIALIZED = True
+    WORKSPACE_DIR.mkdir(parents=True, exist_ok=True)
+    CONFIG_DIR.mkdir(parents=True, exist_ok=True)
+    STICKER_DIR.mkdir(parents=True, exist_ok=True)
+    XIAOLI_STICKER_DIR.mkdir(parents=True, exist_ok=True)
+    AGENT_STICKER_BASE.mkdir(parents=True, exist_ok=True)
+    VOICE_REF_DIR.mkdir(parents=True, exist_ok=True)
+    MEMORY_STATE_DIR.mkdir(parents=True, exist_ok=True)
+    PLUGINS_CONFIG_DIR.mkdir(parents=True, exist_ok=True)
+    AGENTS_CONFIG_DIR.mkdir(parents=True, exist_ok=True)
+    # 路径常量已全部定义（函数体调用时执行），_ensure_workspace 的迁移逻辑可安全引用
+    _ensure_workspace()
