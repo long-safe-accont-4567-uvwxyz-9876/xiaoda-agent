@@ -186,12 +186,37 @@ function onAdvancedInput() {
   advancedTouched.value = true
 }
 
+function isVideoWallpaper(url: string): boolean {
+  return /\.(mp4|webm)(\?|$)/i.test(url)
+}
+
+const WP_LIMITS: Record<string, number> = {
+  image: 8 * 1024 * 1024,
+  gif: 20 * 1024 * 1024,
+  video: 50 * 1024 * 1024,
+}
+
+function wallpaperKind(file: File): 'image' | 'gif' | 'video' | null {
+  if (file.type === 'image/gif') return 'gif'
+  if (file.type === 'video/mp4' || file.type === 'video/webm') return 'video'
+  if (file.type.startsWith('image/')) return 'image'
+  return null
+}
+
 function pickWallpaper(e: Event) {
   const input = e.target as HTMLInputElement
   const file = input.files?.[0]
   if (!file) return
-  if (file.size > 8 * 1024 * 1024) {
-    message.error(t('agentsView.imgTooLarge'))
+  const kind = wallpaperKind(file)
+  if (!kind) {
+    message.error(t('agentsView.wpUnsupported'))
+    input.value = ''
+    return
+  }
+  if (file.size > WP_LIMITS[kind]) {
+    const key = kind === 'image' ? 'agentsView.imgTooLarge'
+      : kind === 'gif' ? 'agentsView.gifTooLarge' : 'agentsView.videoTooLarge'
+    message.error(t(key))
     input.value = ''
     return
   }
@@ -595,11 +620,17 @@ async function uploadVoiceForAgent() {
                   <n-button v-if="!isCreate" :loading="uploadingWp" @click="wpInput?.click()">
                     {{ t('agentsView.uploadImage') }}
                   </n-button>
-                  <input ref="wpInput" type="file" accept="image/png,image/jpeg,image/webp"
+                  <input ref="wpInput" type="file"
+                         accept="image/png,image/jpeg,image/webp,image/gif,video/mp4,video/webm"
                          style="display: none" @change="pickWallpaper" />
                 </div>
-                <div v-if="editing.wallpaper" class="wallpaper-preview"
-                     :style="{ backgroundImage: `url('${editing.wallpaper}')` }" />
+                <template v-if="editing.wallpaper">
+                  <video v-if="isVideoWallpaper(editing.wallpaper)"
+                         class="wallpaper-preview" :src="editing.wallpaper"
+                         autoplay loop muted playsinline />
+                  <div v-else class="wallpaper-preview"
+                       :style="{ backgroundImage: `url('${editing.wallpaper}')` }" />
+                </template>
                 <span v-else class="wallpaper-hint">{{ t('agentsView.wallpaperHint') }}</span>
               </div>
             </n-form-item>
