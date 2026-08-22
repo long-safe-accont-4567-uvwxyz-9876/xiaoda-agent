@@ -206,6 +206,9 @@ class UnifiedExecutor:
                            skill_name, str(e)[:300])
             return NodeResult(status=StepStatus.FAILED, error_code="SKILL_LLM_FAILED",
                               error_message=str(e)[:500])
+        if answer is None:
+            return NodeResult(status=StepStatus.FAILED, error_code="SKILL_NO_ANSWER",
+                              error_message="技能执行无输出（超时）")
         text, filtered = self._filter_output(str(answer))
         return NodeResult(status=StepStatus.SUCCEEDED,
                           output={"skill": skill_name, "text": _mask(text),

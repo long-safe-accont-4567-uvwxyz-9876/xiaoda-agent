@@ -261,6 +261,16 @@ async def test_skill_with_file_resolver():
 
 
 @pytest.mark.asyncio
+async def test_skill_llm_no_answer_fails():
+    """技能 LLM 无响应（route 返回 None）必须显式失败，不能拿 'None' 当成功输出。"""
+    router = FakeRouter(answer=None)
+    ex = _ex(router=router, skill=_skill_map({"整理文件夹": "步骤一"}))
+    r = await ex(_node("s", NodeType.SKILL, skill_ref="整理文件夹"), None, {})
+    assert r.status == StepStatus.FAILED
+    assert r.error_code == "SKILL_NO_ANSWER"
+
+
+@pytest.mark.asyncio
 async def test_skill_async_resolver():
     async def _resolver(name):
         return {"instructions": "异步技能体"}
