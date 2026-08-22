@@ -16,7 +16,7 @@ const targetUrl = computed(() => {
   return agentsStore.mainWallpaper || DEFAULT_BG
 })
 
-type LayerKind = 'image' | 'video'
+type LayerKind = 'image' | 'video' | 'html'
 interface Layer { url: string; key: number; kind: LayerKind }
 const layers = ref<Layer[]>([])
 let seq = 0
@@ -33,16 +33,19 @@ onBeforeUnmount(() => {
 })
 
 function layerKind(url: string): LayerKind {
-  return /\.(mp4|webm)(\?|$)/i.test(url) ? 'video' : 'image'
+  if (/\.(mp4|webm)(\?|$)/i.test(url)) return 'video'
+  if (/\.html?(\?|$)/i.test(url)) return 'html'
+  return 'image'
 }
 
 watch(targetUrl, (url) => {
   if (!url) return
   pendingUrl = url
   if (topUrl() === url) return
-  if (layerKind(url) === 'video') {
-    // 视频无 Image 预加载探活；canplay 事件在 <video> 元素上处理，
-    // 失败由 videoError 回退默认图
+  const kind = layerKind(url)
+  if (kind !== 'image') {
+    // 视频/HTML 无 Image 预加载探活；错误处理在元素事件上
+    // （视频 error→回退默认图；HTML 上传侧已静态校验）
     pushLayer(url)
     return
   }
@@ -100,6 +103,14 @@ function videoError() {
           preload="auto"
           @error="videoError"
         />
+        <iframe
+          v-else-if="l.kind === 'html'"
+          class="backdrop-layer backdrop-html"
+          :src="l.url"
+          sandbox="allow-scripts"
+          referrerpolicy="no-referrer"
+          title="dynamic wallpaper"
+        />
         <div
           v-else
           class="backdrop-layer"
@@ -132,6 +143,15 @@ function videoError() {
   object-fit: cover;
   width: 100%;
   height: 100%;
+}
+
+/* HTML 动画层：全屏、透明背景、不可交互（纯展示） */
+.backdrop-html {
+  width: 100%;
+  height: 100%;
+  border: none;
+  background: transparent;
+  pointer-events: none;
 }
 
 .bg-fade-enter-active {

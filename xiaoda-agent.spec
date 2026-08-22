@@ -505,6 +505,13 @@ except Exception:
 #              （仅 collect_data_files 可能被当 data 处理，加载路径不一致导致失败）
 # tokenizers: Rust 扩展二进制（tokenizers*.pyd/.so）双保险收集
 binaries = []
+# 动态壁纸转码：vendored ffmpeg 静态构建（scripts/fetch_ffmpeg.py 预先下载）
+_vendored_ffmpeg_dir = os.path.join(SPECPATH, 'vendor', 'ffmpeg')
+for _plat_dir in ('win32-x64',):
+    for _exe in ('ffmpeg.exe', 'ffprobe.exe'):
+        _p = os.path.join(_vendored_ffmpeg_dir, _plat_dir, _exe)
+        if os.path.isfile(_p):
+            binaries.append((_p, os.path.join('ffmpeg', _plat_dir)))
 from PyInstaller.utils.hooks import collect_dynamic_libs
 for pkg in ('pilk', 'sqlite_vec', 'onnxruntime', 'onnxruntime_genai', 'tokenizers'):
     try:

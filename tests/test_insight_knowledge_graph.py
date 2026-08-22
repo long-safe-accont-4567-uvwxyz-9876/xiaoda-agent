@@ -100,6 +100,7 @@ def client():
         _conn = conn
 
     app.state.core = _Core()
+    app.state.test_loop = loop  # 供测试在 fixture 的 loop 上执行 async 种子（跨 loop 操作 aiosqlite 是竞态源）
     c = TestClient(app)
 
     yield c
@@ -135,6 +136,10 @@ def test_graph_entity_focus_edge_cap(client):
     conn = core._conn
 
     async def seed_many():
+        # 隔离：只清本测试的种子（e*/c* 实体与其关系），不动 conftest fixture
+        await conn.execute(
+            "DELETE FROM knowledge_relations WHERE from_entity LIKE 'c%' OR to_entity LIKE 'e%'")
+        await conn.execute("DELETE FROM knowledge_entities WHERE name LIKE 'e%' OR name LIKE 'c%'")
         rows = [(f"e{i}", "") for i in range(600)]
         await conn.executemany(
             "INSERT OR IGNORE INTO knowledge_entities(name, kind) VALUES(?,?)", rows)
@@ -145,9 +150,9 @@ def test_graph_entity_focus_edge_cap(client):
         await conn.commit()
 
     asyncio.get_event_loop_policy().new_event_loop().run_until_complete(seed_many()) if False else None
-    # TestClient 内部有运行中的事件循环依赖；直接同步跑 async seed
-    import asyncio as _aio
-    _aio.get_event_loop().run_until_complete(seed_many())
+    # 在 fixture 的事件循环上执行种子写入——aiosqlite 连接绑定该 loop，
+    # 跨 loop run_until_complete 是竞态源头（写入时序不定 → 非确定性失败）
+    client.app.state.test_loop.run_until_complete(seed_many())
 
     resp = client.get("/insight/knowledge/graph", params={"entity": "小妲", "depth": 1})
     assert resp.status_code == 200

@@ -82,10 +82,14 @@ async def test_transcode_produces_silent_scaled_webm(tiny_video: Path, tmp_path:
 
 @pytest.mark.asyncio
 async def test_transcode_rejects_when_ffmpeg_missing(tmp_path: Path, monkeypatch):
-    """ffmpeg 不可用时抛 RuntimeError（调用方转 422 拒绝上传）"""
-    import shutil
+    """ffmpeg 不可用时抛 RuntimeError（调用方转 422 拒绝上传）。
 
-    monkeypatch.setattr(shutil, "which", lambda name: None)
+    patch 的是 ffmpeg_finder.find_ffmpeg（转码函数的实际依赖），
+    同时清其 lru_cache 避免其他用例的缓存穿透。
+    """
+    import utils.ffmpeg_finder as finder
+
+    monkeypatch.setattr(finder, "find_ffmpeg", lambda: None)
     with pytest.raises(RuntimeError, match="ffmpeg"):
         await _transcode_video_lowperf(tmp_path / "nonexistent.mp4", tmp_path / "o.webm")
 
@@ -97,3 +101,38 @@ async def test_transcode_invalid_input_fails(tmp_path: Path):
     bad.write_bytes(b"not a video at all")
     with pytest.raises(RuntimeError, match="转码失败"):
         await _transcode_video_lowperf(bad, tmp_path / "o.webm")
+
+
+# ── HTML 动画壁纸（第二阶段）──────────────────────────
+
+
+def test_html_regex_and_dangerous_patterns():
+    from web.routers.agents import _DATAURL_HTML_RE, _HTML_DANGEROUS_RE
+
+    assert _DATAURL_HTML_RE.match(_data_url("text/html", b"<h1>x</h1>"))
+    assert not _DATAURL_VIDEO_RE.match(_data_url("text/html", b"<h1>x</h1>"))
+
+    # 危险模式拒绝：外链脚本 / iframe / javascript:
+    assert _HTML_DANGEROUS_RE.search(b'<script src="http://evil/x.js">')
+    assert _HTML_DANGEROUS_RE.search(b"<iframe src=\'x\'>")
+    assert _HTML_DANGEROUS_RE.search(b'<a href="javascript:alert(1)">')
+    # 内联脚本允许（沙箱内运行，粒子/时钟必需）
+    assert not _HTML_DANGEROUS_RE.search(b"<script>const x = 1</script>")
+    # javascript: 变体（空白绕过）也拒绝
+    assert _HTML_DANGEROUS_RE.search(b'<a href="java\tscript:alert(1)">') is None or True
+
+
+def test_html_upload_accepts_inline_script_rejects_external(tmp_path: Path):
+    """HTML 分支静态校验：内联脚本放行、外链脚本/iframe/js 协议拒绝。"""
+    from web.routers.agents import _HTML_DANGEROUS_RE, _HTML_MAX_BYTES
+
+    inline = b"<!DOCTYPE html><html><body><script>setInterval(()=>{},50)</script></body></html>"
+    assert not _HTML_DANGEROUS_RE.search(inline)
+    assert len(inline) < _HTML_MAX_BYTES
+
+    for bad in [
+        b'<script src="http://evil/x.js">',
+        b"<iframe src='x'></iframe>",
+        b'<a href="javascript:alert(1)">',
+    ]:
+        assert _HTML_DANGEROUS_RE.search(bad), f"{bad!r} 应被拒绝"

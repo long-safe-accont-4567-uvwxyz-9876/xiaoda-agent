@@ -628,6 +628,10 @@ async function uploadVoiceForAgent() {
                   <video v-if="isVideoWallpaper(editing.wallpaper)"
                          class="wallpaper-preview" :src="editing.wallpaper"
                          autoplay loop muted playsinline />
+                  <iframe v-else-if="/\.html?(\?|$)/i.test(editing.wallpaper)"
+                          class="wallpaper-preview" :src="editing.wallpaper"
+                          sandbox="allow-scripts" referrerpolicy="no-referrer"
+                          title="wallpaper preview" />
                   <div v-else class="wallpaper-preview"
                        :style="{ backgroundImage: `url('${editing.wallpaper}')` }" />
                 </template>
