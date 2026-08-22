@@ -352,7 +352,7 @@ def _apply_llm_node(core: Any, node_id: str, backend: str, local_model: str | No
     if node_id == "nudge":
         try:
             import qq_bot_adapter
-            bot = getattr(qq_bot_adapter, "_ACTIVE_BOT", None)
+            bot = getattr(qq_bot_adapter, "get_active_bot", lambda: None)()
             nudge = getattr(bot, "nudge_engine", None) if bot is not None else None
             _try_set_backend(nudge, backend, local_model)
         except (ImportError, AttributeError):

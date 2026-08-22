@@ -79,7 +79,7 @@ async def get_status(request: Request) -> Any:
         # source 是 'qq_c2c' / 'qq_group'，精确匹配永远查不到，导致恒为 False。
         # 且“消息活跃度”不等于“连接状态”——连上但没人发消息也会误显示离线。
         import qq_bot_adapter
-        bot = qq_bot_adapter._ACTIVE_BOT
+        bot = qq_bot_adapter.get_active_bot()
         if bot is not None and not bot.is_closed():
             qq_connected = True
     except (ImportError, AttributeError, OSError, RuntimeError) as exc:
@@ -89,7 +89,7 @@ async def get_status(request: Request) -> Any:
     wechat_connected = False
     try:
         import wechat_bot_adapter
-        bot = wechat_bot_adapter._ACTIVE_BOT
+        bot = wechat_bot_adapter.get_active_bot()
         # 与 /wechat/status 语义一致：只有已连接、未关闭、未过期才算在线。
         # 避免"无凭证/初始化失败/会话过期"三种状态误报已连接。
         if (

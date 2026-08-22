@@ -158,6 +158,11 @@ def _build_user_input(content: str, attachment_info: str) -> str:
 _ACTIVE_BOT: "AIQQBot | None" = None
 
 
+def get_active_bot() -> "AIQQBot | None":
+    """返回当前活跃的 QQ bot 实例；web 层读取一律经此访问，勿直读 _ACTIVE_BOT。"""
+    return _ACTIVE_BOT
+
+
 async def send_proactive_message(text: str, openid: str = "") -> bool:
     """向最近私聊用户（或指定 openid）主动发一条 QQ 消息。
 

@@ -113,6 +113,11 @@ ILINK_DEFAULT_BASE_URL = "https://ilinkai.weixin.qq.com"
 _ACTIVE_BOT: "WeChatBotAdapter | None" = None
 
 
+def get_active_bot() -> "WeChatBotAdapter | None":
+    """返回当前活跃的微信 adapter 实例；web 层经此读取，勿直读模块私有状态。"""
+    return _ACTIVE_BOT
+
+
 async def send_proactive_message(text: str) -> bool:
     """向最近微信私聊用户主动发一条消息（供 web/greeting_scheduler 等调用）。
 

@@ -270,7 +270,7 @@ async def test_connection(request: Request) -> Any:
     # M2：优先读活跃实例实时状态，避免与 live poller 并发 getupdates。
     try:
         import wechat_bot_adapter
-        active = wechat_bot_adapter._ACTIVE_BOT
+        active = wechat_bot_adapter.get_active_bot()
     except Exception:
         active = None
     if active is not None and not active.is_closed():
@@ -463,7 +463,7 @@ async def get_wechat_status() -> Any:
     bot = None
     try:
         import wechat_bot_adapter
-        bot = wechat_bot_adapter._ACTIVE_BOT
+        bot = wechat_bot_adapter.get_active_bot()
         if bot is not None and not bot.is_closed():
             if getattr(bot, "_expired", False):
                 expired = True
