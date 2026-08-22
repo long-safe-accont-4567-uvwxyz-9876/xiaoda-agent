@@ -169,6 +169,42 @@ function linkId(end: string | GraphNode): string {
 
 // ── 加载数据 ──
 const RETRY_DELAYS = [1000, 2000, 4000]
+// 按需展开状态：累积节点/边（id 索引去重），点击节点增量拉邻域
+let accNodes: GraphNode[] = []
+let accLinks: GraphLink[] = []
+const accNodeIdx = new Map<string, GraphNode>()
+const accLinkKeys = new Set<string>()
+// 已展开邻域的节点 id 集合（高亮提示）
+const expandedIds = ref<Set<string>>(new Set())
+const expandingName = ref('')
+
+function mergeIntoAcc(rawNodes: any[], rawEdges: any[]) {
+  const degree = new Map<string, number>()
+  for (const e of rawEdges) {
+    const f = String(e.from), t2 = String(e.to)
+    degree.set(f, (degree.get(f) || 0) + 1)
+    degree.set(t2, (degree.get(t2) || 0) + 1)
+  }
+  for (const n of rawNodes) {
+    const id = String(n.name)
+    if (accNodeIdx.has(id)) continue
+    const node: GraphNode = {
+      id,
+      name: String(n.name),
+      kind: n.kind,
+      val: (degree.get(id) || 0) + 1,
+      fx: 0, fy: 0, fz: 0,
+    }
+    accNodeIdx.set(id, node)
+    accNodes.push(node)
+  }
+  for (const e of rawEdges) {
+    const key = `${e.from}||${e.relation}||${e.to}`
+    if (accLinkKeys.has(key)) continue
+    accLinkKeys.add(key)
+    accLinks.push({ source: String(e.from), target: String(e.to), relation: e.relation })
+  }
+}
 
 async function loadGraph(retries = 0) {
   if (destroyed || !containerEl.value) return
@@ -177,97 +213,23 @@ async function loadGraph(retries = 0) {
 
   loading.value = true
   try {
-    const data = await getKnowledgeGraph(props.entity, activeDepth.value)
+    // 按需展开模型：重置累积状态，只拉起步实体 depth=1 邻域（<400 边）
+    // 用户后续单击节点增量展开，不再一次性拉全图
+    accNodes = []
+    accLinks = []
+    accNodeIdx.clear()
+    accLinkKeys.clear()
+    expandedIds.value = new Set()
+    const startEntity = props.entity.trim()
+    const data = await getKnowledgeGraph(startEntity, Math.min(activeDepth.value, 1))
     if (destroyed) return
 
     const rawNodes: any[] = data.nodes || []
     const rawEdges: any[] = data.edges || []
+    mergeIntoAcc(rawNodes, rawEdges)
+    if (startEntity) expandedIds.value.add(startEntity)
 
-    // 计算度数
-    const degree = new Map<string, number>()
-    for (const e of rawEdges) {
-      const f = String(e.from), t = String(e.to)
-      degree.set(f, (degree.get(f) || 0) + 1)
-      degree.set(t, (degree.get(t) || 0) + 1)
-    }
-
-    const graphNodes: GraphNode[] = rawNodes.map(n => {
-      const id = String(n.name)
-      return {
-        id,
-        name: String(n.name),
-        kind: n.kind,
-        val: (degree.get(id) || 0) + 1,
-        // 入场动画：所有节点从中心起步
-        fx: 0, fy: 0, fz: 0,
-      }
-    })
-    const graphLinks: GraphLink[] = rawEdges.map(e => ({
-      source: String(e.from),
-      target: String(e.to),
-      relation: e.relation,
-    }))
-
-    nodes.value = graphNodes
-    links.value = graphLinks
-    nodeCount.value = graphNodes.length
-    neighborsCache = buildNeighbors(graphNodes, graphLinks)
-
-    // 渲染规模分级：>600 边关粒子流（每条边一个动画粒子是最大 GPU 开销），
-    // >1200 边再降节点分辨率；比"一刀切 2000 节点降级"更平滑
-    const edgeTotal = graphLinks.length
-    heavyEdges.value = edgeTotal > 600
-
-    // 性能保护：节点过多则降级（用户已点击"仍要进入 3D"则跳过）
-    if (graphNodes.length > 2000 && !bypassDegrade) {
-      degraded.value = true
-      loading.value = false
-      // 释放已建实例
-      if (graph.value) {
-        graph.value._destructor()
-        graph.value = null
-        initialized = false
-      }
-      return
-    }
-    degraded.value = false
-
-    if (!graph.value) initGraph()
-
-    // graphData 接收内部会原地解析 source/target 为节点对象
-    // 大图（>400 节点）先只挂节点、延后 300ms 再挂边：力导向先散开节点，
-    // 避免边+节点同时求解导致的初始帧卡死
-    const bigGraph = graphNodes.length > 400
-    graph.value!.graphData({
-      nodes: graphNodes as unknown as NodeObject[],
-      links: (bigGraph ? [] : graphLinks) as unknown as GraphLink[],
-    } as any)
-
-    // 力导向参数：增大斥力和连接长度，避免节点挤成一坨
-    // 默认 charge.strength=-30, link.distance=30；调大后节点会分散开
-    const charge = graph.value!.d3Force('charge')
-    if (charge) charge.strength(bigGraph ? -200 : -120)
-    const link = graph.value!.d3Force('link')
-    if (link) link.distance(60)
-
-    loading.value = false
-
-    // 释放初始锚定，让力导向把节点从中心炸开
-    releaseTimer = setTimeout(() => {
-      if (destroyed || !graph.value) return
-      graphNodes.forEach(n => { n.fx = undefined; n.fy = undefined; n.fz = undefined })
-      graph.value!.d3AlphaDecay(0.05)
-      graph.value!.graphData({
-        nodes: graphNodes as unknown as NodeObject[],
-        links: graphLinks as unknown as GraphLink[],
-      } as any)
-    }, 300)
-
-    // 收敛后框选居中
-    zoomTimer = setTimeout(() => {
-      if (destroyed || !graph.value) return
-      graph.value!.zoomToFit(500, 100)
-    }, 1500)
+    applyAccumulatedToGraph()
   } catch (e: any) {
     if (retries < RETRY_DELAYS.length) {
       retryTimer = setTimeout(() => loadGraph(retries + 1), RETRY_DELAYS[retries])
@@ -275,6 +237,88 @@ async function loadGraph(retries = 0) {
       message.error(e?.message || t('universeGraph.loadFailed'))
       loading.value = false
     }
+  }
+}
+
+// 将累积数据应用到 3D 引擎（大图分阶段挂边，防初始帧卡死）
+function applyAccumulatedToGraph() {
+  if (destroyed || !containerEl.value) return
+
+  nodes.value = [...accNodes]
+  links.value = [...accLinks]
+  nodeCount.value = accNodes.length
+  neighborsCache = buildNeighbors(accNodes, accLinks)
+
+  // 渲染规模分级：>600 边关粒子流（每条边一个动画粒子是最大 GPU 开销）
+  heavyEdges.value = accLinks.length > 600
+
+  // 性能保护：节点过多则降级（用户已点击"仍要进入 3D"则跳过）
+  if (accNodes.length > 2000 && !bypassDegrade) {
+    degraded.value = true
+    loading.value = false
+    // 释放已建实例
+    if (graph.value) {
+      graph.value._destructor()
+      graph.value = null
+      initialized = false
+    }
+    return
+  }
+  degraded.value = false
+
+  if (!graph.value) initGraph()
+
+  // 大图（>400 节点）先只挂节点、延后 300ms 再挂边：力导向先散开节点，
+  // 避免边+节点同时求解导致的初始帧卡死
+  const bigGraph = accNodes.length > 400
+  graph.value!.graphData({
+    nodes: accNodes as unknown as NodeObject[],
+    links: (bigGraph ? [] : accLinks) as unknown as GraphLink[],
+  } as any)
+
+  // 力导向参数：增大斥力和连接长度，避免节点挤成一坨
+  const charge = graph.value!.d3Force('charge')
+  if (charge) charge.strength(bigGraph ? -200 : -120)
+  const link = graph.value!.d3Force('link')
+  if (link) link.distance(60)
+
+  loading.value = false
+  expandingName.value = ''
+
+  // 释放初始锚定，让力导向把节点从中心炸开
+  releaseTimer = setTimeout(() => {
+    if (destroyed || !graph.value) return
+    accNodes.forEach(n => { n.fx = undefined; n.fy = undefined; n.fz = undefined })
+    graph.value!.d3AlphaDecay(0.05)
+    graph.value!.graphData({
+      nodes: accNodes as unknown as NodeObject[],
+      links: accLinks as unknown as GraphLink[],
+    } as any)
+  }, 300)
+
+  // 收敛后框选居中
+  zoomTimer = setTimeout(() => {
+    if (destroyed || !graph.value) return
+    graph.value!.zoomToFit(500, 100)
+  }, 1500)
+}
+
+// ── 单击节点：增量拉取该节点 1 跳邻域合并进图 ──
+async function expandAround(node: GraphNode) {
+  const id = node.id as string
+  if (expandingName.value || expandedIds.value.has(id)) return
+  expandingName.value = node.name
+  try {
+    const data = await getKnowledgeGraph(node.name, 1)
+    if (destroyed) return
+    mergeIntoAcc(data.nodes || [], data.edges || [])
+    expandedIds.value.add(id)
+    applyAccumulatedToGraph()
+    // 展开后聚焦到该节点
+    setTimeout(() => { if (!destroyed) focusOnNode(node) }, 350)
+  } catch (e: any) {
+    console.debug('[universe] expand failed:', e?.message)
+    expandingName.value = ''
   }
 }
 
@@ -455,6 +499,8 @@ function initGraph() {
       updateHighlight()
       focusOnNode(n)
       spawnRipple(n.x ?? 0, n.y ?? 0, n.z ?? 0, colorForKind(n.kind))
+      // 按需展开：单击节点增量拉取其邻域（已展开过则跳过）
+      expandAround(n)
       resetIdleTimer()
     })
     .onBackgroundClick(() => {
