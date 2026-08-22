@@ -97,6 +97,10 @@ jobs:
         working-directory: web/frontend
         run: npm install
 
+      - name: Typecheck frontend (vue-tsc)
+        working-directory: web/frontend
+        run: npm run typecheck
+
       - name: Build frontend (vite)
         working-directory: web/frontend
         run: npm run build

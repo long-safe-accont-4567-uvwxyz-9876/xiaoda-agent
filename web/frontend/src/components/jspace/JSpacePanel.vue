@@ -237,7 +237,7 @@ function formatTime(ts: number) {
           </label>
           <label class="config-row">
             <span>{{ t('jspace.configSignalHistory') }}</span>
-            <n-input v-model:value="config.signal_max_history" type="number" size="small" style="width: 80px" />
+            <n-input-number v-model:value="config.signal_max_history" size="small" style="width: 80px" />
           </label>
           <label class="config-row">
             <span>{{ t('jspace.configIntentLlm') }}</span>
@@ -245,7 +245,7 @@ function formatTime(ts: number) {
           </label>
           <label class="config-row">
             <span>{{ t('jspace.configIntentTimeout') }}</span>
-            <n-input v-model:value="config.intent_llm_timeout" type="number" size="small" style="width: 80px" />
+            <n-input-number v-model:value="config.intent_llm_timeout" size="small" style="width: 80px" />
           </label>
           <n-button type="primary" size="small" @click="saveConfig">{{ t('jspace.save') }}</n-button>
         </div>

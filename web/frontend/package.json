@@ -5,6 +5,7 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
+    "typecheck": "vue-tsc --noEmit -p tsconfig.json",
     "build": "node build.mjs",
     "preview": "vite preview"
   },

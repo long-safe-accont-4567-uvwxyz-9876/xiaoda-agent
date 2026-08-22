@@ -132,6 +132,26 @@ jobs:
           echo "=== Test Summary ==="
           echo "CI tests completed. Check results above."
 
+  frontend-typecheck:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Node 20
+        uses: actions/setup-node@v5
+        with:
+          node-version: '20'
+
+      - name: Install frontend deps
+        working-directory: web/frontend
+        run: npm ci
+
+      - name: Typecheck frontend (vue-tsc)
+        working-directory: web/frontend
+        run: npm run typecheck
+
   lint:
     runs-on: ubuntu-latest
 
