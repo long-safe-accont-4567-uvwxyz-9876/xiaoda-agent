@@ -1327,6 +1327,7 @@ export default {
     lightOff: '关灯',
     lightOn: '开灯',
     refresh: '刷新',
+    resetView: '复位视角',
     close: '✕ 关闭',
     collapseToolbar: '▾ 控制栏',
     loading: '召唤须弥星图…',

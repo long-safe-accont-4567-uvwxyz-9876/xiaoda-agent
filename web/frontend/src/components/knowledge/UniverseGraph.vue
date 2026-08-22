@@ -83,6 +83,8 @@ const webglUnavailable = ref(false)
 const fps = ref(0)
 const qualityTier = ref<'high' | 'medium' | 'low'>('high')
 const toolbarCollapsed = ref(false)
+// 边数过载标记：>600 边时初始档位直接降到 medium 并关粒子
+const heavyEdges = ref(false)
 
 // 模态内部可控的检索 / 深度状态（与 prop 同步，但允许在浮层内独立切换）
 const searchText = ref(props.entity || '')
@@ -211,6 +213,11 @@ async function loadGraph(retries = 0) {
     nodeCount.value = graphNodes.length
     neighborsCache = buildNeighbors(graphNodes, graphLinks)
 
+    // 渲染规模分级：>600 边关粒子流（每条边一个动画粒子是最大 GPU 开销），
+    // >1200 边再降节点分辨率；比"一刀切 2000 节点降级"更平滑
+    const edgeTotal = graphLinks.length
+    heavyEdges.value = edgeTotal > 600
+
     // 性能保护：节点过多则降级（用户已点击"仍要进入 3D"则跳过）
     if (graphNodes.length > 2000 && !bypassDegrade) {
       degraded.value = true
@@ -228,12 +235,18 @@ async function loadGraph(retries = 0) {
     if (!graph.value) initGraph()
 
     // graphData 接收内部会原地解析 source/target 为节点对象
-    graph.value!.graphData({ nodes: graphNodes as unknown as NodeObject[], links: graphLinks as unknown as GraphLink[] } as any)
+    // 大图（>400 节点）先只挂节点、延后 300ms 再挂边：力导向先散开节点，
+    // 避免边+节点同时求解导致的初始帧卡死
+    const bigGraph = graphNodes.length > 400
+    graph.value!.graphData({
+      nodes: graphNodes as unknown as NodeObject[],
+      links: (bigGraph ? [] : graphLinks) as unknown as GraphLink[],
+    } as any)
 
     // 力导向参数：增大斥力和连接长度，避免节点挤成一坨
     // 默认 charge.strength=-30, link.distance=30；调大后节点会分散开
     const charge = graph.value!.d3Force('charge')
-    if (charge) charge.strength(-120)
+    if (charge) charge.strength(bigGraph ? -200 : -120)
     const link = graph.value!.d3Force('link')
     if (link) link.distance(60)
 
@@ -244,7 +257,10 @@ async function loadGraph(retries = 0) {
       if (destroyed || !graph.value) return
       graphNodes.forEach(n => { n.fx = undefined; n.fy = undefined; n.fz = undefined })
       graph.value!.d3AlphaDecay(0.05)
-      graph.value!.graphData({ nodes: graphNodes as unknown as NodeObject[], links: graphLinks as unknown as GraphLink[] } as any)
+      graph.value!.graphData({
+        nodes: graphNodes as unknown as NodeObject[],
+        links: graphLinks as unknown as GraphLink[],
+      } as any)
     }, 300)
 
     // 收敛后框选居中
@@ -300,6 +316,10 @@ function startPerfMonitor() {
 function applyQualityTier() {
   const g = graph.value
   if (!g) return
+  // 边数过载（>600）时强制 medium 起步：Bloom 关、粒子 1
+  if (heavyEdges.value && qualityTier.value === 'high') {
+    qualityTier.value = 'medium'
+  }
   const tier = qualityTier.value
   // Bloom 仅在 high 档启用
   if (bloomPass) bloomPass.enabled = (tier === 'high')
@@ -444,6 +464,16 @@ function initGraph() {
     })
     .onNodeDrag(() => resetIdleTimer())
     .onNodeDragEnd(() => resetIdleTimer())
+
+  // 双击空白处复位全局视角（全屏模式快速回到总览）
+  el.addEventListener('dblclick', onDblClickReset)
+}
+
+// 双击背景复位（initGraph 时绑定；dblclick 不与单击选中冲突）
+const onDblClickReset = (e: MouseEvent) => {
+  // 双击落在节点上时不复位（保留节点聚焦行为）
+  if (hoveredNode.value) return
+  resetView()
 }
 
 // ── 星空三层（Fibonacci 螺旋分布 + HSL 闪烁，借鉴 Obsidian 粒子星图知识）──
@@ -597,6 +627,21 @@ function resetIdleTimer() {
   }, 5000)
 }
 
+// ── 全屏体验：ESC 关闭 / 双击背景复位视角 ──
+function onKeydown(e: KeyboardEvent) {
+  if (e.key === 'Escape') emit('close')
+}
+
+function resetView() {
+  const g = graph.value
+  if (!g) return
+  selectedNode.value = null
+  updateHighlight()
+  const controls = getOrbitControls()
+  if (controls?.target) controls.target.set(0, 0, 0)
+  g.zoomToFit(600, 100)
+}
+
 // ── 深度切换 / 检索 ──
 function setActiveDepth(d: 1 | 2) {
   activeDepth.value = d
@@ -649,7 +694,8 @@ const fpsClass = computed(() => {
 })
 
 // ── 开灯/关灯标签（high 档=灯开，其余=灯关）──
-const lightLabel = computed(() => qualityTier.value === 'high' ? '关灯' : '开灯')
+const lightLabel = computed(() => qualityTier.value === 'high'
+  ? t('universeGraph.lightOff') : t('universeGraph.lightOn'))
 
 // ── 详情面板：选中节点的关系 ──
 const selectedRelations = computed(() => {
@@ -671,6 +717,8 @@ onMounted(() => {
   ws.on('knowledge_graph_changed', onGraphChanged)
   // 窗口隐藏/最小化：显式暂停 3d-force-graph 引擎（防 WebView2 rAF 节流边缘情况）
   document.addEventListener('visibilitychange', onVisibility)
+  // 全屏体验：ESC 直接关闭
+  window.addEventListener('keydown', onKeydown)
 
   // ResizeObserver：模态由 display 切换，容器尺寸从 0 变非 0 时再初始化
   if (containerEl.value) {
@@ -696,6 +744,7 @@ onBeforeUnmount(() => {
   destroyed = true
   ws.off('knowledge_graph_changed', onGraphChanged)
   document.removeEventListener('visibilitychange', onVisibility)
+  window.removeEventListener('keydown', onKeydown)
   if (idleTimer) clearTimeout(idleTimer)
   if (retryTimer) clearTimeout(retryTimer)
   if (debounceTimer) clearTimeout(debounceTimer)
@@ -776,6 +825,7 @@ function kindLabel(kind?: string): string {
         >{{ t('universeGraph.depth2') }}</n-button>
         <span class="universe-count">{{ nodeCount }} {{ t('universeGraph.nodeCount') }}</span>
         <span class="universe-fps" :class="fpsClass">{{ fps }} fps · {{ qualityTier }}</span>
+        <n-button size="tiny" quaternary @click="resetView" :title="t('universeGraph.resetView')">{{ t('universeGraph.resetView') }}</n-button>
         <n-button size="tiny" quaternary @click="toggleLight">{{ lightLabel }}</n-button>
         <n-button size="tiny" quaternary @click="loadGraph()">{{ t('universeGraph.refresh') }}</n-button>
         <n-button class="universe-close" size="tiny" type="primary" @click="emit('close')">{{ t('universeGraph.close') }}</n-button>

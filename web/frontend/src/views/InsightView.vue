@@ -426,10 +426,18 @@ async function loadKnowledge() {
     })
 
     // 力导向布局，拖拽后固定
+    // 渲染性能分级：>150 节点关边标签（edgeLabel 是 force 图最大开销），
+    // >400 节点再关节点标签，避免大图一次 setOption 卡死主线程
+    const nodeTotal = data.nodes.length
+    const showEdgeLabel = nodeTotal <= 150
+    const showNodeLabel = nodeTotal <= 400
+    const symbolSize = nodeTotal > 300 ? 14 : 26
+
     const nodeData = data.nodes.map((n: any) => ({
       name: n.name,
       value: n.kind,
-      symbolSize: 26,
+      symbolSize,
+      label: { show: showNodeLabel },
     }))
 
     knowledgeChart.setOption({
@@ -448,11 +456,13 @@ async function loadKnowledge() {
       series: [{
         type: 'graph', layout: 'force', roam: true, draggable: true,
         force: { repulsion: 260, edgeLength: 120, gravity: 0.08, friction: 0.32 },
-        label: { show: true, color: '#f2f7ee', fontSize: 11 },
+        label: { show: showNodeLabel, color: '#f2f7ee', fontSize: 11 },
         edgeLabel: {
-          show: true, fontSize: 9, color: '#e8d5a3',
+          show: showEdgeLabel, fontSize: 9, color: '#e8d5a3',
           formatter: (p: any) => p.data.relation || '',
         },
+        // 大图关闭逐帧动画重排：layoutAnimation=false 一次算完，避免长时间掉帧
+        layoutAnimation: nodeTotal <= 200,
         itemStyle: { color: '#7fd650' },
         lineStyle: { color: 'rgba(232, 213, 163, 0.5)' },
         emphasis: { disabled: true },

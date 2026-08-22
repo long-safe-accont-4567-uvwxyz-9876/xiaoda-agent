@@ -236,8 +236,34 @@ async def delete_memory(memory_id: int, request: Request) -> Any:
 async def knowledge_graph(request: Request,
                           entity: str = Query(default=""),
                           depth: int = Query(default=1, ge=1, le=2)) -> Any:
+    """知识图谱数据（内在世界页 + 全屏 3D 共用）。
+
+    性能契约：实体聚焦路径复用 kdb.get_related_knowledge 的批量 BFS
+    （每层 2 条 IN 查询，实测 depth2 热点实体 45ms；原逐实体 N+1 版本
+    ~1400 次串行往返 14.4s 是前端卡顿根因）。每层边数上限
+    GRAPH_MAX_EDGES_PER_HOP 防止热门实体（1200+ 关系）撑爆渲染。
+    """
     core = request.app.state.core
     kdb = core.db.knowledge
+    GRAPH_MAX_EDGES_PER_HOP = 400
+
+    if entity.strip():
+        result = await kdb.get_related_knowledge([entity.strip()], depth)
+        rels = result["relations"]
+        ent_map = {e["name"]: e for e in result["entities"]}
+        # 超限时按 confidence 降序保留最有把握的关系，保证截断确定性
+        if len(rels) > GRAPH_MAX_EDGES_PER_HOP:
+            rels = sorted(rels, key=lambda r: r.get("confidence") or 0,
+                          reverse=True)[:GRAPH_MAX_EDGES_PER_HOP]
+        edges = [{"from": r["from_entity"], "to": r["to_entity"],
+                  "relation": r.get("relation_type", "")} for r in rels]
+        names = {r["from_entity"] for r in rels} | {r["to_entity"] for r in rels}
+        names.add(entity.strip())
+        nodes = [{"name": n, "kind": (ent_map.get(n) or {}).get("kind", "")}
+                 for n in names]
+        return Envelope(data={"nodes": nodes, "edges": edges})
+
+    # 全图概览：最近 80 条关系（原逻辑保留，量级固定无风险）
     nodes: dict[str, dict] = {}
     edges: list[dict] = []
 
@@ -247,35 +273,13 @@ async def knowledge_graph(request: Request,
         ent = await kdb.get_knowledge_entity(name)
         nodes[name] = {"name": name, "kind": (ent or {}).get("kind", "")}
 
-    if entity.strip():
-        frontier = [entity.strip()]
-        seen_rel: set[str] = set()
-        for _ in range(depth):
-            next_frontier = []
-            for name in frontier:
-                await _node(name)
-                rels = await kdb.get_knowledge_relations(name)
-                for r in rels:
-                    rid = r.get("id", f"{r['from_entity']}-{r['to_entity']}")
-                    if rid in seen_rel:
-                        continue
-                    seen_rel.add(rid)
-                    await _node(r["from_entity"])
-                    await _node(r["to_entity"])
-                    edges.append({"from": r["from_entity"], "to": r["to_entity"],
-                                  "relation": r.get("relation_type", "")})
-                    for other in (r["from_entity"], r["to_entity"]):
-                        if other != name:
-                            next_frontier.append(other)
-            frontier = next_frontier
-    else:
-        rows = await core.db.fetch_all(
-            "SELECT * FROM knowledge_relations ORDER BY rowid DESC LIMIT 80")
-        for r in rows:
-            await _node(r["from_entity"])
-            await _node(r["to_entity"])
-            edges.append({"from": r["from_entity"], "to": r["to_entity"],
-                          "relation": r.get("relation_type", "")})
+    rows = await core.db.fetch_all(
+        "SELECT * FROM knowledge_relations ORDER BY rowid DESC LIMIT 80")
+    for r in rows:
+        await _node(r["from_entity"])
+        await _node(r["to_entity"])
+        edges.append({"from": r["from_entity"], "to": r["to_entity"],
+                      "relation": r.get("relation_type", "")})
     return Envelope(data={"nodes": list(nodes.values()), "edges": edges})
 
 

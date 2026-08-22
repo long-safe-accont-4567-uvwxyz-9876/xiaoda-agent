@@ -751,6 +751,7 @@ export default {
     empty: 'No plugins',
     market: 'Plugin Market',
     refresh: 'Refresh',
+    resetView: 'Reset View',
     browseInstall: 'Browse and install in one click',
     install: 'Install',
     emptyMarket: 'No installable plugins',
