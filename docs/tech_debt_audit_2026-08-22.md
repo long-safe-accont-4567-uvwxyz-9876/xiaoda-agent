@@ -105,9 +105,9 @@ legacy 唯一生产入口导航注释、idempotent_migrator 弃用声明、repai
    **本地全集基线已建立**：`4911 passed / 0 failed / 9 skipped / 5m09s`（ARM 裸机）。首跑暴露的 3 个失败**全部是陈旧契约而非 flaky**——22f1c96a 改嵌入架构未同步测试 + a0431f71 起前端源码契约背离，均因无 CI 静默红着；已在 `9965352e` 修复归零。这意味着：**一旦真 CI 就位，全集可直接严格门禁**，无需先治 flaky。
    **选型落地（用户拍板）**：pre-push hook 先行——`scripts/git-hooks/pre-push`（`git config core.hooksPath scripts/git-hooks` 启用）：push 前 18 文件 critical 子集约 20s 实测 173 passed；`PUSH_FULL_TESTS=1` 跑全集；`--no-verify` 紧急跳过。GitHub mirror / Gitee Go 可后续叠加。
 2. **workflow_v2 定性修正**：`web/routers/workflows_v2.py` 已挂 server.py:1077（原报告"仅包内互引"过时），但前端 api/index.ts 只调 `/workflows` v1，v2 仍零消费者；legacy_migrations v27 每次启动照旧建表。**另一会话正在改造中**（新增 app.py、改 repository/service/routers，前端 api/index.ts 的 `/workflow-runs` 端点已就位）。
-3. **web/dist 96 文件入库**：出库前置条件是解决离线部署模式（SETUP.md 承诺），否则继续付 hash 翻动成本。
+3. ~~web/dist 出库~~ → **决策：暂维持现状**（用户拍板 2026-08-22）。SETUP.md 免构建安装承诺仍被依赖；churn 噪音已由 `-text` 属性 + `git diff -w` 缓解；待真 CI（GitHub mirror）就位后随发布产物出库。
 4. ~~双进程并发写 SQLite~~ → **已消解**：架构已合并单进程（见三.2 副产物发现）；外挂盘现为 btrfs（非 vfat），WAL 降级风险随之解除。
-5. 慢性病类存量（巨型文件、1128 裸 except、三可视化库并存、config.py import 副作用链）——需专项重构会话，不在对账批内逐点清偿。已定点清除：~~dotenv override 双轨~~ `535ed7af`；~~i18n 双字典无 key 校验~~ `5800b93f`；~~ComputeDevicesTab 绕过 store + config.py 四 getter 静默失效~~ `fb1a6bcd`（契约测试恢复严格版）。
+5. 慢性病类存量（巨型文件、1128 裸 except、三可视化库并存、config.py import 副作用链）——需专项重构会话，不在对账批内逐点清偿。已定点清除：~~dotenv override 双轨~~ `535ed7af`；~~i18n 双字典无 key 校验~~ `5800b93f`；~~ComputeDevicesTab 绕过 store + config.py 四 getter 静默失效~~ `fb1a6bcd`（契约测试恢复严格版）；~~纯 pass 裸 except~~：全仓复扫仅剩 2 处且均为合理形态（窄类型 OSError/ValueError、asyncio.CancelledError 惯用吞没），无行动目标。
 
 ## 五、多会话并行（归属台账）
 
