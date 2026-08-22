@@ -106,14 +106,14 @@ legacy 唯一生产入口导航注释、idempotent_migrator 弃用声明、repai
 2. **workflow_v2 定性修正**：`web/routers/workflows_v2.py` 已挂 server.py:1077（原报告"仅包内互引"过时），但前端 api/index.ts 只调 `/workflows` v1，v2 仍零消费者；legacy_migrations v27 每次启动照旧建表。**另一会话正在改造中**（新增 app.py、改 repository/service/routers，前端 api/index.ts 的 `/workflow-runs` 端点已就位）。
 3. **web/dist 96 文件入库**：出库前置条件是解决离线部署模式（SETUP.md 承诺），否则继续付 hash 翻动成本。
 4. ~~双进程并发写 SQLite~~ → **已消解**：架构已合并单进程（见三.2 副产物发现）；外挂盘现为 btrfs（非 vfat），WAL 降级风险随之解除。
-5. 慢性病类（巨型文件、1128 裸 except 存量、i18n 双字典、three/echarts/3d-force-graph 三库并存、config.py import 副作用链、dotenv override 双轨打架）未动。
+5. 慢性病类存量未动（巨型文件、1128 裸 except、three/echarts/3d-force-graph 三库并存、config.py import 副作用链）。已清偿两项：~~dotenv override 双轨~~ `535ed7af`（统一进程环境优先，仅向导重载点保留 True）；~~i18n 双字典无 key 校验~~ `5800b93f`（npm run check:i18n 接入双 workflow，首跑即修掉 resetView 错位死键）。
 
 ## 五、多会话并行（归属台账）
 
 - **会话 A（海报功能）已完成**：`a85b8fd7` 由对账会话代为 review 后提交。
 - **会话 B（ONNX 出库）已完成**：`22f1c96a`。
 - **会话 C（workflow_v2 改造）进行中**：app.py/repository/service/routers/workflows_v2 + api/index.ts 端点切换，勿动其文件。
-- **对账会话（本报告）**：`1aa2cade` `423fa7f3` `661a2f29` `924d279b` `a3135bf4` `5ab58d6f` `6990fb20` `a85b8fd7` `9965352e` `2546d983`。
+- **对账会话（本报告）**：`1aa2cade` `423fa7f3` `661a2f29` `924d279b` `a3135bf4` `5ab58d6f` `6990fb20` `a85b8fd7` `535ed7af` `5800b93f` `9965352e` `2546d983`。
 
 ## 六、优先级 v3（2026-08-22 晚更新）
 
