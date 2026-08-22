@@ -1005,6 +1005,10 @@ def _add_rate_limit_middleware(app: FastAPI) -> None:
         logger.debug("server.config_fallback_error", exc_info=True)
         _rate_limit_db = str(Path(__file__).parent.parent / "data" / "rate_limit_buckets.sqlite")
     app.add_middleware(RateLimitMiddleware, persist_path=_rate_limit_db)
+    # API 响应 gzip 压缩（insight/memories 等大 JSON 实测 55KB 未压缩传输；
+    # minimum_size=1000 避免小响应的压缩开销反噬）
+    from fastapi.middleware.gzip import GZipMiddleware
+    app.add_middleware(GZipMiddleware, minimum_size=1000)
 
 
 def _add_security_and_sla_middleware(app: FastAPI) -> None:

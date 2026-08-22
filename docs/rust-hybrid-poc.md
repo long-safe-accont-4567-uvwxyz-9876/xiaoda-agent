@@ -155,6 +155,25 @@ alive 过滤边界）；开发中捕获并修复种子双重累积 bug（分差�
 **第三轮结论：主链路无新达标候选。estimate_tokens 逐字符循环 3.78ms/次
 （60KB history）远低于 30% 门槛；所有秒级阶段均为网络/外部进程。**
 
+## 六C、前端性能方案研判（2026-08-22，应"前端 Rust 候选"之问）
+
+对 WebUI 接口实测负载数据逐条检验「服务端预处理/WASM/二进制传输/Tauri」方案：
+
+| 文档方案 | 本项目实测 | 判定 |
+|---|---|---|
+| 服务端预处理减负 | 全部数据接口 ≤55KB / ≤13ms 服务端耗时（除 providers 0.9s——根因是 PBKDF2 重复派生，已修：指纹缓存 0.9s→0.01s） | ❌ 无"超大原始数据丢给前端"问题 |
+| 二进制传输替代 JSON | 最大响应 55KB，本机局域网传输 <5ms | ❌ 收益不成立；**已加 GZip 中间件**：55KB→8.5KB（-85%），弱网/移动端有实际意义 |
+| Rust WASM 分担前端计算 | 前端重型计算点仅 echarts 图表渲染（浏览器原生 Canvas/WebGL），无批量向量/统计运算在前端执行 | ❌ 无承接对象 |
+| Tauri 替代 Electron | 项目桌面打包用 PyInstaller（非 Electron），无 WebView 内存问题 | ❌ 不适用 |
+
+**意外收获**：providers 接口 0.9s 根因为 credential_vault 的 PBKDF2（20 万次
+迭代 ≈128ms）在每次 encrypt/decrypt 重新派生——providers 列表对每个凭证
+各解密一次线性放大。修复为按（机器身份, 盐）指纹缓存的派生密钥，接口
+0.9s→0.01s（~60x）；机器绑定语义不变（身份变化自动失效重派生，
+test_encrypt_different_per_machine 回归通过）。同批启用 gzip。
+
+**结论：前端侧无 Rust 候选；本轮实际产出为 2 个服务端修复（KDF 缓存 + gzip）。**
+
 ## 七、线上全链路 A/B 实测（2026-08-22，RUST_HYBRID_ENABLED 开关切换）
 
 对运行中的生产服务（API `/retrieval/test`，8 条多样化查询同序对比）：

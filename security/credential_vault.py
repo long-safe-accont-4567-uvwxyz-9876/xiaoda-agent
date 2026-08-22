@@ -91,6 +91,9 @@ except Exception as e:
     logger.debug("credential_vault.salt_migrate_failed", error=str(e))
 # PBKDF2 迭代次数（增大可减缓暴力破解）
 _PBKDF2_ITERATIONS = 200_000
+# 派生密钥进程内缓存：键为（机器身份, 盐）指纹——身份变化（如测试 mock、
+# 极端场景用户名/主机名变更）时自动失效重派生，保证机器绑定语义不变
+_DERIVED_KEY_CACHE: tuple[tuple[str, bytes], bytes] | None = None
 # 随机 nonce 长度（字节）
 _NONCE_LEN = 16
 # HMAC 认证标签长度（字节，SHA256 输出 32 字节）
@@ -166,15 +169,29 @@ def _get_salt() -> bytes:
 
 
 def _derive_key() -> bytes:
-    """从机器身份派生 32 字节密钥（PBKDF2-HMAC-SHA256）"""
+    """从机器身份派生 32 字节密钥（PBKDF2-HMAC-SHA256）
+
+    进程内 memo：派生输入（机器身份 + 盐）在进程生命周期内不变，
+    PBKDF2 20 万次迭代实测 ~128ms/次，providers 列表等接口对每个凭证
+    重复解密会线性放大（N 个 provider = N×128ms）。缓存派生结果不降低
+    安全性——攻击者拿到进程内存即可直接拿到密钥本，无需重算 KDF。
+    """
+    global _DERIVED_KEY_CACHE
     identity = _machine_identity()
-    return hashlib.pbkdf2_hmac(
+    salt = _get_salt()
+    fingerprint = (identity, salt)
+    cached = _DERIVED_KEY_CACHE
+    if cached is not None and cached[0] == fingerprint:
+        return cached[1]
+    key = hashlib.pbkdf2_hmac(
         "sha256",
         identity.encode("utf-8"),
-        _get_salt(),
+        salt,
         _PBKDF2_ITERATIONS,
         dklen=_KEY_LEN,
     )
+    _DERIVED_KEY_CACHE = (fingerprint, key)
+    return key
 
 
 def _keystream(key: bytes, nonce: bytes, length: int) -> bytes:
