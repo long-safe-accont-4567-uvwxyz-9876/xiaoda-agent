@@ -60,6 +60,15 @@ if [ -z "$RUN_USER_HOME" ]; then
     RUN_USER_HOME="$(eval echo "~${RUN_USER}")"
 fi
 
+# 冲突防护：已有其他 systemd 单元托管 agent.py --web 时拒绝安装，防止双单元
+# 并存开机抢端口（实际案例：nahida-web 与 xiaoda-webui 并存互杀）。
+CONFLICT_UNITS="$(grep -ls "agent.py --web" /etc/systemd/system/*.service 2>/dev/null | grep -v "$SERVICE_FILE" || true)"
+if [ -n "$CONFLICT_UNITS" ]; then
+    echo "错误：检测到已托管 WebUI 的 systemd 单元，请先停用/删除再安装：" >&2
+    printf '%s\n' "$CONFLICT_UNITS" >&2
+    exit 1
+fi
+
 sudo tee "$SERVICE_FILE" > /dev/null <<EOF
 [Unit]
 Description=Xiaoda Agent Web UI（源码直跑托管）
