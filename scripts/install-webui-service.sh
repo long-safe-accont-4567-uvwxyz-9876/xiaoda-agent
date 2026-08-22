@@ -51,6 +51,15 @@ if pgrep -f "agent.py.*--web" > /dev/null 2>&1; then
     echo "      pkill -f 'agent.py.*--web'"
 fi
 
+# 以当前调用用户运行服务。不能用 systemd 说明符 %u/%h：system 管理器下
+# %u 恒解析为 "root"、%h 解析为 /root（man systemd.unit SPECIFIERS，实证于
+# systemd 252），会导致 WebUI 以 root 运行——故安装时把真实用户写进 unit。
+RUN_USER="$(id -un)"
+RUN_USER_HOME="$(getent passwd "$RUN_USER" | cut -d: -f6)"
+if [ -z "$RUN_USER_HOME" ]; then
+    RUN_USER_HOME="$(eval echo "~${RUN_USER}")"
+fi
+
 sudo tee "$SERVICE_FILE" > /dev/null <<EOF
 [Unit]
 Description=Xiaoda Agent Web UI（源码直跑托管）
@@ -58,14 +67,14 @@ After=network.target
 
 [Service]
 Type=simple
-User=%u
+User=${RUN_USER}
 WorkingDirectory=$INSTALL_DIR
-# start-linux.sh 自带看门狗崩溃重启；systemd 层负责开机自启与兜底（on-failure 30s）
+# start-linux.sh 自带看门狗崩溃重启；systemd 层负责开机自启与兜底
 ExecStart=$INSTALL_DIR/scripts/start-linux.sh --web --host $WEBUI_HOST --port $WEBUI_PORT
 Restart=on-failure
 RestartSec=5
 # 防止环境变量依赖用户登录会话
-Environment=HOME=%h
+Environment=HOME=${RUN_USER_HOME}
 StandardOutput=journal
 StandardError=journal
 SyslogIdentifier=$SERVICE_NAME
