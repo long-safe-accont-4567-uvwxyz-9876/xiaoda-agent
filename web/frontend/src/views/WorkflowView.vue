@@ -1,9 +1,9 @@
 <script setup lang="ts">
-import { ref, computed, onMounted } from 'vue'
+import { ref, onMounted, watch } from 'vue'
 import SumeruIcon from '../components/fx/SumeruIcon.vue'
 import { useRouter } from 'vue-router'
 import {
-  NButton, NSwitch, NInput, NSelect, NPopconfirm, NTag, NSpin, NEmpty, NModal, NTabs, NTabPane, useMessage,
+  NButton, NSwitch, NInput, NSelect, NPopconfirm, NTag, NSpin, NEmpty, NModal, NTooltip, useMessage,
 } from 'naive-ui'
 import { api, type Workflow, type WorkflowNode, type WorkflowSummary } from '../api'
 import { useChatStore } from '../stores/chat'
@@ -265,10 +265,36 @@ async function openRuns(wfId: string, wfName: string) {
   showRunsModal.value = true
   try {
     runsList.value = await api.listWorkflowRuns(wfId)
+    startRunsPollingIfActive()
   } catch (e: any) { message.error(e.message) } finally {
     runsLoading.value = false
   }
 }
+
+// 运行弹窗自动轮询：存在非终态 run 时每 2.5s 刷新，全部结束后停止
+let runsPollTimer: ReturnType<typeof setInterval> | null = null
+
+function hasQueuedRuns(): boolean {
+  return runsList.value.some(r =>
+    ['queued', 'running', 'waiting_input', 'paused', 'cancelling'].includes(r.status))
+}
+
+function stopRunsPolling() {
+  if (runsPollTimer) { clearInterval(runsPollTimer); runsPollTimer = null }
+}
+
+function startRunsPollingIfActive() {
+  stopRunsPolling()
+  if (!hasQueuedRuns() || !runsWfId.value) return
+  runsPollTimer = setInterval(async () => {
+    try {
+      runsList.value = await api.listWorkflowRuns(runsWfId.value)
+      if (!hasQueuedRuns()) stopRunsPolling()
+    } catch { stopRunsPolling() }
+  }, 2500)
+}
+
+watch(() => showRunsModal.value, v => { if (!v) stopRunsPolling() })
 
 async function cancelRun(runId: string) {
   try {
@@ -296,8 +322,25 @@ async function publishWorkflow(wfId: string) {
     await api.publishWorkflow(wfId)
     message.success('工作流已发布')
     await load()
+    if (showRevisionsModal.value && revisionsWfId.value === wfId) {
+      await openRevisions(revisionsWfId.value, revisionsWfName.value)
+    }
   } catch (e: any) { message.error(e.message) } finally {
     publishing.value = ''
+  }
+}
+
+const rollingBack = ref('')
+
+async function rollbackRevision(rev: any) {
+  rollingBack.value = rev.revision_id
+  try {
+    await api.rollbackWorkflowRevision(revisionsWfId.value, rev.revision_id, rev.etag)
+    message.success('已回滚——运行将使用该版本编排')
+    await openRevisions(revisionsWfId.value, revisionsWfName.value)
+    await load()
+  } catch (e: any) { message.error(e.message) } finally {
+    rollingBack.value = ''
   }
 }
 </script>
@@ -330,10 +373,20 @@ async function publishWorkflow(wfId: string) {
               </div>
               <div class="wf-card-actions">
                 <n-button size="tiny" type="primary" @click="editWorkflow(wf)">{{ t('workflowView.edit') }}</n-button>
-                <n-button size="tiny" :loading="starting === wf.id" @click="startWorkflow(wf)"><SumeruIcon name="sprout" :size="11" variant="duo" tone="add" interactive /> 启动</n-button>
+                <n-tooltip trigger="hover">
+                  <template #trigger>
+                    <n-button size="tiny" :loading="starting === wf.id" @click="startWorkflow(wf)"><SumeruIcon name="sprout" :size="11" variant="duo" tone="add" interactive /> 启动</n-button>
+                  </template>
+                  首次运行将自动把当前定义发布为第一个版本；之后可在「版本」中回滚
+                </n-tooltip>
                 <n-button size="tiny" quaternary @click="openRuns(wf.id, wf.name)"><SumeruIcon name="chart" :size="11" variant="duo" tone="view" interactive /> 记录</n-button>
                 <n-button size="tiny" quaternary @click="openRevisions(wf.id, wf.name)"><SumeruIcon name="note" :size="11" variant="duo" tone="edit" interactive /> 版本</n-button>
-                <n-button size="tiny" quaternary :loading="publishing === wf.id" @click="publishWorkflow(wf.id)"><SumeruIcon name="rocket" :size="12" variant="duo" tone="add" interactive /> 发布</n-button>
+                <n-popconfirm @positive-click="publishWorkflow(wf.id)">
+                  <template #trigger>
+                    <n-button size="tiny" quaternary :loading="publishing === wf.id"><SumeruIcon name="rocket" :size="12" variant="duo" tone="add" interactive /> 发布</n-button>
+                  </template>
+                  将当前定义固化为新版本并设为运行版本？
+                </n-popconfirm>
                 <n-popconfirm @positive-click="deleteWorkflow(wf)">
                   <template #trigger>
                     <n-button size="tiny" type="error" quaternary>{{ t('workflowView.delete') }}</n-button>
@@ -449,16 +502,24 @@ async function publishWorkflow(wfId: string) {
     <n-modal v-model:show="showRevisionsModal" preset="card" :title="`${revisionsWfName} — 版本历史`" style="width: min(580px, 94vw)">
       <n-spin :show="revisionsLoading">
         <div v-if="revisionsList.length" class="revisions-list">
-          <div v-for="rev in revisionsList" :key="rev.revision" class="rev-item">
+          <div v-for="(rev, idx) in revisionsList" :key="rev.revision_id" class="rev-item">
             <div class="rev-head">
-              <n-tag size="small" :bordered="false">v{{ rev.version || rev.revision }}</n-tag>
-              <span class="rev-time">{{ rev.created_at ? new Date(rev.created_at).toLocaleString('zh-CN') : '—' }}</span>
-              <n-tag v-if="rev.published" size="tiny" type="success" :bordered="false">已发布</n-tag>
+              <n-tag size="small" :bordered="false">v{{ revisionsList.length - idx }}</n-tag>
+              <span class="rev-time">{{ rev.created_at ? new Date(rev.created_at * 1000).toLocaleString('zh-CN') : '—' }}</span>
+              <span class="rev-hash mono">{{ (rev.content_hash || '').slice(0, 8) }}</span>
+              <n-tag v-if="rev.current" size="tiny" type="success" :bordered="false">当前版本</n-tag>
             </div>
-            <div v-if="rev.description" class="rev-desc">{{ rev.description }}</div>
+            <div v-if="!rev.current" class="rev-actions">
+              <n-popconfirm @positive-click="rollbackRevision(rev)">
+                <template #trigger>
+                  <n-button size="tiny" :loading="rollingBack === rev.revision_id">回滚</n-button>
+                </template>
+                回滚后，运行将使用该版本编排（不可撤销）？
+              </n-popconfirm>
+            </div>
           </div>
         </div>
-        <n-empty v-else description="暂无版本记录" />
+        <n-empty v-else description="暂无版本——点击「发布」生成第一个版本" />
       </n-spin>
     </n-modal>
   </div>
@@ -544,8 +605,9 @@ async function publishWorkflow(wfId: string) {
 .run-head, .rev-head { display: flex; align-items: center; gap: 8px; }
 .run-id { font-size: 12px; }
 .run-time, .rev-time { font-size: 12px; color: var(--moon-dim); flex: 1; }
+.rev-hash { font-size: 11px; color: var(--moon-dim); font-family: var(--mono, monospace); }
 .run-error { font-size: 12px; color: var(--alert); margin-top: 4px; }
-.run-actions { margin-top: 4px; }
+.run-actions, .rev-actions { margin-top: 4px; }
 .rev-desc { font-size: 12px; color: var(--moon-dim); margin-top: 4px; }
 
 @media (max-width: 768px) {

@@ -8,12 +8,14 @@ interface ApiEnvelope<T> {
   error?: { code: string; message: string }
 }
 
-async function request<T>(path: string, options?: RequestInit, confirm = false): Promise<T> {
+async function request<T>(path: string, options?: RequestInit, confirm = false,
+                          extraHeaders?: Record<string, string>): Promise<T> {
   const token = localStorage.getItem('token')
   const headers: Record<string, string> = {
     'Content-Type': 'application/json',
     ...(token ? { Authorization: `Bearer ${token}` } : {}),
     ...(confirm ? { 'X-Confirm': 'yes' } : {}),
+    ...(extraHeaders || {}),
   }
   const res = await fetch(`${BASE}${path}`, { ...options, headers }).catch(e => {
     // 路由切换时浏览器中止 fetch 产生 AbortError，重新抛出以便调用方静默处理
@@ -66,6 +68,8 @@ export const post = <T = any>(path: string, body?: unknown, confirm = false) =>
   request<T>(path, { method: 'POST', body: body !== undefined ? JSON.stringify(body) : undefined }, confirm)
 export const put = <T = any>(path: string, body?: unknown, confirm = false) =>
   request<T>(path, { method: 'PUT', body: JSON.stringify(body ?? {}) }, confirm)
+export const patch = <T = any>(path: string, body?: unknown, extraHeaders?: Record<string, string>) =>
+  request<T>(path, { method: 'PATCH', body: JSON.stringify(body ?? {}) }, false, extraHeaders)
 export const del = <T = any>(path: string, confirm = false) =>
   request<T>(path, { method: 'DELETE' }, confirm)
 
@@ -232,7 +236,10 @@ export const api = {
   runWorkflow: (wfId: string, input?: Record<string, unknown>) => post<any>(`/workflows/${wfId}/runs`, { input: input || {} }),
   getWorkflowRun: (runId: string) => get<any>(`/workflow-runs/${runId}`),
   listWorkflowRevisions: (wfId: string) => get<any[]>(`/workflows/${wfId}/revisions`),
+  createWorkflowRevision: (wfId: string) => post<any>(`/workflows/${wfId}/revisions`, {}),
   publishWorkflow: (wfId: string) => post<any>(`/workflows/${wfId}/publish`),
+  rollbackWorkflowRevision: (wfId: string, revisionId: string, etag: string) =>
+    patch<any>(`/workflows/${wfId}/current`, { revision_id: revisionId }, { 'If-Match': etag }),
   cancelWorkflowRun: (runId: string) => post<any>(`/workflow-runs/${runId}/cancel`),
 
   // 品牌署名与免责协议

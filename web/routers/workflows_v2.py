@@ -10,14 +10,16 @@ mounts every router under ``/api/v1``), so the real paths are e.g.
 ``/api/v1/workflows/{wf_id}/runs``.
 
 转正后的 WebUI 契约（web/frontend 对应调用）：
-- ``GET  /workflows/{wf_id}/runs``      —— 运行记录列表
-- ``GET  /workflows/{wf_id}/revisions`` —— 版本列表
-- ``POST /workflows/{wf_id}/publish``   —— 把当前 v1 JSON 发布为新版本
-- ``POST /workflows/{wf_id}/runs``      —— 启动一次运行（首次自动从 v1 迁移）
+- ``GET  /workflows/{wf_id}/runs``          —— 运行记录列表
+- ``GET  /workflows/{wf_id}/revisions``     —— 版本列表（含 current 标记与定义 etag）
+- ``POST /workflows/{wf_id}/revisions``     —— 显式快照：固化版本但不提升 current
+- ``POST /workflows/{wf_id}/publish``       —— 把当前版本发布为新版本并置为当前
+- ``PATCH /workflows/{wf_id}/current``      —— 回滚：切换 current 到历史版本（If-Match etag）
+- ``POST /workflows/{wf_id}/runs``          —— 启动一次运行（首次自动从 v1 迁移）
 - ``GET/POST /workflow-runs/...``  —— 快照 / 事件回放 / 取消（原已实现）
 
-仍 deferred 的端点（501 明示、不崩溃）：显式 revision 创建/发布
-（POST /revisions[/{rev}/publish]）与结构化信号（发布−审批闭环留到后续）。
+仍 deferred 的端点（501 明示、不崩溃）：已存 revision 的发布
+（POST /revisions/{rev}/publish）与结构化信号（发布−审批闭环留待后续）。
 """
 from __future__ import annotations
 
@@ -173,15 +175,47 @@ def _not_implemented(what: str) -> JSONResponse:
 
 
 @router.post("/workflows/{wf_id}/revisions", response_model=Envelope[dict])
-async def create_revision(wf_id: str, body: dict, request: Request) -> Any:
-    """Validate + store an immutable revision — DEFERRED (501 stub)."""
-    return _not_implemented("revision creation")
+async def create_revision(wf_id: str, request: Request,
+                          body: dict | None = None) -> Any:  # noqa: E501
+    """显式创建版本：把当前定义固化为新的不可变 revision（不提升 current）。
+
+    M2 语义（立项书 §4）："存档"动作——只快照不动运行版本；
+    发布（POST /publish）= 快照 + 置为当前。
+    """
+    svc = _svc(request)
+    if svc is None:
+        return _err("WF_RUNTIME_UNAVAILABLE", "工作流引擎未启动（降级模式）", 503)
+    snap = await svc.snapshot_revision_from_v1(wf_id)
+    if snap is None:
+        return _err("WORKFLOW_NOT_FOUND", "workflow not found (legacy JSON missing too)", 404)
+    return Envelope(data=snap)
 
 
-@router.post("/workflows/{wf_id}/revisions/{rev}/publish", response_model=Envelope[dict])
-async def publish_revision(wf_id: str, rev: str, request: Request) -> Any:
-    """Set the current revision — DEFERRED (501 stub)."""
-    return _not_implemented("revision publish")
+@router.patch("/workflows/{wf_id}/current", response_model=Envelope[dict])
+async def rollback_current(wf_id: str, body: dict, request: Request,
+                           if_match: str | None = Header(default=None, alias="If-Match")) -> Any:
+    """回滚：把 current_revision_id 切到指定版本（版本不可变，只移动指针）。
+
+    If-Match 必须携带定义当前 etag（版本列表已返回），CAS 语义与定义 PATCH
+    一致：并发回滚/修改只能有一个赢。
+    """
+    svc = _svc(request)
+    if svc is None:
+        return _err("WF_RUNTIME_UNAVAILABLE", "工作流引擎未启动（降级模式）", 503)
+    revision_id = (body or {}).get("revision_id")
+    if not revision_id:
+        return _err("REVISION_ID_REQUIRED", "revision_id is required", 422)
+    if if_match is None:
+        return _err("ETAG_CONFLICT", "If-Match header is required", 409)
+    current = await svc.get_definition(wf_id)
+    if current is None:
+        return _err("WORKFLOW_NOT_FOUND", "definition not found", 404)
+    updated = await svc.set_revision_current(wf_id, revision_id, etag=if_match)
+    if updated is None:
+        if not await svc.revision_exists(wf_id, revision_id):
+            return _err("REVISION_NOT_FOUND", "revision not found for this workflow", 404)
+        return _err("ETAG_CONFLICT", "definition was modified by another client", 409)
+    return Envelope(data=updated)  # 定义新 etag 一并返回，前端后续 CAS 继续有效
 
 
 @router.post("/workflow-runs/{run_id}/signals/{node_id}", response_model=Envelope[dict])

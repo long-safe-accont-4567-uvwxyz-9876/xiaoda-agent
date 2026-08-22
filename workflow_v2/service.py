@@ -14,7 +14,7 @@ import uuid
 
 from loguru import logger
 
-from workflow_v2.models import WorkflowRun, WorkflowRunEvent, RunStatus
+from workflow_v2.models import RunStatus, WorkflowRun, WorkflowRunEvent
 from workflow_v2.repository import WorkflowRepository
 
 # statuses that can no longer be cancelled
@@ -183,14 +183,17 @@ class WorkflowV2Service:
 
     def _v1_path(self, wf_id: str):
         from pathlib import Path
+
         from config import WORKSPACE_DIR
         p = Path(WORKSPACE_DIR) / "workflows" / f"{wf_id}.json"
         return p if p.exists() else None
 
-    async def _publish_v1_revision(self, wf_id: str) -> dict | None:
-        """核心逻辑：读取 v1 JSON → 迁移为 v2 revision → 落库并设为当前。
+    async def snapshot_revision_from_v1(self, wf_id: str) -> dict | None:
+        """把当前 v1 JSON 固化为新的不可变 revision（不提升 current）。
 
-        返回 revision dict；v1 文件不存在时返回 None。定义行缺失时自动创建。
+        M2 显式版本创建的语义：只存档、不动当前运行版本；
+        publish（_publish_v1_revision）= 本方法 + 设置 current。
+        v1 文件不存在返回 None，定义行缺失时自动创建。
         """
         fp = self._v1_path(wf_id)
         if fp is None:
@@ -214,8 +217,15 @@ class WorkflowV2Service:
                 enabled=bool(v1.get("enabled", True)),
             )
         await self.repo.insert_revision(rev)
-        await self.repo.set_current_revision(wf_id, rev.revision_id)
         return {"revision": rev.model_dump(mode="json"), "warnings": warnings}
+
+    async def _publish_v1_revision(self, wf_id: str) -> dict | None:
+        """发布：快照（见上）+ 提升当前版本。返回 revision dict 或 None。"""
+        snap = await self.snapshot_revision_from_v1(wf_id)
+        if snap is None:
+            return None
+        await self.repo.set_current_revision(wf_id, snap["revision"]["revision_id"])
+        return snap
 
     async def ensure_published(self, wf_id: str) -> dict | None:
         """确保 wf_definition 存在且 current_revision_id 非空（首次运行自动接入）。
@@ -235,9 +245,46 @@ class WorkflowV2Service:
         """发布新版本：把当前 v1 JSON 固化为新的不可变 revision（WebUI 发布按钮）。"""
         return await self._publish_v1_revision(wf_id)
 
+    async def _revision_exists(self, wf_id: str, revision_id: str) -> bool:
+        cur = await self.repo.conn.execute(
+            "SELECT 1 FROM wf_revision WHERE revision_id=? AND workflow_id=?",
+            (revision_id, wf_id),
+        )
+        return (await cur.fetchone()) is not None
+
+    async def revision_exists(self, wf_id: str, revision_id: str) -> bool:
+        """revision 是否属于该 workflow（回滚路由做 404/409 区分）。"""
+        return await self._revision_exists(wf_id, revision_id)
+
+    async def set_revision_current(self, wf_id: str, revision_id: str,
+                                    etag: str) -> dict | None:
+        """回滚：把 current_revision_id 切到指定 revision（etag CAS 同定义 PATCH）。
+
+        版本不存在或 etag 移动（并发修改）→ None，不盲覆盖。
+        """
+        if not await self._revision_exists(wf_id, revision_id):
+            return None
+        cur = await self.repo.conn.execute(
+            "UPDATE wf_definition SET current_revision_id=?, etag=?, updated_at=? "
+            "WHERE workflow_id=? AND etag=?",
+            (revision_id, f"etag-{uuid.uuid4().hex[:12]}", time.time(), wf_id, etag),
+        )
+        if cur.rowcount != 1:
+            return None  # 定义被他人改过（etag 移动）——回滚不盲覆盖
+        await self.repo.conn.commit()
+        return await self.get_definition(wf_id)
+
     async def list_runs(self, workflow_id: str) -> list[dict]:
         runs = await self.repo.list_runs_by_wf(workflow_id)
         return [_run_dict(r) for r in runs]
 
     async def list_revisions(self, workflow_id: str) -> list[dict]:
-        return await self.repo.list_revisions(workflow_id)
+        """版本列表富化：逐条标注是否 current + 定义 etag（回滚 PUT 需要）。"""
+        definition = await self._definition_row(workflow_id)
+        current = definition["current_revision_id"] if definition else None
+        etag = definition["etag"] if definition else ""
+        rows = await self.repo.list_revisions(workflow_id)
+        for r in rows:
+            r["current"] = r["revision_id"] == current
+            r["etag"] = etag
+        return rows
