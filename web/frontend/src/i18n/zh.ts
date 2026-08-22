@@ -1327,6 +1327,8 @@ export default {
     searchPh: '搜索实体定位…',
     depth1: '深度1',
     depth2: '深度2',
+    depthLabel: '深度',
+    depthHint: '起步展开层数（1-5）：单击节点可继续按需展开',
     nodeCount: '节点',
     lightOff: '关灯',
     lightOn: '开灯',

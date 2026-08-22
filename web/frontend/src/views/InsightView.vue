@@ -420,10 +420,11 @@ function mergeGraphData(newNodes: any[], newEdges: any[]) {
 }
 
 async function renderKnowledge() {
-  await nextTick()
-  if (!graphEl.value) return
-  if (knowledgeChart) { knowledgeChart.dispose() }
-  knowledgeChart = echarts.init(graphEl.value)
+  try {
+    await nextTick()
+    if (!graphEl.value) return
+    if (knowledgeChart) { knowledgeChart.dispose() }
+    knowledgeChart = echarts.init(graphEl.value)
 
   // 按节点对分组，计算每条边的独立曲率，避免重叠
   const pairKey = (a: string, b: string) => [a, b].sort().join('||')

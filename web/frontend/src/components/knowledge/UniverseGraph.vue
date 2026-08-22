@@ -53,7 +53,7 @@ interface OrbitLikeControls {
 
 const props = withDefaults(defineProps<{
   entity?: string
-  depth?: 1 | 2
+  depth?: number
   autoLoad?: boolean
   enableBloom?: boolean
 }>(), {
@@ -88,7 +88,7 @@ const heavyEdges = ref(false)
 
 // 模态内部可控的检索 / 深度状态（与 prop 同步，但允许在浮层内独立切换）
 const searchText = ref(props.entity || '')
-const activeDepth = ref<1 | 2>(props.depth)
+const activeDepth = ref<number>(props.depth)
 
 // 内部非响应式状态
 let composer: ReturnType<ForceGraph3DInstance['postProcessingComposer']> | null = null
@@ -125,6 +125,7 @@ const COLOR_DIM = 'rgba(143,229,96,0.6)'
 const COLOR_LINK = 'rgba(143,229,96,0.3)'
 const COLOR_LINK_DIM = 'rgba(143,229,96,0.1)'
 const COLOR_NODE_DIM = 'rgba(143,229,96,0.15)'
+const COLOR_EXPANDED = '#fbbf24'  // 已展开邻域的节点：亮金色提示
 const BG_DEEP = '#0f1f17'
 
 function colorForKind(kind?: string): string {
@@ -446,7 +447,8 @@ function initGraph() {
   g.nodeRelSize(6)
     .nodeOpacity(1.0)
     .nodeResolution(8)
-    .nodeColor((node: NodeObject) => colorForKind((node as GraphNode).kind))
+    .nodeColor((node: NodeObject) => expandedIds.value.has(node.id as string)
+      ? COLOR_EXPANDED : colorForKind((node as GraphNode).kind))
     .nodeLabel((node: NodeObject) => {
       const n = node as GraphNode
       return `<div style="padding:4px 10px;border-radius:8px;background:var(--glass-bg);border:1px solid var(--glass-border);color:var(--moon);font-size:13px;">${escapeHtml(n.name)}${n.kind ? `<span style="margin-left:8px;color:var(--wisdom);font-size:11px;">${escapeHtml(n.kind)}</span>` : ''}</div>`
@@ -591,8 +593,12 @@ function updateHighlight() {
   const g = graph.value
   if (!g) return
   const focus = hoveredNode.value || selectedNode.value
+  // 未聚焦时：已展开节点用亮金色，提示"该邻域已加载"；其余按类别配色
   if (!focus) {
-    g.nodeColor((node: NodeObject) => colorForKind((node as GraphNode).kind))
+    g.nodeColor((node: NodeObject) => {
+      const nid = node.id as string
+      return expandedIds.value.has(nid) ? COLOR_EXPANDED : colorForKind((node as GraphNode).kind)
+    })
     g.linkColor(() => COLOR_LINK)
     return
   }
@@ -600,7 +606,9 @@ function updateHighlight() {
   const neighbors = neighborsCache.get(id) || new Set<string>()
   g.nodeColor((node: NodeObject) => {
     const nid = node.id as string
-    return nid === id || neighbors.has(nid) ? colorForKind((node as GraphNode).kind) : COLOR_NODE_DIM
+    if (nid === id) return '#ffffff'
+    if (neighbors.has(nid)) return colorForKind((node as GraphNode).kind)
+    return expandedIds.value.has(nid) ? COLOR_EXPANDED : COLOR_NODE_DIM
   })
   g.linkColor((link: any) => {
     const s = linkId(link.source)
@@ -689,8 +697,9 @@ function resetView() {
 }
 
 // ── 深度切换 / 检索 ──
-function setActiveDepth(d: 1 | 2) {
-  activeDepth.value = d
+// 按需展开模型：深度只影响搜索起步范围（1-5），点击节点始终增量展开 1 跳
+function setActiveDepth(d: number) {
+  activeDepth.value = (Math.max(1, Math.min(5, d)) ) as 1 | 2
   loadGraph()
 }
 
@@ -859,16 +868,12 @@ function kindLabel(kind?: string): string {
           style="max-width: 200px"
           @keydown.enter="onSearchEnter"
         />
-        <n-button
-          size="tiny"
-          :type="activeDepth === 1 ? 'primary' : 'default'"
-          @click="setActiveDepth(1)"
-        >{{ t('universeGraph.depth1') }}</n-button>
-        <n-button
-          size="tiny"
-          :type="activeDepth === 2 ? 'primary' : 'default'"
-          @click="setActiveDepth(2)"
-        >{{ t('universeGraph.depth2') }}</n-button>
+        <div class="universe-depth-stepper" :title="t('universeGraph.depthHint')">
+          <n-button size="tiny" quaternary @click="setActiveDepth(activeDepth - 1)">−</n-button>
+          <span class="universe-depth-value">{{ t('universeGraph.depthLabel') }} {{ activeDepth }}</span>
+          <n-button size="tiny" quaternary @click="setActiveDepth(activeDepth + 1)">+</n-button>
+        </div>
+        <span v-if="expandingName" class="universe-expanding">{{ t('insightView.expanding') }}「{{ expandingName }}」…</span>
         <span class="universe-count">{{ nodeCount }} {{ t('universeGraph.nodeCount') }}</span>
         <span class="universe-fps" :class="fpsClass">{{ fps }} fps · {{ qualityTier }}</span>
         <n-button size="tiny" quaternary @click="resetView" :title="t('universeGraph.resetView')">{{ t('universeGraph.resetView') }}</n-button>
@@ -959,6 +964,34 @@ function kindLabel(kind?: string): string {
   font-size: 12px;
   color: var(--moon-dim);
   margin-left: 4px;
+}
+
+.universe-depth-stepper {
+  display: flex;
+  align-items: center;
+  gap: 0;
+  padding: 0 2px;
+  border: 1px solid var(--glass-border);
+  border-radius: 6px;
+}
+
+.universe-depth-value {
+  font-size: 12px;
+  color: var(--moon);
+  min-width: 52px;
+  text-align: center;
+  white-space: nowrap;
+}
+
+.universe-expanding {
+  font-size: 11px;
+  color: var(--wisdom);
+  animation: universe-pulse 1.2s ease-in-out infinite;
+}
+
+@keyframes universe-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.45; }
 }
 
 .universe-fps {

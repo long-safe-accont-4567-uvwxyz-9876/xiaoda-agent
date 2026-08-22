@@ -1327,6 +1327,8 @@ export default {
     searchPh: 'Search entity to locate…',
     depth1: 'Depth 1',
     depth2: 'Depth 2',
+    depthLabel: 'Depth',
+    depthHint: 'Starting expand levels (1-5): click any node to expand further',
     nodeCount: 'nodes',
     lightOff: 'Lights Off',
     lightOn: 'Lights On',
