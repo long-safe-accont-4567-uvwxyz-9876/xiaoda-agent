@@ -184,6 +184,16 @@ wf_id 在白名单内 → 该流可用;否则前端隐藏"启动"按钮(占位�
      测试: 服务层 6 + 路由层 3(发布→回滚→409 全链路),全套 65 通过;
 **M3(迁移/回滚/灰度)**:§6;验收: CLI dry-run 对真实工作区零失败; 双
  引擎一致性抽查脚本。
+  - 状态: ✅ 2026-08-22 落地 — `wf_config` KV 表(db v28)+ 灰度开关
+    `workflow_v2.enabled`(默认关)/`pilot_wf_ids` 白名单(DB config,不新增
+    env var);启用规则 = 全局开或白名单内;路由 `POST /runs` 未开放 503
+    (WORKFLOW_V2_DISABLED)+`GET /{wf_id}/v2-status` 前端可用性查询;
+    driver 不调度未开放工作流的 QUEUED 运行(白名单加入后自动续跑);
+    启动按钮未开放时禁用+占位文案;迁移 CLI `scripts/migrate_v1_workflows.py`
+    (status/dry-run/迁移幂等(dedup by content_hash,不覆盖人工回滚)/
+    rollback/set_current/pilot 白名单操作);
+    验收: 真实工作区 `--dry-run` rc=0 零警告; 18 个新用例(M3 灰度 16 +
+    版本 28 契约补齐); 全套 4965 通过。
 **M4(加固/可观测)**:高级 DAG 节点 REVIEW、PRINCIPI 文档 + 负载节流、
  workflow 级指标(事件已有,加 debug 计数)。
 
