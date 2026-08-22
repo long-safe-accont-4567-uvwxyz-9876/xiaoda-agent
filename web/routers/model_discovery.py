@@ -468,13 +468,13 @@ async def discover_models(request: Request) -> Any:
     if stale:
         # stale-while-revalidate：旧数据立即返回（页面秒开），
         # 后台静默刷新。模型页首次打开后不再被外部 API 拖慢 2.6s。
-        asyncio.get_running_loop().create_task(_refresh_cache_background())
+        asyncio.get_running_loop().create_task(_refresh_cache_background(request))
         return _cache["data"]
 
-    return await _fetch_and_cache_discovered()
+    return await _fetch_and_cache_discovered(request)
 
 
-async def _fetch_and_cache_discovered() -> Any:
+async def _fetch_and_cache_discovered(request: Request) -> Any:
     """并发拉取全部 provider 的模型列表并写入缓存（首次冷启动路径）。"""
     now = time.time()
     if True:
@@ -591,10 +591,14 @@ async def set_chat_model(body: dict, request: Request) -> Any:
         logger.exception("model_discovery.set_chat_model.unexpected_error")
         return Envelope(ok=False, error={"code": "set_failed", "message": str(e)})
 
-async def _refresh_cache_background() -> None:
-    """后台静默刷新 discover 缓存（stale-while-revalidate 的 revalidate 半边）。"""
+async def _refresh_cache_background(request: Request) -> None:
+    """后台静默刷新 discover 缓存（stale-while-revalidate 的 revalidate 半边）。
+
+    request 在 spawn 点捕获（仅用于取 app.state 单例，请求体早已读完，
+    fire-and-forget 生命周期内 app 引用有效）。
+    """
     try:
-        await _fetch_and_cache_discovered()
+        await _fetch_and_cache_discovered(request)
     except Exception as e:  # noqa: BLE001
         from loguru import logger as _lg
         _lg.debug("models.discover_bg_refresh_failed error={}", str(e)[:150])
