@@ -61,7 +61,7 @@ STREAM_GROUP_MAX_SEGMENTS = 4
 
 # ---------------------------------------------------------------------------
 # 流式回复分片工具（A2：从 qq_bot_adapter 逐字节下沉，QQ/微信共用）
-# 模块级函数，供 qq_bot_streaming / wechat_bot_adapter 等直接 import。
+# 模块级函数，供 qq_bot_adapter / wechat_bot_adapter 等直接 import。
 # ---------------------------------------------------------------------------
 
 def _split_text_by_bytes(text: str, byte_limit: int = 7800) -> list[str]:
