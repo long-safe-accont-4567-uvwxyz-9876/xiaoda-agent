@@ -19,6 +19,7 @@ import * as THREE from 'three'
 import { UnrealBloomPass } from 'three/examples/jsm/postprocessing/UnrealBloomPass.js'
 import { getKnowledgeGraph } from '../../api'
 import { getWsClient, type WsEvent } from '../../api/ws'
+import { useKnowledgeGraphData } from '../../composables/useKnowledgeGraphData'
 import { t, tf } from '../../i18n'
 
 interface GraphNode extends NodeObject {
@@ -171,42 +172,22 @@ function linkId(end: string | GraphNode): string {
 
 // ── 加载数据 ──
 const RETRY_DELAYS = [1000, 2000, 4000]
-// 按需展开状态：累积节点/边（id 索引去重），点击节点增量拉邻域
-let accNodes: GraphNode[] = []
-let accLinks: GraphLink[] = []
-const accNodeIdx = new Map<string, GraphNode>()
-const accLinkKeys = new Set<string>()
-// 已展开邻域的节点 id 集合（高亮提示）
-const expandedIds = ref<Set<string>>(new Set())
+// 按需展开状态：累积节点/边（去重合并走共享组合式函数），点击节点增量拉邻域
+// 数据层已与 InsightView 2D 图合并为 useKnowledgeGraphData（2026-08-22 专项）
+const acc = useKnowledgeGraphData<GraphNode, GraphLink>(
+  (raw, degree) => ({
+    id: String(raw.name),
+    name: String(raw.name),
+    kind: raw.kind,
+    val: degree + 1,
+    fx: 0, fy: 0, fz: 0,
+  }),
+  (raw) => ({ source: String(raw.from), target: String(raw.to), relation: raw.relation }),
+)
+const accNodes = computed(() => acc.nodes.value)
+const accLinks = computed(() => acc.edges.value)
+const { expandedIds } = acc
 const expandingName = ref('')
-
-function mergeIntoAcc(rawNodes: any[], rawEdges: any[]) {
-  const degree = new Map<string, number>()
-  for (const e of rawEdges) {
-    const f = String(e.from), t2 = String(e.to)
-    degree.set(f, (degree.get(f) || 0) + 1)
-    degree.set(t2, (degree.get(t2) || 0) + 1)
-  }
-  for (const n of rawNodes) {
-    const id = String(n.name)
-    if (accNodeIdx.has(id)) continue
-    const node: GraphNode = {
-      id,
-      name: String(n.name),
-      kind: n.kind,
-      val: (degree.get(id) || 0) + 1,
-      fx: 0, fy: 0, fz: 0,
-    }
-    accNodeIdx.set(id, node)
-    accNodes.push(node)
-  }
-  for (const e of rawEdges) {
-    const key = `${e.from}||${e.relation}||${e.to}`
-    if (accLinkKeys.has(key)) continue
-    accLinkKeys.add(key)
-    accLinks.push({ source: String(e.from), target: String(e.to), relation: e.relation })
-  }
-}
 
 async function loadGraph(retries = 0) {
   if (destroyed || !containerEl.value) return
@@ -217,19 +198,13 @@ async function loadGraph(retries = 0) {
   try {
     // 按需展开模型：重置累积状态，只拉起步实体 depth=1 邻域（<400 边）
     // 用户后续单击节点增量展开，不再一次性拉全图
-    accNodes = []
-    accLinks = []
-    accNodeIdx.clear()
-    accLinkKeys.clear()
-    expandedIds.value = new Set()
+    acc.reset()
     const startEntity = props.entity.trim()
     const data = await getKnowledgeGraph(startEntity, Math.min(activeDepth.value ?? 6, 1))
     if (destroyed) return
 
-    const rawNodes: any[] = data.nodes || []
-    const rawEdges: any[] = data.edges || []
-    mergeIntoAcc(rawNodes, rawEdges)
-    if (startEntity) expandedIds.value.add(startEntity)
+    acc.merge(data.nodes || [], data.edges || [])
+    if (startEntity) acc.markExpanded(startEntity)
 
     applyAccumulatedToGraph()
   } catch (e: any) {
@@ -246,16 +221,16 @@ async function loadGraph(retries = 0) {
 function applyAccumulatedToGraph() {
   if (destroyed || !containerEl.value) return
 
-  nodes.value = [...accNodes]
-  links.value = [...accLinks]
-  nodeCount.value = accNodes.length
-  neighborsCache = buildNeighbors(accNodes, accLinks)
+  nodes.value = [...accNodes.value]
+  links.value = [...accLinks.value]
+  nodeCount.value = accNodes.value.length
+  neighborsCache = buildNeighbors(accNodes.value, accLinks.value)
 
   // 渲染规模分级：>600 边关粒子流（每条边一个动画粒子是最大 GPU 开销）
-  heavyEdges.value = accLinks.length > 600
+  heavyEdges.value = accLinks.value.length > 600
 
   // 性能保护：节点过多则降级（用户已点击"仍要进入 3D"则跳过）
-  if (accNodes.length > 2000 && !bypassDegrade) {
+  if (accNodes.value.length > 2000 && !bypassDegrade) {
     degraded.value = true
     loading.value = false
     // 释放已建实例
@@ -272,10 +247,10 @@ function applyAccumulatedToGraph() {
 
   // 大图（>400 节点）先只挂节点、延后 300ms 再挂边：力导向先散开节点，
   // 避免边+节点同时求解导致的初始帧卡死
-  const bigGraph = accNodes.length > 400
+  const bigGraph = accNodes.value.length > 400
   graph.value!.graphData({
-    nodes: accNodes as unknown as NodeObject[],
-    links: (bigGraph ? [] : accLinks) as unknown as GraphLink[],
+    nodes: accNodes.value as unknown as NodeObject[],
+    links: (bigGraph ? [] : accLinks.value) as unknown as GraphLink[],
   } as any)
 
   // 力导向参数：增大斥力和连接长度，避免节点挤成一坨
@@ -290,11 +265,11 @@ function applyAccumulatedToGraph() {
   // 释放初始锚定，让力导向把节点从中心炸开
   releaseTimer = setTimeout(() => {
     if (destroyed || !graph.value) return
-    accNodes.forEach(n => { n.fx = undefined; n.fy = undefined; n.fz = undefined })
+    accNodes.value.forEach(n => { n.fx = undefined; n.fy = undefined; n.fz = undefined })
     graph.value!.d3AlphaDecay(0.05)
     graph.value!.graphData({
-      nodes: accNodes as unknown as NodeObject[],
-      links: accLinks as unknown as GraphLink[],
+      nodes: accNodes.value as unknown as NodeObject[],
+      links: accLinks.value as unknown as GraphLink[],
     } as any)
   }, 300)
 
@@ -313,7 +288,7 @@ async function expandAround(node: GraphNode) {
   try {
     const data = await getKnowledgeGraph(node.name, 1)
     if (destroyed) return
-    mergeIntoAcc(data.nodes || [], data.edges || [])
+    acc.merge(data.nodes || [], data.edges || [])
     expandedIds.value.add(id)
     applyAccumulatedToGraph()
     // 展开后聚焦到该节点

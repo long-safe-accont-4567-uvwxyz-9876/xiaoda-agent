@@ -19,6 +19,7 @@ import {
 } from '../api'
 import type { XpState, XpLevelConfig } from '../api'
 import { getWsClient } from '../api/ws'
+import { useKnowledgeGraphData } from '../composables/useKnowledgeGraphData'
 // 3D 宇宙视图按需加载：3d-force-graph/three 等依赖仅在全屏打开时拉取，
 // 避免 WebGL 库常驻主包拖慢 Insight 页首开（图谱双模式评估见 docs/kgraph-dual-render.md）
 const UniverseGraph = defineAsyncComponent(
@@ -60,11 +61,15 @@ const graphEntity = ref(t('insightView.graphEntityPh'))
 // 图谱深度：1-5 自由调节（后端批量 BFS 任意深度 <70ms），不再固定两档
 const graphDepth = ref<number>(1)
 // 按需展开状态：已加载节点集合 + 展开中的节点（防重复请求）
-const expandedNodes = ref<Set<string>>(new Set())
 const expandingNode = ref('')
 // 增量图数据（搜索/展开合并后的累积结果）
-const kgNodes = ref<any[]>([])
-const kgEdges = ref<any[]>([])
+// 数据层与 3D UniverseGraph 共享 useKnowledgeGraphData（2026-08-22 三可视化库专项）：
+// 去重/degree 计算只此一份；echarts 节点形态 {name,value,kind} 经 makeNode 注入
+const { nodes: kgNodes, edges: kgEdges, expandedIds: expandedNodes, reset: resetGraphAcc, merge: mergeGraphData, markExpanded } =
+  useKnowledgeGraphData<any, any>(
+    (raw) => ({ name: String(raw.name), value: raw.kind, kind: raw.kind }),
+    (raw) => raw,
+  )
 const showUniverse = ref(false)
 const activeTab = ref('emotion')
 let knowledgeChart: echarts.ECharts | null = null
@@ -401,28 +406,8 @@ async function removeInstinct(id: number) {
 
 // ── 图谱增量合并渲染 ──
 // 按需展开模型：初始只拉搜索实体 1 跳邻域；单击节点增量拉取其邻域合并进图。
-// kgNodes/kgEdges 是累积状态，mergeGraphData 去重合并，renderKnowledge 全量重绘
+// 累积/去重逻辑在共享组合式函数中（useKnowledgeGraphData），renderKnowledge 全量重绘
 // （echarts force 图 setOption 增量挂边会破坏已固定节点坐标，全量重绘 + 坐标保留）。
-
-function mergeGraphData(newNodes: any[], newEdges: any[]) {
-  const nodeIdx = new Map<string, any>()
-  for (const n of kgNodes.value) nodeIdx.set(n.name, n)
-  for (const n of newNodes) {
-    if (!nodeIdx.has(n.name)) {
-      nodeIdx.set(n.name, { name: n.name, value: n.kind, kind: n.kind })
-      kgNodes.value.push(nodeIdx.get(n.name))
-    }
-  }
-  const edgeKey = (e: any) => `${e.from}||${e.relation}||${e.to}`
-  const edgeIdx = new Set(kgEdges.value.map(edgeKey))
-  for (const e of newEdges) {
-    const k = edgeKey(e)
-    if (!edgeIdx.has(k)) {
-      edgeIdx.add(k)
-      kgEdges.value.push(e)
-    }
-  }
-}
 
 async function renderKnowledge() {
   try {
@@ -550,7 +535,7 @@ async function expandNode(name: string) {
   try {
     const data = await getKnowledgeGraph(name, 1)
     mergeGraphData(data.nodes || [], data.edges || [])
-    expandedNodes.value.add(name)
+    markExpanded(name)
     await renderKnowledge()
   } catch (e: any) {
     message.error(e.message)
@@ -561,13 +546,11 @@ async function expandNode(name: string) {
 
 // 搜索/深度变化 → 重置累积图，从目标实体重新起步
 async function resetAndLoadGraph(entity: string, depth: number) {
-  kgNodes.value = []
-  kgEdges.value = []
-  expandedNodes.value = new Set()
+  resetGraphAcc()
   try {
     const data = await getKnowledgeGraph(entity, depth)
     mergeGraphData(data.nodes || [], data.edges || [])
-    if (entity.trim()) expandedNodes.value.add(entity.trim())
+    if (entity.trim()) markExpanded(entity.trim())
     await renderKnowledge()
   } catch (e: any) { message.error(e.message) }
 }
