@@ -1,0 +1,21 @@
+# 统一行尾：LF for all text files（2026-08-22 技术债批 1.5）
+# 背景：仓库混杂 CRLF/LF 导致 diff 全文件翻动（参见 docs/TODO.md Minor #3）。
+# 设置后新文件一律 LF；既有 CRLF 文件由 git add --renormalize 一次性迁移。
+*.py text eol=lf
+*.md text eol=lf
+*.js text eol=lf
+*.mjs text eol=lf
+*.cjs text eol=lf
+*.ts text eol=lf
+*.vue text eol=lf
+*.json text eol=lf
+*.yml text eol=lf
+*.yaml text eol=lf
+*.sh text eol=lf
+*.spec text eol=lf
+*.ini text eol=lf
+
+# 构建产物：行尾与仓库无关，保持原样避免无谓 diff
+web/dist/** -text
+build/** -text
+dist/** -text
