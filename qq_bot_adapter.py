@@ -47,7 +47,6 @@ setup_logging()
 from loguru import logger
 
 import botpy
-from botpy.gateway import BotWebSocket
 from botpy.message import C2CMessage, GroupMessage
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -64,155 +63,9 @@ from emotion.nudge_engine import NudgeEngine
 from emotion.emoji_config import get_ack_message
 from utils.text_utils import encode_image_to_base64
 
-_original_is_system_event = BotWebSocket._is_system_event
+from botpy_compat import install_botpy_patches, redirect_bot_log
 
-async def _patched_is_system_event(self, message_event: Any, ws: Any) -> Any:
-    event_op = message_event.get("op")
-    if event_op == BotWebSocket.WS_HEARTBEAT_ACK:
-        self._last_heartbeat_ack = asyncio.get_running_loop().time()
-    return await _original_is_system_event(self, message_event, ws)
-
-BotWebSocket._is_system_event = _patched_is_system_event
-
-_original_send_heart = BotWebSocket._send_heart
-
-async def _patched_send_heart(self, interval: Any) -> None:
-    _log = __import__("botpy.logging", fromlist=["get_logger"]).get_logger()
-    _log.info("[botpy] 心跳维持启动（带超时检测）...")
-    self._last_heartbeat_ack = asyncio.get_running_loop().time()
-    missed_acks = 0
-    while True:
-        if self._conn is None:
-            _log.debug("[botpy] 连接已关闭!")
-            return
-        if self._conn.closed:
-            _log.debug("[botpy] ws连接已关闭, 心跳检测停止")
-            return
-
-        # 先发送心跳（捕获连接关闭异常，避免心跳任务失败导致 QQ Bot 断连）
-        payload = {
-            "op": self.WS_HEARTBEAT,
-            "d": self._session["last_seq"],
-        }
-        try:
-            await self.send_msg(__import__("json").dumps(payload))
-        except Exception as e:
-            # WebSocket 已关闭或网络异常，心跳任务退出（QQ Bot SDK 会自动重连）
-            _log.warning(f"[botpy] 心跳发送失败，连接可能已关闭: {e}")
-            return
-        await asyncio.sleep(interval)
-
-        # 再检查 ACK 是否超时
-        now = asyncio.get_running_loop().time()
-        if now - self._last_heartbeat_ack > interval * 4:
-            missed_acks += 1
-            _log.warning(f"[botpy] 心跳ACK超时 ({missed_acks}次), 上次ACK: {int(now - self._last_heartbeat_ack)}秒前")
-            if missed_acks >= 3:
-                _log.warning("[botpy] 心跳ACK连续超时，强制断开重连!")
-                await self._conn.close()
-                return
-        else:
-            missed_acks = 0
-
-BotWebSocket._send_heart = _patched_send_heart
-
-# Patch: on_closed 时处理 session 失效码（4009 等），强制 IDENTIFY 重连
-# 根因：botpy _INVALID_RECONNECT_CODE=[9001,9005] 不含 4009(Session timed out)，
-#   导致 4009 后 session_id 未清空 → 重连用 ws_resume → RESUME 已超时 session 无效
-#   → QQ 网关接受连接但不推送消息 → bot 在线却收不到任何用户消息（严重阻塞）。
-#   实测：07-28 16:20 起 每30分钟 4009+ws_resume，从未 ws_identify，消息零接收。
-# 修复：4009/4007 时清空 session_id，重连走 ws_identify 重建 session（QQ 官方要求）。
-# CodeRabbit 修复：4008 是限频（rate limited），session 仍有效，应保留 session_id
-#   走 ws_resume（RESUME）。原实现把 4008 纳入 _SESSION_INVALID_CODES 清空 session_id
-#   → 重连走 ws_identify → 丢失未 ACK 的消息（RESUME 本可恢复）。
-_original_on_closed = BotWebSocket.on_closed
-
-async def _patched_on_closed(self, close_status_code: Any, close_msg: Any) -> Any:
-    _SESSION_INVALID_CODES = {4007, 4009}  # session 失效，必须重新 IDENTIFY
-    _botpy_log = __import__("botpy.logging", fromlist=["get_logger"]).get_logger()
-    if close_status_code in _SESSION_INVALID_CODES:
-        _botpy_log.warning(
-            f"[botpy] session失效(code={close_status_code})，清空session强制IDENTIFY重连")
-        self._session["session_id"] = ""
-        self._session["last_seq"] = 0
-    elif close_status_code == 4008:
-        # 4008 限频：session 仍有效，保留 session_id 走 RESUME（不丢未 ACK 消息）
-        # botpy 自带 session_interval backoff，不强行 sleep 避免与重连机制冲突
-        _botpy_log.warning(
-            f"[botpy] 限频(code=4008)，保留session走RESUME，等待botpy backoff重连")
-    await _original_on_closed(self, close_status_code, close_msg)
-
-BotWebSocket.on_closed = _patched_on_closed
-
-from botpy.client import Client as _BotpyClient
-
-_original_pool_init = _BotpyClient._pool_init
-
-
-async def _patched_pool_init(self, token: Any, session_interval: Any) -> Any:
-    _botpy_log = __import__("botpy.logging", fromlist=["get_logger"]).get_logger()
-    for i in range(self._ws_ap["shards"]):
-        session = {
-            "session_id": "",
-            "last_seq": 0,
-            "intent": self.intents,
-            "token": token,
-            "url": self._ws_ap["url"],
-            "shards": {"shard_id": i, "shard_count": self._ws_ap["shards"]},
-        }
-        self._connection.add(session)
-
-    loop = self._connection.loop
-
-    def _loop_exception_handler(_loop: Any, context: Any) -> None:
-        _loop.default_exception_handler(context)
-        exception = context.get("exception")
-        if isinstance(exception, ZeroDivisionError):
-            _loop.stop()
-
-    loop.set_exception_handler(_loop_exception_handler)
-
-    recon_attempts = 0
-    max_recon_delay = 60
-
-    while not self._closed:
-        _botpy_log.debug("[botpy] 会话循环检查...")
-        try:
-            # multi_run 是 async def，返回的协程对象恒为 truthy——
-            # 原 `if coroutine: ... else: 重新登录` 的 else 分支永不执行（死代码）。
-            # Q2 修复：删除死分支，直接 await；连接中断后由 bot_connect 内部
-            # ws 重连机制（RESUME/IDENTIFY）接管，外层仅维持循环与异常退避。
-            coroutine = self._connection.multi_run(session_interval)
-            if self.ret_coro:
-                return coroutine
-            await coroutine
-            recon_attempts = 0
-            if not self._closed:
-                await asyncio.sleep(0.1)
-        except (TimeoutError, OSError, RuntimeError, ConnectionError) as e:
-            recon_attempts += 1
-            delay = min(5 * (2 ** min(recon_attempts - 1, 4)), max_recon_delay)
-            _botpy_log.error(f"[botpy] 会话异常: {e}, {delay}秒后重试 (第{recon_attempts}次)")
-            await asyncio.sleep(delay)
-            try:
-                await self._bot_login(token)
-                for i in range(self._ws_ap["shards"]):
-                    session = {
-                        "session_id": "",
-                        "last_seq": 0,
-                        "intent": self.intents,
-                        "token": token,
-                        "url": self._ws_ap["url"],
-                        "shards": {"shard_id": i, "shard_count": self._ws_ap["shards"]},
-                    }
-                    self._connection.add(session)
-            except (OSError, RuntimeError, ConnectionError) as login_err:
-                _botpy_log.error(f"[botpy] 异常后重新登录失败: {login_err}")
-    return None
-
-
-_BotpyClient._pool_init = _patched_pool_init
-
+install_botpy_patches()
 APP_ID = os.getenv("QQBOT_APP_ID", "")
 APP_SECRET = os.getenv("QQBOT_APP_SECRET", "")
 
@@ -322,45 +175,12 @@ async def send_proactive_message(text: str, openid: str = "") -> bool:
     return True
 
 
-_BOTPY_LOG_REDIRECTED = False
-
-
-def _redirect_botpy_file_log(log_dir: Path | None = None) -> None:
-    """把 botpy SDK 的文件日志从 cwd/botpy.log 重定向到项目 LOG_DIR。
-
-    背景：botpy.Client 构造时默认以 ext_handlers=True 追加 DEFAULT_FILE_HANDLER，
-    文件固定在 os.getcwd()/botpy.log（TimedRotatingFileHandler），导致日志散落
-    启动目录、脱离项目轮转体系。基于 SDK configure_logging 的判空幂等
-    （_ext_handlers 非空即跳过追加），在首个 Client 实例化前配置一次即可生效。
-    重定向失败不阻断启动，回退 SDK 默认行为。
-    """
-    global _BOTPY_LOG_REDIRECTED
-    if _BOTPY_LOG_REDIRECTED:
-        return
-    _BOTPY_LOG_REDIRECTED = True
-    try:
-        from botpy import logging as _botpy_logging
-
-        from config_paths import LOG_DIR as _LOG_DIR
-        target = Path(log_dir or _LOG_DIR)
-        target.mkdir(parents=True, exist_ok=True)
-        handler_cfg = dict(_botpy_logging.DEFAULT_FILE_HANDLER)
-        handler_cfg["filename"] = str(target / "botpy.log")
-        _botpy_logging.configure_logging(ext_handlers=[handler_cfg])
-        # SDK 只会给 logs 中已存在的 logger 补挂 handler；这里显式获取一次，
-        # 确保重定向 handler 一定挂载（也兼容某些导入顺序下 logger 尚未创建）。
-        _botpy_logging.get_logger()
-        logger.info("botpy_log.redirected_dir={}", target)
-    except Exception as exc:  # noqa: BLE001 —— 日志重定向失败仅告警并回退
-        logger.warning("botpy_log.redirect_skip error={}", str(exc)[:150])
-
-
 async def run_qq_bot(agent: "AgentCore", *, sandbox: bool = False) -> None:
     """在现有事件循环中运行 QQ client（与 WebUI 同进程模式）。
 
     内部带指数退避重连；任务被取消时干净退出。
     """
-    _redirect_botpy_file_log()
+    redirect_bot_log()
     # P0 修复：实时从 env 读取 APP_ID/APP_SECRET，而非依赖模块级变量。
     # 根因：模块级 APP_ID 在 import 时一次性读取，若 load_dotenv 未读到 .env（如
     # Windows 安装包 CWD 不对），APP_ID 永远为空。即使后续 restart_qq_bot_task
