@@ -139,7 +139,27 @@ alive 过滤边界）；开发中捕获并修复种子双重累积 bug（分差�
 
 **结论：历史阻塞点中没有新的达标 Rust 候选**——它们分属「已修复 bug」「连接池调度」「外部进程/网络」三类；但挖出并修复了 1 个真实缺陷（窄 except 漏捕 httpx 超时族，影响 free_model_backend / result_wrapper / xiaoli_agent 共 4 处调用点）。
 
-## 七、后续路线（若合并后观察达标）
+## 七、线上全链路 A/B 实测（2026-08-22，RUST_HYBRID_ENABLED 开关切换）
+
+对运行中的生产服务（API `/retrieval/test`，8 条多样化查询同序对比）：
+
+| 口径 | 纯 Python | Rust 混合 | 提升 |
+|---|---|---|---|
+| 端到端平均 | **7.59s** | **2.46s** | **3.1x** |
+| 最快/最慢查询 | 4.13s / 11.41s | 1.63s / 4.70s | 尾延迟减半以上 |
+| spreading 通道稳态 | ~2000-2500ms | **642-1300ms** | ~2x |
+
+注：中间测得 2.0x 版本系 load_edges 每查询重复执行（100 万行转换 ~600ms
+未做版本跟踪）所致；以 `_graph_ts` 为版本指纹修复后落地 3.1x。
+等价性由 tests/test_rust_hybrid_poc.py 保证（开关切换前后命中一致）。
+
+**剩余瓶颈构成**（Rust 开启后）：vec_embed_search ~0.9-2s（NPU 进程排队）、
+channel_kg ~2.7s（LLM 实体提取网络调用）、get_alive_nodes ~0.5s（SQL IO）、
+hybrid_rerank ~0.8s（reranker API）——均为外部依赖，Rust 无收益。
+
+**结论：全链路验证通过，混合架构在生产路径收益为真实 3.1x，建议保留开关常开。**
+
+## 八、后续路线（若合并后观察达标）
 
 1. **构建链**：maturin wheel 化进 CI 与安装包（`build.sh` 已自动同步 venv）
 2. **线上验证**：合并后开启 `RUST_HYBRID_ENABLED=true` 观察一个流量周期

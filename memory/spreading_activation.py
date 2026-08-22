@@ -66,6 +66,8 @@ class SpreadingActivationEngine:
         # Rust 常驻节点索引（perf/rust-hybrid-poc）：与 alive_nodes 同步重建，
         # 开关关闭时恒为 None，零开销
         self._rust_index: Any | None = None
+        # Rust 侧已加载的边快照版本（对应 _graph_ts；-1 = 从未加载）
+        self._rust_edges_ts: float = -1.0
 
     async def _ensure_graph_snapshot(self) -> dict[str, dict[str, float]]:
         """取整图边快照（{source: {target: weight}}），TTL 内复用，过期后台重建。
@@ -232,9 +234,11 @@ class SpreadingActivationEngine:
         """
         self._recall_cache.clear()
         # Rust 常驻 NodeIndex 同步失效（节点数变化时下次查询自动重建；
-        # 仅数量不变的 key/text 更新会延迟到下次节点数变化，PoC 接受此陈旧度）
+        # 仅数量不变的 key/text 更新会延迟到下次节点数变化，PoC 接受此陈旧度）。
+        # 边快照版本一并失效：索引重建后邻接表必须重载
         if getattr(self, "_rust_index", None) is not None:
             self._rust_index = None
+        self._rust_edges_ts = -1.0
 
     def _compute_idf(self, keys: set, alive_nodes: dict) -> dict:
         """计算每个 key 的 IDF 值
@@ -336,11 +340,14 @@ class SpreadingActivationEngine:
             try:
                 idx = self._get_rust_index(alive_nodes)
                 if idx is not None:
-                    # 边快照仅在图重建后首次调用时加载（load_edges 幂等，
-                    # 100 万行转换 ~200ms，TTL 内摊销为零）
-                    idx.load_edges(
-                        [(s, t, w) for s, targets in graph.items()
-                         for t, w in targets.items()])
+                    # 边快照仅在图重建后重载：以 _graph_ts 为版本指纹，
+                    # 未重建时跳过 100 万行转换（实测 ~600ms/次，不跟踪
+                    # 会把 Rust 游走的收益全部吃掉）
+                    if getattr(self, "_rust_edges_ts", -1.0) != self._graph_ts:
+                        idx.load_edges(
+                            [(s, t, w) for s, targets in graph.items()
+                             for t, w in targets.items()])
+                        self._rust_edges_ts = self._graph_ts
                     spread = idx.spreading_channel(
                         list(direct.items()),
                         radius=self.RECALL_RADIUS,
