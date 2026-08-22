@@ -14,7 +14,7 @@
 | 2 | botpy 私有 API 耦合 + patch 双份漂移 | 高 | ✅ 已收敛（带回归，已修复，见三.1） | `3d5c15de` |
 | 3 | DB 迁移三套并存 + 同步 sqlite 混用 | 高 | 🔶 迁移注释级收敛✅；rate_limit 同步 IO 未动 | `55818bd8` |
 | 4 | ONNX 91MB 在 git | 高 | ✅ 已出库 + 检索默认切远程（含降级链与显式告警） | `22f1c96a` |
-| 5 | 全集测试 continue-on-error | 中高 | ❌ 未动（仍 5 处） | — |
+| 5 | 全集测试 continue-on-error | 中高 | 🔶 重新定性：无 CI（纸面防线）；**绿基线已建立**（4911/0），真 CI 待选型 | — |
 | 6 | web/dist 入库 | 中高 | 🔶 tsbuildinfo 出库✅；dist 有意保留待决策 | `42def5c2` |
 | 7 | vue-tsc 装而不用 | 中 | ✅ 已接入 CI，本机实测全绿 | `dcd88caf` |
 | 8 | WebUI 无进程托管 | 中 | ⚠️ 脚本有 bug 且未应用（见三.2） | `de795d28` |
@@ -84,39 +84,46 @@ legacy 唯一生产入口导航注释、idempotent_migrator 弃用声明、repai
 `3d5c15de` 把 `_patched_on_closed`/`_original_on_closed` 搬到 botpy_compat.py，漏改 tests/test_qq_bot_4008.py → 3 项测试 AttributeError 失败。该测试正是 CodeRabbit 修复（4008 限频不得清 session）的回归防线，失效期间 4007/4008/4009 会话语义无守护。
 **修复**：改引 botpy_compat 符号，test_qq_bot_4008 + test_botpy_compat 共 8 passed。全仓 grep 确认仅此一处旧符号引用。
 
-### 2. 【脚本已修 · `924d279b`｜部署仍未落地】install-webui-service.sh `User=%u` root bug
-%u/%h 解析问题已在安装时写死真实用户修复。**仍开放**：本机未实际安装 xiaoda-webui 单元，WebUI 仍是手动 setsid 进程——"脚本交付 ≠ 托管落地"，需择机执行安装并验证开机自启。附带发现：CLAUDE.md 记载的生产单元 qq-agent.service 在本机不存在（`could not be found`），QQ Bot 进程当前也未运行——文档与现实不符，需校正或重建单元。
+### 2. 【已收敛 · `924d279b`+`a3135bf4`+`5ab58d6f`】WebUI 托管：脚本 bug 修复 → 实装实测 → 发现既有单元 → 拆除重复
+完整落地过程暴露了三层问题，全部修复：
+- **脚本 bug**：`User=%u` system 管理器下恒为 root（man systemd.unit(5) 实证）→ 安装时写死真实用户。
+- **start-linux.sh 崩溃循环**：仓库根 `xiaoda-agent/` 构建残留**目录**同样满足 `[ -x ]`，"执行目录"126 错误烧穿看门狗重启预算 → 加 `-f` 判定（实装首启即触发，修复后正常）。
+- **双单元并存互杀**：本机早已存在手工调优的 `nahida-web.service`（KIOXIA_DATA_DIR env、MemoryHigh/Max、CPUQuota、ExecStartPre fuser -k 端口预清理 + db 目录断言）。xiaoda-webui 安装启用后与其抢 8080——旧"手动 nohup 进程"实为 nahida-web 所管，kill 后被 systemd 立即 respawn。处置：**拆除 xiaoda-webui，收敛到 nahida-web**；安装脚本加冲突防护（检测既有同类单元即拒绝安装）。
+
+**重要副产物发现（文档全面过时）**：
+- 生产形态已是**单进程**：`web/server.py:556` 内联 `run_qq_bot()`，WebUI+QQ Bot+WS 共享 AgentCore。原报告第八节"双进程并发写 SQLite"、原 CLAUDE.md"两个独立进程"均失效。
+- 数据盘已迁移：活数据在 `/mnt/usb2/nahida-data`（btrfs），原记载的 `/media/orangepi/KIOXIA/xiaoda-data` 已不存在。
+- 以上均已写入 CLAUDE.md（`6990fb20`）。
 
 ### 3. 【已修复 · `661a2f29`】botpy_compat.py 丢失关键考古注释
 旧内联版记录的根因——"botpy `_INVALID_RECONNECT_CODE=[9001,9005]` 不含 4009 → RESUME 已超时 session → 在线却收不到任何消息（07-28 实测）"——已补回补丁定义处，并附 SDK 修复后的处置指引（补丁应删）。
 
 ## 四、仍未偿还未动（按风险排序）
 
-1. **continue-on-error 制度化**：ci-tests.yml 4 处 + build-release.yml 1 处，全集 flaky 门禁未恢复。
-2. **rate_limit 审计修正 + 已收口（`423fa7f3`）**：原审计"请求路径同步 connect 阻塞事件循环"复核**不成立**——周期保存自 `8ceb4dcc`(2026-07-04) 起已 run_in_executor 挪出事件循环，init/load 仅启动时一次。真实问题是 except 未含 sqlite3.Error（锁库/损坏时穿透），已修复。
-3. **workflow_v2 定性修正**：`web/routers/workflows_v2.py` 已挂 server.py:1077（原报告"仅包内互引"过时），但前端 api/index.ts 只调 `/workflows` v1，v2 仍零消费者；legacy_migrations v27 每次启动照旧建表。处置二选一：下线 v27+v2 路由，或推前端接入后转正。
-4. **web/dist 96 文件入库**：出库前置条件是解决离线部署模式（SETUP.md 承诺），否则继续付 hash 翻动成本。
-5. 双进程各持 AgentCore 并发写 SQLite、外挂盘 vfat 下 WAL 降级风险，未动。
-6. 慢性病类（巨型文件、1128 裸 except 存量、i18n 双字典、three/echarts/3d-force-graph 三库并存）未动。
+1. **continue-on-error 制度化 → 重新定性：根本没有 CI（2026-08-22 晚复核）**
+   仓库唯一 remote 是 **Gitee**，`.github/workflows/*.yml` 在 Gitee 上不会执行，也无 `.workflow/`（Gitee Go）配置——严格 critical 门禁与 COE 全集**从未真正运行过**，"两段制测试策略"是纸面防线。COE 的 5 处中仅 2 处是全集容忍红（ci-tests.yml:62、build-release.yml:777），其余 3 处为覆盖率评论报告步骤（可接受容错）。
+   **本地全集基线已建立**：`4911 passed / 0 failed / 9 skipped / 5m09s`（ARM 裸机）。首跑暴露的 3 个失败**全部是陈旧契约而非 flaky**——22f1c96a 改嵌入架构未同步测试 + a0431f71 起前端源码契约背离，均因无 CI 静默红着；已在 `9965352e` 修复归零。这意味着：**一旦真 CI 就位，全集可直接严格门禁**，无需先治 flaky。选型三选一待决策：GitHub mirror remote 跑 Actions / Gitee Go 流水线 / pre-push hook（5 分钟成本完全可承受）。
+2. **workflow_v2 定性修正**：`web/routers/workflows_v2.py` 已挂 server.py:1077（原报告"仅包内互引"过时），但前端 api/index.ts 只调 `/workflows` v1，v2 仍零消费者；legacy_migrations v27 每次启动照旧建表。**另一会话正在改造中**（新增 app.py、改 repository/service/routers，前端 api/index.ts 的 `/workflow-runs` 端点已就位）。
+3. **web/dist 96 文件入库**：出库前置条件是解决离线部署模式（SETUP.md 承诺），否则继续付 hash 翻动成本。
+4. ~~双进程并发写 SQLite~~ → **已消解**：架构已合并单进程（见三.2 副产物发现）；外挂盘现为 btrfs（非 vfat），WAL 降级风险随之解除。
+5. 慢性病类（巨型文件、1128 裸 except 存量、i18n 双字典、three/echarts/3d-force-graph 三库并存、config.py import 副作用链、dotenv override 双轨打架）未动。
 
-## 五、进行中 WIP（多会话并行实锤，归属标注）
+## 五、多会话并行（归属台账）
 
-- **另一会话 A（海报功能）**：web/agent_registry.py `wallpaper_poster()` + web/routers/agents.py `_extract_video_poster()`（ffmpeg 首帧抽帧）+ AgentBackdrop.vue/agents.ts/LoginView.vue + 全量 dist 重建。功能自洽，是壁纸第二阶段延续。仍待验证提交。
+- **会话 A（海报功能）已完成**：`a85b8fd7` 由对账会话代为 review 后提交。
 - **会话 B（ONNX 出库）已完成**：`22f1c96a`。
-- **本会话（对账批）**：`1aa2cade` / `661a2f29` / `924d279b` / `423fa7f3` + 本报告。
+- **会话 C（workflow_v2 改造）进行中**：app.py/repository/service/routers/workflows_v2 + api/index.ts 端点切换，勿动其文件。
+- **对账会话（本报告）**：`1aa2cade` `423fa7f3` `661a2f29` `924d279b` `a3135bf4` `5ab58d6f` `6990fb20` `a85b8fd7` `9965352e` `2546d983`。
 
-## 六、优先级 v2
+## 六、优先级 v3（2026-08-22 晚更新）
 
-- **P0（本周）**
-  - ~~test_qq_bot_4008 修复~~ ✅ `1aa2cade`
-  - ~~install-webui-service.sh User= 修复~~ ✅ `924d279b`；**剩余**：实际安装启用 xiaoda-webui 并观察一次重启周期
-  - ~~根因考古注释补回~~ ✅ `661a2f29`
-  - 校正 CLAUDE.md 的 qq-agent 单元记载或重建单元。
+- **P0**：全部关闭 ✅
+  - ~~test_qq_bot_4008 回归防线~~ `1aa2cade`；~~systemd 脚本 %u bug~~ `924d279b`+实装实测三连修 `a3135bf4`/`5ab58d6f`；~~考古注释~~ `661a2f29`；~~CLAUDE.md 对齐现实~~ `6990fb20`
 - **P1**
-  - ~~ONNX 出库收尾~~ ✅ `22f1c96a`（会话 B）
-  - continue-on-error 收紧：先把全集 flaky 清单列出来再谈去 true；
-  - ~~rate_limit 同步 IO~~ ✅ 复核为误报 + except 收口 `423fa7f3`；
-  - 海报功能 WIP 验证后提交（会话 A）。
+  - ~~海报 WIP 落袋~~ ✅ `a85b8fd7`
+  - ~~flaky 清单~~ ✅ 结论：**零真 flaky**，全集绿基线 4911/0（`9965352e`）——去 COE 的前置条件已满足，卡点只剩"真 CI 选型"（GitHub mirror / Gitee Go / pre-push hook，用户决策）
+  - workflow_v2 收尾观察（会话 C）
 - **P2**
-  - workflow_v2 生死决策（下线 or 推前端接入）；
-  - dist 出库决策（先改 SETUP.md 部署模式）。
+  - workflow_v2 生死决策 → 待会话 C 产出后评估
+  - dist 出库决策（先改 SETUP.md 部署模式）
+  - ComputeDevicesTab 彻底 store 化（契约已放行类型化模块，非阻塞）
