@@ -84,6 +84,8 @@ async def test_build_runtime_runs_tool_and_model_node(tmp_path):
 
     core = _Core()
     svc, driver = await build_runtime(core, db_path)
+    # M3 灰度门控已接线：测试库默认关，显式打开全局开关再驱动轮询
+    await svc.set_config("workflow_v2.enabled", True)
     try:
         conn = await aiosqlite.connect(db_path)
         conn.row_factory = aiosqlite.Row

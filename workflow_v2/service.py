@@ -11,6 +11,7 @@ import json
 import sqlite3
 import time
 import uuid
+from typing import Any
 
 from loguru import logger
 
@@ -288,3 +289,123 @@ class WorkflowV2Service:
             r["current"] = r["revision_id"] == current
             r["etag"] = etag
         return rows
+
+    # ── M3：灰度开关（DB config 键，决策"试点白名单"；不新增环境变量） ─────────
+    #
+    # 两个键（立项书 §6）：
+    #   workflow_v2.enabled      —— 全局开关，默认 false
+    #   workflow_v2.pilot_wf_ids —— 试点白名单，JSON 字符串数组
+    # 生效规则：全局开 或 wf_id 在白名单内 → 该工作流可用。
+    # 表由 legacy_migration v28 创建（idempotent CREATE TABLE IF NOT EXISTS）。
+
+    async def get_config(self, key: str, default: Any = None) -> Any:
+        """读取 DB config 值（JSON 解码）；键缺失或表未建 → default。"""
+        try:
+            cur = await self.repo.conn.execute(
+                "SELECT value FROM wf_config WHERE key=?", (key,)
+            )
+            row = await cur.fetchone()
+        except sqlite3.OperationalError:
+            return default
+        if row is None:
+            return default
+        try:
+            return json.loads(row["value"])
+        except (TypeError, ValueError):
+            return row["value"]
+
+    async def set_config(self, key: str, value: Any) -> None:
+        """写 DB config 键（upsert，JSON 编码持久化）。"""
+        await self.repo.conn.execute(
+            "INSERT INTO wf_config(key, value) VALUES(?,?) "
+            "ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+            (key, json.dumps(value, ensure_ascii=False)),
+        )
+        await self.repo.conn.commit()
+
+    async def v2_global_enabled(self) -> bool:
+        return bool(await self.get_config("workflow_v2.enabled", False))
+
+    async def v2_pilot_ids(self) -> list[str]:
+        """白名单列表（容忍字符串直存的旧值形态）。"""
+        v = await self.get_config("workflow_v2.pilot_wf_ids", [])
+        if isinstance(v, str):
+            try:
+                v = json.loads(v)
+            except ValueError:
+                return []
+        return v if isinstance(v, list) else []
+
+    async def is_wf_enabled(self, wf_id: str) -> bool:
+        """灰度生效规则（立项书 §6）：全局开 **或** 白名单内 → 该流可用。"""
+        return await self.v2_global_enabled() or wf_id in await self.v2_pilot_ids()
+
+    # ── M3：v1 → v2 批量迁移（CLI scripts/migrate_v1_workflows.py 核心） ──────
+
+    async def _find_revision_by_hash(self, wf_id: str, content_hash: str) -> dict | None:
+        cur = await self.repo.conn.execute(
+            "SELECT revision_id, content_hash FROM wf_revision "
+            "WHERE workflow_id=? AND content_hash=? ORDER BY created_at DESC LIMIT 1",
+            (wf_id, content_hash),
+        )
+        row = await cur.fetchone()
+        return dict(row) if row else None
+
+    async def migrate_workflow(self, wf_id: str, *, set_current: bool = True,
+                               dry_run: bool = False) -> dict | None:
+        """幂等迁移一个 v1 工作流为 v2 revision（CLI 的默认/--dry-run 共用）。
+
+        报告字段：action = "invalid" | "unchanged" | "migrated"；
+        v1 文件缺失 → 整体返回 None。语义（立项书 §6 CLI 要求）：
+        - 同 content_hash 的 revision 已存在 → unchanged，**不**覆盖 current
+          （尊重 WebUI 人工回滚——"回滚"就是把 current 指向旧版本）；
+        - 否则固化新 revision（dry_run 只预演不写库）→ migrated；
+        - set_current=True 时达成"置 current"，但只有 current 为空才写指针
+          （已有当前版本时该工作即 publish 职责，不属于迁移）。
+        """
+        fp = self._v1_path(wf_id)
+        if fp is None:
+            return None
+        try:
+            v1 = json.loads(fp.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            logger.warning("workflow.v1_read_failed wf_id={}", wf_id)
+            return None
+        from workflow_v2.migrate import migrate_v1
+        rev, warnings = migrate_v1(v1)
+        from workflow_v2.graph import GraphError, validate_graph
+        try:
+            validate_graph(rev.nodes, rev.edges)
+        except GraphError as e:
+            return {"wf_id": wf_id, "action": "invalid", "error": str(e),
+                    "details": e.details, "warnings": warnings}
+
+        existing = await self._find_revision_by_hash(wf_id, rev.content_hash)
+        if existing is not None:
+            # 同内容已入库：不重复插入、不覆盖人工回滚；current 为空才补指
+            definition = await self._definition_row(wf_id)
+            if (not dry_run and set_current and definition is not None
+                    and not definition["current_revision_id"]):
+                await self.repo.set_current_revision(wf_id, existing["revision_id"])
+            return {"wf_id": wf_id, "action": "unchanged",
+                    "revision_id": existing["revision_id"],
+                    "content_hash": rev.content_hash, "warnings": warnings}
+
+        definition = await self._definition_row(wf_id)
+        if dry_run:
+            return {"wf_id": wf_id, "action": "migrated", "dry_run": True,
+                    "definition_exists": definition is not None,
+                    "content_hash": rev.content_hash, "warnings": warnings}
+        if definition is None:
+            await self.repo.upsert_definition(
+                workflow_id=wf_id,
+                name=str(v1.get("name") or wf_id),
+                description=str(v1.get("description") or ""),
+                enabled=bool(v1.get("enabled", True)),
+            )
+        await self.repo.insert_revision(rev)
+        if set_current and definition is None:  # 新定义：首版即当前
+            await self.repo.set_current_revision(wf_id, rev.revision_id)
+        return {"wf_id": wf_id, "action": "migrated",
+                "revision_id": rev.revision_id, "content_hash": rev.content_hash,
+                "warnings": warnings}

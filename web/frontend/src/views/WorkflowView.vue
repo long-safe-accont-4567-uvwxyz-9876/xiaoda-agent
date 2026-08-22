@@ -49,6 +49,7 @@ async function load() {
   loading.value = true
   try {
     workflows.value = await api.listWorkflows()
+    await loadV2Status(workflows.value.map(w => w.id))
   } catch (e: any) {
     message.error(e.message)
   } finally {
@@ -120,6 +121,22 @@ function getOptions(type: string) {
 }
 
 // ── 工作流操作 ──
+// M3 灰度：记录每个工作流的 v2 可用性（全局开关或缺省白名单），
+// 未开放时隐藏「启动」并给占位文案；失败视为可用（点击时报错兜底）。
+const v2Status = ref<Record<string, { enabled: boolean }>>({})
+
+function v2Enabled(wfId: string): boolean {
+  return v2Status.value[wfId]?.enabled ?? true
+}
+
+async function loadV2Status(wfIds: string[]) {
+  const entries = await Promise.all(wfIds.map(async id => {
+    const s = await api.getWorkflowV2Status(id).catch(() => null)
+    return [id, s] as const
+  }))
+  v2Status.value = Object.fromEntries(entries.filter(([, s]) => s) as any)
+}
+
 function newWorkflow() {
   editing.value = {
     id: '', name: '', description: '', version: '1.0.0',
@@ -375,9 +392,9 @@ async function rollbackRevision(rev: any) {
                 <n-button size="tiny" type="primary" @click="editWorkflow(wf)">{{ t('workflowView.edit') }}</n-button>
                 <n-tooltip trigger="hover">
                   <template #trigger>
-                    <n-button size="tiny" :loading="starting === wf.id" @click="startWorkflow(wf)"><SumeruIcon name="sprout" :size="11" variant="duo" tone="add" interactive /> 启动</n-button>
+                    <n-button size="tiny" :loading="starting === wf.id" :disabled="!v2Enabled(wf.id)" @click="startWorkflow(wf)"><SumeruIcon name="sprout" :size="11" variant="duo" tone="add" interactive /> 启动</n-button>
                   </template>
-                  首次运行将自动把当前定义发布为第一个版本；之后可在「版本」中回滚
+                  {{ v2Enabled(wf.id) ? '首次运行将自动把当前定义发布为第一个版本；之后可在「版本」中回滚' : '工作流 v2 未开放灰度（全局开关关闭且不在试点白名单），加入白名单后可用' }}
                 </n-tooltip>
                 <n-button size="tiny" quaternary @click="openRuns(wf.id, wf.name)"><SumeruIcon name="chart" :size="11" variant="duo" tone="view" interactive /> 记录</n-button>
                 <n-button size="tiny" quaternary @click="openRevisions(wf.id, wf.name)"><SumeruIcon name="note" :size="11" variant="duo" tone="edit" interactive /> 版本</n-button>

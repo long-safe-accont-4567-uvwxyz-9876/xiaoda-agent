@@ -21,7 +21,7 @@ from __future__ import annotations
 
 import asyncio
 from contextlib import suppress
-from typing import Any
+from typing import Any, Awaitable, Callable
 
 from loguru import logger
 
@@ -60,13 +60,16 @@ class WorkflowDriver:
     """后台驱动：轮询非终态 run → scheduler.tick 推进；处理 cancel 与恢复。"""
 
     def __init__(self, repo: WorkflowRepository, scheduler: Scheduler,
-                 poll_seconds: float = 1.0, conn: Any = None) -> None:
+                 poll_seconds: float = 1.0, conn: Any = None,
+                 is_enabled: Callable[[str], Awaitable[bool]] | None = None) -> None:
         self._repo = repo
         self._scheduler = scheduler
         self._poll = poll_seconds
         self._conn = conn  # 装配时传入的独立连接，stop 时一并关闭
         self._task: asyncio.Task | None = None
         self._closed = False
+        # M3 灰度门控：None = 不启用门控（测试/无开关场景全量调度）
+        self._is_enabled = is_enabled
 
     def start(self) -> None:
         if self._task is not None and not self._task.done():
@@ -112,6 +115,11 @@ class WorkflowDriver:
                 if await self._repo.cancel_run(run.run_id):
                     logger.info("workflow.run_cancelled run_id={}", run.run_id)
                 continue
+            # M3 灰度：不在白名单/全局关闭的工作流，其 QUEUED run 保持队列
+            # 不动（不消费、不失败）——管理员加入白名单后自动续跑
+            if (run.status == RunStatus.QUEUED and self._is_enabled is not None
+                    and not await self._is_enabled(run.workflow_id)):
+                continue
             try:
                 await self._scheduler.tick(run.run_id)
             except Exception as e:  # noqa: BLE001
@@ -141,7 +149,7 @@ async def build_runtime(core: Any, db_path: str) -> tuple[WorkflowV2Service, Wor
     )
     executor = UnifiedExecutor(services)
     scheduler = Scheduler(repo, executor, repo.get_revision)
-    driver = WorkflowDriver(repo, scheduler, conn=conn)
+    driver = WorkflowDriver(repo, scheduler, conn=conn, is_enabled=svc.is_wf_enabled)
     await driver.recover_running()
     driver.start()
     return svc, driver

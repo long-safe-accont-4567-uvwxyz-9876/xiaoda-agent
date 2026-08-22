@@ -1,4 +1,5 @@
 from __future__ import annotations
+
 import aiosqlite
 
 DDL = [
@@ -60,6 +61,12 @@ DDL = [
         timestamp REAL DEFAULT 0,
         schema_version INTEGER DEFAULT 1,
         PRIMARY KEY (run_id, seq)
+    )""",
+    # 灰度开关 KV（M3 决策：不新增环境变量，用 DB config 键——
+    # workflow_v2.enabled 全局默认关 + workflow_v2.pilot_wf_ids 白名单 JSON 数组）
+    """CREATE TABLE IF NOT EXISTS wf_config (
+        key TEXT PRIMARY KEY,
+        value TEXT NOT NULL DEFAULT '{}'
     )""",
 ]
 

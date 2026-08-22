@@ -15,8 +15,13 @@ mounts every router under ``/api/v1``), so the real paths are e.g.
 - ``POST /workflows/{wf_id}/revisions``     —— 显式快照：固化版本但不提升 current
 - ``POST /workflows/{wf_id}/publish``       —— 把当前版本发布为新版本并置为当前
 - ``PATCH /workflows/{wf_id}/current``      —— 回滚：切换 current 到历史版本（If-Match etag）
+- ``GET  /workflows/{wf_id}/v2-status``     —— 灰度可用性（全局开关 + 试点白名单）
 - ``POST /workflows/{wf_id}/runs``          —— 启动一次运行（首次自动从 v1 迁移）
 - ``GET/POST /workflow-runs/...``  —— 快照 / 事件回放 / 取消（原已实现）
+
+灰度（M3，立项书 §6）：``workflow_v2.enabled`` 全局默认关 + ``pilot_wf_ids``
+白名单；不在可用范围的工作流 ``POST /runs`` 返回 503 WORKFLOW_V2_DISABLED，
+driver 对其 QUEUED run 跳过调度（不消耗、不失败）。
 
 仍 deferred 的端点（501 明示、不崩溃）：已存 revision 的发布
 （POST /revisions/{rev}/publish）与结构化信号（发布−审批闭环留待后续）。
@@ -62,11 +67,15 @@ async def create_run(wf_id: str, body: dict, request: Request,
     - 前端 v1 页面首次点「运行」时 definition 可能尚未迁移 —— 自动从
       workspace/workflows/{wf_id}.json 转换并发布一个版本，再创建 run；
     - Idempotency-Key 缺省时由服务端自动生成（前端不强约束，仍幂等
-      重放保护：带同 key 的重复请求返回同一 run）。
+      重放保护：带同 key 的重复请求返回同一 run）；
+    - 灰度门控（M3）：全局开关 或 试点白名单命中才放行，否则 503。
     """
     svc = _svc(request)
     if svc is None:
         return _err("WF_RUNTIME_UNAVAILABLE", "工作流引擎未启动（降级模式）", 503)
+    if not await svc.is_wf_enabled(wf_id):
+        return _err("WORKFLOW_V2_DISABLED",
+                    "该工作流未开放灰度执行（全局开关关闭且不在试点白名单）", 503)
     if await svc.ensure_published(wf_id) is None:
         return _err("WORKFLOW_NOT_FOUND", "workflow not found (legacy JSON missing too)", 404)
     run = await svc.create_or_get_run(
@@ -84,6 +93,21 @@ async def list_runs(wf_id: str, request: Request) -> Any:
     if svc is None:
         return _err("WF_RUNTIME_UNAVAILABLE", "工作流引擎未启动（降级模式）", 503)
     return Envelope(data=await svc.list_runs(wf_id))
+
+
+@router.get("/workflows/{wf_id}/v2-status", response_model=Envelope[dict])
+async def v2_status(wf_id: str, request: Request) -> Any:
+    """灰度可用性状态：WebUI 据此显示/隐藏「启动」按钮（M3 试点）。"""
+    svc = _svc(request)
+    if svc is None:
+        return _err("WF_RUNTIME_UNAVAILABLE", "工作流引擎未启动（降级模式）", 503)
+    global_on = await svc.v2_global_enabled()
+    whitelisted = wf_id in await svc.v2_pilot_ids()
+    return Envelope(data={
+        "enabled": global_on or whitelisted,
+        "global_enabled": global_on,
+        "whitelisted": whitelisted,
+    })
 
 
 @router.get("/workflows/{wf_id}/revisions", response_model=Envelope[list[dict]])

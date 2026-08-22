@@ -241,6 +241,8 @@ export const api = {
   rollbackWorkflowRevision: (wfId: string, revisionId: string, etag: string) =>
     patch<any>(`/workflows/${wfId}/current`, { revision_id: revisionId }, { 'If-Match': etag }),
   cancelWorkflowRun: (runId: string) => post<any>(`/workflow-runs/${runId}/cancel`),
+  getWorkflowV2Status: (wfId: string) =>
+    get<{ enabled: boolean; global_enabled: boolean; whitelisted: boolean }>(`/workflows/${wfId}/v2-status`),
 
   // 品牌署名与免责协议
   getBrandSignature: () => get<{ signature: string; author: string; version: string }>('/brand/signature'),

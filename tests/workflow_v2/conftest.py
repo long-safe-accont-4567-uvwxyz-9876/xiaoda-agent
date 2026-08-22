@@ -46,7 +46,11 @@ async def repo() -> WorkflowRepository:
 @pytest.fixture
 async def app(repo: WorkflowRepository) -> FastAPI:
     app = FastAPI()
-    app.state.workflow_v2 = WorkflowV2Service(repo)
+    svc = WorkflowV2Service(repo)
+    # M3 灰度门控：默认打开全局开关，保证既有运行/发布类测试不受门控影响；
+    # 灰度语义专项测试各自显式 set_config 关闭/白名单
+    await svc.set_config("workflow_v2.enabled", True)
+    app.state.workflow_v2 = svc
     app.dependency_overrides[get_current_user] = lambda: "test-user"
     app.include_router(workflows_v2_router, prefix="/api/v1")
     return app

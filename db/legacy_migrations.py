@@ -1,4 +1,4 @@
-"""LegacyMigrationMixin — v1-v27 历史 schema 迁移函数。
+"""LegacyMigrationMixin — v1-v28 历史 schema 迁移函数。
 
 自 db/database.py 拆分（上帝文件 Phase 1）：函数体逐字节搬移，仅缩进调整。
 结构契约见 tests/test_db_migration_refactor.py；实例白盒调用
@@ -8,16 +8,15 @@ from __future__ import annotations
 
 import sys
 import time
-from typing import ClassVar, Any
+from typing import Any, ClassVar
 
 from loguru import logger
 
 from . import db_workflow
 
 
-
 # ── 迁移体系导航 ─────────────────────────────────────────────
-# 本项目 DB schema 变更只有一个生产入口：LegacyMigrationMixin（本文件，v1-v27，
+# 本项目 DB schema 变更只有一个生产入口：LegacyMigrationMixin（本文件，v1-v28，
 # 挂载于 DatabaseManager.init）。幂等机制 = schema_version 跟踪 + 逐条
 # IF NOT EXISTS 守卫 + migration_state dirty 恢复；新迁移一律追加到本文件。
 #
@@ -141,6 +140,7 @@ class LegacyMigrationMixin:
             (25, "installed_models_table", self._migrate_v25),
             (26, "conversation_logs.request_context_json", self._migrate_v26),
             (27, "workflow_v2_tables", self._migrate_v27),
+            (28, "workflow_v2_config_table", self._migrate_v28),
         ]
 
     async def _run_migrations(self) -> None:
@@ -1070,4 +1070,8 @@ class LegacyMigrationMixin:
 
     async def _migrate_v27(self) -> None:
         # workflow_v2 表（CREATE TABLE IF NOT EXISTS，幂等）
+        await db_workflow.create_schema(self._conn)
+
+    async def _migrate_v28(self) -> None:
+        # wf_config KV 表（M3 灰度开关：workflow_v2.enabled / pilot_wf_ids）
         await db_workflow.create_schema(self._conn)
