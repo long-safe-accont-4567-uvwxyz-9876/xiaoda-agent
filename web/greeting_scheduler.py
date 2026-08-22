@@ -465,7 +465,8 @@ class GreetingScheduler:
                 else:
                     logger.info("greeting.quality_retry attempt={}", attempt)
                     continue  # 不合格，重试
-            except (RuntimeError, OSError, ValueError, ConnectionError) as e:
+            except (RuntimeError, OSError, ValueError, ConnectionError,
+                        httpx.TimeoutException, httpx.RequestError) as e:
                 logger.warning("greeting.generate_failed attempt={} error={}", attempt, str(e))
                 continue
 

@@ -4,6 +4,7 @@
 """
 
 import re
+import httpx
 from loguru import logger
 from dataclasses import dataclass
 from typing import Any
@@ -326,7 +327,8 @@ class SmartErrorHandler:
 
         try:
             return await specialist.chat(prompt)
-        except (RuntimeError, OSError, ValueError, ConnectionError) as e:
+        except (RuntimeError, OSError, ValueError, ConnectionError,
+                    httpx.TimeoutException, httpx.RequestError) as e:
             logger.warning("error_handler.agent_consult_failed",
                           agent=agent_name, error=str(e))
             return None

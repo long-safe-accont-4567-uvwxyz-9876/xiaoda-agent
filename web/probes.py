@@ -7,6 +7,7 @@ import time
 from pathlib import Path
 from typing import Any
 
+import httpx
 from loguru import logger
 
 
@@ -31,7 +32,8 @@ async def probe_llm(core: Any, route: str = "chat") -> dict:
                 "model": ROUTE_TABLE[route].get("model", ""),
                 "reply_excerpt": (text or "")[:60],
                 "error": "" if ok else "空回复"}
-    except (RuntimeError, OSError, ValueError, ConnectionError) as e:
+    except (RuntimeError, OSError, ValueError, ConnectionError,
+                httpx.TimeoutException, httpx.RequestError) as e:
         return {"ok": False, "latency_ms": int((time.time() - t0) * 1000),
                 "model": ROUTE_TABLE[route].get("model", ""), "error": str(e)[:200]}
 
@@ -49,7 +51,8 @@ async def probe_provider(core: Any, provider_id: str, provider_service: Any | No
         report = await service.capabilities(provider_id)
     except KeyError:
         return {"ok": False, "error": f"provider {provider_id} 不存在", "latency_ms": 0}
-    except (RuntimeError, OSError, ValueError, ConnectionError) as error:
+    except (RuntimeError, OSError, ValueError, ConnectionError,
+                httpx.TimeoutException, httpx.RequestError) as error:
         return {"ok": False, "error": str(error)[:200], "latency_ms": int((time.time() - t0) * 1000)}
     return {
         "ok": report.available,
@@ -78,7 +81,8 @@ async def probe_tts(core: Any) -> dict:
             audio_url = f"/media/tts/{dest.name}"
         return {"ok": ok, "latency_ms": int((time.time() - t0) * 1000),
                 "audio_url": audio_url, "error": "" if ok else "合成产物缺失或过小"}
-    except (RuntimeError, OSError, ValueError, ConnectionError) as e:
+    except (RuntimeError, OSError, ValueError, ConnectionError,
+                httpx.TimeoutException, httpx.RequestError) as e:
         return {"ok": False, "latency_ms": int((time.time() - t0) * 1000), "error": str(e)[:200]}
 
 

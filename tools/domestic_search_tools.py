@@ -109,7 +109,8 @@ async def search_cn(query: str, scope: str = "auto", count: int = 8) -> ToolResu
             return await _search_bilibili(query, count)
         # web
         return await _search_web(query, count)
-    except (RuntimeError, OSError, ValueError, ConnectionError) as e:
+    except (RuntimeError, OSError, ValueError, ConnectionError,
+                httpx.TimeoutException, httpx.RequestError) as e:
         logger.warning("search_cn.error query={} error={}", query[:40], repr(e)[:200])
         return ToolResult.fail(f"搜索失败: {str(e)[:150]}")
 
@@ -188,7 +189,8 @@ async def _search_bilibili(query: str, count: int) -> ToolResult:
                 lines.append(f"   链接: {it['link']}")
 
         return ToolResult.ok("\n".join(lines))
-    except (RuntimeError, OSError, ValueError, ConnectionError) as e:
+    except (RuntimeError, OSError, ValueError, ConnectionError,
+                httpx.TimeoutException, httpx.RequestError) as e:
         return ToolResult.fail(f"B站搜索失败: {str(e)[:150]}")
 
 
@@ -254,7 +256,8 @@ async def _search_news(query: str, count: int) -> ToolResult:
                 lines.append(f"   链接: {it['url']}")
 
         return ToolResult.ok("\n".join(lines))
-    except (RuntimeError, OSError, ValueError, ConnectionError) as e:
+    except (RuntimeError, OSError, ValueError, ConnectionError,
+                httpx.TimeoutException, httpx.RequestError) as e:
         return ToolResult.fail(f"头条搜索失败: {str(e)[:150]}")
 
 
@@ -298,7 +301,8 @@ async def _search_zhihu(query: str, count: int) -> ToolResult:
             return ToolResult.fail(f"知乎搜索 '{query}' 无结果")
 
         return ToolResult.ok("\n".join(lines))
-    except (RuntimeError, OSError, ValueError, ConnectionError) as e:
+    except (RuntimeError, OSError, ValueError, ConnectionError,
+                httpx.TimeoutException, httpx.RequestError) as e:
         return ToolResult.fail(f"知乎搜索失败: {str(e)[:150]}")
 
 
@@ -358,7 +362,8 @@ async def _search_douban(query: str, cat: str, count: int) -> ToolResult:
             return ToolResult.fail(f"豆瓣搜索 '{query}' 无结果")
 
         return ToolResult.ok("\n".join(lines))
-    except (RuntimeError, OSError, ValueError, ConnectionError) as e:
+    except (RuntimeError, OSError, ValueError, ConnectionError,
+                httpx.TimeoutException, httpx.RequestError) as e:
         return ToolResult.fail(f"豆瓣搜索失败: {str(e)[:150]}")
 
 
@@ -409,5 +414,6 @@ async def _search_hot(count: int) -> ToolResult:
                 lines.append(f"   {it['desc'][:200]}")
 
         return ToolResult.ok("\n".join(lines))
-    except (RuntimeError, OSError, ValueError, ConnectionError) as e:
+    except (RuntimeError, OSError, ValueError, ConnectionError,
+                httpx.TimeoutException, httpx.RequestError) as e:
         return ToolResult.fail(f"获取百度热搜失败: {str(e)[:150]}")
