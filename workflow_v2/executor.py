@@ -49,6 +49,8 @@ class ExecutorServices:
     security: Any = None               # SecurityFilter-like（check_user_input / check_output_privacy）
     secret_resolver: Callable[[str], str | None] | None = None
     skill_resolver: Callable[[str], dict[str, Any]] | None = None
+    # M1.5：子智能体解析（core.dispatcher.get_agent 适配层），返回 SubAgent 或 None
+    subagent_loader: Callable[[str], Any | None] | None = None
     user_id: str = "workflow"
 
 
@@ -109,8 +111,7 @@ class UnifiedExecutor:
         if t == NodeType.LEGACY_PROMPT:
             return await self._run_legacy(node)
         if t == NodeType.AGENT:
-            return NodeResult(status=StepStatus.FAILED, error_code="AGENT_NOT_IMPLEMENTED",
-                              error_message="子智能体节点尚未实现（M1 后置），请改用 step 串联")
+            return await self._run_agent(node)
         return NodeResult(status=StepStatus.FAILED, error_code="UNSUPPORTED_NODE",
                           error_message=f"node type '{t.value}' {_NO_IMPL_HINT}")
 
@@ -205,12 +206,74 @@ class UnifiedExecutor:
                            skill_name, str(e)[:300])
             return NodeResult(status=StepStatus.FAILED, error_code="SKILL_LLM_FAILED",
                               error_message=str(e)[:500])
-        if answer is None:
-            return NodeResult(status=StepStatus.FAILED, error_code="SKILL_NO_ANSWER",
-                              error_message="技能执行无输出")
         text, filtered = self._filter_output(str(answer))
         return NodeResult(status=StepStatus.SUCCEEDED,
                           output={"skill": skill_name, "text": _mask(text),
+                                  "privacy_filtered": filtered})
+
+    # ------------------------------------------------------------------ 子智能体
+    async def _run_agent(self, node: NodeSpec) -> NodeResult:
+        """AGENT 节点（M1.5）：委托给注册子智能体执行。
+
+        v1 迁移产物统一落到 NodeType.AGENT，按 config 键三分派：
+        - ``agent_ref`` → 子智能体（本分支主路径）；
+        - ``skill_refs``（无 agent_ref）→ 技能回退（与 M1 SKILL 同语义）；
+        - ``model_policy``（无 agent_ref）→ 模型回退（与 M1 MODEL 同语义）。
+        找不到子智能体/能力缺失一律显式失败（防静默，AGENT_NOT_FOUND）。
+        """
+        cfg = node.config or {}
+        skill_refs = cfg.get("skill_refs")
+        if not cfg.get("agent_ref") and skill_refs:
+            # v1 skill 迁移产物：skill_refs 是列表，_run_skill 读单数 skill_ref
+            import copy
+
+            sub = copy.copy(node)
+            sub.config = {**cfg, "skill_ref": skill_refs[0] if isinstance(skill_refs, list)
+                          else skill_refs}
+            return await self._run_skill(sub)
+        if not cfg.get("agent_ref") and isinstance(cfg.get("model_policy"), dict):
+            return await self._run_model(node)
+
+        # 子智能体主路径：优先 agent_ref，兼容直接写 name
+        agent_name = str(cfg.get("agent_ref") or node.name or "").strip()
+        if not agent_name:
+            return NodeResult(status=StepStatus.FAILED, error_code="AGENT_REF_MISSING",
+                              error_message="AGENT 节点缺少 agent_ref")
+        loader = self.svc.subagent_loader
+        if loader is None:
+            return NodeResult(status=StepStatus.FAILED, error_code="AGENT_LOADER_UNAVAILABLE",
+                              error_message="子智能体解析器不可用（降级模式）")
+        try:
+            agent = await loader(agent_name) if inspect.iscoroutinefunction(loader) \
+                else loader(agent_name)
+        except Exception as e:  # noqa: BLE001
+            logger.warning("workflow.agent_loader_failed name={} error={}",
+                           agent_name, str(e)[:300])
+            agent = None
+        if agent is None or not getattr(agent, "available", True):
+            return NodeResult(status=StepStatus.FAILED, error_code="AGENT_NOT_FOUND",
+                              error_message=f"找不到可用的子智能体 {agent_name}")
+
+        task = (cfg.get("task") or cfg.get("note") or node.name) or ""
+        context = cfg.get("context") or ""
+        try:
+            answer = await self._with_timeout(
+                node, lambda: agent.chat(task, context=context))
+        except Exception as e:  # noqa: BLE001 —— SubAgent 只捕其内部异常，其余上抛
+            logger.warning("workflow.agent_chat_failed name={} error={}",
+                           agent_name, str(e)[:300])
+            return NodeResult(status=StepStatus.FAILED, error_code="AGENT_CHAT_FAILED",
+                              error_message=str(e)[:500])
+        if answer is None:
+            return NodeResult(status=StepStatus.FAILED, error_code="AGENT_TIMEOUT",
+                              error_message="子智能体执行超时（无响应）")
+        text = str(answer).strip()
+        if not text:
+            return NodeResult(status=StepStatus.FAILED, error_code="AGENT_EMPTY_OUTPUT",
+                              error_message="子智能体输出为空")
+        text, filtered = self._filter_output(text)
+        return NodeResult(status=StepStatus.SUCCEEDED,
+                          output={"agent": agent_name, "text": _mask(text),
                                   "privacy_filtered": filtered})
 
     # ------------------------------------------------------------------ legacy

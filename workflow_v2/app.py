@@ -57,6 +57,15 @@ def _secret_resolver_from_core(core: Any):
     return None
 
 
+def _subagent_loader_from_core(core: Any):
+    """把 core.dispatcher.get_agent 适配成子智能体解析器；缺省返回 None。"""
+    dispatcher = getattr(core, "dispatcher", None)
+    getter = getattr(dispatcher, "get_agent", None)
+    if getter is None:
+        return None
+    return lambda name: getter(name)  # type: ignore[no-any-return]
+
+
 class WorkflowDriver:
     """后台驱动：轮询非终态 run → scheduler.tick 推进；处理 cancel 与恢复。
 
@@ -167,6 +176,7 @@ async def build_runtime(core: Any, db_path: str) -> tuple[WorkflowV2Service, Wor
         security=getattr(core, "security", None),
         skill_resolver=_skill_resolver_from_workspace(),
         secret_resolver=_secret_resolver_from_core(core),
+        subagent_loader=_subagent_loader_from_core(core),
         user_id="workflow",
     )
     metrics = WorkflowMetrics()

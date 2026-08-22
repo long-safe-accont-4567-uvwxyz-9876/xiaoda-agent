@@ -386,7 +386,8 @@ async def test_condition_node_unsupported():
 
 
 @pytest.mark.asyncio
-async def test_agent_node_not_implemented():
+async def test_agent_node_without_loader_fails_explicit():
+    # M1.5：AGENT 节点已实现（三分派，见 test_m5_agent.py）；无 loader 时仍显式失败
     ex = _ex()
     r = await ex(_node("a", NodeType.AGENT), None, {})
-    assert r.error_code == "AGENT_NOT_IMPLEMENTED"
+    assert r.error_code == "AGENT_LOADER_UNAVAILABLE"
