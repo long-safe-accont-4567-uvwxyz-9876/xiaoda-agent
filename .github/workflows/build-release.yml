@@ -101,6 +101,10 @@ jobs:
         working-directory: web/frontend
         run: npm run typecheck
 
+      - name: Check i18n key parity
+        working-directory: web/frontend
+        run: npm run check:i18n
+
       - name: Build frontend (vite)
         working-directory: web/frontend
         run: npm run build

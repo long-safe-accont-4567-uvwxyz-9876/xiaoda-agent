@@ -152,6 +152,10 @@ jobs:
         working-directory: web/frontend
         run: npm run typecheck
 
+      - name: Check i18n key parity
+        working-directory: web/frontend
+        run: npm run check:i18n
+
   lint:
     runs-on: ubuntu-latest
 
