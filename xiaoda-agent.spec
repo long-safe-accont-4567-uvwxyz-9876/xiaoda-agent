@@ -76,10 +76,11 @@ for _vfile in ('.version', '.auto_update'):
 # assets/ directory (icons and other resources)
 datas += _tree_datas(os.path.join(SPECPATH, 'assets'), 'assets')
 
-# models/bge-small-zh-v1.5/ (本地向量模型：onnx + tokenizer.json，
-# Windows 安装包内置、默认 CPU 推理；有 VIP9000 的 Linux 板端走 NPU 常驻流)
-datas += _tree_datas(os.path.join(SPECPATH, 'models', 'bge-small-zh-v1.5'),
-                     os.path.join('models', 'bge-small-zh-v1.5'))
+# 本地向量模型（bge-small-zh-v1.5）权重 ONNX（~95MB）不再随安装包内置：
+# 检索默认走 SiliconFlow 远程 API，本地兜底模型由 scripts 手动下载到
+# data 目录后通过 WebUI「本地部署」注册（见 docs/repo_hygiene_notes.md 方案）。
+# 故此处不再收集 models/bge-small-zh-v1.5/onnx 权重；
+# onnxruntime/tokenizers 运行库仍保留（见下），供用户自行放置模型后本地兜底。
 
 # Windows launch scripts (bundled by CI, but also declare here for local builds)
 # 清单与 .github/workflows/build-release.yml 和 scripts/build-release.sh 保持一致

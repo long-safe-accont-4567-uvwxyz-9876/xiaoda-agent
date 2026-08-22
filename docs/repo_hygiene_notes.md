@@ -19,7 +19,9 @@
 
 另一个遗留问题是 git 中已追踪的
 `models/bge-small-zh-v1.5/onnx/model.onnx`（94,851,877 字节 ≈ 90.5 MiB）。
-本次**未**做任何历史改写；以下仅记录可选迁移方案。
+该文件已于 2026-08-22 通过 `git rm --cached` + `.gitignore` 移出
+跟踪（见下文"方案 A 实施记录"），仅做索引移除、未做历史改写，
+旧 blob 仍保留在历史中。
 
 ## 2. ONNX 模型移出 git 的候选方案
 
@@ -27,8 +29,10 @@
 由 `memory/local_embed.py` 加载；路径解析在
 `memory/vector_store.py::_default_local_model_dir()`
 （优先级：env `LOCAL_EMBED_MODEL_DIR` > 项目内 `models/bge-small-zh-v1.5/` > 空）。
-`db/database.py`（约 1383 行）会把 `builtin:bge-small-zh-v1.5` 以
-`ownership="bundled"` 种子进 `installed_models` 表，目录指向项目内路径。
+`db/legacy_migrations.py`（v26 起，原位于 database.py）会把
+`builtin:bge-small-zh-v1.5` 以 `ownership="bundled"` 种子进
+`installed_models` 表，目录指向项目内路径；该 seed 不做目录存在性校验
+（registry 条目是目录声明，实例启动时才定位文件，缺失由启动时日志暴露）。
 
 项目内已具备的下载基础设施（可直接复用，无需新造轮子）：
 
@@ -45,25 +49,44 @@ SETUP.md / README.md 均**没有** bge 模型的下载步骤；模型缺失时
 `local_embed.load()` 直接抛 `FileNotFoundError`，无自动下载兜底。
 （Windows 安装包靠打包时内置模型，属构建期产物。）
 
-### 方案 A：构建/安装时下载（推荐）
+### 方案 A：构建/安装时下载（推荐）—— ✅ 已实施（2026-08-22）
 
-把 `models/bge-small-zh-v1.5/onnx/model.onnx` 移出 git（`git rm --cached` +
-加 .gitignore 白名单恢复其余 tokenizer/config 小文件），改为：
+> 2026-08-22 实际落地：**未走"安装时下载"，改为"默认远程 API + 本地可选"**，
+> 用户决策优先项是检索默认走硅基流动 API（模型不再随包/随 git 分发）。
+> 编号与当时的方案 A 仅共享"模型移出 git"的目标，实施细节见下。
 
-1. 复用 DownloadManager/catalog 在安装脚本（install-linux.sh /
-   install-windows.ps1）或 setup_wizard 中下载 Xenova/bge-small-zh-v1.5 的
-   `onnx/model.onnx`（约 90 MiB，hf-mirror 国内可达）到
-   `models/bge-small-zh-v1.5/`；
-2. 首次启动兜底：`_default_local_model_dir()` 解析不到目录时触发下载
-   （带进度事件，可挂 local_ai 的 EventSink）；
-3. 调整 `db/database.py` 的 bundled 种子逻辑：目录存在才 seed，或 seed 为
-   "pending" 状态待下载完成。
+迁移动作清单（对应 commit `70b5f761` 之后的 `perf/rust-hybrid-poc` 分支工作区）：
 
-- 优点：git 仓库瘦身 90.5 MiB（未来 clone 不再拉取）；模型可升级/换量化
-  变体不改 git；复用现成下载管线。
-- 缺点：离线/内网部署需预置模型或离线包；需要一次性的 `git rm --cached`
-  提交（旧 blob 仍在历史中，体积不会回退，只是不再增长）；首次启动有
-  网络依赖。
+1. **git 侧**：`git rm --cached models/bge-small-zh-v1.5/onnx/model.onnx`，
+   `.gitignore` 追加精确规则 `models/bge-small-zh-v1.5/onnx/model.onnx`
+   （仅忽略权重，tokenizer/config 小文件继续跟踪）。
+2. **打包侧**：`xiaoda-agent.spec` 删除 `models/bge-small-zh-v1.5` 的
+   `_tree_datas` 收集块（安装包不再内置 90 MiB 权重）；onnxruntime/
+   tokenizers 运行库收集**保留**（供用户自行放置模型后本地兜底）。
+   `.github/workflows/build-release.yml` 中"Checking local BGE model
+   bundled"由 FATAL 改为 INFO（预期缺失）；onnxruntime/tokenizers
+   校验仍 FATAL。
+3. **默认引擎**：`memory/vector_store.py` 与 `core/bootstrap.py` 的
+   `EMBED_MODE` 默认值 `local` → `remote`（SiliconFlow API，
+   base `https://api.siliconflow.cn/v1`，模型 `BAAI/bge-large-zh-v1.5`
+   走 `EMBED_MODEL`）。`bootstrap.py` 的 `embed_api_key` 读取新增
+   `SILICONFLOW_API_KEY` 别名（与项目内其他 siliconflow 服务一致）。
+4. **降级**：`VectorStore.__init__` remote 分支——key 缺失且本地模型
+   存在 → 自动降级 `local`（日志 `embed_fallback_to_local`）；两者皆无
+   → 明确告警 `embed_unavailable`，绝不静默返回空向量。
+   bootstrap 侧 remote 无 key 不建向量库时打 `vector_store.skipped` 告警。
+5. **未做**：`installed_models` 的 builtin seed 未加目录守卫（见上文
+   现状段落：条目为声明，缺文件由启动时日志暴露，避免影响本地部署页
+   模型列表）；模型未做首次启动下载兜底（默认远程后本地兜底仅服务
+   "有模型文件"的场景，安装脚本未新增下载步骤）。
+6. 回归：向量链路 38 项测试全过（test_context_governance /
+   test_parent_child_chunk / test_kg_v2_search），py_compile 通过，
+   workflow yaml 解析通过。
+
+手动还原本地兜底模型（离线/内网部署）：
+`hf_hub_download` Xenova/bge-small-zh-v1.5 的 `onnx/model.onnx` 放到
+`models/bge-small-zh-v1.5/onnx/`，或设置 `EMBED_MODE=local` +
+`LOCAL_EMBED_MODEL_DIR` 指向自备目录。
 
 ### 方案 B：Git LFS
 

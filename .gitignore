@@ -113,3 +113,7 @@ vendor/ffmpeg/**/ffmpeg
 vendor/ffmpeg/**/ffprobe
 vendor/ffmpeg/**/ffmpeg.exe
 vendor/ffmpeg/**/ffprobe.exe
+
+# === 大文件不入库：本地 BGE 向量模型权重（约 95MB，默认走 SiliconFlow API）===
+# 手动下载还原：https://huggingface.co/BAAI/bge-small-zh-v1.5 或 scripts 内工具
+models/bge-small-zh-v1.5/onnx/model.onnx

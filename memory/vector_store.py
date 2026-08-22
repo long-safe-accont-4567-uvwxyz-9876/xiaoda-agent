@@ -230,8 +230,10 @@ class VectorStore:
                  embedding_service: LocalEmbeddingService | None = None) -> None:
         """初始化向量存储。
 
-        embed_mode: "local" 走香橙派本地 onnxruntime 推理（BGE-small-zh-v1.5），
-                    默认 "remote" 走远程 API（向后兼容）。
+        embed_mode: "remote"（默认）走 SiliconFlow 远程 API（配 SILICONFLOW_API_KEY
+                    或 EMBED_API_KEY；启动时 key 缺失且本地模型可用则自动降级 local，
+                    两者皆无则明确告警"检索不可用"）；
+                    "local" 走香橙派本地 onnxruntime 推理（BGE-small-zh-v1.5）。
         """
         self._db_path = str(db_path)
         self._embed_api_key = embed_api_key
@@ -239,7 +241,7 @@ class VectorStore:
         self._embed_model = embed_model
         self._dimensions = dimensions
         self._dimensions_explicit = dimensions > 0
-        self._embed_mode = embed_mode or os.getenv("EMBED_MODE", "local")
+        self._embed_mode = embed_mode or os.getenv("EMBED_MODE", "remote")
         self._local_model_dir = local_model_dir or _default_local_model_dir()
         self._local_query_prefix = local_query_prefix or os.getenv("LOCAL_EMBED_QUERY_PREFIX", "")
         self._local_provider = embedding_service
@@ -286,8 +288,28 @@ class VectorStore:
                             os.getenv("LOCAL_EMBED_BACKEND", "auto"), self._local_model_dir)
             else:
                 logger.warning("vector_store.local_embed_init_failed provider=None")
-        elif HAS_OPENAI and self._embed_api_key:
+        else:
+            # remote（默认，硅基流动）：配 key 走远程 API；key 缺失时若本地模型
+            # 可用则降级本地，否则明确告警。绝不静默进入"检索全空"状态。
             self._embed_client = self._build_remote_client()
+            if self._embed_client is not None:
+                logger.info("vector_store.remote_embed_enabled base_url={} model={}",
+                            self._embed_base_url or "https://api.siliconflow.cn/v1",
+                            self._embed_model)
+            else:
+                fallback = self._build_local_provider()
+                if fallback is not None:
+                    self._local_provider = fallback
+                    self._embed_mode = "local"
+                    logger.warning(
+                        "vector_store.embed_fallback_to_local reason=missing_api_key "
+                        "backend={} model_dir={}",
+                        os.getenv("LOCAL_EMBED_BACKEND", "auto"), self._local_model_dir)
+                else:
+                    logger.warning(
+                        "vector_store.embed_unavailable reason=missing_api_key_and_no_local "
+                        "检索不可用：配置 SILICONFLOW_API_KEY（或 EMBED_API_KEY）"
+                        "或部署本地 bge 模型后重启")
 
     def _embed_cache_path(self) -> str:
         """EmbedCache 磁盘持久化路径（与 db 同目录，按模型区分避免维度冲突）。

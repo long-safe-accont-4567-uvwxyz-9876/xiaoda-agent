@@ -346,12 +346,16 @@ class AgentCoreBootstrapper:
             "local-chat",
             stream_context_factory=lambda request: request.extra["route"],
         ))
-        embed_api_key = os.getenv("EMBED_API_KEY", "")
+        # 远程嵌入 Key：与文内其他 siliconflow 服务一致（SILICONFLOW_API_KEY 优先
+        # 兼容 setup_wizard，EMBED_API_KEY 为旧别名）；两者都缺时由 VectorStore
+        # 内自动降级本地模型（见 vector_store.embed_fallback_to_local）。
+        embed_api_key = (os.getenv("EMBED_API_KEY", "")
+                         or os.getenv("SILICONFLOW_API_KEY", ""))
         embed_base_url = os.getenv("EMBED_BASE_URL", "https://api.siliconflow.cn/v1")
-        # 本地推理模式（EMBED_MODE=local）不依赖 API Key，同样创建向量存储
-        # 默认 local：安装包首次运行直接启用内置本地 BGE 模型（无 API Key 也可用）
+        # 默认 remote：检索（embedding）走 SiliconFlow 远程 API（模型不再随包内置，
+        # 见 docs/repo_hygiene_notes.md）。EMBED_MODE=local 仍可强制本地推理。
         # WebUI 本地部署页持久化的引擎模式优先（webui_overrides.json local_deploy.mode）
-        embed_mode = os.getenv("EMBED_MODE", "local")
+        embed_mode = os.getenv("EMBED_MODE", "remote")
         try:
             import json as _json
             from config import get_config_dir
@@ -405,6 +409,13 @@ class AgentCoreBootstrapper:
             except Exception as e:
                 logger.warning("vector_store.init_failed mode={} error={}", embed_mode, str(e))
                 core._vec_store = None
+        else:
+            # 默认 remote 且未配置任何远程 Key：向量库不创建（记忆检索整体禁用）。
+            # 明确提示而非静默；用户配置 SILICONFLOW_API_KEY 后重启即可。
+            logger.warning(
+                "vector_store.skipped mode=remote api_key=MISSING "
+                "记忆检索不可用：请配置 SILICONFLOW_API_KEY/EMBED_API_KEY，"
+                "或设置 EMBED_MODE=local 并放置本地 bge 模型后重启")
 
     # ── 认知系统 ──────────────────────────────────────────
 
