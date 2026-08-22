@@ -29,6 +29,7 @@
 **Files:**
 - Modify: `requirements.txt`
 - Create: `db/migrations/v06_cognitive.sql`
+  - 实施更新（2026-08）v0.6 迁移最终以 Python 实现落地（legacy_migrations._migrate_v14），SQL 双轨文件已删除。
 - Test: `tests/test_v06_migration.py`
 
 **Interfaces:**
