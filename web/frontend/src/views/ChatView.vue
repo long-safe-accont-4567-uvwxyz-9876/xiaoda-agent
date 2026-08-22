@@ -296,17 +296,17 @@ const emotionColors: Record<string, string> = {
   <div class="chat-view">
     <div class="chat-toolbar">
       <n-button size="tiny" quaternary @click="openSessions">
-        <template #icon><SumeruIcon name="sessions" :size="15" /></template>{{ t('chatView.session') }}
+        <template #icon><SumeruIcon name="sessions" :size="15" variant="duo" tone="view" interactive /></template>{{ t('chatView.session') }}
       </n-button>
       <n-button size="tiny" quaternary @click="startNew">
-        <template #icon><SumeruIcon name="sprout" :size="15" /></template>{{ t('chatView.newChat') }}
+        <template #icon><SumeruIcon name="sprout" :size="15" variant="duo" tone="add" interactive /></template>{{ t('chatView.newChat') }}
       </n-button>
       <n-button size="tiny" quaternary @click="clearAll">
-        <template #icon><SumeruIcon name="trash" :size="15" /></template>{{ t('chatView.clear') }}
+        <template #icon><SumeruIcon name="trash" :size="15" variant="duo" tone="del" interactive /></template>{{ t('chatView.clear') }}
       </n-button>
       <n-button v-if="chat.sessionId" size="tiny" quaternary
          @click="exportSessionDownload(chat.sessionId).catch(e => message.error(e.message))">
-        <template #icon><SumeruIcon name="download" :size="15" /></template>{{ t('chatView.export') }}
+        <template #icon><SumeruIcon name="download" :size="15" variant="duo" tone="add" interactive /></template>{{ t('chatView.export') }}
       </n-button>
       <ModelSelector style="margin-left: auto" @change="onModelChange" />
       <span class="session-label">{{ chat.sessionId }}</span>
@@ -344,7 +344,7 @@ const emotionColors: Record<string, string> = {
 
           <!-- 生成产物区（工具产出的图/视频/语音，与表情包分离） -->
           <div v-if="msg.imageUrls?.length || msg.videoUrl || msg.audioUrl" class="artifact-block">
-            <span class="artifact-label"><SumeruIcon name="palette" :size="14" /> {{ t('chatView.artifacts') }}</span>
+            <span class="artifact-label"><SumeruIcon name="palette" :size="14" variant="duo" tone="magic" interactive /> {{ t('chatView.artifacts') }}</span>
             <div v-if="msg.imageUrls?.length" class="media-grid">
               <img v-for="url in msg.imageUrls" :key="url" :src="url" class="media-image"
                    :class="{ loaded: imgSettled.has(url) }"
@@ -363,16 +363,16 @@ const emotionColors: Record<string, string> = {
             <span class="msg-time">{{ fmtTime(msg.timestamp) }}</span>
             <template v-if="msg.role === 'assistant'">
               <button class="footer-btn" :class="{ playing: playingUrl && playingUrl === msg.audioUrl }"
-                      :title="t('chatView.readAloud')" @click="speak(msg)"><SumeruIcon name="speak" :size="14" /></button>
-              <button class="footer-btn" :title="t('chatView.copy')" @click="copyText(msg.content)"><SumeruIcon name="copy" :size="14" /></button>
-              <button class="footer-btn" :title="t('chatView.regenerate')" @click="chat.retryLast()"><SumeruIcon name="retry" :size="14" /></button>
+                      :title="t('chatView.readAloud')" @click="speak(msg)"><SumeruIcon name="speak" :size="14" variant="duo" interactive /></button>
+              <button class="footer-btn" :title="t('chatView.copy')" @click="copyText(msg.content)"><SumeruIcon name="copy" :size="14" variant="duo" tone="edit" interactive /></button>
+              <button class="footer-btn" :title="t('chatView.regenerate')" @click="chat.retryLast()"><SumeruIcon name="retry" :size="14" variant="duo" interactive /></button>
             </template>
             <template v-else>
-              <button class="footer-btn" :title="t('chatView.copy')" @click="copyText(msg.content)"><SumeruIcon name="copy" :size="14" /></button>
-              <button class="footer-btn" :title="t('chatView.resend')" @click="resend(msg)"><SumeruIcon name="retry" :size="14" /></button>
+              <button class="footer-btn" :title="t('chatView.copy')" @click="copyText(msg.content)"><SumeruIcon name="copy" :size="14" variant="duo" tone="edit" interactive /></button>
+              <button class="footer-btn" :title="t('chatView.resend')" @click="resend(msg)"><SumeruIcon name="retry" :size="14" variant="duo" interactive /></button>
             </template>
             <button class="footer-btn" :title="t('chatView.withdraw')"
-                    @click="chat.deleteMessage(msg.id)"><SumeruIcon name="trash" :size="14" /></button>
+                    @click="chat.deleteMessage(msg.id)"><SumeruIcon name="trash" :size="14" variant="duo" tone="del" interactive /></button>
           </div>
         </div>
       </div>
@@ -433,7 +433,7 @@ const emotionColors: Record<string, string> = {
               <span>{{ s.message_count }} {{ t('chatView.messages') }} · {{ new Date(s.updated_at * 1000).toLocaleString('zh-CN') }}</span>
               <n-popconfirm @positive-click.stop="removeSession(s.session_id)">
                 <template #trigger>
-                  <button class="footer-btn" @click.stop><SumeruIcon name="trash" :size="13" /></button>
+                  <button class="footer-btn" @click.stop><SumeruIcon name="trash" :size="13" variant="duo" tone="del" interactive /></button>
                 </template>
                 {{ t('chatView.deleteConfirm') }}
               </n-popconfirm>

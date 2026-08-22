@@ -471,7 +471,7 @@ async function uploadVoiceForAgent() {
   <div class="agents-view">
     <div class="view-header">
       <h2>🧚 {{ t('agentsView.title') }}</h2>
-      <n-button type="primary" @click="openEditor(null)"><SumeruIcon name="plus" :size="14" /> {{ t('agentsView.createSub') }}</n-button>
+      <n-button type="primary" @click="openEditor(null)"><SumeruIcon name="plus" :size="14" variant="duo" tone="add" interactive /> {{ t('agentsView.createSub') }}</n-button>
     </div>
 
     <div class="agent-grid">
@@ -499,7 +499,7 @@ async function uploadVoiceForAgent() {
           </div>
           <div class="card-stats">
             🛠 {{ a.tool_count ?? '—' }} {{ t('agentsView.toolsUnit') }}
-            <span v-if="a.mcp_servers?.length" class="inline-ic"> · <SumeruIcon name="mcp" :size="12" /> {{ a.mcp_servers.length }} {{ t('agentsView.mcpUnit') }}</span>
+            <span v-if="a.mcp_servers?.length" class="inline-ic"> · <SumeruIcon name="mcp" :size="12" variant="duo" interactive /> {{ a.mcp_servers.length }} {{ t('agentsView.mcpUnit') }}</span>
           </div>
           <div class="card-desc">{{ a.route_description || t('agentsView.noRouteDesc') }}</div>
           <div class="card-actions" v-if="!a.builtin && !a.is_main">
@@ -631,7 +631,7 @@ async function uploadVoiceForAgent() {
             </div>
           </div>
           <div v-if="Object.keys(permissions.mcp_servers || {}).length" class="perm-group">
-            <div class="perm-group-head"><span class="inline-ic"><SumeruIcon name="mcp" :size="13" /> {{ t('agentsView.mcpServices') }}</span></div>
+            <div class="perm-group-head"><span class="inline-ic"><SumeruIcon name="mcp" :size="13" variant="duo" interactive /> {{ t('agentsView.mcpServices') }}</span></div>
             <div class="perm-rows">
               <div v-for="(info, name) in permissions.mcp_servers" :key="name" class="perm-row">
                 <span class="perm-name">{{ name }}</span>

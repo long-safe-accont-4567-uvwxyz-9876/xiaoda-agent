@@ -278,7 +278,7 @@ const statusType: Record<string, any> = {
                 <input ref="voiceInputEl" type="file" accept="audio/mpeg,audio/wav" style="display: none"
                        @change="onVoiceFilePick" />
                 <n-button size="small" :loading="voiceUploading" @click="voiceInputEl?.click()">
-                  <SumeruIcon name="folder" :size="14" /> {{ t('mediaView.selectAudio') }}
+                  <SumeruIcon name="folder" :size="14" variant="duo" tone="view" interactive /> {{ t('mediaView.selectAudio') }}
                 </n-button>
               </div>
               <div class="voice-select-row">
@@ -293,7 +293,7 @@ const statusType: Record<string, any> = {
                   <span class="voice-name" :class="{ active: currentAgent.voice_ref === v.voice_ref }">{{ replaceAgentNames(v.name) }}</span>
                   <n-popconfirm @positive-click="deleteVoice(v.name)">
                     <template #trigger>
-                      <n-button size="tiny" type="error" quaternary><SumeruIcon name="trash" :size="13" /></n-button>
+                      <n-button size="tiny" type="error" quaternary><SumeruIcon name="trash" :size="13" variant="duo" tone="del" interactive /></n-button>
                     </template>
                     {{ t('mediaView.voiceDeleteConfirm') }}
                   </n-popconfirm>
@@ -313,7 +313,7 @@ const statusType: Record<string, any> = {
                    :placeholder="t('mediaView.imagePromptPh')" />
           <n-button type="primary" style="margin-top: 10px"
                     :loading="submitting === 'image'" @click="submitTask('image')">
-            <SumeruIcon name="palette" :size="14" /> {{ t('mediaView.submit') }}
+            <SumeruIcon name="palette" :size="14" variant="duo" tone="magic" interactive /> {{ t('mediaView.submit') }}
           </n-button>
         </div></Tilt3D>
       </n-tab-pane>
@@ -367,7 +367,7 @@ const statusType: Record<string, any> = {
           <div class="gallery-meta">
             <span class="g-name">{{ g.name }}</span>
             <n-popconfirm @positive-click="removeMedia(g.name)">
-              <template #trigger><button class="g-del"><SumeruIcon name="trash" :size="13" /></button></template>
+              <template #trigger><button class="g-del"><SumeruIcon name="trash" :size="13" variant="duo" tone="del" interactive /></button></template>
               {{ t('mediaView.deleteConfirm') }}
             </n-popconfirm>
           </div>

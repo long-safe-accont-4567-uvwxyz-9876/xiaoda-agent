@@ -223,7 +223,7 @@ function formatTime(ts: number) {
                 <div class="bar-fill" :class="'bar-' + factor.name" :style="{ width: `${factor.activation * 100}%` }"></div>
               </div>
               <span class="factor-val">{{ factor.activation.toFixed(2) }}</span>
-              <span v-if="factor.evidence" class="factor-evidence" :title="factor.evidence"><SumeruIcon name="note" :size="13" /></span>
+              <span v-if="factor.evidence" class="factor-evidence" :title="factor.evidence"><SumeruIcon name="note" :size="13" variant="duo" tone="edit" interactive /></span>
             </div>
           </div>
         </div>

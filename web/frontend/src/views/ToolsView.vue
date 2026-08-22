@@ -325,7 +325,7 @@ async function testSkill(item: any) {
         <Tilt3D>
         <div class="skills-section glass-panel">
           <div class="skills-head">
-            <span class="skills-title"><SumeruIcon name="note" :size="14" /> Skills（{{ t('toolsView.skillHint') }}）</span>
+            <span class="skills-title"><SumeruIcon name="note" :size="14" variant="duo" tone="edit" interactive /> Skills（{{ t('toolsView.skillHint') }}）</span>
             <div style="display:flex; gap:8px">
               <n-button size="small" type="primary" @click="skillInput?.click()">⬆ {{ t('toolsView.uploadSkill') }}</n-button>
               <n-button size="small" @click="openSkill(null)">＋ {{ t('toolsView.createNew') }}</n-button>

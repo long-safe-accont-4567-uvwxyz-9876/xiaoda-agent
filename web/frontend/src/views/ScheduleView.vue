@@ -171,7 +171,7 @@ const reasonLabel: Record<string, string> = {
     <section class="glass-panel section">
       <div class="section-head">
         <h3>{{ t('scheduleView.plans') }}</h3>
-        <n-button size="small" type="primary" @click="openForm(null)"><SumeruIcon name="plus" :size="14" /> {{ t('scheduleView.addPlan') }}</n-button>
+        <n-button size="small" type="primary" @click="openForm(null)"><SumeruIcon name="plus" :size="14" variant="duo" tone="add" interactive /> {{ t('scheduleView.addPlan') }}</n-button>
       </div>
       <div class="greeting-list">
         <Tilt3D v-for="g in greetings" :key="g.id"><div class="greeting-card">

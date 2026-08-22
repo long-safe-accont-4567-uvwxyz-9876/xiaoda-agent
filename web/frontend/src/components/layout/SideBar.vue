@@ -105,14 +105,14 @@ function onLeave() {
 
       <div class="sidebar-foot" v-if="showLabels">
         <router-link to="/sponsor" class="sponsor-entry" :title="t('sponsor.navTitle')">
-          <span class="sponsor-icon"><SumeruIcon name="tea" :size="14" /></span>
+          <span class="sponsor-icon"><SumeruIcon name="tea" :size="14" variant="duo" interactive /></span>
           <span class="sponsor-label">{{ t('sponsor.navTitle') }}</span>
         </router-link>
         <span class="foot-text">{{ t('tagline') }}</span>
         <span class="foot-signature">{{ t('brand_signature.full') }}</span>
       </div>
       <router-link v-else to="/sponsor" class="sponsor-entry-collapsed" :title="t('sponsor.navTitle')">
-        <span class="sponsor-icon"><SumeruIcon name="tea" :size="18" /></span>
+        <span class="sponsor-icon"><SumeruIcon name="tea" :size="18" variant="duo" interactive /></span>
       </router-link>
     </div>
   </nav>

@@ -394,7 +394,7 @@ const permLabel = computed<Record<string, string>>(() => ({
           <template v-if="ws.authorized">
             <div class="setting-row">
               <span class="s-label">{{ t('settings.workspaceCurrent') }}</span>
-              <span class="ws-path" :title="ws.currentPath"><SumeruIcon name="folder" :size="13" /> {{ ws.currentPath }}</span>
+              <span class="ws-path" :title="ws.currentPath"><SumeruIcon name="folder" :size="13" variant="duo" tone="view" interactive /> {{ ws.currentPath }}</span>
             </div>
             <div class="setting-row">
               <span class="s-label">{{ t('settings.workspaceAuthorizedAt') }}</span>

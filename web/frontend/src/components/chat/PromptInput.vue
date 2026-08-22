@@ -407,7 +407,7 @@ watch(() => props.modelValue, () => {
       <div class="toolbar-left">
         <!-- 附件上传 -->
         <button class="tool-btn" :title="t('promptInput.uploadAttachment')" :aria-label="t('promptInput.uploadAttachment')" @click="triggerFileInput" :disabled="disabled || uploadState === 'uploading'">
-          <SumeruIcon name="paperclip" :size="15" />
+          <SumeruIcon name="paperclip" :size="15" variant="duo" tone="edit" interactive />
         </button>
         <input
           ref="fileInputRef"
@@ -429,7 +429,7 @@ watch(() => props.modelValue, () => {
           @click="toggleSearch"
           :disabled="disabled"
         >
-          <SumeruIcon name="flow" :size="15" />
+          <SumeruIcon name="flow" :size="15" variant="duo" interactive />
           <transition name="label-fade">
             <span v-if="showSearch" class="mode-label search-label">Search</span>
           </transition>
@@ -447,7 +447,7 @@ watch(() => props.modelValue, () => {
           @click="toggleThink"
           :disabled="disabled"
         >
-          <SumeruIcon name="models" :size="15" />
+          <SumeruIcon name="models" :size="15" variant="duo" tone="magic" interactive />
             <transition name="label-fade">
               <span v-if="showThink" class="mode-label think-label">Think</span>
             </transition>
@@ -493,7 +493,7 @@ watch(() => props.modelValue, () => {
           :title="t('promptInput.abort')"
           :aria-label="t('promptInput.abort')"
         >
-          <SumeruIcon name="stop" :size="15" />
+          <SumeruIcon name="stop" :size="15" variant="duo" tone="del" interactive />
         </button>
       </div>
     </div>

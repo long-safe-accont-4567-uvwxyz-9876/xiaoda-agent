@@ -1,5 +1,14 @@
 <script setup lang="ts">
-withDefaults(defineProps<{ name: string; size?: number }>(), { size: 20 })
+withDefaults(defineProps<{
+  name: string
+  size?: number
+  /** duo = 双色填充（主体描边+底形半透明填充）；line = 纯线稿 */
+  variant?: 'line' | 'duo'
+  /** 语义色：add/edit/del/view/magic，缺省继承 currentColor */
+  tone?: '' | 'add' | 'edit' | 'del' | 'view' | 'magic'
+  /** 可交互图标：hover 微动效（放大 + 光晕呼吸） */
+  interactive?: boolean
+}>(), { size: 20, variant: 'line', tone: '', interactive: false })
 
 // 须弥风手绘线性图标（统一 24×24 视窗、圆头描边、草元素叶形语言）
 const PATHS: Record<string, string> = {
@@ -70,13 +79,76 @@ const PATHS: Record<string, string> = {
   stop: 'M6.5 6.5h11v11h-11Z',
   paperclip: 'M20 11.5 12.6 18.9a5 5 0 0 1-7-7L13 4.4a3.4 3.4 0 0 1 4.8 4.8l-7.3 7.3a1.8 1.8 0 0 1-2.6-2.6l6.8-6.8',
 }
+
+// duo 变体底形：主轮廓的填充版（渲染为 opacity .14 的底层），无则退化为纯线稿
+const FILLS: Record<string, string> = {
+  trash: 'M7.4 7.8h9.2l-.8 11.5H8.2Z',
+  note: 'M6 3.5h9L19 7.5v13H6Z',
+  folder: 'M3.5 6.5a1.5 1.5 0 0 1 1.5-1.5h4.5l2 2.5H19a1.5 1.5 0 0 1 1.5 1.5v9a1.5 1.5 0 0 1-1.5 1.5H5a1.5 1.5 0 0 1-1.5-1.5Z',
+  chart: 'M5.8 12.6h2.4V20H5.8Z M10.3 7.6h2.4V20h-2.4Z M14.8 10.2h2.4V20h-2.4Z',
+  search: 'M10.5 6a4.5 4.5 0 1 0 0 9 4.5 4.5 0 0 0 0-9Z',
+  sparkle: 'M12 3l1.8 5.2L19 10l-5.2 1.8L12 17l-1.8-5.2L5 10l5.2-1.8Z',
+  palette: 'M12 20.5a8.5 8.5 0 1 1 8.5-8.5c0 2.3-1.9 3.2-3.5 3.2h-1.8a2 2 0 0 0-1.5 3.3c.4.5.2 2-1.7 2Z',
+  wrench: 'M14.5 6.5a4 4 0 0 0-5.4 4.8L3.5 17l3.5 3.5 5.7-5.6a4 4 0 0 0 4.8-5.4L14.6 12 12 9.4l2.5-2.9Z',
+  stop: 'M6.5 6.5h11v11h-11Z',
+}
 </script>
 
 <template>
-  <svg :width="size" :height="size" viewBox="0 0 24 24" fill="none"
-       stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"
-       style="filter: drop-shadow(0 1px 1.5px rgba(0, 0, 0, 0.35)); flex: 0 0 auto;"
-       aria-hidden="true">
+  <svg
+    :class="['sumeru-ic', `tone-${tone}`, { 'sumeru-ic--hover': interactive }]"
+    :width="size" :height="size" viewBox="0 0 24 24" fill="none"
+    stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"
+    aria-hidden="true">
+    <path v-if="variant === 'duo' && FILLS[name]"
+          :d="FILLS[name]" fill="currentColor" stroke="none" class="ic-fill" />
     <path :d="PATHS[name] || PATHS.chat" />
   </svg>
 </template>
+
+
+<style scoped>
+.sumeru-ic {
+  flex: 0 0 auto;
+}
+/* duo 变体：底形半透明填充 */
+.ic-fill {
+  opacity: 0.16;
+}
+
+/* 语义色（覆盖 currentColor 的显式色调） */
+.tone-add { color: #8fe560; }
+.tone-edit { color: #e8d5a3; }
+.tone-del { color: #ff9d90; }
+.tone-view { color: #7cc7e8; }
+.tone-magic { color: #c9a0ff; }
+
+/* 可交互图标 hover 微动效：轻微放大 + 呼吸光晕 */
+.sumeru-ic--hover {
+  position: relative;
+  cursor: pointer;
+  transition: transform 0.25s cubic-bezier(0.34, 1.56, 0.64, 1);
+}
+.sumeru-ic--hover::after {
+  content: '';
+  position: absolute;
+  inset: -22%;
+  border-radius: 50%;
+  background: radial-gradient(closest-side, currentColor, transparent 72%);
+  opacity: 0;
+  transition: opacity 0.25s;
+  pointer-events: none;
+  z-index: -1;
+}
+.sumeru-ic--hover:hover {
+  transform: scale(1.14);
+}
+.sumeru-ic--hover:hover::after {
+  opacity: 0.18;
+  animation: ic-breath 1.3s ease-in-out infinite;
+}
+@keyframes ic-breath {
+  0%, 100% { transform: scale(1); opacity: 0.14; }
+  50% { transform: scale(1.1); opacity: 0.24; }
+}
+</style>

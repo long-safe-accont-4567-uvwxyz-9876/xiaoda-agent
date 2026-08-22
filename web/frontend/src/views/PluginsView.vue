@@ -214,7 +214,7 @@ onMounted(() => { load(); loadMarket() })
   <div class="plugins-view">
     <div class="view-header">
       <h2>🧩 {{ t('pluginsView.title') }}</h2>
-      <n-button type="primary" :loading="discovering" @click="discoverPlugins"><SumeruIcon name="search" :size="14" /> {{ t('pluginsView.scan') }}</n-button>
+      <n-button type="primary" :loading="discovering" @click="discoverPlugins"><SumeruIcon name="search" :size="14" variant="duo" tone="view" interactive /> {{ t('pluginsView.scan') }}</n-button>
     </div>
 
     <n-tabs v-model:value="activeTab" type="line" @update:value="onTabChange">
@@ -244,7 +244,7 @@ onMounted(() => { load(); loadMarket() })
               <n-button v-if="p.state === 'enabled'" size="tiny"
                         @click="doAction(p.id, 'reload')">{{ t('pluginsView.reload') }}</n-button>
               <n-button v-if="p.state === 'enabled' || p.state === 'loaded'" size="tiny" quaternary
-                        @click="openConfig(p.id, p.name)"><SumeruIcon name="settings" :size="12" /> 配置</n-button>
+                        @click="openConfig(p.id, p.name)"><SumeruIcon name="settings" :size="12" variant="duo" tone="edit" interactive /> 配置</n-button>
               <n-button size="tiny" :type="pluginTestResult[p.id]?.ok === false ? 'error' : 'success'"
                         :loading="testingPlugin[p.id]" @click="testPlugin(p.id)">
                 {{ pluginTestResult[p.id]?.ok === false ? t('pluginsView.retry') : t('pluginsView.test') }}

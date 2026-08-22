@@ -177,7 +177,7 @@ function diskLabel(d: any): string {
 
 <template>
   <div class="dashboard-view">
-    <h2 class="view-title view-title-icon"><SumeruIcon name="chart" :size="20" /> {{ t('dashboardView.title') }}</h2>
+    <h2 class="view-title view-title-icon"><SumeruIcon name="chart" :size="20" variant="duo" tone="view" interactive /> {{ t('dashboardView.title') }}</h2>
 
     <div v-if="permissionMode === 'bypass'" class="bypass-warning">
       {{ t('dashboardView.bypassWarning') }}

@@ -62,8 +62,8 @@ function enterDir(d: string) {
       当前：{{ currentPath }}
     </div>
     <div style="max-height: 320px; overflow-y: auto; border: 1px solid #eee; border-radius: 4px">
-      <div v-if="parentPath" class="dir-item" @click="browse(parentPath!)"><SumeruIcon name="folder" :size="14" /> ..（上级）</div>
-      <div v-for="d in dirs" :key="d" class="dir-item" @click="enterDir(d)"><SumeruIcon name="folder" :size="14" /> {{ d }}</div>
+      <div v-if="parentPath" class="dir-item" @click="browse(parentPath!)"><SumeruIcon name="folder" :size="14" variant="duo" tone="view" interactive /> ..（上级）</div>
+      <div v-for="d in dirs" :key="d" class="dir-item" @click="enterDir(d)"><SumeruIcon name="folder" :size="14" variant="duo" tone="view" interactive /> {{ d }}</div>
       <div v-if="!dirs.length && currentPath && !loading" style="padding: 12px; color: #999">无子目录</div>
       <div v-if="loading" style="padding: 12px; color: #999">加载中...</div>
     </div>

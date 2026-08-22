@@ -668,7 +668,7 @@ function fmtTs(ts: number): string {
 
 <template>
   <div class="insight-view">
-    <h2 class="view-title view-title-icon"><SumeruIcon name="insight" :size="20" /> {{ t('insightView.title') }}</h2>
+    <h2 class="view-title view-title-icon"><SumeruIcon name="insight" :size="20" variant="duo" tone="magic" interactive /> {{ t('insightView.title') }}</h2>
     <n-tabs type="line" animated v-model:value="activeTab">
       <n-tab-pane name="emotion" :tab="t('insightView.emotion')">
         <Tilt3D :max-x="4" :max-y="6"><div class="emotion-current glass-panel">

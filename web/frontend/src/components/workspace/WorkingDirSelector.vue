@@ -67,7 +67,7 @@ async function onConfirmAuthorize() {
         : t('settings.workspaceUnauthorized')"
       @click="onClick"
     >
-      <SumeruIcon name="folder" :size="15" />
+      <SumeruIcon name="folder" :size="15" variant="duo" tone="view" interactive />
     </button>
 
     <DirectoryPickerDialog :show="showPicker" @select="onPickerSelect" @cancel="showPicker = false" />

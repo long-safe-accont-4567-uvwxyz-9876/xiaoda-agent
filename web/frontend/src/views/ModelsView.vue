@@ -404,8 +404,8 @@ async function moveProvider(pid: string, dir: -1 | 1) {
 <template>
   <div class="models-view">
     <div class="view-header">
-      <h2 class="view-title-icon"><SumeruIcon name="models" :size="20" /> {{ t('modelsView.title') }}</h2>
-      <n-button type="primary" @click="openProviderForm(null)"><SumeruIcon name="plus" :size="14" /> {{ t('modelsView.customProvider') }}</n-button>
+      <h2 class="view-title-icon"><SumeruIcon name="models" :size="20" variant="duo" tone="magic" interactive /> {{ t('modelsView.title') }}</h2>
+      <n-button type="primary" @click="openProviderForm(null)"><SumeruIcon name="plus" :size="14" variant="duo" tone="add" interactive /> {{ t('modelsView.customProvider') }}</n-button>
     </div>
 
     <Tilt3D :max-x="4" :max-y="6">

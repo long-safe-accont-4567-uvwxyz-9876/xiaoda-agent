@@ -318,9 +318,9 @@ async function publishWorkflow(wfId: string) {
               </div>
               <div class="wf-card-actions">
                 <n-button size="tiny" type="primary" @click="editWorkflow(wf)">{{ t('workflowView.edit') }}</n-button>
-                <n-button size="tiny" quaternary @click="openRuns(wf.id, wf.name)"><SumeruIcon name="chart" :size="12" /> 运行</n-button>
-                <n-button size="tiny" quaternary @click="openRevisions(wf.id, wf.name)"><SumeruIcon name="note" :size="12" /> 版本</n-button>
-                <n-button size="tiny" quaternary :loading="publishing === wf.id" @click="publishWorkflow(wf.id)"><SumeruIcon name="rocket" :size="12" /> 发布</n-button>
+                <n-button size="tiny" quaternary @click="openRuns(wf.id, wf.name)"><SumeruIcon name="chart" :size="12" variant="duo" tone="view" interactive /> 运行</n-button>
+                <n-button size="tiny" quaternary @click="openRevisions(wf.id, wf.name)"><SumeruIcon name="note" :size="12" variant="duo" tone="edit" interactive /> 版本</n-button>
+                <n-button size="tiny" quaternary :loading="publishing === wf.id" @click="publishWorkflow(wf.id)"><SumeruIcon name="rocket" :size="12" variant="duo" tone="add" interactive /> 发布</n-button>
                 <n-popconfirm @positive-click="deleteWorkflow(wf)">
                   <template #trigger>
                     <n-button size="tiny" type="error" quaternary>{{ t('workflowView.delete') }}</n-button>
