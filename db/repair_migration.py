@@ -9,6 +9,9 @@
 
     # 查看当前迁移状态
     python -m db.repair_migration --status
+
+职责边界：本 CLI 仅操作 schema_version / migration_state 迁移记录，
+不承载任何 schema 变更逻辑；schema 变更请统一写入 db/legacy_migrations.py。
 """
 import argparse
 import asyncio

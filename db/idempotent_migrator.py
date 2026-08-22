@@ -1,5 +1,9 @@
 """数据库迁移幂等性管理器 (H3)
 
+!!! deprecated：已被 db/legacy_migrations.py 的 LegacyMigrationMixin 取代
+运行时迁移统一走 schema_version + IF NOT EXISTS 守卫 + migration_state dirty 恢复，
+本模块仅保留供 tests/test_phase6_modules.py 作行为测试，禁止新增生产调用。
+
 参考:
 - Alembic / Flyway migration versioning
 - Idempotent migration patterns

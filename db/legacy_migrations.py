@@ -15,6 +15,17 @@ from loguru import logger
 from . import db_workflow
 
 
+
+# ── 迁移体系导航 ─────────────────────────────────────────────
+# 本项目 DB schema 变更只有一个生产入口：LegacyMigrationMixin（本文件，v1-v27，
+# 挂载于 DatabaseManager.init）。幂等机制 = schema_version 跟踪 + 逐条
+# IF NOT EXISTS 守卫 + migration_state dirty 恢复；新迁移一律追加到本文件。
+#
+# 同目录另有：
+#   idempotent_migrator.py — 早期 H3 幂等迁移器，机制已被本文件完整覆盖，
+#       生产零引用，仅 tests/test_phase6_modules.py 保留行为测试，禁止新增调用。
+#   repair_migration.py   — 运维 CLI（--status/--mark-clean/--rollback），仅操作
+#       schema_version 迁移记录，不承担 schema 变更；dirty 恢复失败时手动介入。
 class LegacyMigrationMixin:
     async def _setup_migration_state(self) -> None:
         # 逐条执行 DDL，避免 executescript() 在 vfat 上的隐式 commit 问题
