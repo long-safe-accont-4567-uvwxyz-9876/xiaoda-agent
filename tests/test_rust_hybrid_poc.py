@@ -341,3 +341,73 @@ def test_zero_activation_seed_entry_preserved():
     idx.load_edges([("a", "b", 0.5)])
     out = idx.spreading_channel([("a", 0.0)])
     assert "a" in out and out["a"] == 0.0
+
+
+# ── 二进制契约（CONTRACT_VERSION + 符号表）回归 ──────────
+# 背景：陈旧 .so 可导入但缺新符号，曾致
+# AttributeError: module 'rust_core' has no attribute 'NodeIndex'
+# 在使用点爆出而非按"扩展不可用"回退/skip。契约校验收敛进 _try_import。
+
+
+def _swap_module(monkeypatch, stub):
+    """把伪造模块塞进 sys.modules 并重置 rust_hybrid 导入缓存。"""
+    import sys
+    monkeypatch.setitem(sys.modules, "rust_core", stub)
+    monkeypatch.setattr(rust_hybrid, "_import_attempted", False)
+    monkeypatch.setattr(rust_hybrid, "_rust_core", None)
+
+
+def test_contract_stale_binary_without_nodeindex_falls_back(monkeypatch):
+    """可导入但缺 NodeIndex 的陈旧二进制 → 视同不可用（None），
+    RustNodeIndex 抛 RuntimeError 而非 AttributeError。"""
+    import sys
+    import types
+
+    _swap_module(monkeypatch, types.ModuleType("rust_core"))
+    assert rust_hybrid._try_import() is None
+    with pytest.raises(RuntimeError, match="rust_core unavailable"):
+        rust_hybrid.RustNodeIndex(
+            {"n0": {"keys": "[]", "text": "t", "weight": 1.0}})
+
+
+def test_contract_version_mismatch_falls_back(monkeypatch):
+    """版本号不一致（异机拷贝/新旧错配的二进制）→ 视同不可用。"""
+    import sys
+    import types
+
+    stale = types.ModuleType("rust_core")
+    stale.CONTRACT_VERSION = rust_hybrid.RUST_CORE_CONTRACT_VERSION + 1
+    if _RC is not None:
+        stale.NodeIndex = rust_hybrid._try_import().NodeIndex
+    _swap_module(monkeypatch, stale)
+    assert rust_hybrid._try_import() is None
+
+
+def test_contract_missing_method_falls_back(monkeypatch):
+    """类存在但方法缺失（如旧版只有 direct_channel 无 spreading_channel）
+    的部分陈旧二进制 → 同样拒绝，防调用点 AttributeError。"""
+    import sys
+    import types
+
+    partial = types.ModuleType("rust_core")
+    partial.CONTRACT_VERSION = rust_hybrid.RUST_CORE_CONTRACT_VERSION
+
+    class _HalfIndex:  # noqa: D401  只实现部分契约方法的模拟旧版
+        def direct_channel(self, query, query_keys):
+            return {}
+
+        size = 0
+
+    partial.NodeIndex = _HalfIndex
+    _swap_module(monkeypatch, partial)
+    assert rust_hybrid._try_import() is None
+
+
+@pytest.mark.skipif(_RC is None, reason="需要可用 rust_core 扩展")
+def test_contract_current_binary_satisfies():
+    """当前产物满足契约：版本相等 + NodeIndex 四方法齐全（守真探针）。"""
+    rc = rust_hybrid._try_import()
+    assert rc is not None
+    assert rc.CONTRACT_VERSION == rust_hybrid.RUST_CORE_CONTRACT_VERSION
+    for m in ("direct_channel", "load_edges", "spreading_channel", "size"):
+        assert hasattr(rc.NodeIndex, m)

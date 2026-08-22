@@ -373,6 +373,11 @@ impl NodeIndex {
 
 #[pymodule]
 fn rust_core(m: &Bound<'_, PyModule>) -> PyResult<()> {
+    // 二进制契约版本：与 memory/rust_hybrid.py 的 RUST_CORE_CONTRACT_VERSION
+    // 必须相等，任何 pyclass/pymethod 增删改（含语义变化）双侧同步 bump。
+    // Python 侧 _try_import 校验此值+符号表，不符视同扩展不可用（回退纯 Python），
+    // 防止陈旧 .so 在使用点爆 AttributeError。
+    m.add("CONTRACT_VERSION", 2)?;
     m.add_class::<NodeIndex>()?;
     Ok(())
 }

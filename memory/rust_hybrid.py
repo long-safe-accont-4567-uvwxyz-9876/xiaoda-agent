@@ -5,10 +5,18 @@
 
 设计约束：
 - 可开关：RUST_HYBRID_ENABLED=False（默认）时行为与主线完全一致；
-- 回退安全：rust_core 不可导入 / .so 架构不符 / 运行时异常，一律静默回退
-  纯 Python 路径，检索功能永不因本模块失败而中断；
+- 回退安全：rust_core 不可导入 / .so 架构不符 / 二进制陈旧缺符号 /
+  运行时异常，一律静默回退纯 Python 路径，检索功能永不因本模块失败而中断；
 - 语义不变：Rust 实现与 spreading_activation.py 逐字段对齐，
   tests/test_rust_hybrid_poc.py 用真实数据做等价性断言。
+
+二进制契约（CONTRACT_VERSION）：可导入 ≠ 契约满足——旧源码构建的 .so
+能通过 import 却缺新类/方法，曾在测试处爆出
+AttributeError: module 'rust_core' has no attribute 'NodeIndex'。
+_try_import 对版本号+符号表双重校验，不符视同不可用走回退；
+Rust 侧改 pyclass/pymethod 签名或语义时须同步 bump 双侧版本号
+（lib.rs CONTRACT_VERSION ↔ 本文件 RUST_CORE_CONTRACT_VERSION），
+build.sh 在同步产物前也会跑同一套探针。
 """
 from __future__ import annotations
 
@@ -29,13 +37,51 @@ RUST_HYBRID_ENABLED = _CFG_ENABLED
 # 低于该节点数时 Python 路径已足够快（<5ms），不值得维护双份索引一致性
 RUST_HYBRID_MIN_NODES = 500
 
+# 二进制契约版本：与 rust_core/src/lib.rs 的 CONTRACT_VERSION 必须相等。
+# 任何 pyclass/pymethod 的增删改（含语义变化）都要双侧同步 bump。
+RUST_CORE_CONTRACT_VERSION = 2
+# _try_import 返回模块必须满足的最小符号表（类 + 方法级探针）。
+_REQUIRED_CONTRACT = ("NodeIndex", "CONTRACT_VERSION")
+
+
+def _contract_ok(rc: Any) -> bool:
+    """校验二进制契约：版本号相等 + 符号齐全。
+
+    陈旧 .so（旧源码构建产物）或异机拷贝的 .so 可导入但不满足契约，
+    一律视同不可用——调用方/测试按"扩展未构建"回退或 skip，
+    而不是在使用点爆 AttributeError。
+    """
+    missing = [a for a in _REQUIRED_CONTRACT if not hasattr(rc, a)]
+    if missing:
+        logger.warning(
+            "rust_hybrid.contract_missing symbols={} hint=bash rust_core/build.sh",
+            ",".join(missing))
+        return False
+    if rc.CONTRACT_VERSION != RUST_CORE_CONTRACT_VERSION:
+        logger.warning(
+            "rust_hybrid.contract_version_mismatch binary={} python={} "
+            "hint=bash rust_core/build.sh",
+            rc.CONTRACT_VERSION, RUST_CORE_CONTRACT_VERSION)
+        return False
+    idx_cls = getattr(rc, "NodeIndex")
+    for method in ("direct_channel", "load_edges", "spreading_channel", "size"):
+        if not hasattr(idx_cls, method):
+            logger.warning("rust_hybrid.contract_method_missing class=NodeIndex "
+                           "method={} hint=bash rust_core/build.sh", method)
+            return False
+    return True
+
 _rust_core: Any | None = None
 _import_attempted = False
 _import_lock = threading.Lock()
 
 
 def _try_import() -> Any | None:
-    """惰性导入 rust_core 扩展模块（进程内单次尝试）。"""
+    """惰性导入 rust_core 扩展模块（进程内单次尝试）。
+
+    导入成功后仍需通过 _contract_ok 契约校验（版本+符号），
+    不满足契约视同不可用，返回 None 走纯 Python 回退。
+    """
     global _rust_core, _import_attempted
     if _import_attempted:
         return _rust_core
@@ -46,8 +92,10 @@ def _try_import() -> Any | None:
         try:
             import rust_core as _rc  # type: ignore[import-not-found]
 
-            _rust_core = _rc
-            logger.info("rust_hybrid.module_loaded")
+            _rust_core = _rc if _contract_ok(_rc) else None
+            if _rust_core is not None:
+                logger.info("rust_hybrid.module_loaded contract=v{}",
+                            RUST_CORE_CONTRACT_VERSION)
         except (ImportError, OSError) as e:
             logger.debug("rust_hybrid.module_unavailable error={}", str(e)[:120])
             _rust_core = None

@@ -19,6 +19,18 @@
 bash rust_core/build.sh        # 需要 cargo（https://rustup.rs）
 ```
 
+构建末尾自动跑契约探针（CONTRACT_VERSION 相等 + NodeIndex 符号齐全），
+不通过则中止同步到 venv——防止陈旧二进制流入运行时。
+
+## 二进制契约（CONTRACT_VERSION）
+
+`src/lib.rs` 的 `CONTRACT_VERSION` 与 `memory/rust_hybrid.py` 的
+`RUST_CORE_CONTRACT_VERSION` 必须相等。**任何 pyclass/pymethod 的增删改
+（含语义变化）都要双侧同步 bump**，否则 Python 侧视同扩展不可用、
+静默回退纯 Python 并打 warning（可导入但缺符号的陈旧 .so 曾在使用点
+爆 `AttributeError: module 'rust_core' has no attribute 'NodeIndex'`，
+契约校验把这类漂移拦截在导入层/构建期）。
+
 ## 启用
 
 ```bash
