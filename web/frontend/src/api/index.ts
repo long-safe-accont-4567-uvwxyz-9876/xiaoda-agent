@@ -376,8 +376,11 @@ export async function getXpLevels(): Promise<{ levels: XpLevelConfig[] }> {
 export const updateKnowledgeRelation = (id: string, data: { relation: string }) =>
   put<{ id: string; updated: boolean }>(`/insight/knowledge/relations/${id}`, data)
 
-export const getKnowledgeGraph = (entity = '', depth = 1) =>
-  get<{ nodes: any[]; edges: any[] }>(`/insight/knowledge/graph?entity=${encodeURIComponent(entity)}&depth=${depth}`)
+export const getKnowledgeGraph = (entity = '', depth: number | null | undefined = 1) => {
+  // n-input-number 清空时 depth 为 null；后端要求整数，这里归位到默认 6
+  const d = Number.isFinite(Number(depth)) && Number(depth) >= 1 ? Math.round(Number(depth)) : 6
+  return get<{ nodes: any[]; edges: any[] }>(`/insight/knowledge/graph?entity=${encodeURIComponent(entity)}&depth=${d}`)
+}
 
 // ── J-Space API ──
 export interface JSpaceStatus {

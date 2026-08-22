@@ -238,30 +238,69 @@ async def knowledge_graph(request: Request,
                           depth: int = Query(default=6, ge=1, le=12)) -> Any:
     """知识图谱数据（内在世界页 + 全屏 3D 共用）。
 
-    性能契约：实体聚焦路径复用 kdb.get_related_knowledge 的批量 BFS
-    （每层 2 条 IN 查询；depth1-12 实测均 <120ms——图直径有限，深层
-    返回量收敛，深度不再是性能约束）。每层边数上限
-    GRAPH_MAX_EDGES_PER_HOP=400 防止热门实体（1200+ 关系）撑爆渲染；
-    前端按需展开（点击节点增量拉邻域），默认起步 6 层。
+    性能契约：逐层批量 BFS（每层 2 条 IN 查询），depth 严格生效——
+    depth=1 只返回第一跳。每层独立 GRAPH_MAX_EDGES_PER_HOP=400 上限
+    （confidence 降序截断，被挤掉的边所指向的实体不再外扩），
+    防止热门实体（1200+ 关系）撑爆渲染且不再掩盖深度差异。
     """
     core = request.app.state.core
     kdb = core.db.knowledge
     GRAPH_MAX_EDGES_PER_HOP = 400
 
     if entity.strip():
-        result = await kdb.get_related_knowledge([entity.strip()], depth)
-        rels = result["relations"]
-        ent_map = {e["name"]: e for e in result["entities"]}
-        # 超限时按 confidence 降序保留最有把握的关系，保证截断确定性
-        if len(rels) > GRAPH_MAX_EDGES_PER_HOP:
-            rels = sorted(rels, key=lambda r: r.get("confidence") or 0,
-                          reverse=True)[:GRAPH_MAX_EDGES_PER_HOP]
-        edges = [{"from": r["from_entity"], "to": r["to_entity"],
-                  "relation": r.get("relation_type", "")} for r in rels]
-        names = {r["from_entity"] for r in rels} | {r["to_entity"] for r in rels}
-        names.add(entity.strip())
+        # 逐层 BFS：每层独立批量查询 + 独立上限。此前全局截断导致热门实体
+        # 一跳就吃满 400 名额，depth=1 与 depth=6 返回完全一致（约束失效）。
+        seen_rel: set[tuple[str, str, str]] = set()
+        visited: set[str] = {entity.strip()}
+        frontier = [entity.strip()]
+        edges: list[dict] = []
+        ent_map: dict[str, dict] = {}
+        for _ in range(depth):
+            if not frontier:
+                break
+            placeholders = ",".join("?" * len(frontier))
+            cur = await kdb._conn.execute(
+                f"SELECT * FROM knowledge_relations "
+                f"WHERE from_entity IN ({placeholders}) OR to_entity IN ({placeholders})",
+                frontier + frontier,
+            )
+            rows = await cur.fetchall()
+            next_frontier: list[str] = []
+            hop_rels: list[dict] = []
+            for r in rows:
+                rel = dict(r)
+                key = (rel["from_entity"], rel.get("relation_type", ""), rel["to_entity"])
+                if key in seen_rel:
+                    continue
+                seen_rel.add(key)
+                hop_rels.append(rel)
+                for other in (rel["from_entity"], rel["to_entity"]):
+                    if other not in visited:
+                        visited.add(other)
+                        next_frontier.append(other)
+            # 本层超限：confidence 降序截断，保证确定性；被挤掉的二跳实体不进 frontier
+            if len(hop_rels) > GRAPH_MAX_EDGES_PER_HOP:
+                keep = {id(r) for r in sorted(hop_rels, key=lambda x: x.get("confidence") or 0,
+                                              reverse=True)[:GRAPH_MAX_EDGES_PER_HOP]}
+                kept_rels = [r for r in hop_rels if id(r) in keep]
+                kept_touch = {r["from_entity"] for r in kept_rels} | {r["to_entity"] for r in kept_rels}
+                next_frontier = [n for n in next_frontier if n in kept_touch]
+                hop_rels = kept_rels
+            # 批量补本层新实体的 kind
+            new_names = [n for n in set(next_frontier) | {r["from_entity"] for r in hop_rels}
+                         | {r["to_entity"] for r in hop_rels} if n not in ent_map]
+            if new_names:
+                ph = ",".join("?" * len(new_names))
+                cur2 = await kdb._conn.execute(
+                    f"SELECT name, kind FROM knowledge_entities WHERE name IN ({ph})", new_names)
+                for row in await cur2.fetchall():
+                    ent_map[row["name"]] = dict(row)
+            for rel in hop_rels:
+                edges.append({"from": rel["from_entity"], "to": rel["to_entity"],
+                              "relation": rel.get("relation_type", "")})
+            frontier = list(set(next_frontier))
         nodes = [{"name": n, "kind": (ent_map.get(n) or {}).get("kind", "")}
-                 for n in names]
+                 for n in ({e["from"] for e in edges} | {e["to"] for e in edges} | visited)]
         return Envelope(data={"nodes": nodes, "edges": edges})
 
     # 全图概览：最近 80 条关系（原逻辑保留，量级固定无风险）

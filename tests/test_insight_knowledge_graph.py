@@ -48,35 +48,63 @@ class _FakeKnowledgeDB:
 
 @pytest.fixture
 def client():
-    entities = [
-        {"name": "小妲", "kind": "person"},
-        {"name": "爸爸", "kind": "person"},
-        {"name": "须弥", "kind": "place"},
-        {"name": "孤岛", "kind": "place"},
-    ]
-    relations = [
-        {"from_entity": "小妲", "relation_type": "家人", "to_entity": "爸爸", "confidence": 1.0},
-        {"from_entity": "小妲", "relation_type": "居住", "to_entity": "须弥", "confidence": 0.9},
-        {"from_entity": "爸爸", "relation_type": "到访", "to_entity": "须弥", "confidence": 0.5},
-        {"from_entity": "孤岛", "relation_type": "位于", "to_entity": "须弥", "confidence": 0.4},
-    ]
-    fake = _FakeKnowledgeDB(entities, relations)
+    """真实内存 sqlite + KnowledgeDB：覆盖逐层 BFS 的真实 SQL 路径。"""
+    import asyncio
+    import aiosqlite
+    from db.db_knowledge import KnowledgeDB
+
+    loop = asyncio.new_event_loop()
+    conn = loop.run_until_complete(aiosqlite.connect(":memory:"))
+    conn.row_factory = aiosqlite.Row
+    loop.run_until_complete(conn.executescript("""
+        CREATE TABLE knowledge_entities (name TEXT PRIMARY KEY, kind TEXT DEFAULT '');
+        CREATE TABLE knowledge_relations (
+            id TEXT PRIMARY KEY, from_entity TEXT, relation_type TEXT,
+            to_entity TEXT, updated_at REAL DEFAULT 0,
+            valid_from REAL DEFAULT 0, valid_to REAL DEFAULT 0, confidence REAL DEFAULT 1.0);
+    """))
+
+    async def seed():
+        ents = [("小妲", "person"), ("爸爸", "person"), ("须弥", "place"),
+                ("孤岛", "place"), ("朋友", "person")]
+        await conn.executemany(
+            "INSERT OR IGNORE INTO knowledge_entities(name, kind) VALUES(?,?)", ents)
+        rels = [
+            ("r1", "小妲", "家人", "爸爸", 1.0),
+            ("r2", "小妲", "居住", "须弥", 0.9),
+            ("r3", "爸爸", "到访", "须弥", 0.5),
+            ("r4", "孤岛", "位于", "须弥", 0.4),
+            ("r5", "朋友", "认识", "孤岛", 0.3),
+        ]
+        await conn.executemany(
+            "INSERT OR REPLACE INTO knowledge_relations(id, from_entity, relation_type, to_entity, confidence) VALUES(?,?,?,?,?)",
+            rels)
+        await conn.commit()
+
+    loop.run_until_complete(seed())
+    kdb = KnowledgeDB(conn)
 
     app = FastAPI()
     app.include_router(insight.router)
 
     class _Core:
         class db:  # noqa: N801
-            knowledge = fake
+            knowledge = kdb
 
             @staticmethod
             async def fetch_all(sql, *a, **kw):
-                # 全图概览路径：返回最近关系
-                return list(reversed(relations[:80]))
+                cur = await conn.execute(sql, list(a))
+                return [dict(r) for r in await cur.fetchall()]
+
+        # 逐层 BFS 直接用 kdb._conn；同时路由里 kdb._conn.execute 可用
+        _conn = conn
 
     app.state.core = _Core()
-    return TestClient(app)
+    c = TestClient(app)
 
+    yield c
+    loop.run_until_complete(conn.close())
+    loop.close()
 
 def _auth(requests_mock_client):
     # insight 路由依赖 get_current_user；直接 override 依赖绕过鉴权
@@ -99,33 +127,41 @@ def test_graph_entity_focus_batch_path(client):
     assert kinds["须弥"] == "place"
 
 
-def test_graph_entity_focus_edge_cap(client, monkeypatch):
-    """关系数超过每层上限时截断到 400 且不崩溃。"""
+def test_graph_entity_focus_edge_cap(client):
+    """第一跳关系超过每层上限时截断到 400 且按 confidence 保留最高批。"""
+    import asyncio
     _auth(client)
-    many = [
-        {"from_entity": "小妲", "relation_type": f"r{i}", "to_entity": f"e{i}",
-         "confidence": i / 1000}
-        for i in range(500)
-    ]
-    ents = [{"name": f"e{i}", "kind": ""} for i in range(500)]
-    fake = _FakeKnowledgeDB([{"name": "小妲", "kind": "person"}] + ents, many)
+    core = client.app.state.core
+    conn = core._conn
 
-    class _Core:
-        class db:  # noqa: N801
-            knowledge = fake
+    async def seed_many():
+        rows = [(f"e{i}", "") for i in range(600)]
+        await conn.executemany(
+            "INSERT OR IGNORE INTO knowledge_entities(name, kind) VALUES(?,?)", rows)
+        rels = [(f"c{i}", "小妲", f"r{i}", f"e{i}", i / 1000) for i in range(600)]
+        await conn.executemany(
+            "INSERT OR REPLACE INTO knowledge_relations(id, from_entity, relation_type, to_entity, confidence) VALUES(?,?,?,?,?)",
+            rels)
+        await conn.commit()
 
-            @staticmethod
-            async def fetch_all(sql, *a, **kw):
-                return []
+    asyncio.get_event_loop_policy().new_event_loop().run_until_complete(seed_many()) if False else None
+    # TestClient 内部有运行中的事件循环依赖；直接同步跑 async seed
+    import asyncio as _aio
+    _aio.get_event_loop().run_until_complete(seed_many())
 
-    client.app.state.core = _Core()
     resp = client.get("/insight/knowledge/graph", params={"entity": "小妲", "depth": 1})
     assert resp.status_code == 200
     data = resp.json()["data"]
     assert len(data["edges"]) <= 400
-    # 截断按 confidence 降序：保留的应是 confidence 最高的那批
-    kept_conf = sorted((e["relation"] for e in data["edges"]))
-    assert kept_conf[-1] == "r499"
+    # 截断按 confidence 降序：600 条 cN 关系只保留 confidence 最高的 400 条
+    # （i/1000 有并列值，排序边界允许少量浮动）。fixture 的 5 条原始关系
+    # confidence 更高（0.3~1.0 vs c200=0.2），也理应在保留集内。
+    kept = [e["relation"] for e in data["edges"] if e["relation"].startswith("r")]
+    # 总边数 = 400 上限；fixture 的 5 条高置信关系挤占名额，rN 只剩 395~400 条
+    assert len(data["edges"]) <= 400
+    assert 395 <= len(kept) <= 400
+    nums = sorted(int(k[1:]) for k in kept)
+    assert min(nums) >= 198 and max(nums) == 599
 
 
 def test_graph_overview_limit80(client):

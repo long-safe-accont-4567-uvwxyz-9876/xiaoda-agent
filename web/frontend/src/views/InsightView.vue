@@ -568,6 +568,18 @@ async function resetAndLoadGraph(entity: string, depth: number) {
   } catch (e: any) { message.error(e.message) }
 }
 
+function onDepthInput(v: number | null) {
+  // 输入框清空时归一为当前上限（深度恒有值，下游无需判空）
+  graphDepth.value = v ?? 6
+}
+
+const _depthDebounce = ref<ReturnType<typeof setTimeout> | null>(null)
+watch(graphDepth, (v) => {
+  if (v === null || v === undefined) return
+  if (_depthDebounce.value) clearTimeout(_depthDebounce.value)
+  _depthDebounce.value = setTimeout(() => loadKnowledgeData(), 600)
+})
+
 async function loadKnowledgeData() {
   try {
     const [ents, rels] = await Promise.all([listKnowledgeEntities(), listKnowledgeRelations()])
@@ -773,8 +785,9 @@ function fmtTs(ts: number): string {
                 :min="1"
                 :max="12"
                 :show-button="false"
+                placeholder="6"
                 style="width: 64px"
-                @update:value="loadKnowledgeData"
+                @update:value="onDepthInput"
               />
             </div>
             <span v-if="expandingNode" class="kg-expanding">{{ t('insightView.expanding') }}「{{ expandingNode }}」…</span>

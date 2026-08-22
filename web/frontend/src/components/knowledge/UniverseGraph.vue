@@ -223,7 +223,7 @@ async function loadGraph(retries = 0) {
     accLinkKeys.clear()
     expandedIds.value = new Set()
     const startEntity = props.entity.trim()
-    const data = await getKnowledgeGraph(startEntity, Math.min(activeDepth.value, 1))
+    const data = await getKnowledgeGraph(startEntity, Math.min(activeDepth.value ?? 6, 1))
     if (destroyed) return
 
     const rawNodes: any[] = data.nodes || []
