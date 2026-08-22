@@ -139,6 +139,22 @@ alive 过滤边界）；开发中捕获并修复种子双重累积 bug（分差�
 
 **结论：历史阻塞点中没有新的达标 Rust 候选**——它们分属「已修复 bug」「连接池调度」「外部进程/网络」三类；但挖出并修复了 1 个真实缺陷（窄 except 漏捕 httpx 超时族，影响 free_model_backend / result_wrapper / xiaoli_agent 共 4 处调用点）。
 
+## 六B、对话主链路扫描（2026-08-22，第三轮候选排查）
+
+对 pipeline 各阶段按「总耗时×频次」排序逐段定性（08-21 全天日志 + 定向微基准）：
+
+| 阶段 | avg / 总耗时 | 根因定性 | Rust 候选？ |
+|---|---|---|---|
+| llm_verify | 9.7s / 502s | LLM 网络调用 | ❌ |
+| memory | 7.9s / 411s | 已被本 PR 三项优化压缩 | ✅ 已收割 |
+| llm_call | 5.9s / 291s | LLM 网络调用 | ❌ |
+| dedup | 1.6s / 74s | 相似度计算仅 3ms（rapidfuzz C 实现）；慢点全为重试生成 LLM 调用 | ❌ |
+| build_msg | 1.1s / 56s | 尖峰全为视觉 LLM 调用计入；token 统计 3.78ms/次不达标 | ❌ |
+| restore/finalize | ~0.3s | IO+组装混合，量级不足 | ❌ |
+
+**第三轮结论：主链路无新达标候选。estimate_tokens 逐字符循环 3.78ms/次
+（60KB history）远低于 30% 门槛；所有秒级阶段均为网络/外部进程。**
+
 ## 七、线上全链路 A/B 实测（2026-08-22，RUST_HYBRID_ENABLED 开关切换）
 
 对运行中的生产服务（API `/retrieval/test`，8 条多样化查询同序对比）：
