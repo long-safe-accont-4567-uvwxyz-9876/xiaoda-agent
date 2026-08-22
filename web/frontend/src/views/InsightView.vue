@@ -54,7 +54,7 @@ const importanceMin = ref(0)
 const graphEl = ref<HTMLElement | null>(null)
 const graphEntity = ref(t('insightView.graphEntityPh'))
 // 图谱深度：1-5 自由调节（后端批量 BFS 任意深度 <70ms），不再固定两档
-const graphDepth = ref<number>(6)
+const graphDepth = ref<number>(1)
 // 按需展开状态：已加载节点集合 + 展开中的节点（防重复请求）
 const expandedNodes = ref<Set<string>>(new Set())
 const expandingNode = ref('')

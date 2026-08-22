@@ -378,7 +378,7 @@ export const updateKnowledgeRelation = (id: string, data: { relation: string }) 
 
 export const getKnowledgeGraph = (entity = '', depth: number | null | undefined = 1) => {
   // n-input-number 清空时 depth 为 null；后端要求整数，这里归位到默认 6
-  const d = Number.isFinite(Number(depth)) && Number(depth) >= 1 ? Math.round(Number(depth)) : 6
+  const d = Number.isFinite(Number(depth)) && Number(depth) >= 1 ? Math.round(Number(depth)) : 1
   return get<{ nodes: any[]; edges: any[] }>(`/insight/knowledge/graph?entity=${encodeURIComponent(entity)}&depth=${d}`)
 }
 

@@ -59,7 +59,7 @@ const props = withDefaults(defineProps<{
   enableBloom?: boolean
 }>(), {
   entity: '',
-  depth: 6,
+  depth: 1,
   autoLoad: true,
   enableBloom: true,
 })
@@ -700,7 +700,7 @@ function resetView() {
 // ── 深度切换 / 检索 ──
 // 按需展开模型：深度只影响搜索起步范围（1-5），点击节点始终增量展开 1 跳
 function setActiveDepth(d: number | null) {
-  const v = Math.max(1, Math.min(12, Math.round(d ?? 6)))
+  const v = Math.max(1, Math.min(12, Math.round(d ?? 1)))
   activeDepth.value = v
   loadGraph()
 }

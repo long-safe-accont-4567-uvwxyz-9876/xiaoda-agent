@@ -235,7 +235,7 @@ async def delete_memory(memory_id: int, request: Request) -> Any:
 @router.get("/insight/knowledge/graph", response_model=Envelope[dict])
 async def knowledge_graph(request: Request,
                           entity: str = Query(default=""),
-                          depth: int = Query(default=6, ge=1, le=12)) -> Any:
+                          depth: int = Query(default=1, ge=1, le=12)) -> Any:
     """知识图谱数据（内在世界页 + 全屏 3D 共用）。
 
     性能契约：逐层批量 BFS（每层 2 条 IN 查询），depth 严格生效——
