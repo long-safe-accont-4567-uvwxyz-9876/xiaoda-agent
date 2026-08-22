@@ -99,6 +99,13 @@ class UnifiedExecutor:
             return await self._run_model(node)
         if t == NodeType.SKILL:
             return await self._run_skill(node)
+        if t in (NodeType.APPROVAL, NodeType.REVIEW):
+            # M4 高级节点：人工审批闸门。执行器不代做决定——返回 WAITING，
+            # scheduler 落审批单（wf_review），由管理人批准/拒绝决定续跑或停流。
+            return NodeResult(status=StepStatus.WAITING_INPUT,
+                              output={"mode": "review",
+                                      "title": (node.config or {}).get("title", node.name),
+                                      "note": (node.config or {}).get("note", "")})
         if t == NodeType.LEGACY_PROMPT:
             return await self._run_legacy(node)
         if t == NodeType.AGENT:

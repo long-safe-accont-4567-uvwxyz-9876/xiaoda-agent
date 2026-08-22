@@ -42,6 +42,8 @@ def _run_dict(run: WorkflowRun) -> dict:
 class WorkflowV2Service:
     def __init__(self, repo: WorkflowRepository):
         self.repo = repo
+        # M4 观测：build_runtime 装配时注入 WorkflowMetrics（空/缺省场景可 None）
+        self.metrics: Any = None
 
     # --- definitions -------------------------------------------------------
 
@@ -146,6 +148,8 @@ class WorkflowV2Service:
             if existing is not None:
                 return _run_dict(existing)
             raise
+        if self.metrics is not None:
+            self.metrics.run_started(wf_id)
         return _run_dict(run)
 
     async def snapshot(self, run_id: str) -> dict | None:
@@ -409,3 +413,49 @@ class WorkflowV2Service:
         return {"wf_id": wf_id, "action": "migrated",
                 "revision_id": rev.revision_id, "content_hash": rev.content_hash,
                 "warnings": warnings}
+
+    # --- M4 REVIEW 审批 / 负载节流 / 观测 ------------------------------------
+
+    async def max_concurrent_runs(self) -> int:
+        """并发运行上限（负载节流）：0/负值 = 不限制。
+
+        DB config 键 ``workflow_v2.max_concurrent_runs``（不新增 env var），
+        默认 4——同时处于 RUNNING 的 run 超过上限时 driver 不再启动新的
+        QUEUED run（已运行中的不受影响，等空出名额自动续跑）。
+        """
+        v = await self.get_config("workflow_v2.max_concurrent_runs", 4)
+        try:
+            n = int(v)
+        except (TypeError, ValueError):
+            return 4
+        return n if n > 0 else 0
+
+    async def list_reviews(self, run_id: str) -> list[dict]:
+        """某次运行的审批单（含已决）；WebUI 审批卡片 / 审计用。"""
+        return await self.repo.list_reviews(run_id)
+
+    async def decide_review(self, run_id: str, review_id: str, decision: str,
+                            decided_by: str, note: str = "") -> tuple[str, dict]:
+        """审批决策：返回 (outcome, data)。outcome ∈ ok / not_found / conflict。
+
+        approve → REVIEW 步骤 SUCCEEDED + run 继续（DAG 自动推进）；
+        reject → 步骤 FAILED + run FAILED（REVIEW_REJECTED，审批否决即停）。
+        单事务 CAS：重复决策 / run 已终态 → conflict，不重复计分。
+        """
+        row = await self.repo.get_review(review_id)
+        if row is None or row["run_id"] != run_id:
+            return "not_found", {}
+        committed = await self.repo.resolve_review(review_id, decision, decided_by, note)
+        if committed is None:
+            return "conflict", {}
+        run = await self.repo.get_run(run_id)
+        if run is not None and self.metrics is not None:
+            self.metrics.review_decided(run.workflow_id)
+        return "ok", {"run_id": run_id, "status": run.status.value if run else "unknown",
+                      "review_id": review_id, "decision": decision}
+
+    def metrics_snapshot(self) -> dict:
+        """workflow 级指标 + debug 计数（无 metrics 注入时返回空结构）。"""
+        if self.metrics is None:
+            return {"workflows": {}, "totals": {}}
+        return self.metrics.snapshot()

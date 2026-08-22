@@ -18,13 +18,22 @@ mounts every router under ``/api/v1``), so the real paths are e.g.
 - ``GET  /workflows/{wf_id}/v2-status``     —— 灰度可用性（全局开关 + 试点白名单）
 - ``POST /workflows/{wf_id}/runs``          —— 启动一次运行（首次自动从 v1 迁移）
 - ``GET/POST /workflow-runs/...``  —— 快照 / 事件回放 / 取消（原已实现）
+- ``GET  /workflow-runs/{rid}/reviews``              —— 审批单列表（REVIEW 节点，M4）
+- ``POST /workflow-runs/{rid}/reviews/{rev}/decide`` —— 批准放行 / 驳回停流（M4）
+- ``GET  /workflow-metrics``                         —— workflow 级计数 + debug 计数（M4）
 
 灰度（M3，立项书 §6）：``workflow_v2.enabled`` 全局默认关 + ``pilot_wf_ids``
 白名单；不在可用范围的工作流 ``POST /runs`` 返回 503 WORKFLOW_V2_DISABLED，
 driver 对其 QUEUED run 跳过调度（不消耗、不失败）。
 
+REVIEW 高级节点（M4，立项书 加固/可观测）：DAG 中 REVIEW/APPROVAL 类型节点
+是人工审批闸门——执行器只把步骤置 WAITING，审批单落 ``wf_review`` 表；
+``POST .../reviews/{review_id}/decide`` 批准即续跑、拒绝即停流（run FAILED）。
+负载节流 ``workflow_v2.max_concurrent_runs``（DB config，默认 4）+ 观测
+``GET /workflow-metrics``（workflow 级计数 + debug 计数，进程级 /metrics 不变）。
+
 仍 deferred 的端点（501 明示、不崩溃）：已存 revision 的发布
-（POST /revisions/{rev}/publish）与结构化信号（发布−审批闭环留待后续）。
+（POST /revisions/{rev}/publish）与结构化信号（信号投递 await 审批卡片 UI）。
 """
 from __future__ import annotations
 
@@ -180,6 +189,50 @@ async def cancel(run_id: str, request: Request) -> Any:
     except KeyError:
         return _err("RUN_NOT_FOUND", "run not found", 404)
     return Envelope(data=result)
+
+
+@router.get("/workflow-runs/{run_id}/reviews", response_model=Envelope[list[dict]])
+async def list_reviews(run_id: str, request: Request) -> Any:
+    """运行中的审批单（REVIEW/APPROVAL 节点，M4）。WebUI 审批卡片数据源。"""
+    svc = _svc(request)
+    if svc is None:
+        return _err("WF_RUNTIME_UNAVAILABLE", "工作流引擎未启动（降级模式）", 503)
+    return Envelope(data=await svc.list_reviews(run_id))
+
+
+@router.post("/workflow-runs/{run_id}/reviews/{review_id}/decide", response_model=Envelope[dict])
+async def decide_review(run_id: str, review_id: str, body: dict, request: Request,
+                        user_id: str = Depends(get_current_user)) -> Any:
+    """审批决策：approve → DAG 继续推进；reject → run 失败（REVIEW_REJECTED）。
+
+    单事务 CAS：同 review_id 重复决策 / run 已终态 → 409，不重复计分；
+    review 不存在或不属于该 run → 404。
+    """
+    svc = _svc(request)
+    if svc is None:
+        return _err("WF_RUNTIME_UNAVAILABLE", "工作流引擎未启动（降级模式）", 503)
+    decision = (body or {}).get("decision")
+    if decision not in ("approve", "reject"):
+        return _err("INVALID_DECISION", "decision 必须是 approve 或 reject", 422)
+    outcome, data = await svc.decide_review(
+        run_id, review_id, decision, decided_by=user_id,
+        note=str((body or {}).get("note", "")))
+    if outcome == "not_found":
+        return _err("REVIEW_NOT_FOUND", "审批单不存在或不属于该运行", 404)
+    if outcome == "conflict":
+        return _err("REVIEW_CONFLICT", "审批单已决策或 run 已终态，请刷新", 409)
+    return Envelope(data=data)
+
+
+@router.get("/workflow-metrics", response_model=Envelope[dict])
+async def workflow_metrics(request: Request) -> Any:
+    """workflow 级指标 + debug 计数（M4 观测）：按工作流聚合的运行/步骤/
+    事件/审批计数。事件表本身已落库，这里只读内存计数，进程级 /metrics 不受影响。
+    """
+    svc = _svc(request)
+    if svc is None:
+        return _err("WF_RUNTIME_UNAVAILABLE", "工作流引擎未启动（降级模式）", 503)
+    return Envelope(data=svc.metrics_snapshot())
 
 
 # --- deferred endpoints (501 stubs; see module docstring) -------------------

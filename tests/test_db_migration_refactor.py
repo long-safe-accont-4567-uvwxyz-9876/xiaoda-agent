@@ -8,7 +8,7 @@ def test_migration_entries_are_complete_and_ordered():
     db = DatabaseManager.__new__(DatabaseManager)
     entries = db._migration_entries()
     versions = [v for v, _, _ in entries]
-    assert versions == list(range(1, 29))
+    assert versions == list(range(1, 30))
     for _v, _desc, migrate_fn in entries:
         assert callable(migrate_fn)
 

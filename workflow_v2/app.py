@@ -26,6 +26,7 @@ from typing import Any, Awaitable, Callable
 from loguru import logger
 
 from workflow_v2.executor import ExecutorServices, UnifiedExecutor
+from workflow_v2.metrics import WorkflowMetrics
 from workflow_v2.models import RunStatus
 from workflow_v2.repository import WorkflowRepository
 from workflow_v2.scheduler import Scheduler
@@ -57,11 +58,17 @@ def _secret_resolver_from_core(core: Any):
 
 
 class WorkflowDriver:
-    """后台驱动：轮询非终态 run → scheduler.tick 推进；处理 cancel 与恢复。"""
+    """后台驱动：轮询非终态 run → scheduler.tick 推进；处理 cancel 与恢复。
+
+    M4 负载节流：``max_concurrent`` 非空时 RUNNING 数达到上限就不再启动新的
+    QUEUED run（保持队列，不失败），空出名额后自动续跑——与 M3 灰度门控
+    （白名单外也不启动）正交。
+    """
 
     def __init__(self, repo: WorkflowRepository, scheduler: Scheduler,
                  poll_seconds: float = 1.0, conn: Any = None,
-                 is_enabled: Callable[[str], Awaitable[bool]] | None = None) -> None:
+                 is_enabled: Callable[[str], Awaitable[bool]] | None = None,
+                 metrics: Any = None, max_concurrent: int | None = None) -> None:
         self._repo = repo
         self._scheduler = scheduler
         self._poll = poll_seconds
@@ -70,6 +77,9 @@ class WorkflowDriver:
         self._closed = False
         # M3 灰度门控：None = 不启用门控（测试/无开关场景全量调度）
         self._is_enabled = is_enabled
+        # M4 观测 + 节流：None = 不计数 / 不限并发
+        self._metrics = metrics
+        self._max_concurrent = max_concurrent
 
     def start(self) -> None:
         if self._task is not None and not self._task.done():
@@ -114,14 +124,24 @@ class WorkflowDriver:
             if run.cancel_requested_at is not None:
                 if await self._repo.cancel_run(run.run_id):
                     logger.info("workflow.run_cancelled run_id={}", run.run_id)
+                    if self._metrics is not None:
+                        self._metrics.run_finished(run.workflow_id, RunStatus.CANCELLED.value)
                 continue
             # M3 灰度：不在白名单/全局关闭的工作流，其 QUEUED run 保持队列
-            # 不动（不消费、不失败）——管理员加入白名单后自动续跑
-            if (run.status == RunStatus.QUEUED and self._is_enabled is not None
-                    and not await self._is_enabled(run.workflow_id)):
-                continue
+            # 不动（不消费、不失败）——管理员/用户加入白名单后自动续跑
+            if run.status == RunStatus.QUEUED:
+                if (self._is_enabled is not None
+                        and not await self._is_enabled(run.workflow_id)):
+                    continue
+                # M4 负载节流：RUNNING 数已达上限 → 本轮不启动新的 QUEUED run
+                if (self._max_concurrent is not None
+                        and await self._repo.count_running_runs() >= self._max_concurrent):
+                    continue
             try:
-                await self._scheduler.tick(run.run_id)
+                status = await self._scheduler.tick(run.run_id)
+                if (status in (RunStatus.SUCCEEDED, RunStatus.FAILED, RunStatus.CANCELLED)
+                        and self._metrics is not None):
+                    self._metrics.run_finished(run.workflow_id, status.value)
             except Exception as e:  # noqa: BLE001
                 logger.warning("workflow.tick_failed run_id={} error={}", run.run_id, str(e)[:300])
 
@@ -131,7 +151,9 @@ async def build_runtime(core: Any, db_path: str) -> tuple[WorkflowV2Service, Wor
 
     注意生产关系：与 VectorStore 一致，v2 使用自己的一条 aiosqlite 连接（主库
     独立连接串行访问，事务由 repository 内 BEGIN/COMMIT 管理），不共享 Core DB
-    线程池连接以避免交叉事务。schema 由 legacy_migration v27 幂等创建。
+    线程池连接以避免交叉事务。schema 由 legacy_migration v27+ 幂等创建。
+    M4：装配 WorkflowMetrics 注入 service/scheduler/driver；负载节流上限
+    max_concurrent_runs 从 DB config 读取（默认 4，0 = 不限）。
     """
     import aiosqlite
 
@@ -147,9 +169,13 @@ async def build_runtime(core: Any, db_path: str) -> tuple[WorkflowV2Service, Wor
         secret_resolver=_secret_resolver_from_core(core),
         user_id="workflow",
     )
+    metrics = WorkflowMetrics()
+    svc.metrics = metrics
     executor = UnifiedExecutor(services)
-    scheduler = Scheduler(repo, executor, repo.get_revision)
-    driver = WorkflowDriver(repo, scheduler, conn=conn, is_enabled=svc.is_wf_enabled)
+    scheduler = Scheduler(repo, executor, repo.get_revision, metrics=metrics)
+    max_concurrent = await svc.max_concurrent_runs() or None
+    driver = WorkflowDriver(repo, scheduler, conn=conn, is_enabled=svc.is_wf_enabled,
+                            metrics=metrics, max_concurrent=max_concurrent)
     await driver.recover_running()
     driver.start()
     return svc, driver

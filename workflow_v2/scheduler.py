@@ -45,11 +45,14 @@ def compute_ready(revision: WorkflowRevision, steps: list[WorkflowStepRun]) -> l
 
 class Scheduler:
     def __init__(self, repo: WorkflowRepository, executor: ExecutorFn,
-                 revision_provider: RevisionProvider, lease_ttl: float = 60.0):
+                 revision_provider: RevisionProvider, lease_ttl: float = 60.0,
+                 metrics: Any = None):
         self.repo = repo
         self.executor = executor
         self.revision_provider = revision_provider
         self.lease_ttl = lease_ttl
+        # M4 观测：非空时按节点结果记 step 计数（不影响任何状态判定）
+        self.metrics = metrics
 
     async def tick(self, run_id: str) -> RunStatus:
         run = await self.repo.get_run(run_id)
@@ -82,7 +85,27 @@ class Scheduler:
                 continue
             result = await self.executor(node, claimed, {"run": run.input})
             await self._commit(run_id, node, claimed.attempt, result)
+            if result.status == StepStatus.WAITING_INPUT:
+                # M4 REVIEW：执行器只声明"等人"，审批单落库后 DAG 停在 WAITING
+                # 步骤（compute_ready 不会重取已启动节点），决策端点批准/拒绝
+                # 才恢复推进或停流。
+                await self._require_review(run_id, node, claimed.attempt, result)
         return (await self.repo.get_run(run_id)).status
+
+    async def _require_review(self, run_id: str, node: NodeSpec,
+                              attempt: int, result: NodeResult) -> None:
+        """为 WAITING 的 REVIEW 步骤建审批单（幂等——同一步骤只落一张）。"""
+        cfg = node.config or {}
+        wf_id = None
+        run = await self.repo.get_run(run_id)
+        if run is not None:
+            wf_id = run.workflow_id
+        await self.repo.create_review(
+            run_id, node.id, attempt,
+            title=str(cfg.get("title") or node.name or "人工审批"),
+            note=str(cfg.get("note") or ""))
+        if self.metrics is not None and wf_id is not None:
+            self.metrics.review_created(wf_id)
 
     def _all_ends_done(self, rev: WorkflowRevision, steps: list[WorkflowStepRun]) -> bool:
         ends = [n.id for n in rev.nodes if n.type == NodeType.END]
@@ -98,7 +121,7 @@ class Scheduler:
                       else (RunStatus.FAILED if result.status == StepStatus.FAILED and node.failure_policy == FailurePolicy.FAIL_RUN
                             else RunStatus.RUNNING))
         event_type = f"step_{result.status.value}"
-        await self.repo.commit_step_result(
+        committed = await self.repo.commit_step_result(
             run_id, node.id, attempt, result.status,
             {"output": result.output, "error_code": result.error_code, "error_message": result.error_message},
             run_status, run.lock_version,
@@ -107,6 +130,10 @@ class Scheduler:
                              step_id=node.id, attempt=attempt, timestamp=time.time(),
                              payload=result.output),
         )
+        # M4 观测：只统计真正落库的步骤结果（CAS 失败/终态守卫不计）
+        if committed and self.metrics is not None:
+            self.metrics.step_finished(run.workflow_id,
+                                       result.status == StepStatus.SUCCEEDED)
 
     async def _finish(self, run_id: str, status: RunStatus) -> None:
         run = await self.repo.get_run(run_id)

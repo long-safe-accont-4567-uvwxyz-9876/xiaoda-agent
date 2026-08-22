@@ -28,7 +28,7 @@ from .session_store import SessionStoreMixin
 
 DB_DIR = DATA_DIR
 DB_PATH = DB_DIR / "agent.db"
-CURRENT_SCHEMA_VERSION = 28
+CURRENT_SCHEMA_VERSION = 29
 
 
 def _detect_fs_type(path: Path) -> str:

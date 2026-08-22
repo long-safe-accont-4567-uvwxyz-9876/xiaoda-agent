@@ -41,6 +41,7 @@ class NodeType(str, Enum):
     TRANSFORM = "transform"
     INPUT = "input"
     APPROVAL = "approval"
+    REVIEW = "review"
     DELAY = "delay"
     LEGACY_PROMPT = "legacy_prompt"  # migrated v1 'custom' nodes
 

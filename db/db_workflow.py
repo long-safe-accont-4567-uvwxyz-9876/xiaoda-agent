@@ -68,6 +68,22 @@ DDL = [
         key TEXT PRIMARY KEY,
         value TEXT NOT NULL DEFAULT '{}'
     )""",
+    # REVIEW 高级节点（M4）：运行途中的审批单——批准放行/拒绝即停（FAIL_RUN）
+    """CREATE TABLE IF NOT EXISTS wf_review (
+        review_id TEXT PRIMARY KEY,
+        run_id TEXT NOT NULL,
+        node_id TEXT NOT NULL,
+        attempt INTEGER NOT NULL,
+        title TEXT DEFAULT '',
+        note TEXT DEFAULT '',
+        status TEXT NOT NULL DEFAULT 'pending',
+        decided_by TEXT,
+        decision_note TEXT DEFAULT '',
+        created_at REAL DEFAULT 0,
+        decided_at REAL
+    )""",
+    """CREATE INDEX IF NOT EXISTS ux_wf_review_run
+        ON wf_review(run_id, status)""",
 ]
 
 

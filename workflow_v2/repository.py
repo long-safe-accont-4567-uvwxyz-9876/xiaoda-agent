@@ -1,7 +1,10 @@
 from __future__ import annotations
 import json
 import time
+from uuid import uuid4
+
 import aiosqlite
+
 from workflow_v2.models import (
     WorkflowRun, WorkflowStepRun, WorkflowRunEvent, WorkflowRevision,
     RunStatus, StepStatus,
@@ -199,6 +202,97 @@ class WorkflowRepository:
             )
             for r in rows
         ]
+    # ── M4 REVIEW 审批单（高级节点：运行中人工闸门）──────────────────────────
+
+    async def create_review(self, run_id: str, node_id: str, attempt: int,
+                            *, title: str, note: str, review_id: str | None = None) -> str:
+        """为 WAITING 的 REVIEW 步骤落一张审批单；同 run+node+attempt 幂等。"""
+        rid = review_id or f"rev-{uuid4().hex[:12]}"
+        await self.conn.execute(
+            "INSERT OR IGNORE INTO wf_review"
+            "(review_id, run_id, node_id, attempt, title, note, status, created_at) "
+            "VALUES(?,?,?,?,?,?, 'pending', ?)",
+            (rid, run_id, node_id, attempt, title, note, time.time()),
+        )
+        await self.conn.commit()
+        return rid
+
+    async def list_reviews(self, run_id: str) -> list[dict]:
+        cur = await self.conn.execute(
+            "SELECT * FROM wf_review WHERE run_id=? ORDER BY created_at", (run_id,))
+        rows = await cur.fetchall()
+        return [dict(r) for r in rows]
+
+    async def get_review(self, review_id: str) -> dict | None:
+        cur = await self.conn.execute(
+            "SELECT * FROM wf_review WHERE review_id=?", (review_id,))
+        row = await cur.fetchone()
+        return dict(row) if row else None
+
+    async def resolve_review(self, review_id: str, decision: str, decided_by: str,
+                             decision_note: str = "") -> str | None:
+        """审批决策（单事务 CAS）：pending → approved/rejected + 步骤/run/事件联动。
+
+        approved → 步骤 SUCCEEDED（run 保持 RUNNING，DAG 继续）；
+        rejected → 步骤 FAILED + run FAILED（审批否决即停流）。
+        已在决策冲突（重复决策/run 已终态）→ 返回 None，不做任何写入。
+        成功后返回新的 run status 字符串。
+        """
+        row = await self.get_review(review_id)
+        if row is None:
+            return None
+        run_id, node_id, attempt = row["run_id"], row["node_id"], row["attempt"]
+        run = await self.get_run(run_id)
+        if run is None or run.status in (RunStatus.SUCCEEDED, RunStatus.FAILED, RunStatus.CANCELLED):
+            return None  # run 已终态，审批单已失去意义
+        step_status = StepStatus.SUCCEEDED if decision == "approve" else StepStatus.FAILED
+        run_status = RunStatus.RUNNING if decision == "approve" else RunStatus.FAILED
+        review_status = "approved" if decision == "approve" else "rejected"
+        await self.conn.execute("BEGIN")
+        try:
+            cur = await self.conn.execute(
+                "UPDATE wf_review SET status=?, decided_by=?, decision_note=?, decided_at=? "
+                "WHERE review_id=? AND status='pending'",
+                (review_status, decided_by, decision_note, time.time(), review_id),
+            )
+            if cur.rowcount != 1:
+                await self.conn.rollback()
+                return None
+            cur2 = await self.conn.execute(
+                "UPDATE wf_run SET status=?, lock_version=lock_version+1, updated_at=? "
+                "WHERE run_id=? AND lock_version=?",
+                (run_status.value, time.time(), run_id, run.lock_version),
+            )
+            if cur2.rowcount != 1:
+                await self.conn.rollback()
+                return None
+            error_code = None if decision == "approve" else "REVIEW_REJECTED"
+            error_message = None if decision == "approve" else (decision_note or "审批拒绝")
+            await self.conn.execute(
+                "UPDATE wf_step_run SET status=?, output_json=?, error_code=?, error_message=? "
+                "WHERE run_id=? AND node_id=? AND attempt=?",
+                (step_status.value, json.dumps({"decision": decision, "note": decision_note}),
+                 error_code, error_message, run_id, node_id, attempt),
+            )
+            await self._insert_event(WorkflowRunEvent(
+                run_id=run_id, seq=await self.next_seq(run_id),
+                event_type=f"review_{decision}", run_status=run_status,
+                step_id=node_id, attempt=attempt, timestamp=time.time(),
+payload={"review_id": review_id, "decided_by": decided_by,
+                 "note": decision_note},
+            ))
+            await self.conn.commit()
+            return run_id
+        except (aiosqlite.Error, json.JSONDecodeError, ValueError):
+            await self.conn.rollback()
+            raise
+
+    async def pending_review_count(self, run_id: str) -> int:
+        cur = await self.conn.execute(
+            "SELECT COUNT(*) FROM wf_review WHERE run_id=? AND status='pending'", (run_id,))
+        row = await cur.fetchone()
+        return int(row[0])
+
     # ── 转正运行时扩展（2026-08-22 决策"转正"）：驱动循环 / v1 桥接 / WebUI 视图 ──
 
     async def list_active_runs(self, limit: int = 50) -> list[WorkflowRun]:
@@ -272,6 +366,12 @@ class WorkflowRepository:
             (revision_id, f"etag-{int(time.time())}", time.time(), workflow_id),
         )
         await self.conn.commit()
+
+    async def count_running_runs(self) -> int:
+        """当前 RUNNING 数（M4 负载节流：driver 上限判定用，非终态轮询副作用为零）。"""
+        cur = await self.conn.execute("SELECT COUNT(*) FROM wf_run WHERE status='running'")
+        row = await cur.fetchone()
+        return int(row[0])
 
     async def cancel_run(self, run_id: str) -> bool:
         """终止一个未终态的 run（幂等）：置 status=cancelled + 未完成 steps 置 cancelled + 事件。
