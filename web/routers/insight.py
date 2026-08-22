@@ -245,13 +245,17 @@ async def knowledge_graph(request: Request,
     """
     core = request.app.state.core
     kdb = core.db.knowledge
-    GRAPH_MAX_EDGES_PER_HOP = 400
+    # 分层可视化参数：每层最多 30 个新实体（按关系 confidence 挑最重要的），
+    # 边上限随之收敛。depth=1 = 中心实体 + 30 个一跳邻居，逐层外扩一圈一圈清晰。
+    GRAPH_MAX_NODES_PER_HOP = 30
+    GRAPH_MAX_EDGES_PER_HOP = 90
 
     if entity.strip():
         # 逐层 BFS：每层独立批量查询 + 独立上限。此前全局截断导致热门实体
         # 一跳就吃满 400 名额，depth=1 与 depth=6 返回完全一致（约束失效）。
         seen_rel: set[tuple[str, str, str]] = set()
         visited: set[str] = {entity.strip()}
+        prev_kept: set[str] = {entity.strip()}  # 上一层最终保留节点（逐层更新为扩散中心）
         frontier = [entity.strip()]
         edges: list[dict] = []
         ent_map: dict[str, dict] = {}
@@ -278,14 +282,30 @@ async def knowledge_graph(request: Request,
                     if other not in visited:
                         visited.add(other)
                         next_frontier.append(other)
-            # 本层超限：confidence 降序截断，保证确定性；被挤掉的二跳实体不进 frontier
-            if len(hop_rels) > GRAPH_MAX_EDGES_PER_HOP:
-                keep = {id(r) for r in sorted(hop_rels, key=lambda x: x.get("confidence") or 0,
-                                              reverse=True)[:GRAPH_MAX_EDGES_PER_HOP]}
-                kept_rels = [r for r in hop_rels if id(r) in keep]
-                kept_touch = {r["from_entity"] for r in kept_rels} | {r["to_entity"] for r in kept_rels}
-                next_frontier = [n for n in next_frontier if n in kept_touch]
-                hop_rels = kept_rels
+            # 本层新实体超限：按"入边最高 confidence"选最重要的邻居节点，
+            # 只保留与所选节点相关的边（中心实体的视角：邻居比边数重要）。
+            if len(next_frontier) > GRAPH_MAX_NODES_PER_HOP:
+                # 每个候选邻居的最高置信边
+                best = {}
+                for r in hop_rels:
+                    for e in (r["from_entity"], r["to_entity"]):
+                        if e not in visited - set(next_frontier):
+                            c = r.get("confidence") or 0
+                            if e not in best or c > best[e]:
+                                best[e] = c
+                ranked = sorted(next_frontier, key=lambda n: -best.get(n, 0))
+                chosen = set(ranked[:GRAPH_MAX_NODES_PER_HOP])
+                # 分层保留：边必须连接「上一层已保留节点」与「本层入选邻居」。
+                # prev_kept 首层=搜索实体；一跳时未入选邻居的边因另一端不在
+                # prev_kept+chosen 而剔除；二跳只从一层入选邻居继续生长（一圈一圈清晰）
+                anchors = prev_kept | chosen
+                hop_rels = [r for r in hop_rels
+                            if (r["from_entity"] in prev_kept and r["to_entity"] in chosen)
+                            or (r["to_entity"] in prev_kept and r["from_entity"] in chosen)]
+                next_frontier = [n for n in next_frontier if n in chosen]
+            elif len(hop_rels) > GRAPH_MAX_EDGES_PER_HOP:
+                hop_rels = sorted(hop_rels, key=lambda x: x.get("confidence") or 0,
+                                  reverse=True)[:GRAPH_MAX_EDGES_PER_HOP]
             # 批量补本层新实体的 kind
             new_names = [n for n in set(next_frontier) | {r["from_entity"] for r in hop_rels}
                          | {r["to_entity"] for r in hop_rels} if n not in ent_map]
@@ -298,9 +318,11 @@ async def knowledge_graph(request: Request,
             for rel in hop_rels:
                 edges.append({"from": rel["from_entity"], "to": rel["to_entity"],
                               "relation": rel.get("relation_type", "")})
+            prev_kept |= {r["from_entity"] for r in hop_rels} | {r["to_entity"] for r in hop_rels}
             frontier = list(set(next_frontier))
+        # 节点只来自保留边的端点——未入选的邻居不返回（否则图上挂 98 个孤立点）
         nodes = [{"name": n, "kind": (ent_map.get(n) or {}).get("kind", "")}
-                 for n in ({e["from"] for e in edges} | {e["to"] for e in edges} | visited)]
+                 for n in ({e["from"] for e in edges} | {e["to"] for e in edges})]
         return Envelope(data={"nodes": nodes, "edges": edges})
 
     # 全图概览：最近 80 条关系（原逻辑保留，量级固定无风险）

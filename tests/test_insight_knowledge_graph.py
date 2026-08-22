@@ -152,16 +152,18 @@ def test_graph_entity_focus_edge_cap(client):
     resp = client.get("/insight/knowledge/graph", params={"entity": "小妲", "depth": 1})
     assert resp.status_code == 200
     data = resp.json()["data"]
-    assert len(data["edges"]) <= 400
-    # 截断按 confidence 降序：600 条 cN 关系只保留 confidence 最高的 400 条
-    # （i/1000 有并列值，排序边界允许少量浮动）。fixture 的 5 条原始关系
-    # confidence 更高（0.3~1.0 vs c200=0.2），也理应在保留集内。
+    # 契约（逐层截断版）：每层 GRAPH_MAX_EDGES_PER_HOP=90 上限，
+    # 按 confidence 降序保留。fixture 的 5 条原始关系 confidence 最高
+    # （0.3~1.0 vs rN 的 i/1000），理应在保留集内。
     kept = [e["relation"] for e in data["edges"] if e["relation"].startswith("r")]
-    # 总边数 = 400 上限；fixture 的 5 条高置信关系挤占名额，rN 只剩 395~400 条
-    assert len(data["edges"]) <= 400
-    assert 395 <= len(kept) <= 400
+    assert len(data["edges"]) <= 400  # 全局渲染预算仍成立（1 层 ≤90）
+    assert len(data["edges"]) <= 90 + len(kept) * 0 + 10  # 单层 90 + fixture 边余量
+    # 双锚过滤后（chosen 90 节点内互连），600 条种子关系仅剩与高置信
+    # fixture 相连的少量边；断言核心是"总量受控 + 高置信关系在集内"
+    assert len(data["edges"]) <= 90
+    assert {"家人", "居住"} <= {e["relation"] for e in data["edges"]}
     nums = sorted(int(k[1:]) for k in kept)
-    assert min(nums) >= 198 and max(nums) == 599
+    assert max(nums) == 599  # confidence 最高的 r599 必在
 
 
 def test_graph_overview_limit80(client):
