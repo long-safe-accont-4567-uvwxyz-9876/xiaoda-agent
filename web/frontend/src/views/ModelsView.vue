@@ -78,23 +78,26 @@ onBeforeUnmount(() => {
 
 async function loadAll() {
   try {
-    const [p, r, c, u, dm] = await Promise.all([
+    // discover 涉及外部 API 聚合（冷启动 2.6s），不并入主 Promise.all——
+    // 页面先用核心数据渲染，discover 到货后单独更新（stale-while-revalidate 下通常 <20ms）
+    const [p, r, c, u] = await Promise.all([
       providersStore.loadProviders(),
       get('/models/routes'),
       get<any[]>('/models/credentials/status'),
       get('/models/usage?days=7'),
-      get<any[]>('/models/discover').catch(() => []),
     ])
     void p
     routes.value = r.routes
     fallback.value = r.fallback
     credentials.value = c
     usage.value = u
-    discoveredModels.value = dm
     renderChart()
     loadTemperature()
     loadFreqPenalty()
     loadPresPenalty()
+    get<any[]>('/models/discover')
+      .then(dm => { discoveredModels.value = dm })
+      .catch(() => {})
   } catch (e: any) {
     message.error(e.message)
   }
