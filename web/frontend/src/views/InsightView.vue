@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, reactive, computed, onMounted, onBeforeUnmount, nextTick, watch } from 'vue'
+import { ref, reactive, computed, defineAsyncComponent, onMounted, onBeforeUnmount, nextTick, watch } from 'vue'
 import SumeruIcon from '../components/fx/SumeruIcon.vue'
 import {
   NTabs, NTabPane, NButton, NInput, NInputNumber, NSlider, NTag, NPopconfirm,
@@ -19,7 +19,11 @@ import {
 } from '../api'
 import type { XpState, XpLevelConfig } from '../api'
 import { getWsClient } from '../api/ws'
-import UniverseGraph from '../components/knowledge/UniverseGraph.vue'
+// 3D 宇宙视图按需加载：3d-force-graph/three 等依赖仅在全屏打开时拉取，
+// 避免 WebGL 库常驻主包拖慢 Insight 页首开（图谱双模式评估见 docs/kgraph-dual-render.md）
+const UniverseGraph = defineAsyncComponent(
+  () => import('../components/knowledge/UniverseGraph.vue'),
+)
 import { renderMarkdown } from '../utils/markdown'
 import * as echarts from 'echarts/core'
 import { LineChart, PieChart, GraphChart } from 'echarts/charts'
