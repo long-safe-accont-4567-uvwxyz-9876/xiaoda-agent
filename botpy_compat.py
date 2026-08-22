@@ -106,6 +106,13 @@ async def _patched_send_heart(self: Any, interval: Any) -> None:
 
 
 # ── 3. on_closed session 失效处理 ─────────────────────────────
+# 根因考古（SDK 升级评估必读）：botpy 的 _INVALID_RECONNECT_CODE=[9001,9005]
+# 不含 4007/4009(Session timed out)——SDK 默认把这两个关闭码当可 RESUME 重连，
+# 但 session 已失效：RESUME 后 QQ 网关接受连接却不推送任何消息（bot 在线却
+# 收不到用户消息）。实测 2026-07-28 起每 30 分钟 4009+ws_resume、从未
+# ws_identify、消息零接收，直到本补丁强制清 session 走 IDENTIFY 才恢复。
+# SDK 若将 4007/4009 纳入 _INVALID_RECONNECT_CODE（或等价修复），本补丁应删除；
+# close-code 语义若有变化，需按新语义重新评估。
 
 _original_on_closed: Any = None
 
