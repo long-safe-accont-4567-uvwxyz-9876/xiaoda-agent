@@ -194,8 +194,15 @@ wf_id 在白名单内 → 该流可用;否则前端隐藏"启动"按钮(占位�
     rollback/set_current/pilot 白名单操作);
     验收: 真实工作区 `--dry-run` rc=0 零警告; 18 个新用例(M3 灰度 16 +
     版本 28 契约补齐); 全套 4965 通过。
-**M4(加固/可观测)**:高级 DAG 节点 REVIEW、PRINCIPI 文档 + 负载节流、
+**M4(加固/可观测)**:高级 DAG 节点 REVIEW、PRINCIPLES 文档 + 负载节流、
  workflow 级指标(事件已有,加 debug 计数)。
+  - 状态: ✅ 2026-08-22 落地 — REVIEW 审批节点（executor 置 WAITING +
+    `wf_review` 表(schema v29) + 决策端点批准放行/拒绝停流,单事务 CAS 防重复
+    决策); APPROVAL 老类型同语义兼容;负载节流 `workflow_v2.max_concurrent_runs`
+    (DB config,默认 4,0=不限)(driver 只挡新 QUEUED run 启动);
+    workflow 级指标 `GET /workflow-metrics`(运行/步骤/事件/审批 debug 计数);
+    REVIEW 文档 docs/workflow-v2-review.md + 原则文档 docs/workflow-v2-principles.md;
+    测试: test_m4_review.py 12 项;全套 workflow_v2 93 + 版本契约 57 通过。
 
 ## 8. 决策表(2026-08-22 已全部拍板)
 
