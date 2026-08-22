@@ -26,10 +26,21 @@ function translateToEn(zhName: string): string {
   return joined.charAt(0).toUpperCase() + joined.slice(1).toLowerCase()
 }
 
+const WALLPAPER_CACHE_KEY = 'agents.mainWallpaper'
+
 export const useAgentsStore = defineStore('agents', () => {
   const agents = ref<AgentInfo[]>([])
   const loading = ref(false)
-  const mainWallpaper = ref('')
+  // 初始化优先读会话缓存：刷新时背景层立即可用，消除默认图/底色闪现窗口
+  const mainWallpaper = ref(sessionStorage.getItem(WALLPAPER_CACHE_KEY) || '')
+
+  function setMainWallpaper(url: string) {
+    mainWallpaper.value = url
+    try {
+      if (url) sessionStorage.setItem(WALLPAPER_CACHE_KEY, url)
+      else sessionStorage.removeItem(WALLPAPER_CACHE_KEY)
+    } catch { /* 隐私模式等存储不可用则跳过缓存 */ }
+  }
 
   async function load() {
     loading.value = true
@@ -40,11 +51,11 @@ export const useAgentsStore = defineStore('agents', () => {
         display_name_en: translateToEn(a.display_name)
       }))
       const main = data.find(a => a.is_main)
-      if (main?.wallpaper) mainWallpaper.value = main.wallpaper
+      if (main?.wallpaper) setMainWallpaper(main.wallpaper)
     } finally {
       loading.value = false
     }
   }
 
-  return { agents, loading, mainWallpaper, load }
+  return { agents, loading, mainWallpaper, setMainWallpaper, load }
 })

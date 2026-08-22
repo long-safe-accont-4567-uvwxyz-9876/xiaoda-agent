@@ -315,6 +315,33 @@ async def _transcode_video_lowperf(src: Path, dst: Path) -> Path:
         raise RuntimeError(f"视频转码失败: {tail}")
 
 
+async def _extract_video_poster(video: Path, poster: Path) -> bool:
+    """抽视频首帧为 JPEG（头像用）。失败仅记录，不影响壁纸上传主流程。"""
+    import asyncio
+
+    from utils.ffmpeg_finder import find_ffmpeg
+
+    ffmpeg = find_ffmpeg()
+    if not ffmpeg:
+        return False
+    cmd = [
+        ffmpeg, "-y", "-i", str(video),
+        "-vf", "select=eq(n\,0)", "-frames:v", "1", "-q:v", "4",
+        str(poster),
+    ]
+    try:
+        proc = await asyncio.create_subprocess_exec(
+            *cmd,
+            stdout=asyncio.subprocess.DEVNULL,
+            stderr=asyncio.subprocess.DEVNULL,
+        )
+        await asyncio.wait_for(proc.communicate(), timeout=30)
+    except (asyncio.TimeoutError, OSError):
+        poster.unlink(missing_ok=True)
+        return False
+    return poster.exists() and poster.stat().st_size > 0
+
+
 @router.post("/agents/{name}/wallpaper", response_model=Envelope[dict])
 async def upload_wallpaper(name: str, body: dict, request: Request, _user: str = Depends(get_current_user)) -> Any:
     _validate_agent_name(name)
@@ -379,6 +406,13 @@ async def upload_wallpaper(name: str, body: dict, request: Request, _user: str =
             raise HTTPException(422, str(exc)) from None
         src.unlink(missing_ok=True)  # 原始大文件不保留（设计稿策略一）
         fp = dst
+        # 首帧海报：头像 chip 用静态首帧替代 <img> 加载视频失败的文字回退
+        poster = _WALLPAPER_DIR / f"{name}_{ts}_poster.jpg"
+        if await _extract_video_poster(dst, poster):
+            poster_url = f"/media/wallpapers/{poster.name}"
+        else:
+            poster_url = ""
+            poster.unlink(missing_ok=True)
     elif hm:
         # HTML 动画壁纸：轻量粒子/时钟/天气类（设计稿第二阶段）。
         # 渲染侧 iframe sandbox 隔离；此处静态拒绝显式危险模式与超大文件。

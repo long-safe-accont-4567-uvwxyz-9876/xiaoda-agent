@@ -23,9 +23,23 @@ let seq = 0
 let pendingUrl = ''
 let pruneTimer: ReturnType<typeof setTimeout> | null = null
 
+// 刷新闪现修复：挂载时不立即渲染默认图。store 的 wallpaper 异步就绪后由
+// watch 推入真实壁纸；若挂载时已就绪（路由切换复用组件），也直接推真实值。
+// 加载窗口期显示 forest-deep 底色（0.3~0.5s），不再出现默认图→真实图的切换闪现
 onMounted(() => {
-  const initial = agentsStore.mainWallpaper || DEFAULT_BG
-  pushLayer(initial)
+  // store 尚未加载（mainWallpaper='' 且 agents 空）→ 保持底色等加载完成；
+  // 已就绪（路由复用组件）→ 直接渲染。用户壁纸=默认图的场景由下方
+  // loading 兜底 watch 处理（targetUrl 恒为 DEFAULT_BG 不触发主 watch）
+  if (agentsStore.mainWallpaper || agentsStore.agents.length) {
+    pushLayer(targetUrl.value)
+  }
+})
+
+// store 首次加载完成：无论 targetUrl 是否变化都确保有层渲染
+watch(() => agentsStore.loading, (loading, was) => {
+  if (was === true && loading === false && layers.value.length === 0) {
+    pushLayer(targetUrl.value)
+  }
 })
 
 onBeforeUnmount(() => {

@@ -23,7 +23,7 @@ onMounted(async () => {
   try {
     const data = await get<{ wallpaper?: string }>('/agents/public-wallpaper')
     if (data?.wallpaper) {
-      agentsStore.mainWallpaper = data.wallpaper
+      agentsStore.setMainWallpaper(data.wallpaper)
     }
   } catch {
     // 忽略，使用默认背景

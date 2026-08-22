@@ -401,6 +401,28 @@ class AgentRegistry:
             "degraded": True,
         }
 
+    @staticmethod
+    def wallpaper_poster(wallpaper: str) -> str:
+        """视频壁纸的首帧海报 URL（头像用）。约定：{stem}.webm → {stem}_poster.jpg。
+
+        仅当 poster 文件真实存在时返回（旧视频壁纸无 poster → 返回空，
+        前端回退文字首字或 canvas 抽帧）。
+        """
+        if not wallpaper:
+            return ""
+        import re as _re
+        m = _re.match(r"^/media/wallpapers/(.+)\.(mp4|webm)$", wallpaper)
+        if not m:
+            return ""
+        try:
+            from config import MEDIA_DIR
+            poster = MEDIA_DIR / "wallpapers" / f"{m.group(1)}_poster.jpg"
+        except ImportError:
+            poster = Path(__file__).resolve().parent / "media" / "wallpapers" / f"{m.group(1)}_poster.jpg"
+        if poster.exists():
+            return f"/media/wallpapers/{m.group(1)}_poster.jpg"
+        return ""
+
     def list(self) -> list[dict]:
         """列出所有 Agent（主体 + 已注册子代理 + 降级桩）。"""
         # 先加载 xiaoda 配置（用于后续计算 tool_count 和显示名称）
