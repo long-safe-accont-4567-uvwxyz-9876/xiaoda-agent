@@ -254,3 +254,90 @@ async def test_engine_spreading_channel_matches_python(engine, monkeypatch):
     assert set(ref) == set(got)
     for k in ref:
         assert abs(ref[k] - got[k]) < 1e-9
+
+
+def test_rust_parser_strict_matches_json_loads():
+    """CodeRabbit 研判修复：非法 JSON 形态必须与 json.loads 同拒（尾逗号/裸 token/
+    非法转义），合法转义 \b \f 同支持。用 text 不含 key 的探针隔离 keys 解析路径。"""
+    def rust_hit(raw, key):
+        idx = rust_hybrid.RustNodeIndex(
+            {"n0": {"keys": raw, "text": "中性文本", "weight": 1.0},
+             "n1": {"keys": '["zzz"]', "text": "t", "weight": 1.0},
+             "n2": {"keys": '["zzz"]', "text": "t", "weight": 1.0}})
+        return "n0" in idx.direct_channel(key + "查询", [key])
+
+    cases = [
+        ('["key",]', 'key', False),        # 尾逗号：json.loads 拒绝
+        ('[unquoted]', 'unquoted', False), # 裸 token：拒绝
+        ('["key"]', 'key', True),          # 合法：命中
+        ('["a\\qb"]', 'aqb', False),     # 非法转义：拒绝
+        ('["x\\by\\fz"]', 'x\x08y\x0cz', True),  # \b \f 合法
+    ]
+    for raw, key, expect in cases:
+        assert rust_hit(raw, key) is expect, f"raw={raw!r} 期望 {expect}"
+
+
+def test_rust_negative_idf_entry_kept():
+    """CodeRabbit 研判修复：交集非空但 IDF 为负（单节点 df=n）时，
+    Python 保留负值条目，Rust 不得用 >0 过滤丢弃。"""
+    idx = rust_hybrid.RustNodeIndex(
+        {"n0": {"keys": '["k"]', "text": "k文本", "weight": 1.0}})
+    out = idx.direct_channel("k查询", ["k"])
+    assert "n0" in out and out["n0"] < 0
+
+
+def test_rust_zero_activation_seed_entry_kept():
+    """CodeRabbit 研判修复：激活值为 0 的种子在 Python defaultdict 中保留
+    0.0 条目，Rust 不得用 v!=0 过滤丢弃。"""
+    idx = rust_hybrid.RustNodeIndex(
+        {"a": {"keys": '["k"]', "text": "a文", "weight": 1.0},
+         "b": {"keys": '["z"]', "text": "b文", "weight": 1.0}})
+    idx.load_edges([("a", "b", 0.5)])
+    out = idx.spreading_channel([("a", 0.0)])
+    assert "a" in out and out["a"] == 0.0
+
+
+def test_parser_strict_matches_json_loads():
+    """解析器严格性与 Python json.loads 一致（CodeRabbit 审查项）：
+    尾逗号/裸 token/非法转义拒绝；合法转义 \\" \\\\ \\/ \\b \\f 接受。"""
+    idx = rust_hybrid.RustNodeIndex({
+        "n0": {"keys": '["k"]', "text": "中性", "weight": 1.0},
+        "n1": {"keys": '["zzz"]', "text": "t", "weight": 1.0},
+        "n2": {"keys": '["zzz"]', "text": "t", "weight": 1.0},
+    })
+    # 用 n0 的 keys 探针逐个替换，检查命中（text 不含 key，唯一路径是 keys 解析）
+    def hit(raw, key):
+        idx2 = rust_hybrid.RustNodeIndex({
+            "n0": {"keys": raw, "text": "中性文本", "weight": 1.0},
+            "n1": {"keys": '["zzz"]', "text": "t", "weight": 1.0},
+            "n2": {"keys": '["zzz"]', "text": "t", "weight": 1.0},
+        })
+        return "n0" in idx2.direct_channel(key + "查询", [key])
+
+    assert hit('["key",]', "key") is False          # 尾逗号拒绝
+    assert hit("[unquoted]", "unquoted") is False   # 裸 token 拒绝
+    assert hit('["a\\qb"]', "aqb") is False         # 非法转义拒绝
+    assert hit('["key"]', "key") is True
+    assert hit('["a\\/b"]', "a/b") is True          # \/ 合法
+    assert hit('["a\\"b"]', 'a"b') is True          # \" 合法
+    assert hit('["\\\\"]', "\\") is True            # \\ 合法
+
+
+def test_negative_idf_entry_preserved():
+    """单节点场景 idf=ln(0.5)<0：Python 保留负值条目，Rust 不得按分数过滤（CodeRabbit 审查项）。"""
+    idx = rust_hybrid.RustNodeIndex({
+        "n0": {"keys": '["k"]', "text": "k文", "weight": 1.0},
+    })
+    out = idx.direct_channel("k查询", ["k"])
+    assert "n0" in out and out["n0"] < 0
+
+
+def test_zero_activation_seed_entry_preserved():
+    """act=0.0 的种子：Python defaultdict 写入 0 值条目，Rust 不得过滤（CodeRabbit 审查项）。"""
+    idx = rust_hybrid.RustNodeIndex({
+        "a": {"keys": '["k"]', "text": "a文", "weight": 1.0},
+        "b": {"keys": '["z"]', "text": "b文", "weight": 1.0},
+    })
+    idx.load_edges([("a", "b", 0.5)])
+    out = idx.spreading_channel([("a", 0.0)])
+    assert "a" in out and out["a"] == 0.0

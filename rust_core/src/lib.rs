@@ -26,12 +26,15 @@ fn parse_json_keys(s: &str) -> Option<Vec<String>> {
         return None;
     }
     let inner = &s[1..s.len() - 1];
-    let mut out = Vec::new();
+    let mut out: Vec<String> = Vec::new();
     let mut buf: Option<String> = None;
+    let mut in_string = false; // 引号外的裸 token / 多余逗号 → 与 json.loads 一致判失败
     let mut escaped = false;
     let mut u16_remaining: u32 = 0; // \uXXXX 剩余待读的 hex 位数
     let mut u16_acc: u32 = 0;
     let mut pending_high_surrogate: Option<u32> = None;
+    let mut elements = 0usize; // 已闭合的字符串元素数
+    let mut commas = 0usize;   // 元素间逗号数（合法：elements>0 时 commas==elements-1）
     for ch in inner.chars() {
         if u16_remaining > 0 {
             // 收集 \uXXXX 的 4 位 hex
@@ -60,22 +63,28 @@ fn parse_json_keys(s: &str) -> Option<Vec<String>> {
                     }
                 }
             } else {
-                // 非法 hex：按 Python json 容错性直接整体判失败更安全
+                // 非法 hex：Python json.loads 同样拒绝
                 return None;
             }
             continue;
         }
         if escaped {
-            // 上一个字符是反斜杠：转义序列
+            // 上一个字符是反斜杠：转义序列（与 Python json 合法集合一致：
+            // " \ / b f n r t u；其余为非法转义，json.loads 拒绝，此处同样拒绝）
             match ch {
                 'n' => push_char(&mut buf, '\n'),
                 't' => push_char(&mut buf, '\t'),
                 'r' => push_char(&mut buf, '\r'),
+                'b' => push_char(&mut buf, '\u{8}'),
+                'f' => push_char(&mut buf, '\u{c}'),
                 'u' => u16_remaining = 4,
-                other => push_char(&mut buf, other),
+                '"' => push_char(&mut buf, '"'),
+                '\\' => push_char(&mut buf, '\\'),
+                '/' => push_char(&mut buf, '/'),
+                _ => return None,
             }
             escaped = false;
-        } else {
+        } else if in_string {
             match ch {
                 '\\' => escaped = true,
                 '"' => {
@@ -86,16 +95,29 @@ fn parse_json_keys(s: &str) -> Option<Vec<String>> {
                     if let Some(b) = buf.take() {
                         out.push(b);
                     }
+                    in_string = false;
+                    elements += 1;
                 }
-                other => {
-                    if let Some(b) = buf.as_mut() {
-                        b.push(other);
-                    } else {
-                        buf = Some(String::from(other));
-                    }
+                other => push_char(&mut buf, other),
+            }
+        } else {
+            match ch {
+                '"' => {
+                    in_string = true;
+                    buf = Some(String::new());
                 }
+                c if c.is_whitespace() => {}
+                ',' => commas += 1,
+                _ => return None, // 引号外裸 token：json.loads 拒绝，此处同样拒绝
             }
         }
+    }
+    if in_string {
+        return None; // 未闭合引号
+    }
+    // 尾逗号/连续逗号：commas 必须恰好是 elements-1（空数组两者皆 0）
+    if commas != elements.saturating_sub(1) {
+        return None;
     }
     Some(out)
 }
@@ -180,14 +202,15 @@ impl NodeIndex {
     /// 直接命中通道：IDF 加权 key 重叠 + 双向子串包含（语义与无状态版逐位一致）。
     /// 返回 {node_id: score}，仅含得分 > 0 的节点。
     fn direct_channel(&self, py: Python<'_>, query: &str, query_keys: Vec<String>) -> Py<PyDict> {
-        // IDF（节点数据已驻留，无需重复解析）
+        // IDF（节点数据已驻留，无需重复解析）。
+        // df 的 key 直接借用 self.keys（&str），不用 Box::leak——泄漏会随查询量线性增长
         let n = self.ids.len() as f64;
         let qset: HashSet<&str> = query_keys.iter().map(|s| s.as_str()).collect();
         let mut df: HashMap<&str, usize> = HashMap::new();
         for nk in &self.keys {
             for k in nk {
                 if qset.contains(k.as_str()) {
-                    *df.entry(Box::leak(k.clone().into_boxed_str())).or_insert(0) += 1;
+                    *df.entry(k.as_str()).or_insert(0) += 1;
                 }
             }
         }
@@ -211,12 +234,14 @@ impl NodeIndex {
             let nk = &self.keys[i];
             let w_bias = 0.35 + 0.65 * self.weights[i];
 
-            let shared_score: f64 = nk
-                .iter()
-                .filter(|k| qset.contains(k.as_str()))
-                .map(|k| idf.get(k.as_str()).copied().unwrap_or(0.0))
-                .sum();
-            if shared_score > 0.0 {
+            // 与 Python 一致：交集非空即写入条目（idf 可能为负，负值也要保留）
+            let has_shared = nk.iter().any(|k| qset.contains(k.as_str()));
+            if has_shared {
+                let shared_score: f64 = nk
+                    .iter()
+                    .filter(|k| qset.contains(k.as_str()))
+                    .map(|k| idf.get(k.as_str()).copied().unwrap_or(0.0))
+                    .sum();
                 *direct.entry(nid.as_str()).or_insert(0.0) += shared_score * w_bias;
             }
 
@@ -292,11 +317,13 @@ impl NodeIndex {
         // 种子入队；不在节点集的种子按 Python 语义仅累积自身激活、不传播
         // （生产路径种子恒来自 direct_channel ⊆ 节点集，此分支纯防御）
         let mut spread = vec![0.0f64; self.ids.len()];
+        let mut visited: HashSet<usize> = HashSet::new(); // 被 defaultdict 写入过的下标（含 0 值）
         let mut wave: HashMap<usize, f64> = HashMap::new();
         let mut unknown_spread: Vec<(usize, f64)> = Vec::new();
         for (i, (nid, act)) in seeds.iter().enumerate() {
             if let Some(&idx) = self.id_index.get(nid) {
                 wave.insert(idx, *act);
+                visited.insert(idx); // Python: spread[nid] += act 无条件写入（含 0 值种子）
             } else {
                 unknown_spread.push((i, *act));
             }
@@ -306,6 +333,10 @@ impl NodeIndex {
         for hop in 0..=radius {
             let mut next: HashMap<usize, f64> = HashMap::new();
             for (&idx, &act) in current.iter() {
+                if !visited.contains(&idx) {
+                    visited.insert(idx);
+                    spread[idx] = 0.0;
+                }
                 spread[idx] += act;
                 if hop < radius && act > threshold {
                     // adj 与 ids 同长，idx 恒在界内；用安全索引避免 unsafe
@@ -324,10 +355,8 @@ impl NodeIndex {
         }
 
         let out = PyDict::new(py);
-        for (i, &v) in spread.iter().enumerate() {
-            if v != 0.0 {
-                let _ = out.set_item(self.ids[i].as_str(), v);
-            }
+        for &i in &visited {
+            let _ = out.set_item(self.ids[i].as_str(), spread[i]);
         }
         // 未知种子：同 id 多次出现时合并累积（保持与 dict 累加一致）
         let mut merged: HashMap<&str, f64> = HashMap::new();
