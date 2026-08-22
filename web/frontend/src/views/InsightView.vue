@@ -54,7 +54,7 @@ const importanceMin = ref(0)
 const graphEl = ref<HTMLElement | null>(null)
 const graphEntity = ref(t('insightView.graphEntityPh'))
 // 图谱深度：1-5 自由调节（后端批量 BFS 任意深度 <70ms），不再固定两档
-const graphDepth = ref<number>(1)
+const graphDepth = ref<number>(6)
 // 按需展开状态：已加载节点集合 + 展开中的节点（防重复请求）
 const expandedNodes = ref<Set<string>>(new Set())
 const expandingNode = ref('')
@@ -765,17 +765,22 @@ function fmtTs(ts: number): string {
           <div class="kg-toolbar">
             <n-input v-model:value="graphEntity" :placeholder="t('insightView.entityFocusPh')" size="small"
                      style="max-width: 200px" @keydown.enter="loadKnowledgeData" />
-            <div class="kg-depth-stepper" :title="t('insightView.depthHint')">
-              <n-button size="tiny" quaternary
-                        @click="graphDepth = Math.max(1, graphDepth - 1); loadKnowledgeData()">−</n-button>
-              <span class="kg-depth-value">{{ t('insightView.depthLabel') }} {{ graphDepth }}</span>
-              <n-button size="tiny" quaternary
-                        @click="graphDepth = Math.min(5, graphDepth + 1); loadKnowledgeData()">+</n-button>
+            <div class="kg-depth-input" :title="t('insightView.depthHint')">
+              <span class="kg-depth-label">{{ t('insightView.depthLabel') }}</span>
+              <n-input-number
+                v-model:value="graphDepth"
+                size="small"
+                :min="1"
+                :max="12"
+                :show-button="false"
+                style="width: 64px"
+                @update:value="loadKnowledgeData"
+              />
             </div>
             <span v-if="expandingNode" class="kg-expanding">{{ t('insightView.expanding') }}「{{ expandingNode }}」…</span>
-            <n-button size="tiny" type="primary" @click="openAddModal('entity')">{{ t('insightView.addEntity') }}</n-button>
-            <n-button size="tiny" type="primary" @click="openAddModal('relation')">{{ t('insightView.addRelation') }}</n-button>
-            <n-button size="tiny" type="primary" @click="showUniverse = true">{{ t('insightView.fullscreen') }}</n-button>
+            <n-button size="tiny" type="primary" @click="openAddModal('entity')"><SumeruIcon name="plus" :size="12" /> {{ t('insightView.addEntity') }}</n-button>
+            <n-button size="tiny" type="primary" @click="openAddModal('relation')"><SumeruIcon name="plus" :size="12" /> {{ t('insightView.addRelation') }}</n-button>
+            <n-button size="tiny" type="primary" @click="showUniverse = true"><SumeruIcon name="sparkle" :size="12" /> {{ t('insightView.fullscreen') }}</n-button>
           </div>
           <div ref="graphEl" class="chart tall"></div>
         </div>
@@ -1159,20 +1164,15 @@ function fmtTs(ts: number): string {
 .kg-toolbar { display: flex; align-items: center; gap: 10px; margin-bottom: 8px; flex-wrap: wrap; }
 .kg-toolbar h4 { font-size: 13px; color: var(--dendro); margin-right: auto; }
 
-.kg-depth-stepper {
+.kg-depth-input {
   display: flex;
   align-items: center;
-  gap: 2px;
-  padding: 0 4px;
-  border: 1px solid var(--glass-border);
-  border-radius: 6px;
+  gap: 6px;
 }
 
-.kg-depth-value {
+.kg-depth-label {
   font-size: 12px;
-  color: var(--moon);
-  min-width: 52px;
-  text-align: center;
+  color: var(--moon-dim);
   white-space: nowrap;
 }
 

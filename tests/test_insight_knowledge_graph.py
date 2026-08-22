@@ -139,10 +139,12 @@ def test_graph_overview_limit80(client):
 
 def test_graph_depth_validation(client):
     _auth(client)
-    # depth 上限已放开到 5：3 合法、6 越界
-    resp = client.get("/insight/knowledge/graph", params={"entity": "小妲", "depth": 3})
-    assert resp.status_code == 200
+    # depth 可手动编辑：默认 6，上限 12；13 越界 / 0 越界
     resp = client.get("/insight/knowledge/graph", params={"entity": "小妲", "depth": 6})
+    assert resp.status_code == 200
+    resp = client.get("/insight/knowledge/graph", params={"entity": "小妲", "depth": 12})
+    assert resp.status_code == 200
+    resp = client.get("/insight/knowledge/graph", params={"entity": "小妲", "depth": 13})
     assert resp.status_code == 422
     resp = client.get("/insight/knowledge/graph", params={"entity": "小妲", "depth": 0})
     assert resp.status_code == 422

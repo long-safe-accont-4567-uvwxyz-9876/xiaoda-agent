@@ -328,7 +328,7 @@ async function testSkill(item: any) {
             <span class="skills-title"><SumeruIcon name="note" :size="14" variant="duo" tone="edit" interactive /> Skills（{{ t('toolsView.skillHint') }}）</span>
             <div style="display:flex; gap:8px">
               <n-button size="small" type="primary" @click="skillInput?.click()">⬆ {{ t('toolsView.uploadSkill') }}</n-button>
-              <n-button size="small" @click="openSkill(null)">＋ {{ t('toolsView.createNew') }}</n-button>
+              <n-button size="small" @click="openSkill(null)"><SumeruIcon name="plus" :size="13" /> {{ t('toolsView.createNew') }}</n-button>
               <input ref="skillInput" type="file" accept=".md,text/markdown"
                      style="display:none" @change="uploadSkill" />
             </div>

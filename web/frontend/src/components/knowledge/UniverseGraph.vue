@@ -58,7 +58,7 @@ const props = withDefaults(defineProps<{
   enableBloom?: boolean
 }>(), {
   entity: '',
-  depth: 1,
+  depth: 6,
   autoLoad: true,
   enableBloom: true,
 })
@@ -698,8 +698,9 @@ function resetView() {
 
 // ── 深度切换 / 检索 ──
 // 按需展开模型：深度只影响搜索起步范围（1-5），点击节点始终增量展开 1 跳
-function setActiveDepth(d: number) {
-  activeDepth.value = (Math.max(1, Math.min(5, d)) ) as 1 | 2
+function setActiveDepth(d: number | null) {
+  const v = Math.max(1, Math.min(12, Math.round(d ?? 6)))
+  activeDepth.value = v
   loadGraph()
 }
 
@@ -868,10 +869,17 @@ function kindLabel(kind?: string): string {
           style="max-width: 200px"
           @keydown.enter="onSearchEnter"
         />
-        <div class="universe-depth-stepper" :title="t('universeGraph.depthHint')">
-          <n-button size="tiny" quaternary @click="setActiveDepth(activeDepth - 1)">−</n-button>
-          <span class="universe-depth-value">{{ t('universeGraph.depthLabel') }} {{ activeDepth }}</span>
-          <n-button size="tiny" quaternary @click="setActiveDepth(activeDepth + 1)">+</n-button>
+        <div class="universe-depth-input" :title="t('universeGraph.depthHint')">
+          <span class="universe-depth-label">{{ t('universeGraph.depthLabel') }}</span>
+          <n-input-number
+            v-model:value="activeDepth"
+            size="small"
+            :min="1"
+            :max="12"
+            :show-button="false"
+            style="width: 64px"
+            @update:value="setActiveDepth"
+          />
         </div>
         <span v-if="expandingName" class="universe-expanding">{{ t('insightView.expanding') }}「{{ expandingName }}」…</span>
         <span class="universe-count">{{ nodeCount }} {{ t('universeGraph.nodeCount') }}</span>
@@ -966,20 +974,15 @@ function kindLabel(kind?: string): string {
   margin-left: 4px;
 }
 
-.universe-depth-stepper {
+.universe-depth-input {
   display: flex;
   align-items: center;
-  gap: 0;
-  padding: 0 2px;
-  border: 1px solid var(--glass-border);
-  border-radius: 6px;
+  gap: 6px;
 }
 
-.universe-depth-value {
+.universe-depth-label {
   font-size: 12px;
-  color: var(--moon);
-  min-width: 52px;
-  text-align: center;
+  color: var(--moon-dim);
   white-space: nowrap;
 }
 

@@ -235,14 +235,14 @@ async def delete_memory(memory_id: int, request: Request) -> Any:
 @router.get("/insight/knowledge/graph", response_model=Envelope[dict])
 async def knowledge_graph(request: Request,
                           entity: str = Query(default=""),
-                          depth: int = Query(default=1, ge=1, le=5)) -> Any:
+                          depth: int = Query(default=6, ge=1, le=12)) -> Any:
     """知识图谱数据（内在世界页 + 全屏 3D 共用）。
 
     性能契约：实体聚焦路径复用 kdb.get_related_knowledge 的批量 BFS
-    （每层 2 条 IN 查询，实测 depth1-5 均 <70ms——原逐实体 N+1 版本
-    ~1400 次串行往返 14.4s 是前端卡顿根因）。每层边数上限
+    （每层 2 条 IN 查询；depth1-12 实测均 <120ms——图直径有限，深层
+    返回量收敛，深度不再是性能约束）。每层边数上限
     GRAPH_MAX_EDGES_PER_HOP=400 防止热门实体（1200+ 关系）撑爆渲染；
-    前端按需展开（点击节点增量拉邻域），初始只拉 depth=1。
+    前端按需展开（点击节点增量拉邻域），默认起步 6 层。
     """
     core = request.app.state.core
     kdb = core.db.knowledge
