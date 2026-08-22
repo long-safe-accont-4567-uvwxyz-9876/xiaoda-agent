@@ -1,21 +1,21 @@
 # workflow_v2/app.py
 """Workflow V2 转正运行时：节点执行器 + 后台驱动循环 + 装配助手。
 
-2026-08-22 决策"转正"（此前后端挂路由未注入 app.state、无执行器、无驱动）。
+2026-08-22 决策"转正"（本前后端挂路由未注入 app.state、无执行器、无驱动）。
 本模块补齐三件事：
 
-- ``WorkflowExecutor`` —— Scheduler 的回调执行器
-  * legacy_prompt（v1 迁移的 custom 节点）经 core.router 走 LLM 通道执行；
-  * start/end/transform 为结构性节点，直接成功（不消费 LLM）；
-  * 其余节点类型（tool/mcp/agent/condition/...）转正第 1 版不实现，
-    返回带 UNSUPPORTED_NODE 错误的失败结果，随 run 的 failure_policy
-    落盘为 run_failed —— 可追踪、不静默；
+- ``UnifiedExecutor``(见 workflow_v2/executor.py)—— Scheduler 的回调执行器：
+  * TOOL/MCP 走 core.tool_executor（复用注册表 + 沙箱 + 审批 + 审计）；
+  * MODEL/SKILL/LEGACY_PROMPT 走 core.router（ModelRouter）；
+  * START/END/TRANSFORM 为结构性节点直接成功；AGENT 显式 NO_IMPL；
+    安全横切：secret 占位符运行时解析、input 校验清洗、超时/重试归一；
 - ``WorkflowDriver``: 后台 asyncio 循环，轮询非终态 run 驱动 scheduler.tick，
   处理 cancel 请求与重启后的保守恢复；
 - ``build_runtime``: web/server.py::_start_services 的装配入口（幂等）。
 
-带降级语义：core.router 缺失或 LLM 调用失败 → 节点失败落盘（不吞异常）；
-降级模式下 web 侧不装配，路由对 app.state.workflow_v2 缺失返回 503。
+带降级语义：core.router / tool_executor 缺失或调用失败 → 节点失败落盘
+（不吞异常）；降级模式下 web 侧不装配，路由对 app.state.workflow_v2 缺失
+返回 503。
 """
 from __future__ import annotations
 
@@ -25,87 +25,35 @@ from typing import Any
 
 from loguru import logger
 
-from workflow_v2.models import (
-    NodeSpec, NodeType, RunStatus, StepStatus, WorkflowStepRun,
-)
+from workflow_v2.executor import ExecutorServices, UnifiedExecutor
+from workflow_v2.models import RunStatus
 from workflow_v2.repository import WorkflowRepository
-from workflow_v2.scheduler import NodeResult, Scheduler
+from workflow_v2.scheduler import Scheduler
 from workflow_v2.service import WorkflowV2Service
 
-_UNSUPPORTED_HINT = (
-    "该节点类型在转正第 1 轮未实现，请在编排中改用 step/legacy_prompt 节点"
-)
+
+def _skill_resolver_from_workspace():
+    """默认技能解析器：WORKSPACE_DIR/skills/{name}.md（含 v1 自动生成的 wf_*.md）。"""
+    from pathlib import Path
+
+    from config import WORKSPACE_DIR
+    base = Path(WORKSPACE_DIR) / "skills"
+
+    def resolve(name: str) -> dict | None:
+        fp = base / f"{name}.md"
+        if not fp.is_file():
+            return None
+        return {"name": name, "instructions": fp.read_text(encoding="utf-8", errors="replace")}
+
+    return resolve
 
 
-class WorkflowExecutor:
-    """Scheduler 的回调执行器：把节点交给真实通道执行（最小闭环）。
-
-    目前只执行 legacy_prompt（v1 迁移来的自定义节点，以节点 note/name 作为
-    prompt 交给当前主 LLM），其余 DAG 高级节点类型（tool/mcp/agent/condition…）
-    显式失败并记录原因 —— 宁可失败落库也不静默跳过。
-    """
-
-    def __init__(self, core: Any) -> None:
-        self._core = core
-
-    async def __call__(self, node: NodeSpec, step: WorkflowStepRun,
-                       ctx: dict[str, Any]) -> NodeResult:
-        try:
-            t = node.type
-            if t in (NodeType.START, NodeType.END, NodeType.TRANSFORM):
-                # 结构性节点：开始/结束/纯标记 step，直接成功不消费 LLM
-                return NodeResult(status=StepStatus.SUCCEEDED, output={"node": node.id})
-            if t == NodeType.LEGACY_PROMPT:
-                return await self._run_legacy_prompt(node)
-            return NodeResult(
-                status=StepStatus.FAILED,
-                error_code="UNSUPPORTED_NODE",
-                error_message=f"node type '{t.value}' {_UNSUPPORTED_HINT}",
-            )
-        except Exception as e:  # noqa: BLE001 —— 执行器绝不允许把异常抛给驱动
-            logger.warning("workflow.executor_failed node={} error={}", node.id, str(e))
-            return NodeResult(
-                status=StepStatus.FAILED,
-                error_code="EXECUTOR_ERROR",
-                error_message=str(e)[:500],
-            )
-
-    async def _run_legacy_prompt(self, node: NodeSpec) -> NodeResult:
-        router = getattr(self._core, "router", None)
-        if router is None or not hasattr(router, "route"):
-            return NodeResult(
-                status=StepStatus.FAILED,
-                error_code="ROUTER_UNAVAILABLE",
-                error_message="LLM 路由不可用（降级模式或未装配）",
-            )
-        raw = (node.config or {}).get("raw") or {}
-        note = raw.get("note") or ""
-        name = node.name or node.id or "未命名节点"
-        prompt = (
-            f"执行工作流节点「{name}」：{note}"
-            if note
-            else f"请执行工作流节点「{name}」"
-        )
-        try:
-            answer = await router.route(
-                task_type="chat",
-                messages=[{"role": "user", "content": prompt}],
-                temperature=0.3,
-                timeout=60,
-            )
-        except Exception as e:  # noqa: BLE001 —— LLM 调用失败落死因，不静默
-            logger.warning("workflow.legacy_prompt_llm_failed node={} error={}",
-                           node.id, str(e))
-            return NodeResult(
-                status=StepStatus.FAILED,
-                error_code="LLM_CALL_FAILED",
-                error_message=str(e)[:500],
-            )
-        text = str(answer or "").strip()
-        return NodeResult(
-            status=StepStatus.SUCCEEDED if text else StepStatus.FAILED,
-            output={"text": text, "prompt": prompt},
-        )
+def _secret_resolver_from_core(core: Any):
+    """把 core 的 SecretsBroker 适配成 secret 占位符解析器；缺省返回 None(不解析)。"""
+    sb = getattr(core, "secrets_broker", None)
+    if sb is not None and hasattr(sb, "get"):
+        return lambda name: sb.get(name)  # type: ignore[no-any-return]
+    return None
 
 
 class WorkflowDriver:
@@ -183,7 +131,15 @@ async def build_runtime(core: Any, db_path: str) -> tuple[WorkflowV2Service, Wor
     conn.row_factory = aiosqlite.Row
     repo = WorkflowRepository(conn)
     svc = WorkflowV2Service(repo)
-    executor = WorkflowExecutor(core)
+    services = ExecutorServices(
+        tool_executor=getattr(core, "tool_executor", None),
+        router=getattr(core, "router", None),
+        security=getattr(core, "security", None),
+        skill_resolver=_skill_resolver_from_workspace(),
+        secret_resolver=_secret_resolver_from_core(core),
+        user_id="workflow",
+    )
+    executor = UnifiedExecutor(services)
     scheduler = Scheduler(repo, executor, repo.get_revision)
     driver = WorkflowDriver(repo, scheduler, conn=conn)
     await driver.recover_running()

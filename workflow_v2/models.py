@@ -34,6 +34,8 @@ class NodeType(str, Enum):
     JOIN = "join"
     TOOL = "tool"
     MCP = "mcp"
+    MODEL = "model"
+    SKILL = "skill"
     AGENT = "agent"
     WORKFLOW = "workflow"
     TRANSFORM = "transform"

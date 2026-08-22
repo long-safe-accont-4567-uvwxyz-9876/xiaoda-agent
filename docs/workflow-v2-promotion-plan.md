@@ -166,10 +166,14 @@ wf_id 在白名单内 → 该流可用;否则前端隐藏"启动"按钮(占位�
 
 **M0(已完成等于 2e8f1b56)**:最小闭环(迁移/排队/调度/legacy)。
 **M1(统一执行管线)**:§3 全表 + §5 全项(含 B 决策的 SKILL 独立执行器与
- 审批通道服务端侧)。
- - 验收: 每个节点类型一个集成测试;TOOL/MCP 用真实注册表 fake 工具;
-   MODEL/SKILL 用 stub ModelRouter; 安全专项(secret 不落日志/db;审批拒绝
-   路径可测)。
+   - 验收: 每个节点类型一个集成测试;TOOL/MCP 用 fake ToolExecutor;
+     MODEL/SKILL 用 stub ModelRouter; 安全专项(secret 不落日志/db;审批拒绝
+     路径可测)。
+   - 状态: ✅ 2026-08-22 落地 — executor.py 统一执行器接入 build_runtime
+     (tool_executor/router/security/secret/skill_vesolver 全注入);
+     NodeType 增加 MODEL/SKILL;AGENT 保留 AGENT_NOT_IMPLEMENTED(等 M1.5)。
+     tests/workflow_v2/test_executor.py 21 项 + test_runtime_smoke.py
+     端到端(TOOL→MODEL→END 全链路),全套 56 通过。
 **M2(前端 revision 模型)**:§4;验收: 浏览器走查 发布→运行→回滚→再次运行;
   typecheck + vue 构建通过。
 **M3(迁移/回滚/灰度)**:§6;验收: CLI dry-run 对真实工作区零失败; 双
