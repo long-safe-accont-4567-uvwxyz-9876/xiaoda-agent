@@ -12,7 +12,8 @@
  *  - 闲置公转通过 controlType:'orbit' 的 OrbitControls.autoRotate 实现（引擎每帧调用 controls.update）。
  */
 import { ref, computed, onMounted, onBeforeUnmount, watch } from 'vue'
-import { NInput, NButton, NTag, useMessage } from 'naive-ui'
+import { NInput, NButton, NTag, useMessage, NInputNumber
+} from 'naive-ui'
 import ForceGraph3D, { type NodeObject, type ForceGraph3DInstance } from '3d-force-graph'
 import * as THREE from 'three'
 import { UnrealBloomPass } from 'three/examples/jsm/postprocessing/UnrealBloomPass.js'
@@ -53,7 +54,7 @@ interface OrbitLikeControls {
 
 const props = withDefaults(defineProps<{
   entity?: string
-  depth?: 1 | 2
+  depth?: number
   autoLoad?: boolean
   enableBloom?: boolean
 }>(), {
@@ -83,10 +84,12 @@ const webglUnavailable = ref(false)
 const fps = ref(0)
 const qualityTier = ref<'high' | 'medium' | 'low'>('high')
 const toolbarCollapsed = ref(false)
+// 边数过载标记：>600 边时初始档位直接降到 medium 并关粒子
+const heavyEdges = ref(false)
 
 // 模态内部可控的检索 / 深度状态（与 prop 同步，但允许在浮层内独立切换）
 const searchText = ref(props.entity || '')
-const activeDepth = ref<1 | 2>(props.depth)
+const activeDepth = ref<number>(props.depth)
 
 // 内部非响应式状态
 let composer: ReturnType<ForceGraph3DInstance['postProcessingComposer']> | null = null
@@ -123,6 +126,7 @@ const COLOR_DIM = 'rgba(143,229,96,0.6)'
 const COLOR_LINK = 'rgba(143,229,96,0.3)'
 const COLOR_LINK_DIM = 'rgba(143,229,96,0.1)'
 const COLOR_NODE_DIM = 'rgba(143,229,96,0.15)'
+const COLOR_EXPANDED = '#fbbf24'  // 已展开邻域的节点：亮金色提示
 const BG_DEEP = '#0f1f17'
 
 function colorForKind(kind?: string): string {
@@ -167,6 +171,42 @@ function linkId(end: string | GraphNode): string {
 
 // ── 加载数据 ──
 const RETRY_DELAYS = [1000, 2000, 4000]
+// 按需展开状态：累积节点/边（id 索引去重），点击节点增量拉邻域
+let accNodes: GraphNode[] = []
+let accLinks: GraphLink[] = []
+const accNodeIdx = new Map<string, GraphNode>()
+const accLinkKeys = new Set<string>()
+// 已展开邻域的节点 id 集合（高亮提示）
+const expandedIds = ref<Set<string>>(new Set())
+const expandingName = ref('')
+
+function mergeIntoAcc(rawNodes: any[], rawEdges: any[]) {
+  const degree = new Map<string, number>()
+  for (const e of rawEdges) {
+    const f = String(e.from), t2 = String(e.to)
+    degree.set(f, (degree.get(f) || 0) + 1)
+    degree.set(t2, (degree.get(t2) || 0) + 1)
+  }
+  for (const n of rawNodes) {
+    const id = String(n.name)
+    if (accNodeIdx.has(id)) continue
+    const node: GraphNode = {
+      id,
+      name: String(n.name),
+      kind: n.kind,
+      val: (degree.get(id) || 0) + 1,
+      fx: 0, fy: 0, fz: 0,
+    }
+    accNodeIdx.set(id, node)
+    accNodes.push(node)
+  }
+  for (const e of rawEdges) {
+    const key = `${e.from}||${e.relation}||${e.to}`
+    if (accLinkKeys.has(key)) continue
+    accLinkKeys.add(key)
+    accLinks.push({ source: String(e.from), target: String(e.to), relation: e.relation })
+  }
+}
 
 async function loadGraph(retries = 0) {
   if (destroyed || !containerEl.value) return
@@ -175,83 +215,23 @@ async function loadGraph(retries = 0) {
 
   loading.value = true
   try {
-    const data = await getKnowledgeGraph(props.entity, activeDepth.value)
+    // 按需展开模型：重置累积状态，只拉起步实体 depth=1 邻域（<400 边）
+    // 用户后续单击节点增量展开，不再一次性拉全图
+    accNodes = []
+    accLinks = []
+    accNodeIdx.clear()
+    accLinkKeys.clear()
+    expandedIds.value = new Set()
+    const startEntity = props.entity.trim()
+    const data = await getKnowledgeGraph(startEntity, Math.min(activeDepth.value ?? 6, 1))
     if (destroyed) return
 
     const rawNodes: any[] = data.nodes || []
     const rawEdges: any[] = data.edges || []
+    mergeIntoAcc(rawNodes, rawEdges)
+    if (startEntity) expandedIds.value.add(startEntity)
 
-    // 计算度数
-    const degree = new Map<string, number>()
-    for (const e of rawEdges) {
-      const f = String(e.from), t = String(e.to)
-      degree.set(f, (degree.get(f) || 0) + 1)
-      degree.set(t, (degree.get(t) || 0) + 1)
-    }
-
-    const graphNodes: GraphNode[] = rawNodes.map(n => {
-      const id = String(n.name)
-      return {
-        id,
-        name: String(n.name),
-        kind: n.kind,
-        val: (degree.get(id) || 0) + 1,
-        // 入场动画：所有节点从中心起步
-        fx: 0, fy: 0, fz: 0,
-      }
-    })
-    const graphLinks: GraphLink[] = rawEdges.map(e => ({
-      source: String(e.from),
-      target: String(e.to),
-      relation: e.relation,
-    }))
-
-    nodes.value = graphNodes
-    links.value = graphLinks
-    nodeCount.value = graphNodes.length
-    neighborsCache = buildNeighbors(graphNodes, graphLinks)
-
-    // 性能保护：节点过多则降级（用户已点击"仍要进入 3D"则跳过）
-    if (graphNodes.length > 2000 && !bypassDegrade) {
-      degraded.value = true
-      loading.value = false
-      // 释放已建实例
-      if (graph.value) {
-        graph.value._destructor()
-        graph.value = null
-        initialized = false
-      }
-      return
-    }
-    degraded.value = false
-
-    if (!graph.value) initGraph()
-
-    // graphData 接收内部会原地解析 source/target 为节点对象
-    graph.value!.graphData({ nodes: graphNodes as unknown as NodeObject[], links: graphLinks as unknown as GraphLink[] } as any)
-
-    // 力导向参数：增大斥力和连接长度，避免节点挤成一坨
-    // 默认 charge.strength=-30, link.distance=30；调大后节点会分散开
-    const charge = graph.value!.d3Force('charge')
-    if (charge) charge.strength(-120)
-    const link = graph.value!.d3Force('link')
-    if (link) link.distance(60)
-
-    loading.value = false
-
-    // 释放初始锚定，让力导向把节点从中心炸开
-    releaseTimer = setTimeout(() => {
-      if (destroyed || !graph.value) return
-      graphNodes.forEach(n => { n.fx = undefined; n.fy = undefined; n.fz = undefined })
-      graph.value!.d3AlphaDecay(0.05)
-      graph.value!.graphData({ nodes: graphNodes as unknown as NodeObject[], links: graphLinks as unknown as GraphLink[] } as any)
-    }, 300)
-
-    // 收敛后框选居中
-    zoomTimer = setTimeout(() => {
-      if (destroyed || !graph.value) return
-      graph.value!.zoomToFit(500, 100)
-    }, 1500)
+    applyAccumulatedToGraph()
   } catch (e: any) {
     if (retries < RETRY_DELAYS.length) {
       retryTimer = setTimeout(() => loadGraph(retries + 1), RETRY_DELAYS[retries])
@@ -259,6 +239,88 @@ async function loadGraph(retries = 0) {
       message.error(e?.message || t('universeGraph.loadFailed'))
       loading.value = false
     }
+  }
+}
+
+// 将累积数据应用到 3D 引擎（大图分阶段挂边，防初始帧卡死）
+function applyAccumulatedToGraph() {
+  if (destroyed || !containerEl.value) return
+
+  nodes.value = [...accNodes]
+  links.value = [...accLinks]
+  nodeCount.value = accNodes.length
+  neighborsCache = buildNeighbors(accNodes, accLinks)
+
+  // 渲染规模分级：>600 边关粒子流（每条边一个动画粒子是最大 GPU 开销）
+  heavyEdges.value = accLinks.length > 600
+
+  // 性能保护：节点过多则降级（用户已点击"仍要进入 3D"则跳过）
+  if (accNodes.length > 2000 && !bypassDegrade) {
+    degraded.value = true
+    loading.value = false
+    // 释放已建实例
+    if (graph.value) {
+      graph.value._destructor()
+      graph.value = null
+      initialized = false
+    }
+    return
+  }
+  degraded.value = false
+
+  if (!graph.value) initGraph()
+
+  // 大图（>400 节点）先只挂节点、延后 300ms 再挂边：力导向先散开节点，
+  // 避免边+节点同时求解导致的初始帧卡死
+  const bigGraph = accNodes.length > 400
+  graph.value!.graphData({
+    nodes: accNodes as unknown as NodeObject[],
+    links: (bigGraph ? [] : accLinks) as unknown as GraphLink[],
+  } as any)
+
+  // 力导向参数：增大斥力和连接长度，避免节点挤成一坨
+  const charge = graph.value!.d3Force('charge')
+  if (charge) charge.strength(bigGraph ? -200 : -120)
+  const link = graph.value!.d3Force('link')
+  if (link) link.distance(60)
+
+  loading.value = false
+  expandingName.value = ''
+
+  // 释放初始锚定，让力导向把节点从中心炸开
+  releaseTimer = setTimeout(() => {
+    if (destroyed || !graph.value) return
+    accNodes.forEach(n => { n.fx = undefined; n.fy = undefined; n.fz = undefined })
+    graph.value!.d3AlphaDecay(0.05)
+    graph.value!.graphData({
+      nodes: accNodes as unknown as NodeObject[],
+      links: accLinks as unknown as GraphLink[],
+    } as any)
+  }, 300)
+
+  // 收敛后框选居中
+  zoomTimer = setTimeout(() => {
+    if (destroyed || !graph.value) return
+    graph.value!.zoomToFit(500, 100)
+  }, 1500)
+}
+
+// ── 单击节点：增量拉取该节点 1 跳邻域合并进图 ──
+async function expandAround(node: GraphNode) {
+  const id = node.id as string
+  if (expandingName.value || expandedIds.value.has(id)) return
+  expandingName.value = node.name
+  try {
+    const data = await getKnowledgeGraph(node.name, 1)
+    if (destroyed) return
+    mergeIntoAcc(data.nodes || [], data.edges || [])
+    expandedIds.value.add(id)
+    applyAccumulatedToGraph()
+    // 展开后聚焦到该节点
+    setTimeout(() => { if (!destroyed) focusOnNode(node) }, 350)
+  } catch (e: any) {
+    console.debug('[universe] expand failed:', e?.message)
+    expandingName.value = ''
   }
 }
 
@@ -300,6 +362,10 @@ function startPerfMonitor() {
 function applyQualityTier() {
   const g = graph.value
   if (!g) return
+  // 边数过载（>600）时强制 medium 起步：Bloom 关、粒子 1
+  if (heavyEdges.value && qualityTier.value === 'high') {
+    qualityTier.value = 'medium'
+  }
   const tier = qualityTier.value
   // Bloom 仅在 high 档启用
   if (bloomPass) bloomPass.enabled = (tier === 'high')
@@ -382,7 +448,8 @@ function initGraph() {
   g.nodeRelSize(6)
     .nodeOpacity(1.0)
     .nodeResolution(8)
-    .nodeColor((node: NodeObject) => colorForKind((node as GraphNode).kind))
+    .nodeColor((node: NodeObject) => expandedIds.value.has(node.id as string)
+      ? COLOR_EXPANDED : colorForKind((node as GraphNode).kind))
     .nodeLabel((node: NodeObject) => {
       const n = node as GraphNode
       return `<div style="padding:4px 10px;border-radius:8px;background:var(--glass-bg);border:1px solid var(--glass-border);color:var(--moon);font-size:13px;">${escapeHtml(n.name)}${n.kind ? `<span style="margin-left:8px;color:var(--wisdom);font-size:11px;">${escapeHtml(n.kind)}</span>` : ''}</div>`
@@ -435,6 +502,8 @@ function initGraph() {
       updateHighlight()
       focusOnNode(n)
       spawnRipple(n.x ?? 0, n.y ?? 0, n.z ?? 0, colorForKind(n.kind))
+      // 按需展开：单击节点增量拉取其邻域（已展开过则跳过）
+      expandAround(n)
       resetIdleTimer()
     })
     .onBackgroundClick(() => {
@@ -444,6 +513,16 @@ function initGraph() {
     })
     .onNodeDrag(() => resetIdleTimer())
     .onNodeDragEnd(() => resetIdleTimer())
+
+  // 双击空白处复位全局视角（全屏模式快速回到总览）
+  el.addEventListener('dblclick', onDblClickReset)
+}
+
+// 双击背景复位（initGraph 时绑定；dblclick 不与单击选中冲突）
+const onDblClickReset = (e: MouseEvent) => {
+  // 双击落在节点上时不复位（保留节点聚焦行为）
+  if (hoveredNode.value) return
+  resetView()
 }
 
 // ── 星空三层（Fibonacci 螺旋分布 + HSL 闪烁，借鉴 Obsidian 粒子星图知识）──
@@ -515,8 +594,12 @@ function updateHighlight() {
   const g = graph.value
   if (!g) return
   const focus = hoveredNode.value || selectedNode.value
+  // 未聚焦时：已展开节点用亮金色，提示"该邻域已加载"；其余按类别配色
   if (!focus) {
-    g.nodeColor((node: NodeObject) => colorForKind((node as GraphNode).kind))
+    g.nodeColor((node: NodeObject) => {
+      const nid = node.id as string
+      return expandedIds.value.has(nid) ? COLOR_EXPANDED : colorForKind((node as GraphNode).kind)
+    })
     g.linkColor(() => COLOR_LINK)
     return
   }
@@ -524,7 +607,9 @@ function updateHighlight() {
   const neighbors = neighborsCache.get(id) || new Set<string>()
   g.nodeColor((node: NodeObject) => {
     const nid = node.id as string
-    return nid === id || neighbors.has(nid) ? colorForKind((node as GraphNode).kind) : COLOR_NODE_DIM
+    if (nid === id) return '#ffffff'
+    if (neighbors.has(nid)) return colorForKind((node as GraphNode).kind)
+    return expandedIds.value.has(nid) ? COLOR_EXPANDED : COLOR_NODE_DIM
   })
   g.linkColor((link: any) => {
     const s = linkId(link.source)
@@ -597,9 +682,26 @@ function resetIdleTimer() {
   }, 5000)
 }
 
+// ── 全屏体验：ESC 关闭 / 双击背景复位视角 ──
+function onKeydown(e: KeyboardEvent) {
+  if (e.key === 'Escape') emit('close')
+}
+
+function resetView() {
+  const g = graph.value
+  if (!g) return
+  selectedNode.value = null
+  updateHighlight()
+  const controls = getOrbitControls()
+  if (controls?.target) controls.target.set(0, 0, 0)
+  g.zoomToFit(600, 100)
+}
+
 // ── 深度切换 / 检索 ──
-function setActiveDepth(d: 1 | 2) {
-  activeDepth.value = d
+// 按需展开模型：深度只影响搜索起步范围（1-5），点击节点始终增量展开 1 跳
+function setActiveDepth(d: number | null) {
+  const v = Math.max(1, Math.min(12, Math.round(d ?? 1)))
+  activeDepth.value = v
   loadGraph()
 }
 
@@ -649,7 +751,8 @@ const fpsClass = computed(() => {
 })
 
 // ── 开灯/关灯标签（high 档=灯开，其余=灯关）──
-const lightLabel = computed(() => qualityTier.value === 'high' ? '关灯' : '开灯')
+const lightLabel = computed(() => qualityTier.value === 'high'
+  ? t('universeGraph.lightOff') : t('universeGraph.lightOn'))
 
 // ── 详情面板：选中节点的关系 ──
 const selectedRelations = computed(() => {
@@ -671,6 +774,8 @@ onMounted(() => {
   ws.on('knowledge_graph_changed', onGraphChanged)
   // 窗口隐藏/最小化：显式暂停 3d-force-graph 引擎（防 WebView2 rAF 节流边缘情况）
   document.addEventListener('visibilitychange', onVisibility)
+  // 全屏体验：ESC 直接关闭
+  window.addEventListener('keydown', onKeydown)
 
   // ResizeObserver：模态由 display 切换，容器尺寸从 0 变非 0 时再初始化
   if (containerEl.value) {
@@ -696,6 +801,7 @@ onBeforeUnmount(() => {
   destroyed = true
   ws.off('knowledge_graph_changed', onGraphChanged)
   document.removeEventListener('visibilitychange', onVisibility)
+  window.removeEventListener('keydown', onKeydown)
   if (idleTimer) clearTimeout(idleTimer)
   if (retryTimer) clearTimeout(retryTimer)
   if (debounceTimer) clearTimeout(debounceTimer)
@@ -764,18 +870,22 @@ function kindLabel(kind?: string): string {
           style="max-width: 200px"
           @keydown.enter="onSearchEnter"
         />
-        <n-button
-          size="tiny"
-          :type="activeDepth === 1 ? 'primary' : 'default'"
-          @click="setActiveDepth(1)"
-        >{{ t('universeGraph.depth1') }}</n-button>
-        <n-button
-          size="tiny"
-          :type="activeDepth === 2 ? 'primary' : 'default'"
-          @click="setActiveDepth(2)"
-        >{{ t('universeGraph.depth2') }}</n-button>
+        <div class="universe-depth-input" :title="t('universeGraph.depthHint')">
+          <span class="universe-depth-label">{{ t('universeGraph.depthLabel') }}</span>
+          <n-input-number
+            v-model:value="activeDepth"
+            size="small"
+            :min="1"
+            :max="12"
+            :show-button="false"
+            style="width: 64px"
+            @update:value="setActiveDepth"
+          />
+        </div>
+        <span v-if="expandingName" class="universe-expanding">{{ t('insightView.expanding') }}「{{ expandingName }}」…</span>
         <span class="universe-count">{{ nodeCount }} {{ t('universeGraph.nodeCount') }}</span>
         <span class="universe-fps" :class="fpsClass">{{ fps }} fps · {{ qualityTier }}</span>
+        <n-button size="tiny" quaternary @click="resetView" :title="t('universeGraph.resetView')">{{ t('universeGraph.resetView') }}</n-button>
         <n-button size="tiny" quaternary @click="toggleLight">{{ lightLabel }}</n-button>
         <n-button size="tiny" quaternary @click="loadGraph()">{{ t('universeGraph.refresh') }}</n-button>
         <n-button class="universe-close" size="tiny" type="primary" @click="emit('close')">{{ t('universeGraph.close') }}</n-button>
@@ -863,6 +973,29 @@ function kindLabel(kind?: string): string {
   font-size: 12px;
   color: var(--moon-dim);
   margin-left: 4px;
+}
+
+.universe-depth-input {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.universe-depth-label {
+  font-size: 12px;
+  color: var(--moon-dim);
+  white-space: nowrap;
+}
+
+.universe-expanding {
+  font-size: 11px;
+  color: var(--wisdom);
+  animation: universe-pulse 1.2s ease-in-out infinite;
+}
+
+@keyframes universe-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.45; }
 }
 
 .universe-fps {

@@ -1,5 +1,14 @@
 <script setup lang="ts">
-withDefaults(defineProps<{ name: string; size?: number }>(), { size: 20 })
+withDefaults(defineProps<{
+  name: string
+  size?: number
+  /** duo = 双色填充（主体描边+底形半透明填充）；line = 纯线稿 */
+  variant?: 'line' | 'duo'
+  /** 语义色：add/edit/del/view/magic，缺省继承 currentColor */
+  tone?: '' | 'add' | 'edit' | 'del' | 'view' | 'magic'
+  /** 可交互图标：hover 微动效（放大 + 光晕呼吸） */
+  interactive?: boolean
+}>(), { size: 20, variant: 'line', tone: '', interactive: false })
 
 // 须弥风手绘线性图标（统一 24×24 视窗、圆头描边、草元素叶形语言）
 const PATHS: Record<string, string> = {
@@ -57,12 +66,94 @@ const PATHS: Record<string, string> = {
   chip: 'M7 7h10v10H7V7Z M10 10h4v4h-4v-4Z M9 7V4.5 M12 7V4.5 M15 7V4.5 M9 19.5V17 M12 19.5V17 M15 19.5V17 M7 9H4.5 M7 12H4.5 M7 15H4.5 M19.5 9H17 M19.5 12H17 M19.5 15H17',
   // 检索：放大镜 + 叶形（RAG 检索配置）
   search: 'M10.5 4a6.5 6.5 0 1 0 0 13 6.5 6.5 0 0 0 0-13Z M15.5 15.5 20 20 M10.5 8v5 M8 10.5h5',
+  check: 'M4.5 12.5l5 5L19.5 7',
+  close: 'M5.5 5.5l13 13 M18.5 5.5l-13 13',
+  plus: 'M12 5v14 M5 12h14',
+  note: 'M6 3.5h9L19 7.5v13H6Z M14 3.5V8h4.5 M9 12h6 M9 15.5h6',
+  folder: 'M3.5 6.5a1.5 1.5 0 0 1 1.5-1.5h4.5l2 2.5H19a1.5 1.5 0 0 1 1.5 1.5v9a1.5 1.5 0 0 1-1.5 1.5H5a1.5 1.5 0 0 1-1.5-1.5Z',
+  chart: 'M4 20h16 M7 20v-6 M11.5 20V9 M16 20v-8.5 M19 20V5.5',
+  wrench: 'M14.5 6.5a4 4 0 0 0-5.4 4.8L3.5 17l3.5 3.5 5.7-5.6a4 4 0 0 0 4.8-5.4L14.6 12 12 9.4l2.5-2.9Z',
+  palette: 'M12 20.5a8.5 8.5 0 1 1 8.5-8.5c0 2.3-1.9 3.2-3.5 3.2h-1.8a2 2 0 0 0-1.5 3.3c.4.5.2 2-1.7 2Z M8 10.5h.01 M12 8h.01 M15.8 10h.01',
+  rocket: 'M12 15.5c-1.5-1-2.5-3-2.5-5.5C9.5 6.5 11 4 12 2.5c1 1.5 2.5 4 2.5 7.5 0 2.5-1 4.5-2.5 5.5Z M9.5 10 6 12l1.5 3.5 M14.5 10 18 12l-1.5 3.5 M12 15.5V19 M9.5 21.5 12 19l2.5 2.5',
+  sparkle: 'M12 3l1.8 5.2L19 10l-5.2 1.8L12 17l-1.8-5.2L5 10l5.2-1.8Z M18.5 15.5l.9 2.6 2.6.9-2.6.9-.9 2.6-.9-2.6-2.6-.9 2.6-.9Z',
+  stop: 'M6.5 6.5h11v11h-11Z',
+  paperclip: 'M20 11.5 12.6 18.9a5 5 0 0 1-7-7L13 4.4a3.4 3.4 0 0 1 4.8 4.8l-7.3 7.3a1.8 1.8 0 0 1-2.6-2.6l6.8-6.8',
+}
+
+// duo 变体底形：主轮廓的填充版（渲染为 opacity .14 的底层），无则退化为纯线稿
+const FILLS: Record<string, string> = {
+  trash: 'M7.4 7.8h9.2l-.8 11.5H8.2Z',
+  note: 'M6 3.5h9L19 7.5v13H6Z',
+  folder: 'M3.5 6.5a1.5 1.5 0 0 1 1.5-1.5h4.5l2 2.5H19a1.5 1.5 0 0 1 1.5 1.5v9a1.5 1.5 0 0 1-1.5 1.5H5a1.5 1.5 0 0 1-1.5-1.5Z',
+  chart: 'M5.8 12.6h2.4V20H5.8Z M10.3 7.6h2.4V20h-2.4Z M14.8 10.2h2.4V20h-2.4Z',
+  search: 'M10.5 6a4.5 4.5 0 1 0 0 9 4.5 4.5 0 0 0 0-9Z',
+  sparkle: 'M12 3l1.8 5.2L19 10l-5.2 1.8L12 17l-1.8-5.2L5 10l5.2-1.8Z',
+  palette: 'M12 20.5a8.5 8.5 0 1 1 8.5-8.5c0 2.3-1.9 3.2-3.5 3.2h-1.8a2 2 0 0 0-1.5 3.3c.4.5.2 2-1.7 2Z',
+  wrench: 'M14.5 6.5a4 4 0 0 0-5.4 4.8L3.5 17l3.5 3.5 5.7-5.6a4 4 0 0 0 4.8-5.4L14.6 12 12 9.4l2.5-2.9Z',
+  stop: 'M6.5 6.5h11v11h-11Z',
 }
 </script>
 
 <template>
-  <svg :width="size" :height="size" viewBox="0 0 24 24" fill="none"
-       stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
+  <svg
+    :class="['sumeru-ic', `tone-${tone}`, { 'sumeru-ic--hover': interactive }]"
+    :width="size" :height="size" viewBox="0 0 24 24" fill="none"
+    stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"
+    aria-hidden="true">
+    <path v-if="variant === 'duo' && FILLS[name]"
+          :d="FILLS[name]" fill="currentColor" stroke="none" class="ic-fill" />
     <path :d="PATHS[name] || PATHS.chat" />
   </svg>
 </template>
+
+
+<style scoped>
+.sumeru-ic {
+  flex: 0 0 auto;
+}
+/* duo 变体：底形半透明填充 */
+.ic-fill {
+  opacity: 0.16;
+}
+
+/* 语义色（覆盖 currentColor 的显式色调） */
+.tone-add { color: #8fe560; }
+.tone-edit { color: #e8d5a3; }
+.tone-del { color: #ff9d90; }
+.tone-view { color: #7cc7e8; }
+.tone-magic { color: #c9a0ff; }
+
+/* 可交互图标 hover 微动效：轻微放大 + 呼吸光晕 */
+.sumeru-ic--hover {
+  position: relative;
+  cursor: pointer;
+  transition: transform 0.25s cubic-bezier(0.34, 1.56, 0.64, 1);
+}
+.sumeru-ic--hover::after {
+  content: '';
+  position: absolute;
+  inset: -22%;
+  border-radius: 50%;
+  background: radial-gradient(closest-side, currentColor, transparent 72%);
+  opacity: 0;
+  transition: opacity 0.25s;
+  pointer-events: none;
+  z-index: -1;
+}
+.sumeru-ic--hover:hover,
+/* 图标嵌在按钮内：父容器 hover 时同样触发（否则指针在按钮 padding 区时动效不生效） */
+:is(button, .n-button, .dbtn, [class*='btn']):hover .sumeru-ic--hover,
+a:hover > .sumeru-ic--hover {
+  transform: scale(1.14);
+}
+.sumeru-ic--hover:hover::after,
+:is(button, .n-button, .dbtn, [class*='btn']):hover .sumeru-ic--hover::after,
+a:hover > .sumeru-ic--hover::after {
+  opacity: 0.18;
+  animation: ic-breath 1.3s ease-in-out infinite;
+}
+@keyframes ic-breath {
+  0%, 100% { transform: scale(1); opacity: 0.14; }
+  50% { transform: scale(1.1); opacity: 0.24; }
+}
+</style>

@@ -18,6 +18,7 @@ load_dotenv()
 from utils.logging_config import setup_logging
 setup_logging()
 
+import httpx
 from loguru import logger
 
 logger.remove()
@@ -285,7 +286,8 @@ class XiaodaAcpServer:
             reply = result.reply
             sticker_path = result.sticker_path
             audio_path = result.audio_path
-        except (RuntimeError, OSError, ValueError, ConnectionError) as e:
+        except (RuntimeError, OSError, ValueError, ConnectionError,
+                    httpx.TimeoutException, httpx.RequestError) as e:
             logger.error("xiaoda_acp.process_error", error=str(e))
             reply = f"嗯……出了点小问题：{str(e)[:200]}"
         return reply, sticker_path, audio_path

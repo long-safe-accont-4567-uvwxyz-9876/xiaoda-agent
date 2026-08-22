@@ -229,6 +229,11 @@ QUERY_CACHE_TTL = _safe_int(os.getenv("QUERY_CACHE_TTL"), 300)
 # 过高则拖慢整体回复。默认 8s：给予慢速存储足够余量，同时控制最坏延迟。
 MEMORY_RETRIEVE_TIMEOUT = _safe_positive_float(os.getenv("MEMORY_RETRIEVE_TIMEOUT"), 8.0)
 
+# Rust 热点下沉 PoC 开关：True 时扩散激活直接命中通道走 rust_core 扩展
+# （PyO3 常驻 NodeIndex），扩展缺失/调用失败自动回退纯 Python，业务无感。
+# 默认关闭——需先通过 tests/test_rust_hybrid_poc.py 等价性验证再开启。
+RUST_HYBRID_ENABLED = os.getenv("RUST_HYBRID_ENABLED", "false").lower() in ("1", "true", "yes")
+
 # ── 父子Chunk RAG 优化 ──
 PARENT_CHILD_CHUNK_ENABLED = os.getenv("PARENT_CHILD_CHUNK_ENABLED", "true").lower() in ("1", "true", "yes")
 # ── KG v2 知识图谱优化 ──

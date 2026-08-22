@@ -3,6 +3,7 @@ import asyncio
 import time
 from collections import OrderedDict
 from typing import Any
+import httpx
 from loguru import logger
 from tool_engine.tool_registry import register_tool, ToolPermission, ToolResult
 from security.ssrf_guard import validate_url as _ssrf_validate_url
@@ -296,7 +297,8 @@ async def web_search(query: str) -> ToolResult:
             _search_cache.popitem(last=False)
 
         return result
-    except (RuntimeError, OSError, ValueError, ConnectionError) as e:
+    except (RuntimeError, OSError, ValueError, ConnectionError,
+                httpx.TimeoutException, httpx.RequestError) as e:
         return ToolResult.fail(f"搜索错误: {e!s}")
 
 
@@ -335,5 +337,6 @@ async def get_weather(city: str) -> ToolResult:
 
         result = await asyncio.to_thread(_fetch_weather)
         return ToolResult.ok(f"🌤️ {result}")
-    except (RuntimeError, OSError, ValueError, ConnectionError) as e:
+    except (RuntimeError, OSError, ValueError, ConnectionError,
+                httpx.TimeoutException, httpx.RequestError) as e:
         return ToolResult.fail(f"获取天气失败: {e!s}")

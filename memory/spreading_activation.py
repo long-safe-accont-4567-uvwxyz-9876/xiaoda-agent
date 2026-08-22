@@ -19,10 +19,13 @@ from math import sqrt
 from collections import OrderedDict, defaultdict
 from collections.abc import Mapping
 from dataclasses import dataclass, field
+from typing import Any
 from utils.similarity import ratio as text_ratio
 
 import networkx as nx
 from loguru import logger
+
+from memory import rust_hybrid
 
 
 class SpreadingActivationEngine:
@@ -60,6 +63,11 @@ class SpreadingActivationEngine:
         self._graph_snapshot: dict[str, dict[str, float]] | None = None
         self._graph_ts = 0.0
         self._graph_build_task: "asyncio.Task | None" = None
+        # Rust 常驻节点索引（perf/rust-hybrid-poc）：与 alive_nodes 同步重建，
+        # 开关关闭时恒为 None，零开销
+        self._rust_index: Any | None = None
+        # Rust 侧已加载的边快照版本（对应 _graph_ts；-1 = 从未加载）
+        self._rust_edges_ts: float = -1.0
 
     async def _ensure_graph_snapshot(self) -> dict[str, dict[str, float]]:
         """取整图边快照（{source: {target: weight}}），TTL 内复用，过期后台重建。
@@ -108,6 +116,22 @@ class SpreadingActivationEngine:
         finally:
             self._graph_build_task = None
 
+    def _get_rust_index(self, alive_nodes: dict[str, dict]) -> Any | None:
+        """取 Rust 常驻节点索引，节点集变化时同步重建。
+
+        重建为纯内存操作（实测 2417 节点 <10ms），无需后台化。
+        返回 None 表示不可用（模块缺失/构建失败），调用方回退 Python。
+        """
+        if self._rust_index is not None and self._rust_index.size == len(alive_nodes):
+            return self._rust_index
+        try:
+            self._rust_index = rust_hybrid.RustNodeIndex(alive_nodes)
+            logger.info("memory.rust_index_built nodes={}", self._rust_index.size)
+        except Exception as e:  # noqa: BLE001
+            logger.debug("memory.rust_index_build_failed error={}", str(e)[:120])
+            self._rust_index = None
+        return self._rust_index
+
     async def recall(self, query: str, top_k: int = 5) -> list[dict]:
         """扩散激活检索主入口
 
@@ -139,11 +163,22 @@ class SpreadingActivationEngine:
         if not alive_nodes:
             return []
 
-        # Step 3: IDF 计算
-        idf = self._compute_idf(query_keys, alive_nodes)
-
-        # Step 4: 直接命中通道
-        direct = self._direct_channel(query_keys, idf, alive_nodes, query)
+        # Step 3+4: IDF + 直接命中通道（perf/rust-hybrid-poc）
+        # RUST_HYBRID_ENABLED=1 且规模达标时走 rust_core 常驻索引
+        # （实测 53ms→7.2ms，7.3x）；模块缺失/异常/开关关闭一律回退
+        # 纯 Python 路径，语义逐位一致（tests/test_rust_hybrid_poc.py）。
+        direct = None
+        if rust_hybrid.should_use_rust(len(alive_nodes)):
+            try:
+                idx = self._get_rust_index(alive_nodes)
+                if idx is not None:
+                    direct = idx.direct_channel(query, list(query_keys))
+            except Exception as e:  # noqa: BLE001
+                logger.debug("memory.rust_direct_channel_failed error={}", str(e)[:120])
+                direct = None
+        if direct is None:
+            idf = self._compute_idf(query_keys, alive_nodes)
+            direct = self._direct_channel(query_keys, idf, alive_nodes, query)
 
         # Step 5: 模式补全（无直接命中时用向量模糊匹配）
         if not direct:
@@ -198,6 +233,12 @@ class SpreadingActivationEngine:
         _ensure_graph_snapshot 按 TTL 复用 + 后台重建，最多 120s 陈旧。
         """
         self._recall_cache.clear()
+        # Rust 常驻 NodeIndex 同步失效（节点数变化时下次查询自动重建；
+        # 仅数量不变的 key/text 更新会延迟到下次节点数变化，PoC 接受此陈旧度）。
+        # 边快照版本一并失效：索引重建后邻接表必须重载
+        if getattr(self, "_rust_index", None) is not None:
+            self._rust_index = None
+        self._rust_edges_ts = -1.0
 
     def _compute_idf(self, keys: set, alive_nodes: dict) -> dict:
         """计算每个 key 的 IDF 值
@@ -223,6 +264,9 @@ class SpreadingActivationEngine:
         """IDF 加权 key 重叠 + 子串包含
 
         weight_bias = 0.35 + 0.65 * weight（floor 0.35）
+
+        Rust 加速路径在 recall() Step3+4 统一裁决（rust_hybrid.should_use_rust），
+        本方法恒为纯 Python 参考实现（回退路径 + 等价性测试基准）。
         """
         direct = {}
         q_lower = query.lower()
@@ -283,12 +327,40 @@ class SpreadingActivationEngine:
 
     async def _spreading_channel(self, direct: dict,
                                   alive_nodes: dict) -> dict:
-        """从种子节点沿边传播激活值，3跳"""
+        """从种子节点沿边传播激活值，3跳
+
+        RUST_HYBRID_ENABLED=true 且规模达标时，图游走走 rust_core
+        驻留邻接表（实测 67 万边解释器循环 914~1164ms → Rust 毫秒级）；
+        边快照随 _ensure_graph_snapshot 的 TTL 生命周期同步加载，
+        扩展缺失/异常回退下方纯 Python 实现。
+        """
+        graph = await self._ensure_graph_snapshot() or {}
+
+        if rust_hybrid.should_use_rust(len(alive_nodes)):
+            try:
+                idx = self._get_rust_index(alive_nodes)
+                if idx is not None:
+                    # 边快照仅在图重建后重载：以 _graph_ts 为版本指纹，
+                    # 未重建时跳过 100 万行转换（实测 ~600ms/次，不跟踪
+                    # 会把 Rust 游走的收益全部吃掉）
+                    if getattr(self, "_rust_edges_ts", -1.0) != self._graph_ts:
+                        idx.load_edges(
+                            [(s, t, w) for s, targets in graph.items()
+                             for t, w in targets.items()])
+                        self._rust_edges_ts = self._graph_ts
+                    spread = idx.spreading_channel(
+                        list(direct.items()),
+                        radius=self.RECALL_RADIUS,
+                        decay=self.ACTIVATION_DECAY,
+                        threshold=self.SPREADING_THRESHOLD,
+                    )
+                    return dict(spread)
+            except Exception as e:  # noqa: BLE001
+                logger.debug("memory.rust_spreading_failed error={}",
+                             str(e)[:120])
+
         spread = defaultdict(float)
         wave = dict(direct)
-        # 稠密图（实测 2381 节点 / 100 万边）N+1 优化：整图快照一次载入内存，
-        # 逐节点 get_edges 是串行 DB 往返（实测 1973 节点 19s+）
-        graph = await self._ensure_graph_snapshot() or {}
 
         for hop in range(self.RECALL_RADIUS + 1):
             nxt = defaultdict(float)

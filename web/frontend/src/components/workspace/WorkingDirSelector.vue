@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import SumeruIcon from '../../components/fx/SumeruIcon.vue'
 import { ref, onMounted } from 'vue'
 import { useMessage } from 'naive-ui'
 import { useWorkspaceStore } from '../../stores/workspace'
@@ -66,7 +67,7 @@ async function onConfirmAuthorize() {
         : t('settings.workspaceUnauthorized')"
       @click="onClick"
     >
-      📁
+      <SumeruIcon name="folder" :size="15" variant="duo" tone="view" interactive />
     </button>
 
     <DirectoryPickerDialog :show="showPicker" @select="onPickerSelect" @cancel="showPicker = false" />

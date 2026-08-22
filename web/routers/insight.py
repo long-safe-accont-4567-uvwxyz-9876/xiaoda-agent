@@ -235,9 +235,97 @@ async def delete_memory(memory_id: int, request: Request) -> Any:
 @router.get("/insight/knowledge/graph", response_model=Envelope[dict])
 async def knowledge_graph(request: Request,
                           entity: str = Query(default=""),
-                          depth: int = Query(default=1, ge=1, le=2)) -> Any:
+                          depth: int = Query(default=1, ge=1, le=12)) -> Any:
+    """知识图谱数据（内在世界页 + 全屏 3D 共用）。
+
+    性能契约：逐层批量 BFS（每层 2 条 IN 查询），depth 严格生效——
+    depth=1 只返回第一跳。每层独立 GRAPH_MAX_EDGES_PER_HOP=400 上限
+    （confidence 降序截断，被挤掉的边所指向的实体不再外扩），
+    防止热门实体（1200+ 关系）撑爆渲染且不再掩盖深度差异。
+    """
     core = request.app.state.core
     kdb = core.db.knowledge
+    # 分层可视化参数：每层最多 30 个新实体（按关系 confidence 挑最重要的），
+    # 边上限随之收敛。depth=1 = 中心实体 + 30 个一跳邻居，逐层外扩一圈一圈清晰。
+    GRAPH_MAX_NODES_PER_HOP = 30
+    GRAPH_MAX_EDGES_PER_HOP = 90
+
+    if entity.strip():
+        # 逐层 BFS：每层独立批量查询 + 独立上限。此前全局截断导致热门实体
+        # 一跳就吃满 400 名额，depth=1 与 depth=6 返回完全一致（约束失效）。
+        seen_rel: set[tuple[str, str, str]] = set()
+        visited: set[str] = {entity.strip()}
+        prev_kept: set[str] = {entity.strip()}  # 上一层最终保留节点（逐层更新为扩散中心）
+        frontier = [entity.strip()]
+        edges: list[dict] = []
+        ent_map: dict[str, dict] = {}
+        for _ in range(depth):
+            if not frontier:
+                break
+            placeholders = ",".join("?" * len(frontier))
+            cur = await kdb._conn.execute(
+                f"SELECT * FROM knowledge_relations "
+                f"WHERE from_entity IN ({placeholders}) OR to_entity IN ({placeholders})",
+                frontier + frontier,
+            )
+            rows = await cur.fetchall()
+            next_frontier: list[str] = []
+            hop_rels: list[dict] = []
+            for r in rows:
+                rel = dict(r)
+                key = (rel["from_entity"], rel.get("relation_type", ""), rel["to_entity"])
+                if key in seen_rel:
+                    continue
+                seen_rel.add(key)
+                hop_rels.append(rel)
+                for other in (rel["from_entity"], rel["to_entity"]):
+                    if other not in visited:
+                        visited.add(other)
+                        next_frontier.append(other)
+            # 本层新实体超限：按"入边最高 confidence"选最重要的邻居节点，
+            # 只保留与所选节点相关的边（中心实体的视角：邻居比边数重要）。
+            if len(next_frontier) > GRAPH_MAX_NODES_PER_HOP:
+                # 每个候选邻居的最高置信边
+                best = {}
+                for r in hop_rels:
+                    for e in (r["from_entity"], r["to_entity"]):
+                        if e not in visited - set(next_frontier):
+                            c = r.get("confidence") or 0
+                            if e not in best or c > best[e]:
+                                best[e] = c
+                ranked = sorted(next_frontier, key=lambda n: -best.get(n, 0))
+                chosen = set(ranked[:GRAPH_MAX_NODES_PER_HOP])
+                # 分层保留：边必须连接「上一层已保留节点」与「本层入选邻居」。
+                # prev_kept 首层=搜索实体；一跳时未入选邻居的边因另一端不在
+                # prev_kept+chosen 而剔除；二跳只从一层入选邻居继续生长（一圈一圈清晰）
+                anchors = prev_kept | chosen
+                hop_rels = [r for r in hop_rels
+                            if (r["from_entity"] in prev_kept and r["to_entity"] in chosen)
+                            or (r["to_entity"] in prev_kept and r["from_entity"] in chosen)]
+                next_frontier = [n for n in next_frontier if n in chosen]
+            elif len(hop_rels) > GRAPH_MAX_EDGES_PER_HOP:
+                hop_rels = sorted(hop_rels, key=lambda x: x.get("confidence") or 0,
+                                  reverse=True)[:GRAPH_MAX_EDGES_PER_HOP]
+            # 批量补本层新实体的 kind
+            new_names = [n for n in set(next_frontier) | {r["from_entity"] for r in hop_rels}
+                         | {r["to_entity"] for r in hop_rels} if n not in ent_map]
+            if new_names:
+                ph = ",".join("?" * len(new_names))
+                cur2 = await kdb._conn.execute(
+                    f"SELECT name, kind FROM knowledge_entities WHERE name IN ({ph})", new_names)
+                for row in await cur2.fetchall():
+                    ent_map[row["name"]] = dict(row)
+            for rel in hop_rels:
+                edges.append({"from": rel["from_entity"], "to": rel["to_entity"],
+                              "relation": rel.get("relation_type", "")})
+            prev_kept |= {r["from_entity"] for r in hop_rels} | {r["to_entity"] for r in hop_rels}
+            frontier = list(set(next_frontier))
+        # 节点只来自保留边的端点——未入选的邻居不返回（否则图上挂 98 个孤立点）
+        nodes = [{"name": n, "kind": (ent_map.get(n) or {}).get("kind", "")}
+                 for n in ({e["from"] for e in edges} | {e["to"] for e in edges})]
+        return Envelope(data={"nodes": nodes, "edges": edges})
+
+    # 全图概览：最近 80 条关系（原逻辑保留，量级固定无风险）
     nodes: dict[str, dict] = {}
     edges: list[dict] = []
 
@@ -247,35 +335,13 @@ async def knowledge_graph(request: Request,
         ent = await kdb.get_knowledge_entity(name)
         nodes[name] = {"name": name, "kind": (ent or {}).get("kind", "")}
 
-    if entity.strip():
-        frontier = [entity.strip()]
-        seen_rel: set[str] = set()
-        for _ in range(depth):
-            next_frontier = []
-            for name in frontier:
-                await _node(name)
-                rels = await kdb.get_knowledge_relations(name)
-                for r in rels:
-                    rid = r.get("id", f"{r['from_entity']}-{r['to_entity']}")
-                    if rid in seen_rel:
-                        continue
-                    seen_rel.add(rid)
-                    await _node(r["from_entity"])
-                    await _node(r["to_entity"])
-                    edges.append({"from": r["from_entity"], "to": r["to_entity"],
-                                  "relation": r.get("relation_type", "")})
-                    for other in (r["from_entity"], r["to_entity"]):
-                        if other != name:
-                            next_frontier.append(other)
-            frontier = next_frontier
-    else:
-        rows = await core.db.fetch_all(
-            "SELECT * FROM knowledge_relations ORDER BY rowid DESC LIMIT 80")
-        for r in rows:
-            await _node(r["from_entity"])
-            await _node(r["to_entity"])
-            edges.append({"from": r["from_entity"], "to": r["to_entity"],
-                          "relation": r.get("relation_type", "")})
+    rows = await core.db.fetch_all(
+        "SELECT * FROM knowledge_relations ORDER BY rowid DESC LIMIT 80")
+    for r in rows:
+        await _node(r["from_entity"])
+        await _node(r["to_entity"])
+        edges.append({"from": r["from_entity"], "to": r["to_entity"],
+                      "relation": r.get("relation_type", "")})
     return Envelope(data={"nodes": list(nodes.values()), "edges": edges})
 
 

@@ -21,19 +21,16 @@ body .n-button:not(:disabled):not(.n-button--disabled-type):active {
   transform: scale(0.95) translateY(0);
   transition-duration: 0.08s;
 }
-body .n-button--primary-type {
-  box-shadow: 0 2px 12px rgba(143, 229, 96, 0.22);
+
+/* ---------- 按钮精修（轻量版）：保留胶囊圆角与柔和 hover，不做重背景 ----------
+ * 用户反馈 v3 的深色玻璃/渐变实底背景不如原版。回退背景设计至朴素形态：
+ * primary 保持 naive 原生绿色底，default 保持原生深色底；只统一胶囊圆角、
+ * hover 提亮 + 轻投影，active 按压。 */
+body .n-button {
+  --n-border-radius: 999px !important;
+  border-radius: var(--n-border-radius);
 }
-body .n-button--primary-type:not(:disabled):hover {
-  box-shadow:
-    0 4px 20px rgba(143, 229, 96, 0.38),
-    0 0 16px rgba(79, 214, 165, 0.22);
-}
-/* 默认型按钮：玻璃底 */
-body .n-button--default-type:not(.n-button--quaternary) {
-  background: rgba(20, 40, 28, 0.42);
-  backdrop-filter: blur(8px);
-}
+
 
 /* ---------- 输入类：玻璃底 + 聚焦光环 ---------- */
 body .n-input,
@@ -265,4 +262,26 @@ body .m-item:hover {
   body .greeting-card:hover {
     transform: none;
   }
+}
+
+/* ---------- 线稿图标对齐辅助：emoji → SumeruIcon 替换后的行内排版 ---------- */
+.inline-ic {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  vertical-align: middle;
+}
+.inline-ic svg { color: inherit; }
+
+h2.view-title-icon {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+h2.view-title-icon svg { color: var(--dendro, #8fe560); }
+
+/* n-button 内的 SumeruIcon 与文字基线对齐 */
+.n-button .n-button__content svg,
+.dbtn .l-body svg {
+  vertical-align: middle;
 }

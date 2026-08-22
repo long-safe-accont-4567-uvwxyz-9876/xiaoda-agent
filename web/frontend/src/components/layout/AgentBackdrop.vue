@@ -16,7 +16,8 @@ const targetUrl = computed(() => {
   return agentsStore.mainWallpaper || DEFAULT_BG
 })
 
-interface Layer { url: string; key: number }
+type LayerKind = 'image' | 'video' | 'html'
+interface Layer { url: string; key: number; kind: LayerKind }
 const layers = ref<Layer[]>([])
 let seq = 0
 let pendingUrl = ''
@@ -31,10 +32,23 @@ onBeforeUnmount(() => {
   if (pruneTimer) { clearTimeout(pruneTimer); pruneTimer = null }
 })
 
+function layerKind(url: string): LayerKind {
+  if (/\.(mp4|webm)(\?|$)/i.test(url)) return 'video'
+  if (/\.html?(\?|$)/i.test(url)) return 'html'
+  return 'image'
+}
+
 watch(targetUrl, (url) => {
   if (!url) return
   pendingUrl = url
   if (topUrl() === url) return
+  const kind = layerKind(url)
+  if (kind !== 'image') {
+    // 视频/HTML 无 Image 预加载探活；错误处理在元素事件上
+    // （视频 error→回退默认图；HTML 上传侧已静态校验）
+    pushLayer(url)
+    return
+  }
   const img = new Image()
   img.onload = () => { if (pendingUrl === url) pushLayer(url) }
   img.onerror = () => {
@@ -59,24 +73,50 @@ function sanitizeUrl(url: string): string {
 function pushLayer(url: string) {
   url = sanitizeUrl(url)
   if (topUrl() === url) return
-  layers.value.push({ url, key: ++seq })
+  layers.value.push({ url, key: ++seq, kind: layerKind(url) })
   if (pruneTimer) clearTimeout(pruneTimer)
   pruneTimer = setTimeout(() => {
     if (layers.value.length > 1) layers.value.splice(0, layers.value.length - 1)
     pruneTimer = null
   }, 1400)
 }
+
+function videoError() {
+  // 视频 canplay 前出错（404/解码失败）：回退默认背景，避免黑屏
+  const top = topUrl()
+  if (top && top !== DEFAULT_BG && layerKind(top) === 'video') pushLayer(DEFAULT_BG)
+}
 </script>
 
 <template>
   <div class="agent-backdrop" aria-hidden="true">
     <transition-group name="bg-fade">
-      <div
-        v-for="l in layers"
-        :key="l.key"
-        class="backdrop-layer"
-        :style="{ backgroundImage: `url('${l.url}')` }"
-      />
+      <template v-for="l in layers" :key="l.key">
+        <video
+          v-if="l.kind === 'video'"
+          class="backdrop-layer backdrop-video"
+          :src="l.url"
+          autoplay
+          loop
+          muted
+          playsinline
+          preload="auto"
+          @error="videoError"
+        />
+        <iframe
+          v-else-if="l.kind === 'html'"
+          class="backdrop-layer backdrop-html"
+          :src="l.url"
+          sandbox="allow-scripts"
+          referrerpolicy="no-referrer"
+          title="dynamic wallpaper"
+        />
+        <div
+          v-else
+          class="backdrop-layer"
+          :style="{ backgroundImage: `url('${l.url}')` }"
+        />
+      </template>
     </transition-group>
     <div class="backdrop-tint"></div>
   </div>
@@ -96,6 +136,22 @@ function pushLayer(url: string) {
   inset: 0;
   background-size: cover;
   background-position: center;
+}
+
+/* 视频层与图片层同构图：cover 等效于 object-fit + 全屏尺寸 */
+.backdrop-video {
+  object-fit: cover;
+  width: 100%;
+  height: 100%;
+}
+
+/* HTML 动画层：全屏、透明背景、不可交互（纯展示） */
+.backdrop-html {
+  width: 100%;
+  height: 100%;
+  border: none;
+  background: transparent;
+  pointer-events: none;
 }
 
 .bg-fade-enter-active {

@@ -1005,6 +1005,10 @@ def _add_rate_limit_middleware(app: FastAPI) -> None:
         logger.debug("server.config_fallback_error", exc_info=True)
         _rate_limit_db = str(Path(__file__).parent.parent / "data" / "rate_limit_buckets.sqlite")
     app.add_middleware(RateLimitMiddleware, persist_path=_rate_limit_db)
+    # API 响应 gzip 压缩（insight/memories 等大 JSON 实测 55KB 未压缩传输；
+    # minimum_size=1000 避免小响应的压缩开销反噬）
+    from fastapi.middleware.gzip import GZipMiddleware
+    app.add_middleware(GZipMiddleware, minimum_size=1000)
 
 
 def _add_security_and_sla_middleware(app: FastAPI) -> None:
@@ -1023,17 +1027,19 @@ def _add_security_and_sla_middleware(app: FastAPI) -> None:
             if response.status_code >= 400:
                 _sla.inc_error(f"http_{response.status_code}", request.url.path)
         response.headers["X-Trace-Id"] = _trace_id
-        response.headers["Content-Security-Policy"] = (
-            "default-src 'self'; "
-            "script-src 'self'; "
-            "style-src 'self' 'unsafe-inline'; "
-            "img-src 'self' data: blob:; "
-            "media-src 'self' data: blob:; "
-            "font-src 'self' data:; "
-            "connect-src 'self' ws: wss:; "
-            "frame-ancestors 'self' http://127.0.0.1:18089 http://localhost:18089; "
-            "object-src 'none'; base-uri 'self'"
-        )
+        # 已带专属 CSP 的响应（如 HTML 壁纸的 sandbox 沙箱）不覆盖
+        if "Content-Security-Policy" not in response.headers:
+            response.headers["Content-Security-Policy"] = (
+                "default-src 'self'; "
+                "script-src 'self'; "
+                "style-src 'self' 'unsafe-inline'; "
+                "img-src 'self' data: blob:; "
+                "media-src 'self' data: blob:; "
+                "font-src 'self' data:; "
+                "connect-src 'self' ws: wss:; "
+                "frame-ancestors 'self' http://127.0.0.1:18089 http://localhost:18089; "
+                "object-src 'none'; base-uri 'self'"
+            )
         response.headers["X-Content-Type-Options"] = "nosniff"
         response.headers["X-XSS-Protection"] = "1; mode=block"
         response.headers["Strict-Transport-Security"] = "max-age=31536000; includeSubDomains"

@@ -33,7 +33,7 @@ const wechatImg = '/assets/sponsor/wechat_qr.png'
           </div>
 
           <div class="footer-note">
-            <span class="footer-icon"><SumeruIcon name="tea" :size="14" /></span>
+            <span class="footer-icon"><SumeruIcon name="tea" :size="14" variant="duo" interactive /></span>
             <span class="footer-text">{{ t('sponsor.footerNote') }}</span>
           </div>
         </div>

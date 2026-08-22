@@ -226,5 +226,6 @@ async def web_browse_enhanced(url: str) -> ToolResult:
         # 优先级 3：原有 primp + html2text
         from tools.web_browse_tools import web_browse as _original_browse
         return await _original_browse(url)
-    except (RuntimeError, OSError, ValueError, ConnectionError) as e:
+    except (RuntimeError, OSError, ValueError, ConnectionError,
+                httpx.TimeoutException, httpx.RequestError) as e:
         return ToolResult.fail(f"浏览网页失败: {e!s}")

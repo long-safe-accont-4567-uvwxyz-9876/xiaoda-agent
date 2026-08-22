@@ -104,3 +104,12 @@ scripts/npu/*.bak-*
 # === Test artifacts ===
 _test.py
 tests/benchmark_results.json
+# === Rust hybrid PoC build artifacts ===
+rust_core/target/
+*.so
+
+# === vendored ffmpeg static builds (scripts/fetch_ffmpeg.py 下载) ===
+vendor/ffmpeg/**/ffmpeg
+vendor/ffmpeg/**/ffprobe
+vendor/ffmpeg/**/ffmpeg.exe
+vendor/ffmpeg/**/ffprobe.exe

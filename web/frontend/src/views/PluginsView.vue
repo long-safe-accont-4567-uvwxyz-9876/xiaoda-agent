@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { ref, onMounted, computed } from 'vue'
+import SumeruIcon from '../components/fx/SumeruIcon.vue'
 import { NButton, NTag, NPopconfirm, NSpin, NInput, NEmpty, NTabs, NTabPane, NModal, NForm, NFormItem, useMessage } from 'naive-ui'
 import { get, post, put } from '../api'
 import { t, tf } from '../i18n'
@@ -213,7 +214,7 @@ onMounted(() => { load(); loadMarket() })
   <div class="plugins-view">
     <div class="view-header">
       <h2>🧩 {{ t('pluginsView.title') }}</h2>
-      <n-button type="primary" :loading="discovering" @click="discoverPlugins">🔍 {{ t('pluginsView.scan') }}</n-button>
+      <n-button type="primary" :loading="discovering" @click="discoverPlugins"><SumeruIcon name="search" :size="14" variant="duo" tone="view" interactive /> {{ t('pluginsView.scan') }}</n-button>
     </div>
 
     <n-tabs v-model:value="activeTab" type="line" @update:value="onTabChange">
@@ -243,7 +244,7 @@ onMounted(() => { load(); loadMarket() })
               <n-button v-if="p.state === 'enabled'" size="tiny"
                         @click="doAction(p.id, 'reload')">{{ t('pluginsView.reload') }}</n-button>
               <n-button v-if="p.state === 'enabled' || p.state === 'loaded'" size="tiny" quaternary
-                        @click="openConfig(p.id, p.name)">⚙ 配置</n-button>
+                        @click="openConfig(p.id, p.name)"><SumeruIcon name="settings" :size="12" variant="duo" tone="edit" interactive /> 配置</n-button>
               <n-button size="tiny" :type="pluginTestResult[p.id]?.ok === false ? 'error' : 'success'"
                         :loading="testingPlugin[p.id]" @click="testPlugin(p.id)">
                 {{ pluginTestResult[p.id]?.ok === false ? t('pluginsView.retry') : t('pluginsView.test') }}
@@ -333,7 +334,7 @@ onMounted(() => { load(); loadMarket() })
 
     </n-tabs>
 
-    <n-modal v-model:show="showConfigModal" preset="card" :title="`⚙ ${configPluginName} — 插件配置`" style="width: min(520px, 94vw)">
+    <n-modal v-model:show="showConfigModal" preset="card" :title="`${configPluginName} — 插件配置`" style="width: min(520px, 94vw)">
       <n-spin :show="configLoading">
         <div v-if="Object.keys(configSchema).length" class="config-form">
           <div v-for="(schema, key) in configSchema" :key="key" class="config-field">

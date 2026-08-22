@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { ref, onMounted, watch, onBeforeUnmount } from 'vue'
+import SumeruIcon from '../../components/fx/SumeruIcon.vue'
 import { NPopover, NTag, NSpin, useMessage } from 'naive-ui'
 import { get, post, api } from '../../api'
 import { useChatStore } from '../../stores/chat'
@@ -223,7 +224,7 @@ const emit = defineEmits<{
               <span class="model-display-name">{{ m.display_name }}</span>
               <span class="model-id">{{ m.id }}</span>
               <div class="model-badges">
-                <span v-if="m.tool_calling" class="badge tool" :title="t('modelSelector.toolSupport')">🔧</span>
+                <span v-if="m.tool_calling" class="badge tool" :title="t('modelSelector.toolSupport')"><SumeruIcon name="tools" :size="12" variant="duo" interactive /></span>
                 <span v-if="m.vision" class="badge vision" :title="t('modelSelector.visionSupport')">👁</span>
                 <NTag v-if="m.free" type="success" size="small" class="free-tag">{{ t('modelSelector.free') }}</NTag>
               </div>

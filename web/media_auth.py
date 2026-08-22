@@ -90,6 +90,12 @@ class AuthStaticFiles(StaticFiles):
         if path.startswith("wallpapers/"):
             resp = await super().get_response(path, scope)
             resp.headers["Cache-Control"] = "no-cache, must-revalidate"
+            # HTML 动画壁纸：响应级 CSP 沙箱。直接导航访问时页面不带沙箱属性，
+            # 若以同源执行可携带 cookie 调用本站 API（CSRF 面）；iframe 嵌入时
+            # 与 sandbox="allow-scripts" 叠加，粒子/时钟动画不受影响。
+            if path.lower().endswith((".html", ".htm")):
+                resp.headers["Content-Security-Policy"] = "sandbox allow-scripts"
+                resp.headers["X-Content-Type-Options"] = "nosniff"
             return resp
         token = _token_from_scope(scope)
         if not _validate(token):

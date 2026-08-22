@@ -261,8 +261,58 @@ try:
     _WALLPAPER_DIR = MEDIA_DIR / "wallpapers"
 except ImportError:
     _WALLPAPER_DIR = Path(__file__).resolve().parent.parent / "media" / "wallpapers"
-_DATAURL_RE = re.compile(r"^data:image/(png|jpe?g|webp);base64,(.+)$", re.DOTALL)
+_DATAURL_RE = re.compile(r"^data:image/(png|jpe?g|webp|gif);base64,(.+)$", re.DOTALL)
+_DATAURL_VIDEO_RE = re.compile(r"^data:video/(mp4|webm);base64,(.+)$", re.DOTALL)
+_DATAURL_HTML_RE = re.compile(r"^data:text/html;base64,(.+)$", re.DOTALL)
+# HTML 壁纸静态安全校验：外链脚本/嵌 iframe/js 协议拒绝（渲染侧另有 iframe sandbox 双保险）
+_HTML_DANGEROUS_RE = re.compile(
+    rb"<script[^>]+src\s*=|<iframe|javascript\s*:", re.IGNORECASE)
+_HTML_MAX_BYTES = 2 * 1024 * 1024
 _EXT = {"png": "png", "jpg": "jpg", "jpeg": "jpg", "webp": "webp"}
+_VIDEO_EXT = {"mp4": "mp4", "webm": "webm"}
+_GIF_MAX_BYTES = 20 * 1024 * 1024
+_VIDEO_MAX_BYTES = 50 * 1024 * 1024
+# 低性能副本转码参数（设计稿策略一：去音频/≤720p/24fps/恒定质量快速预设）
+_FFMPEG_TIMEOUT = 120
+
+
+async def _transcode_video_lowperf(src: Path, dst: Path) -> Path:
+    """生成视频的低性能副本：去音频、缩放至 ≤720p（保纵横比）、24fps、WebM。
+
+    ffmpeg 不可用/超时/失败时抛 RuntimeError，由调用方拒绝本次上传——
+    不落原始大文件（弱设备播放原视频正是本功能要避免的）。
+    """
+    import asyncio
+
+    from utils.ffmpeg_finder import find_ffmpeg
+
+    ffmpeg = find_ffmpeg()
+    if not ffmpeg:
+        raise RuntimeError(
+            "ffmpeg 不可用（vendor 未分发且系统未安装），无法处理视频壁纸")
+    cmd = [
+        ffmpeg, "-y", "-i", str(src),
+        "-vf", "scale='min(1280,iw)':-2:flags=fast_bilinear,fps=24",
+        "-an", "-c:v", "libvpx-vp9", "-b:v", "0", "-crf", "34",
+        "-row-mt", "1", "-deadline", "realtime", "-cpu-used", "8",
+        str(dst),
+    ]
+    try:
+        proc = await asyncio.create_subprocess_exec(
+            *cmd,
+            stdout=asyncio.subprocess.DEVNULL,
+            stderr=asyncio.subprocess.PIPE,
+        )
+        _, stderr = await asyncio.wait_for(proc.communicate(), timeout=_FFMPEG_TIMEOUT)
+    except asyncio.TimeoutError as exc:
+        proc.kill()
+        await proc.wait()  # 回收，防僵尸进程；PIPE 缓冲随进程退出释放
+        raise RuntimeError("视频转码超时") from exc
+    except OSError as exc:
+        raise RuntimeError(f"视频转码启动失败: {exc}") from exc
+    if proc.returncode != 0 or not dst.exists() or dst.stat().st_size == 0:
+        tail = (stderr or b"")[-200:].decode("utf-8", "replace")
+        raise RuntimeError(f"视频转码失败: {tail}")
 
 
 @router.post("/agents/{name}/wallpaper", response_model=Envelope[dict])
@@ -270,36 +320,82 @@ async def upload_wallpaper(name: str, body: dict, request: Request, _user: str =
     _validate_agent_name(name)
     """上传背景板（data URL），保存后写入该 Agent 的 wallpaper 字段。
 
+    支持三类：静态图片（png/jpg/webp ≤8MB）、GIF 动图（≤20MB，浏览器原生
+    循环播放）、视频 mp4/webm（≤50MB，服务端 ffmpeg 转低配副本：去音频/
+    ≤720p/24fps/WebM——弱设备不播原片）。
+
     每次上传生成带时间戳的新文件名，不覆盖旧文件，从根本上解决浏览器缓存问题。
     同时清理该 agent 的旧壁纸文件（仅保留最新一张）。
     """
     registry = _registry(request)
     if not registry.get(name):
         raise HTTPException(404, f"Agent {name} 不存在")
-    m = _DATAURL_RE.match(body.get("data_url", ""))
-    if not m:
-        raise HTTPException(400, "仅支持 png/jpg/webp 的 data URL")
+    data_url = body.get("data_url", "")
+    m = _DATAURL_RE.match(data_url)
+    vm = _DATAURL_VIDEO_RE.match(data_url) if not m else None
+    hm = _DATAURL_HTML_RE.match(data_url) if not m and not vm else None
+    if not m and not vm and not hm:
+        raise HTTPException(400, "仅支持 png/jpg/webp/gif 图片、mp4/webm 视频或 text/html 动画的 data URL")
     try:
-        raw = base64.b64decode(m.group(2), validate=True)
+        # image/video 正则 payload 在 group(2)；HTML 正则只有 group(1)
+        matched = m or vm
+        payload_b64 = matched.group(2) if matched else hm.group(1)
+        raw = base64.b64decode(payload_b64, validate=True)
     except (OSError, KeyError, ValueError, RuntimeError, TypeError) as exc:
         logger.debug("agents.base64_decode_failed: {}", exc, exc_info=True)
         raise HTTPException(400, "base64 解码失败") from None
     except Exception as exc:
         logger.exception("agents.upload_wallpaper.unexpected_error")
         raise HTTPException(400, "base64 解码失败") from None
-    if len(raw) > 8 * 1024 * 1024:
-        raise HTTPException(400, "图片不能超过 8MB")
+
     _WALLPAPER_DIR.mkdir(parents=True, exist_ok=True)
     # 生成带时间戳的新文件名，不覆盖旧文件 → 浏览器缓存自动失效
     ts = int(time.time())
-    ext = _EXT[m.group(1).lower()]
-    fp = _WALLPAPER_DIR / f"{name}_{ts}.{ext}"
-    fp.write_bytes(raw)
+    if m:
+        subtype = m.group(1).lower()
+        if subtype == "gif":
+            kind, ext, limit = "gif", "gif", _GIF_MAX_BYTES
+        else:
+            kind, ext, limit = "image", _EXT[subtype], 8 * 1024 * 1024
+        if len(raw) > limit:
+            mb = limit // (1024 * 1024)
+            raise HTTPException(400, f"{'GIF' if kind == 'gif' else '图片'}不能超过 {mb}MB")
+        fp = _WALLPAPER_DIR / f"{name}_{ts}.{ext}"
+        fp.write_bytes(raw)
+    elif vm:
+        kind = "video"
+        vext = _VIDEO_EXT[vm.group(1).lower()]
+        if len(raw) > _VIDEO_MAX_BYTES:
+            raise HTTPException(400, "视频不能超过 50MB")
+        src = _WALLPAPER_DIR / f"{name}_{ts}_src.{vext}"
+        dst = _WALLPAPER_DIR / f"{name}_{ts}.webm"
+        src.write_bytes(raw)
+        try:
+            await _transcode_video_lowperf(src, dst)
+        except RuntimeError as exc:
+            src.unlink(missing_ok=True)
+            dst.unlink(missing_ok=True)
+            logger.warning("agents.wallpaper_transcode_failed name={} error={}", name, str(exc)[:200])
+            raise HTTPException(422, str(exc)) from None
+        src.unlink(missing_ok=True)  # 原始大文件不保留（设计稿策略一）
+        fp = dst
+    elif hm:
+        # HTML 动画壁纸：轻量粒子/时钟/天气类（设计稿第二阶段）。
+        # 渲染侧 iframe sandbox 隔离；此处静态拒绝显式危险模式与超大文件。
+        kind = "html"
+        if len(raw) > _HTML_MAX_BYTES:
+            raise HTTPException(400, "HTML 壁纸不能超过 2MB")
+        if _HTML_DANGEROUS_RE.search(raw):
+            raise HTTPException(422, "HTML 壁纸不允许外链脚本、内嵌 iframe 或 javascript: 协议")
+        fp = _WALLPAPER_DIR / f"{name}_{ts}.html"
+        fp.write_bytes(raw)
+
     url = f"/media/wallpapers/{fp.name}"
     # 清理该 agent 的旧上传壁纸文件（保留最新一张，不删除默认壁纸 {name}.ext）
+    known_exts = set(_EXT.values()) | set(_VIDEO_EXT.values()) | {"gif", "html"}
     try:
         for old in _WALLPAPER_DIR.glob(f"{name}_*.*"):
-            if old != fp and old.suffix.lstrip(".") in _EXT:
+            if old != fp and old.suffix.lstrip(".") in known_exts:
                 old.unlink(missing_ok=True)
     except OSError:
         logger.debug("agents.old_config_unlink_failed", exc_info=True)

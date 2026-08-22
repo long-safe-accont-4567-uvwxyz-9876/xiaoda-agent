@@ -1,7 +1,8 @@
 <script setup lang="ts">
 import { ref, reactive, computed, onMounted, onBeforeUnmount, nextTick, watch } from 'vue'
+import SumeruIcon from '../components/fx/SumeruIcon.vue'
 import {
-  NTabs, NTabPane, NButton, NInput, NSlider, NTag, NPopconfirm,
+  NTabs, NTabPane, NButton, NInput, NInputNumber, NSlider, NTag, NPopconfirm,
   NCollapse, NCollapseItem, NModal, NForm, NFormItem, NSelect,
   NSpace, useMessage,
 } from 'naive-ui'
@@ -52,7 +53,14 @@ const memQuery = ref('')
 const importanceMin = ref(0)
 const graphEl = ref<HTMLElement | null>(null)
 const graphEntity = ref(t('insightView.graphEntityPh'))
-const graphDepth = ref<1 | 2>(1)
+// 图谱深度：1-5 自由调节（后端批量 BFS 任意深度 <70ms），不再固定两档
+const graphDepth = ref<number>(1)
+// 按需展开状态：已加载节点集合 + 展开中的节点（防重复请求）
+const expandedNodes = ref<Set<string>>(new Set())
+const expandingNode = ref('')
+// 增量图数据（搜索/展开合并后的累积结果）
+const kgNodes = ref<any[]>([])
+const kgEdges = ref<any[]>([])
 const showUniverse = ref(false)
 const activeTab = ref('emotion')
 let knowledgeChart: echarts.ECharts | null = null
@@ -387,50 +395,87 @@ async function removeInstinct(id: number) {
   } catch (e: any) { message.error(e.message) }
 }
 
-async function loadKnowledge() {
+// ── 图谱增量合并渲染 ──
+// 按需展开模型：初始只拉搜索实体 1 跳邻域；单击节点增量拉取其邻域合并进图。
+// kgNodes/kgEdges 是累积状态，mergeGraphData 去重合并，renderKnowledge 全量重绘
+// （echarts force 图 setOption 增量挂边会破坏已固定节点坐标，全量重绘 + 坐标保留）。
+
+function mergeGraphData(newNodes: any[], newEdges: any[]) {
+  const nodeIdx = new Map<string, any>()
+  for (const n of kgNodes.value) nodeIdx.set(n.name, n)
+  for (const n of newNodes) {
+    if (!nodeIdx.has(n.name)) {
+      nodeIdx.set(n.name, { name: n.name, value: n.kind, kind: n.kind })
+      kgNodes.value.push(nodeIdx.get(n.name))
+    }
+  }
+  const edgeKey = (e: any) => `${e.from}||${e.relation}||${e.to}`
+  const edgeIdx = new Set(kgEdges.value.map(edgeKey))
+  for (const e of newEdges) {
+    const k = edgeKey(e)
+    if (!edgeIdx.has(k)) {
+      edgeIdx.add(k)
+      kgEdges.value.push(e)
+    }
+  }
+}
+
+async function renderKnowledge() {
   try {
-    const data = await getKnowledgeGraph(graphEntity.value, graphDepth.value)
     await nextTick()
     if (!graphEl.value) return
     if (knowledgeChart) { knowledgeChart.dispose() }
     knowledgeChart = echarts.init(graphEl.value)
 
-    // 按节点对分组，计算每条边的独立曲率，避免重叠
-    const pairKey = (a: string, b: string) => [a, b].sort().join('||')
-    const pairCount: Record<string, number> = {}
-    const pairIdx: Record<string, number> = {}
-    for (const e of data.edges) {
-      const k = pairKey(e.from, e.to)
-      pairCount[k] = (pairCount[k] || 0) + 1
+  // 按节点对分组，计算每条边的独立曲率，避免重叠
+  const pairKey = (a: string, b: string) => [a, b].sort().join('||')
+  const pairCount: Record<string, number> = {}
+  const pairIdx: Record<string, number> = {}
+  for (const e of kgEdges.value) {
+    const k = pairKey(e.from, e.to)
+    pairCount[k] = (pairCount[k] || 0) + 1
+  }
+
+  const links = kgEdges.value.map((e: any) => {
+    const k = pairKey(e.from, e.to)
+    const total = pairCount[k]
+    const idx = pairIdx[k] || 0
+    pairIdx[k] = idx + 1
+    // 单条边用小曲率，多条边均匀展开
+    let curveness: number
+    if (total === 1) {
+      curveness = 0.1
+    } else {
+      // 均匀分布在 -0.4 ~ 0.4 之间
+      curveness = -0.4 + (idx / (total - 1)) * 0.8
     }
+    return {
+      source: e.from,
+      target: e.to,
+      relation: e.relation,
+      lineStyle: { curveness },
+    }
+  })
 
-    const links = data.edges.map((e: any) => {
-      const k = pairKey(e.from, e.to)
-      const total = pairCount[k]
-      const idx = pairIdx[k] || 0
-      pairIdx[k] = idx + 1
-      // 单条边用小曲率，多条边均匀展开
-      let curveness: number
-      if (total === 1) {
-        curveness = 0.1
-      } else {
-        // 均匀分布在 -0.4 ~ 0.4 之间
-        curveness = -0.4 + (idx / (total - 1)) * 0.8
-      }
-      return {
-        source: e.from,
-        target: e.to,
-        relation: e.relation,
-        lineStyle: { curveness },
-      }
-    })
+  // 力导向布局，拖拽后固定
+  // 渲染性能分级：>150 节点关边标签（edgeLabel 是 force 图最大开销），
+  // >400 节点再关节点标签，避免大图一次 setOption 卡死主线程
+  const nodeTotal = kgNodes.value.length
+  const showEdgeLabel = nodeTotal <= 150
+  const showNodeLabel = nodeTotal <= 400
+  const symbolSize = nodeTotal > 300 ? 14 : 26
 
-    // 力导向布局，拖拽后固定
-    const nodeData = data.nodes.map((n: any) => ({
-      name: n.name,
-      value: n.kind,
-      symbolSize: 26,
-    }))
+  const nodeData = kgNodes.value.map((n: any) => ({
+    name: n.name,
+    value: n.kind ?? n.value,
+    kind: n.kind,
+    symbolSize,
+    label: { show: showNodeLabel },
+    // 已展开节点用描边标记，提示用户该邻域已加载
+    itemStyle: expandedNodes.value.has(n.name)
+      ? { color: '#7fd650', borderColor: '#fbbf24', borderWidth: 2 }
+      : { color: '#7fd650' },
+  }))
 
     knowledgeChart.setOption({
       tooltip: {
@@ -448,11 +493,13 @@ async function loadKnowledge() {
       series: [{
         type: 'graph', layout: 'force', roam: true, draggable: true,
         force: { repulsion: 260, edgeLength: 120, gravity: 0.08, friction: 0.32 },
-        label: { show: true, color: '#f2f7ee', fontSize: 11 },
+        label: { show: showNodeLabel, color: '#f2f7ee', fontSize: 11 },
         edgeLabel: {
-          show: true, fontSize: 9, color: '#e8d5a3',
+          show: showEdgeLabel, fontSize: 9, color: '#e8d5a3',
           formatter: (p: any) => p.data.relation || '',
         },
+        // 大图关闭逐帧动画重排：layoutAnimation=false 一次算完，避免长时间掉帧
+        layoutAnimation: nodeTotal <= 200,
         itemStyle: { color: '#7fd650' },
         lineStyle: { color: 'rgba(232, 213, 163, 0.5)' },
         emphasis: { disabled: true },
@@ -465,6 +512,13 @@ async function loadKnowledge() {
         data: nodeData,
         links,
       }],
+    })
+
+    // 单击节点：增量展开该节点邻域（按需加载核心交互）
+    knowledgeChart.on('click', (params: any) => {
+      if (params.dataType === 'node' && params.data?.name) {
+        expandNode(params.data.name)
+      }
     })
 
     // 拖拽松手后固定节点，不弹回
@@ -485,12 +539,53 @@ async function loadKnowledge() {
   } catch (e: any) { message.error(e.message) }
 }
 
+// ── 按需展开：拉取单节点 1 跳邻域合并进图 ──
+async function expandNode(name: string) {
+  if (expandingNode.value || expandedNodes.value.has(name)) return
+  expandingNode.value = name
+  try {
+    const data = await getKnowledgeGraph(name, 1)
+    mergeGraphData(data.nodes || [], data.edges || [])
+    expandedNodes.value.add(name)
+    await renderKnowledge()
+  } catch (e: any) {
+    message.error(e.message)
+  } finally {
+    expandingNode.value = ''
+  }
+}
+
+// 搜索/深度变化 → 重置累积图，从目标实体重新起步
+async function resetAndLoadGraph(entity: string, depth: number) {
+  kgNodes.value = []
+  kgEdges.value = []
+  expandedNodes.value = new Set()
+  try {
+    const data = await getKnowledgeGraph(entity, depth)
+    mergeGraphData(data.nodes || [], data.edges || [])
+    if (entity.trim()) expandedNodes.value.add(entity.trim())
+    await renderKnowledge()
+  } catch (e: any) { message.error(e.message) }
+}
+
+function onDepthInput(v: number | null) {
+  // 输入框清空时归一为当前上限（深度恒有值，下游无需判空）
+  graphDepth.value = v ?? 6
+}
+
+const _depthDebounce = ref<ReturnType<typeof setTimeout> | null>(null)
+watch(graphDepth, (v) => {
+  if (v === null || v === undefined) return
+  if (_depthDebounce.value) clearTimeout(_depthDebounce.value)
+  _depthDebounce.value = setTimeout(() => loadKnowledgeData(), 600)
+})
+
 async function loadKnowledgeData() {
   try {
     const [ents, rels] = await Promise.all([listKnowledgeEntities(), listKnowledgeRelations()])
     kgEntities.value = ents || []
     kgRelations.value = rels || []
-    await loadKnowledge()
+    await resetAndLoadGraph(graphEntity.value.trim(), graphDepth.value)
   } catch (e: any) { message.error(e.message) }
 }
 
@@ -500,7 +595,7 @@ async function removeKgEntity(name: string) {
     kgEntities.value = kgEntities.value.filter(e => e.name !== name)
     kgRelations.value = kgRelations.value.filter(r => r.from_entity !== name && r.to_entity !== name)
     message.success(t('insightView.entityDeleted'))
-    await loadKnowledge()
+    await resetAndLoadGraph(graphEntity.value.trim(), graphDepth.value)
   } catch (e: any) { message.error(e.message) }
 }
 
@@ -509,7 +604,7 @@ async function removeKgRelation(id: string) {
     await deleteKnowledgeRelation(id)
     kgRelations.value = kgRelations.value.filter(r => String(r.id) !== id)
     message.success(t('insightView.relationDeleted'))
-    await loadKnowledge()
+    await resetAndLoadGraph(graphEntity.value.trim(), graphDepth.value)
   } catch (e: any) { message.error(e.message) }
 }
 
@@ -554,17 +649,17 @@ const _sourceLabels: Record<string, string> = {
   daily_login: '每日登录',
 }
 const _sourceIcons: Record<string, string> = {
-  chat: '💬',
-  deep_chat: '📖',
-  support: '💝',
-  task_collab: '🤝',
-  daily_login: '🌅',
+  chat: 'chat',
+  deep_chat: 'note',
+  support: 'insight',
+  task_collab: 'agents',
+  daily_login: 'sprout',
 }
 function getSourceLabel(source: string): string {
   return _sourceLabels[source] || source || '未知来源'
 }
 function getSourceIcon(source: string): string {
-  return _sourceIcons[source] || '✨'
+  return _sourceIcons[source] || 'sparkle'
 }
 
 function onXpLevelUp(e: any) {
@@ -575,7 +670,7 @@ function onXpLevelUp(e: any) {
 }
 
 const kindIcon: Record<string, string> = {
-  memory: '🌱', event: '⚙️', note: '📝', greeting: '💌',
+  memory: 'sprout', event: 'tools', note: 'note', greeting: 'mail',
 }
 
 function fmtTs(ts: number): string {
@@ -585,7 +680,7 @@ function fmtTs(ts: number): string {
 
 <template>
   <div class="insight-view">
-    <h2 class="view-title">🌱 {{ t('insightView.title') }}</h2>
+    <h2 class="view-title view-title-icon"><SumeruIcon name="insight" :size="20" variant="duo" tone="magic" interactive /> {{ t('insightView.title') }}</h2>
     <n-tabs type="line" animated v-model:value="activeTab">
       <n-tab-pane name="emotion" :tab="t('insightView.emotion')">
         <Tilt3D :max-x="4" :max-y="6"><div class="emotion-current glass-panel">
@@ -682,13 +777,23 @@ function fmtTs(ts: number): string {
           <div class="kg-toolbar">
             <n-input v-model:value="graphEntity" :placeholder="t('insightView.entityFocusPh')" size="small"
                      style="max-width: 200px" @keydown.enter="loadKnowledgeData" />
-            <n-button size="tiny" :type="graphDepth === 1 ? 'primary' : 'default'"
-                      @click="graphDepth = 1; loadKnowledgeData()">{{ t('insightView.depth1') }}</n-button>
-            <n-button size="tiny" :type="graphDepth === 2 ? 'primary' : 'default'"
-                      @click="graphDepth = 2; loadKnowledgeData()">{{ t('insightView.depth2') }}</n-button>
-            <n-button size="tiny" type="primary" @click="openAddModal('entity')">{{ t('insightView.addEntity') }}</n-button>
-            <n-button size="tiny" type="primary" @click="openAddModal('relation')">{{ t('insightView.addRelation') }}</n-button>
-            <n-button size="tiny" type="primary" @click="showUniverse = true">{{ t('insightView.fullscreen') }}</n-button>
+            <div class="kg-depth-input" :title="t('insightView.depthHint')">
+              <span class="kg-depth-label">{{ t('insightView.depthLabel') }}</span>
+              <n-input-number
+                v-model:value="graphDepth"
+                size="small"
+                :min="1"
+                :max="12"
+                :show-button="false"
+                placeholder="6"
+                style="width: 64px"
+                @update:value="onDepthInput"
+              />
+            </div>
+            <span v-if="expandingNode" class="kg-expanding">{{ t('insightView.expanding') }}「{{ expandingNode }}」…</span>
+            <n-button size="tiny" type="primary" @click="openAddModal('entity')"><SumeruIcon name="plus" :size="12" variant="duo" tone="add" interactive /> {{ t('insightView.addEntity') }}</n-button>
+            <n-button size="tiny" type="primary" @click="openAddModal('relation')"><SumeruIcon name="plus" :size="12" variant="duo" tone="add" interactive /> {{ t('insightView.addRelation') }}</n-button>
+            <n-button size="tiny" type="primary" @click="showUniverse = true"><SumeruIcon name="sparkle" :size="12" variant="duo" tone="magic" interactive /> {{ t('insightView.fullscreen') }}</n-button>
           </div>
           <div ref="graphEl" class="chart tall"></div>
         </div>
@@ -864,7 +969,7 @@ function fmtTs(ts: number): string {
           <h4>{{ t('insightView.xpHistoryTitle') }}</h4>
           <div class="xp-history-list" v-if="xpState.history?.length">
             <div v-for="entry in xpState.history" :key="entry.timestamp" class="xp-history-item">
-              <span class="xp-history-icon">{{ getSourceIcon(entry.source) }}</span>
+              <span class="xp-history-icon"><SumeruIcon :name="getSourceIcon(entry.source)" :size="14" /></span>
               <div class="xp-history-body">
                 <span class="xp-history-label">{{ getSourceLabel(entry.source) }}</span>
                 <span class="xp-history-time">{{ formatTime(entry.timestamp) }}</span>
@@ -1069,8 +1174,31 @@ function fmtTs(ts: number): string {
   font-size: 11px; color: var(--wisdom); margin-top: 4px;
 }
 
-.kg-toolbar { display: flex; align-items: center; gap: 10px; margin-bottom: 8px; }
+.kg-toolbar { display: flex; align-items: center; gap: 10px; margin-bottom: 8px; flex-wrap: wrap; }
 .kg-toolbar h4 { font-size: 13px; color: var(--dendro); margin-right: auto; }
+
+.kg-depth-input {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.kg-depth-label {
+  font-size: 12px;
+  color: var(--moon-dim);
+  white-space: nowrap;
+}
+
+.kg-expanding {
+  font-size: 11px;
+  color: var(--wisdom);
+  animation: kg-pulse 1.2s ease-in-out infinite;
+}
+
+@keyframes kg-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.45; }
+}
 
 .note-row { display: flex; align-items: center; gap: 10px; padding: 4px 0; font-size: 13px; }
 .note-content { flex: 1; }

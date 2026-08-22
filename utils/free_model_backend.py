@@ -124,9 +124,12 @@ class FreeModelBackend:
             if not choices:
                 return None
             return choices[0].get("message", {}).get("content", "")
-        except (RuntimeError, OSError, ValueError, ConnectionError) as e:
+        except (RuntimeError, OSError, ValueError, ConnectionError,
+                httpx.TimeoutException, httpx.RequestError) as e:
+            # httpx 超时/请求异常不属 OSError（TimeoutException str 常为空），
+            # 必须显式捕获，否则穿透到调用方形成失败风暴
             logger.debug("free_model.call_failed",
-                         error=str(e)[:200], error_type=type(e).__name__)
+                         error=repr(e)[:200], error_type=type(e).__name__)
             return None
 
     async def _call_local(self, messages: list[dict], temperature: float,
@@ -160,7 +163,8 @@ async def call_local_model(router: Any, messages: list[dict], temperature: float
             timeout=timeout,
         )
         return result if isinstance(result, str) else None
-    except (RuntimeError, OSError, ValueError, ConnectionError) as e:
+    except (RuntimeError, OSError, ValueError, ConnectionError,
+            httpx.TimeoutException, httpx.RequestError) as e:
         logger.warning("local_model.call_failed",
-                       error=str(e)[:200], error_type=type(e).__name__)
+                       error=repr(e)[:200], error_type=type(e).__name__)
         return None

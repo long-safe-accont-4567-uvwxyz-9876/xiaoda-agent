@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { ref, onMounted, onBeforeUnmount, computed } from 'vue'
+import SumeruIcon from '../components/fx/SumeruIcon.vue'
 import {
   NButton, NSwitch, NInputNumber, NSelect, NTag, NPopconfirm, NSlider, NInput, NModal, useMessage,
 } from 'naive-ui'
@@ -77,23 +78,26 @@ onBeforeUnmount(() => {
 
 async function loadAll() {
   try {
-    const [p, r, c, u, dm] = await Promise.all([
+    // discover 涉及外部 API 聚合（冷启动 2.6s），不并入主 Promise.all——
+    // 页面先用核心数据渲染，discover 到货后单独更新（stale-while-revalidate 下通常 <20ms）
+    const [p, r, c, u] = await Promise.all([
       providersStore.loadProviders(),
       get('/models/routes'),
       get<any[]>('/models/credentials/status'),
       get('/models/usage?days=7'),
-      get<any[]>('/models/discover').catch(() => []),
     ])
     void p
     routes.value = r.routes
     fallback.value = r.fallback
     credentials.value = c
     usage.value = u
-    discoveredModels.value = dm
     renderChart()
     loadTemperature()
     loadFreqPenalty()
     loadPresPenalty()
+    get<any[]>('/models/discover')
+      .then(dm => { discoveredModels.value = dm })
+      .catch(() => {})
   } catch (e: any) {
     message.error(e.message)
   }
@@ -403,8 +407,8 @@ async function moveProvider(pid: string, dir: -1 | 1) {
 <template>
   <div class="models-view">
     <div class="view-header">
-      <h2>🧠 {{ t('modelsView.title') }}</h2>
-      <n-button type="primary" @click="openProviderForm(null)">＋ {{ t('modelsView.customProvider') }}</n-button>
+      <h2 class="view-title-icon"><SumeruIcon name="models" :size="20" variant="duo" tone="magic" interactive /> {{ t('modelsView.title') }}</h2>
+      <n-button type="primary" @click="openProviderForm(null)"><SumeruIcon name="plus" :size="14" variant="duo" tone="add" interactive /> {{ t('modelsView.customProvider') }}</n-button>
     </div>
 
     <Tilt3D :max-x="4" :max-y="6">

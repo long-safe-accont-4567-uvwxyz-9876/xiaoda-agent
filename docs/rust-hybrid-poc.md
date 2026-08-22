@@ -1,0 +1,244 @@
+# Rust 混合架构 PoC 调研报告与实现 — perf/rust-hybrid-poc
+
+> 结论先行：**混合架构方向可行且已验证**，但收益边界比通用宣传窄得多。
+> 本 PR 用本机（香橙派 aarch64，2417 真实节点）实测数据划出了「值得下沉」的
+> 精确边界，并落地了首个下沉模块（扩散通道 CPU 热点，**7.3x 加速、等价性
+> 零分差、默认关闭、回退安全**）。
+
+---
+
+## 一、多方调研
+
+### 1.1 本机运行时数据（2026-08-21，生产库 agent.db 实测）
+
+对贴出的「Python FastAPI + Rust 底层」提案，先用量化数据检验其每个论断：
+
+| 提案论断 | 本机实测 | 判定 |
+|---|---|---|
+| 「嵌入向量计算是 CPU 瓶颈」 | embed 3.5s = NPU 外部进程排队 + API 重试，非 Python CPU | ❌ Rust 无收益 |
+| 「jieba 分词慢」 | `lcut_for_search` 单次 **0.09ms** | ❌ 非瓶颈 |
+| 「向量检索/余弦慢」 | numpy 批量 2400×1024 仅 **4.9ms**（BLAS 已是原生码） | ❌ 非瓶颈 |
+| 「KG 召回慢」 | 3s = LLM 实体提取网络调用 | ❌ 非 CPU |
+| 「记忆打分排序是解释器开销」 | `_direct_channel`+`_compute_idf` = **53ms/查询纯 Python 循环** | ✅ 唯一符合下沉特征 |
+
+检索端到端 avg 8.2s 中，真正属于「Python 解释器开销」的只有 ~5%。
+**通用宣传的「Rust 快 10-100x」不能直接套用——先测瓶颈构成再动手。**
+
+### 1.2 生产案例佐证（外部证据）
+
+Rust 下沉在「解释器开销主导」的热路径上确实成立：
+
+- **Hugging Face tokenizers**：Rust 为原始实现，1GB 文本分词 <20s（服务器 CPU）
+- **orjson**：序列化比标准库 json 快 **10-13x**（twitter.json 11.1x / github.json 13.6x）
+- **ruff**：官方口径比 Flake8 快 **10-100x**，用户实测 150-1000x
+
+共同点：这些案例的下沉对象都是**逐字符/逐token 的解释器循环**——与本 PoC
+选中的 `_direct_channel`（2400 次 json.loads + set 运算 + 子串扫描）同构。
+
+### 1.3 关键反证实验：FFI 边界开销（本 PR 最重要的发现）
+
+同一份 Rust 实现，两种调用模式实测（2417 节点，含 FFI 开销）：
+
+| 模式 | 每查询耗时 | 对比 Python 52.6ms |
+|---|---|---|
+| 无状态调用（每次传全量节点数据） | **83.3ms** | **0.6x，净亏** |
+| 常驻索引（NodeIndex 数据驻留 Rust 侧） | **7.2ms** | **7.3x** |
+
+原因：无状态模式每次跨 FFI 拷贝 2400×(id+keys_json+text+weight)，
+序列化开销 ~83ms 超过全部计算收益。**推论：Python↔Rust 混合架构中，
+「数据驻留 + 微参数调用」是正收益的前提条件；传大数组的无状态调用
+模式在任何规模下都不划算。** 这直接验证了原提案避坑点第 4 条并给出量化边界。
+
+### 1.4 工具链验证（aarch64 本机）
+
+- rustc 1.98.0 stable（RsProxy 镜像），零第三方 crate（手写 JSON 数组解析，
+  免 serde_json），release 构建 **12 秒**，产物 539KB
+- PyO3 0.23 在 aarch64 Linux + Python 3.11 正常工作
+- 注意：`.so` 必须去掉 `lib` 前缀；项目根同名 Cargo 目录会遮蔽模块，
+  产物需装入 site-packages（CI 打包需同步处理）
+
+## 二、实现内容
+
+```
+rust_core/                    # 新增：PyO3 crate（零第三方依赖）
+├── Cargo.toml                # pyo3 0.23, release+lto
+└── src/lib.rs                # NodeIndex(常驻索引) + direct_channel + cosine_topk(备选)
+memory/rust_hybrid.py         # 新增：接入层（开关/回退/规模门控）
+memory/spreading_activation.py # 修改：recall() Step3+4 可选走 Rust 路径
+tests/test_rust_hybrid_poc.py # 新增：7 项等价性测试（真实数据+边界用例）
+docs/rust-hybrid-poc.md       # 本报告
+```
+
+### 语义契约
+
+Rust `direct_channel` 与 Python `_compute_idf + _direct_channel` 逐位一致：
+IDF 公式 ln(N/(1+df))、weight_bias floor 0.35、双向子串 len>=4 计分 0.6 系数、
+keys 字段损坏按空集处理。等价性测试覆盖：基础命中、双向子串、损坏 JSON、
+缺字段、Unicode 大小写、引擎集成、开关门控，**最大分差 0.00e+00**。
+
+### 安全设计
+
+- **默认关闭**：`RUST_HYBRID_ENABLED=0`（默认）时行为与主线完全一致
+- **三重门控**：环境变量 + 模块可导入 + 节点数 ≥500（小规模 Python 已够快）
+- **回退安全**：模块缺失/.so 架构不符/运行时异常 → 静默回退纯 Python，
+  检索功能永不因本模块失败中断
+- **索引一致性**：Rust 索引随 alive_nodes 节点数变化自动重建（<10ms）
+
+## 三、验收数据
+
+| 项目 | 结果 |
+|---|---|
+| 等价性（4 条真实查询 × 2417 节点） | 最大分差 0.00e+00 |
+| 加速比（常驻索引 vs Python） | **7.3x**（52.6ms → 7.2ms） |
+| 无状态 FFI 反证 | 0.6x 净亏（已记录为架构约束） |
+| 扩散通道回归（87 项） | 全部通过 |
+| 全量回归 | **4877 passed**, 10 skipped |
+| 构建时间（aarch64 release） | 12s |
+
+## 四、第二个下沉位：扩散激活图游走（2026-08-22）
+
+按「解释器开销 >30%」门槛对扩散通道内部逐段剖析（2417 节点 / 100 万边真实库）：
+
+| 阶段 | 实测 | 判定 |
+|---|---|---|
+| `get_alive_nodes`（SQL+组装） | 498ms | IO 主导，不下沉 |
+| **`_spreading_channel` 图游走** | **914~1164ms**（hop0 一跳扩散 1340 节点，两跳遍历 ~67 万边） | ✅ 纯解释器 dict 循环 |
+| `_semantic_rerank`（rapidfuzz×360） | 7.7ms | 不达标，暂缓 |
+| `get_memories_by_ids`（120 条） | 5.0ms | 不达标 |
+
+实现：`NodeIndex.load_edges`（100 万行 → 下标邻接表驻留，597ms 一次性）+
+`spreading_channel`（游走全程 usize+f64，零字符串哈希）。等价性验证
+**28x 加速（1171ms → 41.6ms）、最大分差 2.6e-10**（含未知种子、阈值剪枝、
+alive 过滤边界）；开发中捕获并修复种子双重累积 bug（分差恰为 1.0 被等价性
+测试当场拦截——等价性断言的价值实证）。
+
+## 五、第三批候选测量（2026-08-22）：全部证伪，当前无达标下沉位
+
+| 候选 | 实测 | 判定 |
+|---|---|---|
+| 上下文压缩裁剪循环（smart_summary_truncate×30 条） | **0.1ms/次**，且全天零触发（9282 轮消息） | ❌ 低频+微小 |
+| `get_alive_nodes` dict 组装段 | **24ms**（SQL 拉取 59ms 为 IO 主导） | ❌ 不达标 |
+
+结论：检索主路径上的纯解释器热点已被前两个下沉位（打分 12.5x + 图游走 28x）
+收割完毕；剩余耗时均为 IO / 外部进程 / LLM 网络，Rust 无收益。
+后续仅当出现新的实测热点（新功能引入的解释器循环）时再按本判定法评估。
+
+## 六、历史阻塞点全量挖掘（2026-08-22，应"能否加入候选队列"之问）
+
+对 08-21 全天日志的 `task_slow`(13 类) / `stage_slow`(5 阶段) / timeout 逐类根因判定：
+
+| 阻塞点 | 频次/量级 | 根因 | Rust 候选？ |
+|---|---|---|---|
+| `_local_ai_health_loop` | n=30 avg 5643s max 38693s | 设备扫描挂起（已修：单飞+120s 超时） | ❌ 已修，非 CPU |
+| `portrait_consolidate_failed` | n=52，5 分钟风暴持续 5h | **httpx.TimeoutException 穿透窄 except**（不属 OSError，str 为空）→ 本批已修 | ❌ 是 bug 非 CPU |
+| notebook 加载 avg 3658ms n=104 | 每消息必付 | 无竞争实测 0.9ms——纯共享 aiosqlite 连接排队 + USB 盘争抢 | ❌ IO/调度 |
+| `llm_verify` 16.1s avg | n=52 | LLM 网络调用 | ❌ 网络 |
+| `query_cache.embed_timeout` n=42 | 集中于 11 点/19 点 | NPU embed 排队（后台批量编码占满会话） | ❌ 外部进程 |
+| `memory_retrieval` 8.7s avg n=94 | — | 已被本 PR 三项优化大幅压缩 | ✅ 已收割 |
+| `build_messages` 15.7s n=6 | 低频尖峰 | 与 notebook/embed 排队同源 | ❌ |
+
+**结论：历史阻塞点中没有新的达标 Rust 候选**——它们分属「已修复 bug」「连接池调度」「外部进程/网络」三类；但挖出并修复了 1 个真实缺陷（窄 except 漏捕 httpx 超时族，影响 free_model_backend / result_wrapper / xiaoli_agent 共 4 处调用点）。
+
+## 六B、对话主链路扫描（2026-08-22，第三轮候选排查）
+
+对 pipeline 各阶段按「总耗时×频次」排序逐段定性（08-21 全天日志 + 定向微基准）：
+
+| 阶段 | avg / 总耗时 | 根因定性 | Rust 候选？ |
+|---|---|---|---|
+| llm_verify | 9.7s / 502s | LLM 网络调用 | ❌ |
+| memory | 7.9s / 411s | 已被本 PR 三项优化压缩 | ✅ 已收割 |
+| llm_call | 5.9s / 291s | LLM 网络调用 | ❌ |
+| dedup | 1.6s / 74s | 相似度计算仅 3ms（rapidfuzz C 实现）；慢点全为重试生成 LLM 调用 | ❌ |
+| build_msg | 1.1s / 56s | 尖峰全为视觉 LLM 调用计入；token 统计 3.78ms/次不达标 | ❌ |
+| restore/finalize | ~0.3s | IO+组装混合，量级不足 | ❌ |
+
+**第三轮结论：主链路无新达标候选。estimate_tokens 逐字符循环 3.78ms/次
+（60KB history）远低于 30% 门槛；所有秒级阶段均为网络/外部进程。**
+
+## 六C、前端性能方案研判（2026-08-22，应"前端 Rust 候选"之问）
+
+对 WebUI 接口实测负载数据逐条检验「服务端预处理/WASM/二进制传输/Tauri」方案：
+
+| 文档方案 | 本项目实测 | 判定 |
+|---|---|---|
+| 服务端预处理减负 | 全部数据接口 ≤55KB / ≤13ms 服务端耗时（除 providers 0.9s——根因是 PBKDF2 重复派生，已修：指纹缓存 0.9s→0.01s） | ❌ 无"超大原始数据丢给前端"问题 |
+| 二进制传输替代 JSON | 最大响应 55KB，本机局域网传输 <5ms | ❌ 收益不成立；**已加 GZip 中间件**：55KB→8.5KB（-85%），弱网/移动端有实际意义 |
+| Rust WASM 分担前端计算 | 前端重型计算点仅 echarts 图表渲染（浏览器原生 Canvas/WebGL），无批量向量/统计运算在前端执行 | ❌ 无承接对象 |
+| Tauri 替代 Electron | 项目桌面打包用 PyInstaller（非 Electron），无 WebView 内存问题 | ❌ 不适用 |
+
+**意外收获**：providers 接口 0.9s 根因为 credential_vault 的 PBKDF2（20 万次
+迭代 ≈128ms）在每次 encrypt/decrypt 重新派生——providers 列表对每个凭证
+各解密一次线性放大。修复为按（机器身份, 盐）指纹缓存的派生密钥，接口
+0.9s→0.01s（~60x）；机器绑定语义不变（身份变化自动失效重派生，
+test_encrypt_different_per_machine 回归通过）。同批启用 gzip。
+
+**结论：前端侧无 Rust 候选；本轮实际产出为 2 个服务端修复（KDF 缓存 + gzip）。**
+
+## 七、线上全链路 A/B 实测（2026-08-22，RUST_HYBRID_ENABLED 开关切换）
+
+对运行中的生产服务（API `/retrieval/test`，8 条多样化查询同序对比）：
+
+| 口径 | 纯 Python | Rust 混合 | 提升 |
+|---|---|---|---|
+| 端到端平均 | **7.59s** | **2.46s** | **3.1x** |
+| 最快/最慢查询 | 4.13s / 11.41s | 1.63s / 4.70s | 尾延迟减半以上 |
+| spreading 通道稳态 | ~2000-2500ms | **642-1300ms** | ~2x |
+
+注：中间测得 2.0x 版本系 load_edges 每查询重复执行（100 万行转换 ~600ms
+未做版本跟踪）所致；以 `_graph_ts` 为版本指纹修复后落地 3.1x。
+等价性由 tests/test_rust_hybrid_poc.py 保证（开关切换前后命中一致）。
+
+**剩余瓶颈构成**（Rust 开启后）：vec_embed_search ~0.9-2s（NPU 进程排队）、
+channel_kg ~2.7s（LLM 实体提取网络调用）、get_alive_nodes ~0.5s（SQL IO）、
+hybrid_rerank ~0.8s（reranker API）——均为外部依赖，Rust 无收益。
+
+**结论：全链路验证通过，混合架构在生产路径收益为真实 3.1x，建议保留开关常开。**
+
+## 八、后续路线（若合并后观察达标）
+
+1. **构建链**：maturin wheel 化进 CI 与安装包（`build.sh` 已自动同步 venv）
+2. **线上验证**：合并后开启 `RUST_HYBRID_ENABLED=true` 观察一个流量周期
+3. **不建议下沉**（数据已证伪归档）：embed/NPU 调度、KG LLM 调用、jieba、
+   sqlite-vec 检索、`_semantic_rerank`（7.7ms）、上下文压缩（0.1ms+零触发）、
+   alive_nodes 组装（24ms）、notebook 加载（连接排队）
+4. **不建议全量重构**：本项目 211 个 API 端点 + 40+ 工具 + 三通道 bot 的
+   业务面重写风险远大于收益
+
+## 五、开启方式（合并后）
+
+```bash
+# .env 追加
+RUST_HYBRID_ENABLED=1        # 默认 0
+# 可选：RUST_HYBRID_MIN_NODES=500
+```
+
+## 六、前端 3D 知识图谱 Rust/WASM 优化评估（2026-08-22）
+
+**结论：当前不下沉。** 分层加载设计落地后，3D 图谱实际规模 31-77 节点
+（depth=12 极限实测 40 节点，按需展开上限 ~300），远未触及性能瓶颈。
+
+### 实测数据（d3-force-3d 每 tick，octree 加速已内置，本机基准）
+
+| 规模 | 每 tick | 60fps 预算判定 |
+|---|---|---|
+| 31 节点/217 边（默认） | 0.93ms | ✅ 无压力 |
+| 77 节点/273 边（depth=3） | 1.94ms | ✅ 无压力 |
+| 300 节点/800 边 | 6.19ms | ✅ 可行 |
+| 1000 节点/2500 边 | 33.8ms | ❌ ~30fps 掉帧 |
+| 2400 节点/6000 边 | 84.6ms | ❌ ~12fps 卡顿 |
+
+### 若未来需要（>1000 节点场景）的路线
+
+- 热点确认：3d-force-graph 无 worker，d3-force-3d 布局在**主线程**每帧执行，
+  many-body 力虽经 octree（Barnes-Hut）加速仍是大头
+- 生态现状：无 drop-in 的 Rust/WASM d3-force 替换。可参考：
+  - [WebCola 用 Rust+WASM 重写热路径的案例](https://cprimozic.net/blog/speeding-up-webcola-with-webassembly/)
+  - [vibe-graph-layout-gpu](https://lib.rs/crates/vibe-graph-layout-gpu)：Rust+WebGPU，声称 10k+ 节点 60fps
+  - [fdg 框架](https://github.com/grantshandy/fdg)（Rust 原生力导向）
+- 更低成本的替代：Web Worker 化布局（迁移现有 tick 到 worker，零 WASM 依赖）
+  或 forceEngine 切 ngraph 引擎对比——建议作为第一步，WASM 作为二步
+
+### 判定法（延续「解释器开销 >30%」门槛）
+
+前端场景的对应门槛应为「布局 tick 超 16.6ms（60fps 预算）」：当前 0.9-6.2ms，
+余量 3-18 倍。等实际规模逼近 1000 节点再启动（届时按需展开也自然会限制规模）。

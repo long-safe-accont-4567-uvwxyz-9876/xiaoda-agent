@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { ref, onMounted, onBeforeUnmount, computed, watch } from 'vue'
+import SumeruIcon from '../components/fx/SumeruIcon.vue'
 import {
   NButton, NSwitch, NModal, NForm, NFormItem, NInput, NInputNumber,
   NSelect, NTabs, NTabPane, NTag, NPopconfirm, NDynamicTags, NCollapse,
@@ -185,12 +186,45 @@ function onAdvancedInput() {
   advancedTouched.value = true
 }
 
+function isVideoWallpaper(url: string): boolean {
+  return /\.(mp4|webm)(\?|$)/i.test(url)
+}
+
+// 与 AgentBackdrop.sanitizeUrl 同规则：仅本站媒体路径可直接渲染，
+// 手输的外域 URL 在预览中显示占位而非直接加载
+function sanitizeWallpaperUrl(url: string): string | null {
+  if (url.startsWith('/media/wallpapers/') || url.startsWith('/media/agents/')) return url
+  if (url.startsWith('data:image/')) return url
+  return null
+}
+
+const WP_LIMITS: Record<string, number> = {
+  image: 8 * 1024 * 1024,
+  gif: 20 * 1024 * 1024,
+  video: 50 * 1024 * 1024,
+}
+
+function wallpaperKind(file: File): 'image' | 'gif' | 'video' | null {
+  if (file.type === 'image/gif') return 'gif'
+  if (file.type === 'video/mp4' || file.type === 'video/webm') return 'video'
+  if (file.type.startsWith('image/')) return 'image'
+  return null
+}
+
 function pickWallpaper(e: Event) {
   const input = e.target as HTMLInputElement
   const file = input.files?.[0]
   if (!file) return
-  if (file.size > 8 * 1024 * 1024) {
-    message.error(t('agentsView.imgTooLarge'))
+  const kind = wallpaperKind(file)
+  if (!kind) {
+    message.error(t('agentsView.wpUnsupported'))
+    input.value = ''
+    return
+  }
+  if (file.size > WP_LIMITS[kind]) {
+    const key = kind === 'image' ? 'agentsView.imgTooLarge'
+      : kind === 'gif' ? 'agentsView.gifTooLarge' : 'agentsView.videoTooLarge'
+    message.error(t(key))
     input.value = ''
     return
   }
@@ -470,7 +504,7 @@ async function uploadVoiceForAgent() {
   <div class="agents-view">
     <div class="view-header">
       <h2>🧚 {{ t('agentsView.title') }}</h2>
-      <n-button type="primary" @click="openEditor(null)">＋ {{ t('agentsView.createSub') }}</n-button>
+      <n-button type="primary" @click="openEditor(null)"><SumeruIcon name="plus" :size="14" variant="duo" tone="add" interactive /> {{ t('agentsView.createSub') }}</n-button>
     </div>
 
     <div class="agent-grid">
@@ -498,7 +532,7 @@ async function uploadVoiceForAgent() {
           </div>
           <div class="card-stats">
             🛠 {{ a.tool_count ?? '—' }} {{ t('agentsView.toolsUnit') }}
-            <span v-if="a.mcp_servers?.length"> · 🔌 {{ a.mcp_servers.length }} {{ t('agentsView.mcpUnit') }}</span>
+            <span v-if="a.mcp_servers?.length" class="inline-ic"> · <SumeruIcon name="mcp" :size="12" variant="duo" interactive /> {{ a.mcp_servers.length }} {{ t('agentsView.mcpUnit') }}</span>
           </div>
           <div class="card-desc">{{ a.route_description || t('agentsView.noRouteDesc') }}</div>
           <div class="card-actions" v-if="!a.builtin && !a.is_main">
@@ -594,11 +628,26 @@ async function uploadVoiceForAgent() {
                   <n-button v-if="!isCreate" :loading="uploadingWp" @click="wpInput?.click()">
                     {{ t('agentsView.uploadImage') }}
                   </n-button>
-                  <input ref="wpInput" type="file" accept="image/png,image/jpeg,image/webp"
+                  <input ref="wpInput" type="file"
+                         accept="image/png,image/jpeg,image/webp,image/gif,video/mp4,video/webm"
                          style="display: none" @change="pickWallpaper" />
                 </div>
-                <div v-if="editing.wallpaper" class="wallpaper-preview"
-                     :style="{ backgroundImage: `url('${editing.wallpaper}')` }" />
+                <template v-if="editing.wallpaper">
+                  <template v-if="sanitizeWallpaperUrl(editing.wallpaper)">
+                    <video v-if="isVideoWallpaper(editing.wallpaper)"
+                           class="wallpaper-preview" :src="editing.wallpaper"
+                           autoplay loop muted playsinline />
+                    <iframe v-else-if="/\.html?(\?|$)/i.test(editing.wallpaper)"
+                            class="wallpaper-preview" :src="editing.wallpaper"
+                            sandbox="allow-scripts" referrerpolicy="no-referrer"
+                            title="wallpaper preview" />
+                    <div v-else class="wallpaper-preview"
+                         :style="{ backgroundImage: `url('${editing.wallpaper}')` }" />
+                  </template>
+                  <div v-else class="wallpaper-preview wallpaper-preview-blocked">
+                    {{ t('agentsView.wpExternalBlocked') }}
+                  </div>
+                </template>
                 <span v-else class="wallpaper-hint">{{ t('agentsView.wallpaperHint') }}</span>
               </div>
             </n-form-item>
@@ -630,7 +679,7 @@ async function uploadVoiceForAgent() {
             </div>
           </div>
           <div v-if="Object.keys(permissions.mcp_servers || {}).length" class="perm-group">
-            <div class="perm-group-head"><span>🔌 {{ t('agentsView.mcpServices') }}</span></div>
+            <div class="perm-group-head"><span class="inline-ic"><SumeruIcon name="mcp" :size="13" variant="duo" interactive /> {{ t('agentsView.mcpServices') }}</span></div>
             <div class="perm-rows">
               <div v-for="(info, name) in permissions.mcp_servers" :key="name" class="perm-row">
                 <span class="perm-name">{{ name }}</span>
