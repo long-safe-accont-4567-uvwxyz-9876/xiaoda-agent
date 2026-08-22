@@ -59,7 +59,9 @@
 
 ---
 
-## Minor #3：docs/API.md 与 docs/ARCHITECTURE.md 行尾格式变化淹没内容变化
+## [DONE] Minor #3：docs/API.md 与 docs/ARCHITECTURE.md 行尾格式变化淹没内容变化
+
+> 已于 2026-08-22 解决：新增 `.gitattributes`（*.md/*.py/*.ts/*.vue/*.json 等一律 `text eol=lf`，构建产物 `web/dist/** -text` 排除），并 `git add --renormalize` 一次性迁移既有 108 个 CRLF 文件（内容零变化，`git diff -w` 为空）。后续 review 用 `git diff -w` 忽略行尾噪音即可。见 commit 719b5f71。
 
 - **影响范围**：[docs/API.md](file:///home/orangepi/ai-agent/docs/API.md) 与 [docs/ARCHITECTURE.md](file:///home/orangepi/ai-agent/docs/ARCHITECTURE.md)
 - **复现方式**：
