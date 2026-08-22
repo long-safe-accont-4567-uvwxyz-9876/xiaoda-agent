@@ -140,10 +140,15 @@ const FILLS: Record<string, string> = {
   pointer-events: none;
   z-index: -1;
 }
-.sumeru-ic--hover:hover {
+.sumeru-ic--hover:hover,
+/* 图标嵌在按钮内：父容器 hover 时同样触发（否则指针在按钮 padding 区时动效不生效） */
+:is(button, .n-button, .dbtn, [class*='btn']):hover .sumeru-ic--hover,
+a:hover > .sumeru-ic--hover {
   transform: scale(1.14);
 }
-.sumeru-ic--hover:hover::after {
+.sumeru-ic--hover:hover::after,
+:is(button, .n-button, .dbtn, [class*='btn']):hover .sumeru-ic--hover::after,
+a:hover > .sumeru-ic--hover::after {
   opacity: 0.18;
   animation: ic-breath 1.3s ease-in-out infinite;
 }
