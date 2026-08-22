@@ -174,6 +174,18 @@ wf_id 在白名单内 → 该流可用;否则前端隐藏"启动"按钮(占位�
      NodeType 增加 MODEL/SKILL;AGENT 保留 AGENT_NOT_IMPLEMENTED(等 M1.5)。
      tests/workflow_v2/test_executor.py 21 项 + test_runtime_smoke.py
      端到端(TOOL→MODEL→END 全链路),全套 56 通过。
+**M1.5(AGENT 子智能体节点)**:§3 表中 AGENT 行的"二期(M1.5)"落地——
+   决策: 迁移产物按 config 键三分派,主路径走真实子智能体。
+   - 状态: ✅ 2026-08-22 落地 — `_run_agent`:`agent_ref` → 子智能体
+     (subagent_loader 走 core.dispatcher.get_agent,chat(task,context)
+     委托,超时/异常/隐私过滤对齐 LLM 节点);无 agent_ref 时
+     `skill_refs`→SKILL 回退、`model_policy`→MODEL 回退(M1 迁移兼容);
+     找不到/不可用/无 loader 一律显式失败(AGENT_NOT_FOUND /
+     AGENT_LOADER_UNAVAILABLE / AGENT_TIMEOUT),永不静默。
+     build_runtime 注入 `_subagent_loader_from_core`;
+     tests/workflow_v2/test_m5_agent.py 13 项(fake SubAgent + 三分派 +
+     async loader + 输出过滤),旧 test_agent_node_not_implemented 改为
+     断言 loader 缺失仍显式失败。
 **M2(前端 revision 模型)**:§4;验收: 浏览器走查 发布→运行→回滚→再次运行;
   typecheck + vue 构建通过。
    - 状态: ✅ 2026-08-22 落地 — `POST /revisions` 显式快照(不升 current)、
@@ -203,6 +215,14 @@ wf_id 在白名单内 → 该流可用;否则前端隐藏"启动"按钮(占位�
     workflow 级指标 `GET /workflow-metrics`(运行/步骤/事件/审批 debug 计数);
     REVIEW 文档 docs/workflow-v2-review.md + 原则文档 docs/workflow-v2-principles.md;
     测试: test_m4_review.py 12 项;全套 workflow_v2 93 + 版本契约 57 通过。
+**M5(前端 REVIEW 审批卡片收口)**:M2 §5.4 决策 #2 承诺的前端审批通道;
+M4 REVIEW 节点服务端已就绪,前端补齐。
+   - 状态: ✅ 2026-08-22 落地 — api 层 `listWorkflowReviews` /
+     `decideWorkflowReview`(approve/reject + 可选备注);WorkflowView 运行
+     弹窗内 `waiting_input` 运行项内嵌 REVIEW 审批卡片(待决 review 列表、
+     备注输入、批准/拒绝按钮、决策中 loading、决策后刷新运行列表并停轮询);
+     卡片随 2.5s 轮询增量加载,无新增轮询周期。
+     typecheck + vite 构建通过。
 
 ## 8. 决策表(2026-08-22 已全部拍板)
 
