@@ -27,7 +27,9 @@ body .n-button:not(:disabled):not(.n-button--disabled-type):active {
  * primary=草元素渐变实底；default=深色玻璃；error=暗琥珀警示；warning/info=琥珀。
  * 全部胶囊圆角 + 内阴影压边 + hover 光晕外扩 + active 按压下陷。 */
 body .n-button {
-  border-radius: 999px;
+  /* naive 通过内联 --n-border-radius: 3px 控制圆角，必须覆写变量本身 */
+  --n-border-radius: 999px !important;
+  border-radius: var(--n-border-radius);
   overflow: hidden;
   position: relative;
 }

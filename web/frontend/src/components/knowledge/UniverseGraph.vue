@@ -12,7 +12,8 @@
  *  - 闲置公转通过 controlType:'orbit' 的 OrbitControls.autoRotate 实现（引擎每帧调用 controls.update）。
  */
 import { ref, computed, onMounted, onBeforeUnmount, watch } from 'vue'
-import { NInput, NButton, NTag, useMessage } from 'naive-ui'
+import { NInput, NButton, NTag, useMessage, NInputNumber
+} from 'naive-ui'
 import ForceGraph3D, { type NodeObject, type ForceGraph3DInstance } from '3d-force-graph'
 import * as THREE from 'three'
 import { UnrealBloomPass } from 'three/examples/jsm/postprocessing/UnrealBloomPass.js'

@@ -2,7 +2,7 @@
 import { ref, reactive, computed, onMounted, onBeforeUnmount, nextTick, watch } from 'vue'
 import SumeruIcon from '../components/fx/SumeruIcon.vue'
 import {
-  NTabs, NTabPane, NButton, NInput, NSlider, NTag, NPopconfirm,
+  NTabs, NTabPane, NButton, NInput, NInputNumber, NSlider, NTag, NPopconfirm,
   NCollapse, NCollapseItem, NModal, NForm, NFormItem, NSelect,
   NSpace, useMessage,
 } from 'naive-ui'
@@ -778,9 +778,9 @@ function fmtTs(ts: number): string {
               />
             </div>
             <span v-if="expandingNode" class="kg-expanding">{{ t('insightView.expanding') }}「{{ expandingNode }}」…</span>
-            <n-button size="tiny" type="primary" @click="openAddModal('entity')"><SumeruIcon name="plus" :size="12" /> {{ t('insightView.addEntity') }}</n-button>
-            <n-button size="tiny" type="primary" @click="openAddModal('relation')"><SumeruIcon name="plus" :size="12" /> {{ t('insightView.addRelation') }}</n-button>
-            <n-button size="tiny" type="primary" @click="showUniverse = true"><SumeruIcon name="sparkle" :size="12" /> {{ t('insightView.fullscreen') }}</n-button>
+            <n-button size="tiny" type="primary" @click="openAddModal('entity')"><SumeruIcon name="plus" :size="12" variant="duo" tone="add" interactive /> {{ t('insightView.addEntity') }}</n-button>
+            <n-button size="tiny" type="primary" @click="openAddModal('relation')"><SumeruIcon name="plus" :size="12" variant="duo" tone="add" interactive /> {{ t('insightView.addRelation') }}</n-button>
+            <n-button size="tiny" type="primary" @click="showUniverse = true"><SumeruIcon name="sparkle" :size="12" variant="duo" tone="magic" interactive /> {{ t('insightView.fullscreen') }}</n-button>
           </div>
           <div ref="graphEl" class="chart tall"></div>
         </div>

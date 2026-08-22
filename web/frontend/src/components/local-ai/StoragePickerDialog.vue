@@ -77,7 +77,7 @@ watch(() => props.show, show => {
         <n-checkbox v-model:checked="saveAsDefault">保存为默认目录</n-checkbox>
       </div>
       <div class="directory-list">
-        <button v-for="entry in entries" :key="entry" type="button" @click="browse(resolveEntryPath(entry))"><SumeruIcon name="folder" :size="14" /> {{ entry }}</button>
+        <button v-for="entry in entries" :key="entry" type="button" @click="browse(resolveEntryPath(entry))"><SumeruIcon name="folder" :size="14" variant="duo" tone="view" interactive /> {{ entry }}</button>
         <span v-if="!entries.length && !loading">当前目录没有可浏览的子目录</span>
       </div>
     </div>
