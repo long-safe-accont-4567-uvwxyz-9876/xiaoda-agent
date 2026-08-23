@@ -13,6 +13,7 @@ import subprocess
 import threading
 import time
 import uuid
+from collections import OrderedDict
 from pathlib import Path
 from typing import Any
 
@@ -34,8 +35,17 @@ from fastapi import APIRouter, WebSocket, WebSocketDisconnect  # noqa: E402
 from loguru import logger  # noqa: E402
 
 from agent_core.user_web import WebUser  # noqa: E402
-from config import STREAM_STATUS_PUSH, STREAM_TEXT_PUSH, STREAM_TOOL_STATUS  # noqa: E402
+from config import (  # noqa: E402
+    STREAM_STATUS_PUSH,
+    STREAM_TEXT_PUSH,
+    STREAM_TOOL_STATUS,
+    STRUCTURED_STREAM_EVENTS,
+)
 from core.event_bus import event_bus  # noqa: E402
+from llm_gateway.stream_protocol import (  # noqa: E402
+    StreamEventSequencer,
+    StructuredStreamProtocolError,
+)
 
 router = APIRouter()
 
@@ -90,6 +100,8 @@ class ConnectionManager:
         self._send_queues: dict[str, asyncio.Queue] = {}
         self._writer_tasks: dict[str, asyncio.Task] = {}
         self._term_start_tasks: set[asyncio.Task] = set()
+        self._stream_sessions: OrderedDict[tuple[str, str], dict[str, Any]] = OrderedDict()
+        self._MAX_STREAM_SESSIONS = 256
         self._SEND_QUEUE_MAX = 64  # 有界队列上限；溢出的连接视为过慢并关闭
 
     def register(self, ws: WebSocket) -> str:
@@ -136,6 +148,8 @@ class ConnectionManager:
         if wtask and not wtask.done():
             wtask.cancel()
         self._send_queues.pop(conn_id, None)
+        for key in [key for key in self._stream_sessions if key[0] == conn_id]:
+            self._stream_sessions.pop(key, None)
         await self.cancel_connection_tasks(conn_id)
 
     def track_message_task(self, conn_id: str, msg_id: str, task: asyncio.Task) -> None:
@@ -213,31 +227,123 @@ class ConnectionManager:
                 await self.unregister(conn_id)
                 return
 
+    def _stream_frames(self, conn_id: str, event: dict) -> list[dict]:
+        """按双帧兼容策略计算应入队的帧列表。
+
+        STRUCTURED_STREAM_EVENTS 开启时，聊天生命周期事件（stream_text/
+        tool_status/final/error）同时产出两路帧：
+          [0] legacy 帧 —— 供旧客户端（已部署 bundle 只认 stream_text/final 等同名帧）
+          [1] stream_event v1 信封 —— 供新前端（seq 单调去重 + 迟到事件防护）
+        文本帧两路都只携带绝对 accumulated（由本端按 delta 重建/采信生产者），
+        不携带增量 delta：旧客户端（accumulated 绝对覆盖）、新前端
+        （delta 为空时回退 accumulated 绝对覆盖）以及同时消费两路的客户端，
+        无论到达顺序如何都不会重复拼接文本。返回 [] 表示该事件被结构化协议
+        抑制（tool_event 全局广播、终态之后的迟到事件）。
+        """
+        if not STRUCTURED_STREAM_EVENTS:
+            return [event]
+        msg_id = str(event.get("msg_id") or "")
+        if not msg_id:
+            return [event]
+        event_type = str(event.get("type") or "")
+        # tool_event 是无稳定请求身份的全局广播；结构化模式改用请求绑定的 tool_status。
+        if event_type == "tool_event":
+            return []
+        if event_type not in {
+            "stream_text", "tool_status", "final", "error",
+        }:
+            return [event]
+        key = (conn_id, msg_id)
+        session = self._stream_sessions.get(key)
+        if session is None:
+            session = {
+                "sequencer": StreamEventSequencer(msg_id),
+                "turn": None,
+                "accumulated": "",
+            }
+            self._stream_sessions[key] = session
+            while len(self._stream_sessions) > self._MAX_STREAM_SESSIONS:
+                self._stream_sessions.popitem(last=False)
+        else:
+            self._stream_sessions.move_to_end(key)
+        terminal = event_type in {"final", "error"}
+        payload = {k: v for k, v in event.items() if k not in {"type", "msg_id"}}
+        turn = int(payload.pop("turn", 0) or 0)
+        mapped_event = {
+            "stream_text": "text_delta",
+            "tool_status": "tool_status",
+            "final": "final",
+            "error": "abort" if payload.get("code") == "ABORTED" else "error",
+        }[event_type]
+        try:
+            envelope = session["sequencer"].emit(
+                mapped_event, turn=turn, terminal=terminal, **payload,
+            )
+        except StructuredStreamProtocolError:
+            # 终态之后的迟到事件：两路一并抑制，避免旧客户端回放过期内容。
+            return []
+        if event_type == "stream_text":
+            accumulated = self._track_stream_text(session, turn, payload)
+            legacy = {
+                "type": "stream_text",
+                "msg_id": msg_id,
+                "accumulated": accumulated,
+                "turn": turn,
+            }
+            envelope.pop("delta", None)
+            envelope["accumulated"] = accumulated
+        else:
+            legacy = event
+        return [legacy, envelope]
+
+    @staticmethod
+    def _track_stream_text(session: dict[str, Any], turn: int, payload: dict) -> str:
+        """维护每条流的绝对文本快照：生产者给的 accumulated 优先，否则按 delta 累积。
+
+        turn 变化视为新一轮文本流，快照从头重建（与逐 turn 流式语义一致）。
+        """
+        provided = str(payload.get("accumulated") or "")
+        delta = str(payload.get("delta") or "")
+        if session["turn"] != turn:
+            session["turn"] = turn
+            session["accumulated"] = provided or delta
+        elif provided:
+            session["accumulated"] = provided
+        else:
+            session["accumulated"] += delta
+        return session["accumulated"]
+
     def _enqueue(self, conn_id: str, event: dict) -> bool:
         """非阻塞入队一个事件；连接不存在返回 False。
 
         队列满（连接过慢）时：丢弃最旧的事件为新事件腾位，而非注销连接。
         这样最新/关键消息（如最终回复）仍能送达，不牺牲功能性；被丢弃的只是
-        过期可视化推送。
+        过期可视化推送。结构化模式下一条逻辑事件可能展开为 legacy+信封双帧
+        （见 _stream_frames），每帧独立套用同样的溢出策略；因文本帧均为绝对
+        快照，任一帧被挤出队列都不会造成内容错乱。
         """
+        frames = self._stream_frames(conn_id, event)
+        if not frames:
+            return True
         if conn_id not in self._connections:
             return False
         q = self._send_queues.get(conn_id)
         if q is None:
             return False
-        try:
-            q.put_nowait(event)
-        except asyncio.QueueFull:
+        for frame in frames:
             try:
-                q.get_nowait()  # 丢最旧，保最新
-            except asyncio.QueueEmpty:
-                # 队列已被消费完，无可丢弃事件（正常路径）
-                logger.debug("ws.send_queue_drain_empty conn_id={}", conn_id)
-            try:
-                q.put_nowait(event)
+                q.put_nowait(frame)
             except asyncio.QueueFull:
-                logger.warning("ws.send_queue_overflow conn_id={}", conn_id)
-                return False
+                try:
+                    q.get_nowait()  # 丢最旧，保最新
+                except asyncio.QueueEmpty:
+                    # 队列已被消费完，无可丢弃事件（正常路径）
+                    logger.debug("ws.send_queue_drain_empty conn_id={}", conn_id)
+                try:
+                    q.put_nowait(frame)
+                except asyncio.QueueFull:
+                    logger.warning("ws.send_queue_overflow conn_id={}", conn_id)
+                    return False
         return True
 
     async def send_to(self, conn_id: str, event: dict) -> None:
@@ -958,6 +1064,9 @@ def _make_status_callback(conn_id: str, msg_id: str):
                 "stage": message.get("stage", ""),
                 "label": message.get("label", ""),
                 "detail": message.get("detail", ""),
+                "tool_call_id": message.get("tool_call_id", ""),
+                "turn": message.get("turn", 0),
+                "index": message.get("index", 0),
             })
             return
         if STREAM_STATUS_PUSH:

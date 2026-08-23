@@ -14,7 +14,6 @@ from __future__ import annotations
 import asyncio
 import json
 import os
-import sqlite3
 import threading
 import time
 import weakref
@@ -25,13 +24,11 @@ from typing import Any, Optional
 from loguru import logger
 
 try:
-    from utils.atomic_write import atomic_write, _restrict_file_permissions_windows
+    from utils.atomic_write import _restrict_file_permissions_windows, atomic_write
 except Exception:  # pragma: no cover
     atomic_write = None  # type: ignore[assignment]
     def _restrict_file_permissions_windows(path):  # type: ignore[no-redef]
         return
-
-from ilink_client import ILinkClient, SessionExpiredError, ILinkRetError
 
 from channel_adapter_base import (
     ChannelAdapterBase,
@@ -41,7 +38,7 @@ from channel_adapter_base import (
     load_json_credentials,
     save_json_credentials,
 )
-
+from ilink_client import ILinkClient, ILinkRetError, SessionExpiredError
 
 # ============================================================================
 # 常量定义
@@ -115,6 +112,22 @@ ILINK_DEFAULT_BASE_URL = "https://ilinkai.weixin.qq.com"
 _ACTIVE_BOT: "WeChatBotAdapter | None" = None
 
 
+def _get_ctx_cache(bot: "WeChatBotAdapter") -> TTLCache:
+    values = bot._ctx_by_user
+    stamps = getattr(bot, "_ctx_by_user_ts", None)
+    if stamps is None:
+        now = time.time()
+        stamps = {key: now for key in values}
+        bot._ctx_by_user_ts = stamps
+    ttl = getattr(bot, "_CTX_TTL", 3600)
+    max_size = getattr(bot, "_CTX_MAX", 256)
+    cache = getattr(bot, "_ctx_cache", None)
+    if cache is None or cache.values is not values or cache.stamps is not stamps:
+        cache = TTLCache(values, stamps, ttl=ttl, max_size=max_size)
+        bot._ctx_cache = cache
+    return cache
+
+
 def get_active_bot() -> "WeChatBotAdapter | None":
     """返回当前活跃的微信 adapter 实例；web 层经此读取，勿直读模块私有状态。"""
     return _ACTIVE_BOT
@@ -141,7 +154,7 @@ async def send_proactive_message(text: str,
         raise RuntimeError(
             "还没有可用的微信用户上下文（等用户先在微信上发一条消息，Bot 收到后才能主动回复）"
         )
-    target_token = bot._ctx_by_user.get(bot._last_from_user_id, "")
+    target_token = _get_ctx_cache(bot).get(bot._last_from_user_id, "")
     if not target_token:
         raise RuntimeError(
             "还没有可用的微信用户上下文（等用户先在微信上发一条消息，Bot 收到后才能主动回复）"
@@ -265,6 +278,12 @@ class WeChatBotAdapter(ChannelAdapterBase):
         self._ctx_by_user_ts: dict[str, float] = {}
         self._CTX_TTL = 3600  # 上下文缓存 1 小时
         self._CTX_MAX = 256   # 硬上限，超出时按时间戳淘汰最旧项
+        self._ctx_cache = TTLCache(
+            self._ctx_by_user,
+            self._ctx_by_user_ts,
+            ttl=self._CTX_TTL,
+            max_size=self._CTX_MAX,
+        )
         self._last_from_user_id: str = ""
 
         # 消息去重缓存：msg_id → 时间戳，保留最近 1 小时（见 ChannelAdapterBase）。
@@ -276,6 +295,11 @@ class WeChatBotAdapter(ChannelAdapterBase):
         self._user_locks: dict[str, asyncio.Lock] = {}
         self._user_locks_ts: dict[str, float] = {}
         self._USER_LOCK_TTL = 3600  # 锁缓存 1 小时，超时清理避免长期运行内存增长
+        self._user_locks_cache = TTLCache(
+            self._user_locks,
+            self._user_locks_ts,
+            ttl=self._USER_LOCK_TTL,
+        )
 
         # W5：会话过期（ret=-14）自动恢复——服务端瞬时状态时指数退避重试，
         # 连续多次失败才判定 token 真正失效。避免一次抖动就清凭证强制人工重扫码。
@@ -294,6 +318,11 @@ class WeChatBotAdapter(ChannelAdapterBase):
         self._last_status_by_user: dict[str, str] = {}
         self._last_status_by_user_ts: dict[str, float] = {}
         self._USER_STATUS_TTL = 3600
+        self._last_status_cache = TTLCache(
+            self._last_status_by_user,
+            self._last_status_by_user_ts,
+            ttl=self._USER_STATUS_TTL,
+        )
 
         logger.info(
             "wechat_bot.init user={}",
@@ -402,10 +431,8 @@ class WeChatBotAdapter(ChannelAdapterBase):
         """
         if not user_id or not token:
             return
-        self._ctx_by_user[user_id] = token
-        self._ctx_by_user_ts[user_id] = time.time()
-        TTLCache.prune_pairs(self._ctx_by_user, self._ctx_by_user_ts,
-                             ttl=self._CTX_TTL, max_size=self._CTX_MAX)
+        cache = _get_ctx_cache(self)
+        cache.set(user_id, token)
 
     # ------------------------------------------------------------------
     # 生命周期
@@ -819,18 +846,22 @@ class WeChatBotAdapter(ChannelAdapterBase):
     def _user_lock(self, user_id: str) -> asyncio.Lock:
         """获取（并按需创建）指定用户的串行锁，附带 TTL 清理。
 
-        清理委托 :meth:`TTLCache.prune_pairs`（原手搓循环等价替换）；
-        保留 len>128 门控，避免每条消息都全表扫描。
+        清理、查找和刷新严格按 ``prune → lookup/create → timestamp refresh``
+        执行，保证目标用户的过期锁即使是缓存唯一条目也不会被复用。
         """
-        now = time.time()
-        lock = self._user_locks.get(user_id)
+        cache = getattr(self, "_user_locks_cache", None)
+        if cache is None or cache.values is not self._user_locks:
+            cache = TTLCache(
+                self._user_locks,
+                self._user_locks_ts,
+                ttl=self._USER_LOCK_TTL,
+            )
+            self._user_locks_cache = cache
+        cache.prune()
+        lock = cache.get(user_id, prune=False)
         if lock is None:
             lock = asyncio.Lock()
-            self._user_locks[user_id] = lock
-        self._user_locks_ts[user_id] = now
-        if len(self._user_locks) > 128:
-            TTLCache.prune_pairs(self._user_locks, self._user_locks_ts,
-                                 ttl=self._USER_LOCK_TTL, max_size=None)
+        cache.set(user_id, lock, prune=False)
         return lock
 
     async def _process_message_locked(self, msg: dict, from_user_id: str) -> None:
@@ -922,14 +953,22 @@ class WeChatBotAdapter(ChannelAdapterBase):
 
     def _prune_last_status_cache(self) -> None:
         """清理过期状态条目（TTL 1 小时），避免长期运行内存线性增长。"""
-        TTLCache.prune_pairs(self._last_status_by_user, self._last_status_by_user_ts,
-                             ttl=self._USER_STATUS_TTL, max_size=None)
+        self._get_last_status_cache().prune()
+
+    def _get_last_status_cache(self) -> TTLCache:
+        cache = getattr(self, "_last_status_cache", None)
+        if cache is None or cache.values is not self._last_status_by_user:
+            cache = TTLCache(
+                self._last_status_by_user,
+                self._last_status_by_user_ts,
+                ttl=self._USER_STATUS_TTL,
+            )
+            self._last_status_cache = cache
+        return cache
 
     def _remember_last_status(self, user_id: str, status: str) -> None:
         """记录用户最近一次中间状态并清理过期条目。"""
-        self._last_status_by_user[user_id] = status
-        self._last_status_by_user_ts[user_id] = time.time()
-        self._prune_last_status_cache()
+        self._get_last_status_cache().set(user_id, status)
 
     # ------------------------------------------------------------------
     # B2：ChannelAdapterBase._process_with_core 骨架的微信侧钩子
@@ -1100,9 +1139,34 @@ class WeChatBotAdapter(ChannelAdapterBase):
                     context_token=context_token,
                 )
 
-            # B2：段间打字节奏（0.8–1.2s）+ 某段失败合并剩余段单条重发一次，
-            # 统一走基类 _send_segments_paced（与 QQ 同一行为契约的唯一实现）。
-            await self._send_segments_paced(segments, _wx_send, log_prefix="wechat_bot")
+            async def _recover(index: int, failure: Any) -> None:
+                remaining = "".join(segments[index:])
+                pieces = self._split_text_by_bytes(remaining, 7800)
+                for piece in pieces:
+                    try:
+                        ok = await _wx_send(piece)
+                    except Exception as exc:
+                        logger.warning(
+                            "wechat_bot.stream_recovery_exception size={} error={}",
+                            len(piece),
+                            str(exc)[:200],
+                        )
+                        break
+                    if ok is False:
+                        logger.warning(
+                            "wechat_bot.stream_recovery_failed size={}",
+                            len(piece),
+                        )
+                        break
+
+            # B2：共享层只负责段间节奏与逐片发送；微信恢复含当前片，
+            # 按 7800 UTF-8 字节重切，任一恢复片失败即停止。
+            await self._send_segments_paced(
+                segments,
+                _wx_send,
+                on_failure=_recover,
+                log_prefix="wechat_bot",
+            )
         # 再发表情包（纯图，独立消息）：失败不回退文本，避免重复发送
         if sticker_path and Path(sticker_path).exists():
             logger.info(
@@ -1181,7 +1245,7 @@ class WeChatBotAdapter(ChannelAdapterBase):
             return False
 
         target_user = to_user_id or self._last_from_user_id
-        target_token = context_token or self._ctx_by_user.get(target_user, "")
+        target_token = context_token or _get_ctx_cache(self).get(target_user, "")
         if not target_user:
             logger.warning("wechat_bot.send_no_user_id content={}", content[:80])
             return False
@@ -1217,7 +1281,7 @@ class WeChatBotAdapter(ChannelAdapterBase):
             # ret=-2: context_token 过期/无效。AgentCore 处理最长 120s，
             # 期间用户若发了新消息，per-user 缓存的 token 已更新为最新，
             # 用它重试一次可能恢复投递（覆盖"处理慢导致 token 过期"场景）。
-            cached_token = self._ctx_by_user.get(target_user, "")
+            cached_token = _get_ctx_cache(self).get(target_user, "")
             if (
                 e.ret == -2
                 and cached_token
@@ -1289,7 +1353,7 @@ class WeChatBotAdapter(ChannelAdapterBase):
             logger.warning("wechat_bot.send_media_no_client content={}", content[:40])
             return False
         target_user = to_user_id or self._last_from_user_id
-        target_token = context_token or self._ctx_by_user.get(target_user, "")
+        target_token = context_token or _get_ctx_cache(self).get(target_user, "")
         if not target_user:
             logger.warning("wechat_bot.send_media_no_user_id")
             return False

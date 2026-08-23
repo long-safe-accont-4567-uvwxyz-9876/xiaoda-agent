@@ -23,8 +23,13 @@ from loguru import logger
 from agent_core._shared import DEGRADED_REPLY, ProcessResult, is_degraded_reply
 from agent_core.mixins.verification import _system_context_var
 from agent_core.mixins.voice import _get_temperature
-from config import (AGENT_CONFIG, STREAM_TEXT_PUSH,
-                    build_safe_system_prompt, get_reply_dedup_enabled)
+from config import (
+    AGENT_CONFIG,
+    STREAM_TEXT_PUSH,
+    STRUCTURED_STREAM_EVENTS,
+    build_safe_system_prompt,
+    get_reply_dedup_enabled,
+)
 from core.background_tasks import _spawn
 from core.circuit_breaker import CircuitState
 from core.degradation_strategy import get_degradation_strategy
@@ -120,13 +125,27 @@ class MainPathMixin:
         except Exception:
             logger.debug("emotion.llm_spawn_failed", exc_info=True)
         emotion_hint = build_emotion_hint(emotion)
-        self.context.emotion_hint = emotion_hint
         ctx.last_user_emotion = emotion.get("primary", "")
         self._update_mental_state_emotion(emotion, user_id=getattr(ctx, "user_id", ""))
 
+        token = getattr(ctx, "user_context_token", None)
+        if token is None:
+            token = self.context.get_user_context_token()
+        if token is not None:
+            await self.context.commit_user_context(token, emotion_hint=emotion_hint)
+
         # 记忆检索与 notebook 上下文加载并行化
-        memories = await self._retrieve_main_memories(user_input, is_master, emotion)
-        self.context.memory_retrieval = memories if memories else None
+        memories = await self._retrieve_main_memories(
+            user_input,
+            is_master,
+            emotion,
+            user_token=token,
+        )
+        if token is not None:
+            await self.context.commit_user_context(
+                token,
+                memory_retrieval=memories if memories else None,
+            )
 
         emotion_label = emotion.get("primary", "")
         return emotion, emotion_label
@@ -249,14 +268,25 @@ class MainPathMixin:
                     _model_used = self.router.get_current_chat_model().get("model_id", "")
                     self._bg_task_manager.run_background_tasks(
                         user_input, _clean_for_memory, user_id, source, emotion, tool_results,
-                        session_id=session_id, model_used=_model_used)
-        # 偏好管线: 用户纠正 → L1(约束) + L3(教训) 联动 (异步, 不阻塞回复)
-        try:
-            from core.preference_pipeline import get_preference_pipeline
-            _spawn(get_preference_pipeline().process_correction(
-                user_input, reply, self._bg_task_manager.learning_manager))
-        except Exception as e:
-            logger.debug("msg.preference_pipeline_spawn_failed", error=str(e))
+                        session_id=session_id, model_used=_model_used,
+                        request_context=getattr(ctx, "group_context_metadata", None),
+                        user_context_token=getattr(ctx, "user_context_token", None),
+                    )
+        elif not is_degraded_reply(reply):
+            _model_used = self.router.get_current_chat_model().get("model_id", "")
+            self._bg_task_manager.log_conversation_only(
+                user_input, reply, user_id, source, emotion,
+                session_id=session_id, model_used=_model_used,
+                request_context=getattr(ctx, "group_context_metadata", None),
+            )
+        # 群聊非主人不进入个人偏好、画像或记忆管线。
+        if source != "qq_group" or is_master:
+            try:
+                from core.preference_pipeline import get_preference_pipeline
+                _spawn(get_preference_pipeline().process_correction(
+                    user_input, reply, self._bg_task_manager.learning_manager))
+            except Exception as e:
+                logger.debug("msg.preference_pipeline_spawn_failed", error=str(e))
         try:
             _spawn(self.router.flush_costs())
         except Exception as e:
@@ -349,7 +379,13 @@ class MainPathMixin:
 
         return max(0.2, min(0.8, threshold))
 
-    async def _retrieve_main_memories(self, user_input: Any, is_master: Any, emotion: Any) -> Any:
+    async def _retrieve_main_memories(
+        self,
+        user_input: Any,
+        is_master: Any,
+        emotion: Any,
+        user_token: Any | None = None,
+    ) -> Any:
         """主路径记忆检索（含情绪触发的安抚记忆）与 notebook 加载并行。"""
         _retrieve_start = time.time()
         # 记忆检索超时（秒）在此统一解析一次，内层检索与外层 gather 复用同一值，
@@ -375,8 +411,32 @@ class MainPathMixin:
                     # (2026-08-06) 超时改为 config.MEMORY_RETRIEVE_TIMEOUT（默认 8s）：
                     #   USB 盘慢时 5s 仍频繁误砍（今日 66 次 retrieve_timeout_single），
                     #   8s 给慢速存储足够余量，同时控制最坏延迟（LLM 前串行 await）。
-                    from memory.scope import current_scope
+                    from memory.scope import Scope, current_scope
                     memory_scope = current_scope()
+                    # P1 隐私修复（2026-08-24）：QQ 群回复默认排除 personal-boundary 记忆。
+                    # 根因：本函数仅判 is_master 即按绑定 scope 检索，而向量/FTS/时间线
+                    #       通道只按 user_id 过滤、不区分回复去向——主人私聊提炼的个人
+                    #       记忆会注入全群可见回复（存量隐私缺口，审查确认）。
+                    # 等价判定：主路径中仅 source="qq_group" 会绑定 "qq_group:*" session
+                    #       （core.process ← adapter 群管线），故以前缀判定群回复去向；
+                    #       C2C/Web/CLI 的 session 无此前缀，路径完全不受影响。
+                    # 修复：scope 显式降为该群 conversation 形态（Scope.group，boundary-
+                    #       aware 通道提前过滤），并对结果按 matches_record 后过滤兜底
+                    #       不感知 boundary 的通道。GROUP_REPLY_PERSONAL_MEMORY_ENABLED=true
+                    #       可恢复旧行为（含旧 scope 与不过滤）。
+                    import config as _cfg_scope
+                    _session_id = str(getattr(memory_scope, "session_id", ""))
+                    _exclude_personal_in_group = (
+                        not bool(getattr(_cfg_scope, "GROUP_REPLY_PERSONAL_MEMORY_ENABLED", False))
+                        and _session_id.startswith("qq_group:")
+                    )
+                    if _exclude_personal_in_group:
+                        memory_scope = Scope.group(
+                            user_id=memory_scope.user_id,
+                            group_id=str(memory_scope.session_id)[len("qq_group:"):],
+                            agent_id=memory_scope.agent_id,
+                            request_id=memory_scope.request_id,
+                        )
                     results = await asyncio.wait_for(
                         self.memory.retrieve_memories(
                             user_input,
@@ -386,6 +446,13 @@ class MainPathMixin:
                         ),
                         timeout=_mem_timeout,
                     )
+                    if results and _exclude_personal_in_group:
+                        _raw_count = len(results)
+                        results = [m for m in results if memory_scope.matches_record(m)]
+                        if len(results) != _raw_count:
+                            logger.info("privacy.group_personal_memory_filtered",
+                                        dropped=_raw_count - len(results),
+                                        kept=len(results))
                     _retrieve_ms = int((time.time() - _t0) * 1000)
                     logger.info("pipeline.memory.retrieve.done elapsed_ms={} result_count={}",
                                 _retrieve_ms, len(results) if results else 0)
@@ -426,7 +493,7 @@ class MainPathMixin:
             _t0 = time.time()
             logger.info("pipeline.memory.notebook.start")
             try:
-                await self._load_notebook_context()
+                await self._load_notebook_context(user_token=user_token)
                 _elapsed = int((time.time() - _t0) * 1000)
                 logger.info("pipeline.memory.notebook.done elapsed_ms={}", _elapsed)
                 if _elapsed > 500:
@@ -447,7 +514,8 @@ class MainPathMixin:
         #      整体移除该空转慢环节。
         _gather_start = time.time()
         memories_task = asyncio.create_task(_retrieve_memories())
-        _spawn(_load_notebook())  # 后台异步，不占用记忆检索关键路径
+        if is_master:
+            _spawn(_load_notebook())  # 全局单主人 notebook 仅 owner 可加载
         try:
             memories = await asyncio.wait_for(memories_task, timeout=_mem_timeout)
         except asyncio.TimeoutError:
@@ -643,14 +711,25 @@ class MainPathMixin:
         tool_results = []
         try:
             _llm_t0 = time.time()
-            if STREAM_TEXT_PUSH and status_callback and not tools:
+            if STREAM_TEXT_PUSH and status_callback and (not tools or STRUCTURED_STREAM_EVENTS):
                 logger.info("pipeline.llm_call.start mode=stream task_type={}", task_type)
-                result = await self._stream_llm_response(
-                    messages, status_callback=status_callback, task_type=task_type,
-                    temperature=_get_temperature(_model_cfg),
-                    max_tokens=_cb_max_tokens,
-                    user_openid=user_openid, session_id=session_id,
-                )
+                if tools and STRUCTURED_STREAM_EVENTS:
+                    result = await self._stream_llm_turn(
+                        messages, status_callback=status_callback, task_type=task_type,
+                        turn=0,
+                        temperature=_get_temperature(_model_cfg),
+                        max_tokens=_cb_max_tokens,
+                        tools=tools,
+                        tool_choice="auto",
+                        user_openid=user_openid, session_id=session_id,
+                    )
+                else:
+                    result = await self._stream_llm_response(
+                        messages, status_callback=status_callback, task_type=task_type,
+                        temperature=_get_temperature(_model_cfg),
+                        max_tokens=_cb_max_tokens,
+                        user_openid=user_openid, session_id=session_id,
+                    )
             else:
                 logger.info("pipeline.llm_call.start mode=route task_type={} timeout={}",
                             task_type, self.LLM_CALL_TIMEOUT)

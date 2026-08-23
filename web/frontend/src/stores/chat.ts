@@ -8,11 +8,14 @@ import { t, tf } from '../i18n'
 import { clearMarkdownCache } from '../utils/markdown'
 
 export interface ToolCall {
+  id: string
   tool: string
   argsPreview: string
   ok: boolean | null
   elapsedMs: number | null
   running: boolean
+  turn: number
+  index: number
 }
 
 export interface Message {
@@ -75,6 +78,7 @@ export const useChatStore = defineStore('chat', () => {
   const lastEmotion = ref('平静')
   const pendingMsgId = ref('')
   const greetingPing = ref(0)  // 问候到达脉冲（GrassParticles 蒲公英雨）
+  const streamStates = new Map<string, { lastSeq: number; terminal: boolean }>()
 
   const pendingTimers: ReturnType<typeof setTimeout>[] = []
 
@@ -113,6 +117,28 @@ export const useChatStore = defineStore('chat', () => {
     statusText.value = (e.text as string) || ''
   }
 
+  function onStreamEvent(e: WsEvent) {
+    if (e.version !== 1) return
+    const msgId = e.msg_id as string
+    const seq = e.seq as number
+    if (!msgId || !Number.isInteger(seq)) return
+    const state = streamStates.get(msgId) || { lastSeq: 0, terminal: false }
+    if (state.terminal || seq <= state.lastSeq) return
+    state.lastSeq = seq
+    state.terminal = e.terminal === true
+    streamStates.set(msgId, state)
+    const event = e.event as string
+    if (event === 'text_delta') {
+      onStreamText({ ...e, type: 'stream_text' })
+    } else if (event === 'tool_status') {
+      onToolEvent({ ...e, type: 'tool_event' })
+    } else if (event === 'final') {
+      onFinal({ ...e, type: 'final' })
+    } else if (event === 'error' || event === 'abort') {
+      onError({ ...e, type: 'error', code: event === 'abort' ? 'ABORTED' : e.code })
+    }
+  }
+
   // P0: 流式文本推送 —— 逐 token 拼接，实时渲染（在消息列表中显示"正在输入"的临时消息）
   const onStreamText = (e: WsEvent) => {
     const msgId = e.msg_id as string
@@ -125,7 +151,9 @@ export const useChatStore = defineStore('chat', () => {
       }
       pushMessage(messages, msg)
     }
-    msg.content = (e.accumulated as string) || ''
+    const delta = (e.delta as string) || ''
+    const accumulated = (e.accumulated as string) || ''
+    msg.content = delta ? msg.content + delta : accumulated
     msg.streaming = true
   }
 
@@ -147,26 +175,26 @@ export const useChatStore = defineStore('chat', () => {
       pushMessage(messages, msg)
     }
     if (!msg.toolCalls) msg.toolCalls = []
-    if (e.phase === 'start') {
-      msg.toolCalls.push({
-        tool: e.tool as string,
-        argsPreview: (e.args_preview as string) || '',
-        ok: null, elapsedMs: null, running: true,
-      })
-    } else {
-      // 反向查找最后一个匹配的运行中工具调用（避免 [...arr].reverse() 拷贝）
-      const calls = msg.toolCalls
-      if (calls) {
-        for (let i = calls.length - 1; i >= 0; i--) {
-          const c = calls[i]
-          if (c.tool === e.tool && c.running) {
-            c.running = false
-            c.ok = e.ok as boolean
-            c.elapsedMs = e.elapsed_ms as number
-            break
-          }
-        }
+    const id = (e.tool_call_id as string) || `${e.turn || 0}:${e.index || 0}:${e.tool || ''}`
+    const existing = msg.toolCalls.find(call => call.id === id)
+    if (e.stage === 'started' || e.phase === 'start') {
+      if (existing) {
+        existing.running = true
+        existing.argsPreview = (e.args_preview as string) || existing.argsPreview
+      } else {
+        msg.toolCalls.push({
+          id,
+          tool: e.tool as string,
+          argsPreview: (e.args_preview as string) || '',
+          ok: null, elapsedMs: null, running: true,
+          turn: (e.turn as number) || 0,
+          index: (e.index as number) || 0,
+        })
       }
+    } else if (existing) {
+      existing.running = false
+      existing.ok = e.ok == null ? e.stage === 'completed' : e.ok as boolean
+      existing.elapsedMs = (e.elapsed_ms as number) ?? null
     }
   }
 
@@ -243,8 +271,9 @@ export const useChatStore = defineStore('chat', () => {
     ['tool_status', onToolStatus],
     ['tool_event', onToolEvent],
     ['final', onFinal],
-    ['audio_ready', onAudioReady],
     ['error', onError],
+    ['stream_event', onStreamEvent],
+    ['audio_ready', onAudioReady],
     ['agent_changed', onAgentChanged],
     ['greeting', onGreeting],
   ]

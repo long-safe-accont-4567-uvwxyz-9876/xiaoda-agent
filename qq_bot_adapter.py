@@ -1,17 +1,21 @@
-from typing import Any, NamedTuple
-import os
-import sys
 import asyncio
 import base64
 import contextvars
-import sqlite3
-import subprocess
-import threading
-import time
+import hashlib
+import os
 import random
 import re
+import subprocess
+import sys
+import threading
+import time
 import uuid
+from collections.abc import Awaitable, Callable
+from dataclasses import dataclass
 from pathlib import Path
+from typing import Any, NamedTuple
+
+from dotenv import load_dotenv
 
 from channel_adapter_base import (
     STREAM_C2C_MAX_SEGMENTS,
@@ -22,9 +26,6 @@ from channel_adapter_base import (
     upsert_env_file_line,
 )
 
-from dataclasses import dataclass
-
-from dotenv import load_dotenv
 # P0 修复（Windows 安装包 QQ 离线 bug 根因）：
 # load_dotenv() 无参数时只读取 CWD/.env，Windows 安装包从 C:\Program Files\ 启动时
 # CWD 不是用户目录，而 config.py 已把 .env 放到 ~/.ai-agent/.env（frozen 模式），
@@ -40,35 +41,52 @@ except ImportError:
     load_dotenv()
 
 
-from utils.common import safe_int as _safe_int, safe_float as _safe_float
+from utils.common import safe_float as _safe_float
+from utils.common import safe_int as _safe_int
 from utils.llm_cleanup import strip_qq_face_tags
-
-# 安全加固：不再全局 monkey patch ssl.create_default_context
-# botpy 内部已使用 SSLContext() 处理 WebSocket SSL，无需全局禁用证书验证
-
 from utils.logging_config import setup_logging
+
 setup_logging()
 
-from loguru import logger
-
-import botpy
-from botpy.message import C2CMessage, GroupMessage
+import botpy  # noqa: E402
+from botpy.message import C2CMessage, GroupMessage  # noqa: E402
+from loguru import logger  # noqa: E402
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-from agent_core import AgentCore, ProcessResult
-from agent_core.user_qq import QQUser
-from core.event_bus import event_bus
-from config import AGENT_CONFIG, get_agent_display_name
-from security.human_approval import (
-    IMApprovalChannel, ApprovalRequest, ApprovalStatus,
-    RiskLevel, HIGH_RISK_OPERATIONS,
+from agent_core import AgentCore, ProcessResult  # noqa: E402
+from agent_core._shared import (  # noqa: E402
+    _group_context_enabled_var,
+    _group_context_metadata_var,
+    is_degraded_reply,
 )
-from emotion.nudge_engine import NudgeEngine
-from emotion.emoji_config import get_ack_message
-from utils.text_utils import encode_image_to_base64
-
-from botpy_compat import install_botpy_patches, redirect_bot_log
+from agent_core.group_context import (  # noqa: E402
+    GroupContextRegistry,
+    GroupSnapshot,
+    format_group_snapshot,
+)
+from agent_core.user_qq import QQUser  # noqa: E402
+from botpy_compat import install_botpy_patches, redirect_bot_log  # noqa: E402
+from config import (  # noqa: E402
+    AGENT_CONFIG,
+    GROUP_CHAT_BUFFER_ENABLED,
+    get_agent_display_name,
+)
+from core.background_tasks import (  # noqa: E402
+    reset_current_request_context,
+    set_current_request_context,
+)
+from core.event_bus import event_bus  # noqa: E402
+from emotion.emoji_config import get_ack_message  # noqa: E402
+from emotion.nudge_engine import NudgeEngine  # noqa: E402
+from security.human_approval import (  # noqa: E402
+    HIGH_RISK_OPERATIONS,
+    ApprovalRequest,
+    ApprovalStatus,
+    IMApprovalChannel,
+    RiskLevel,
+)
+from utils.text_utils import encode_image_to_base64  # noqa: E402
 
 install_botpy_patches()
 APP_ID = os.getenv("QQBOT_APP_ID", "")
@@ -90,6 +108,34 @@ _HIGH_RISK_OP_RE = re.compile(
 _msg_seq_counter = int(time.time())
 _msg_seq_lock = threading.Lock()
 _env_write_lock = threading.Lock()
+
+
+class QQReplyBudgetExceeded(RuntimeError):
+    """The current QQ group request exhausted its five-message allowance."""
+
+
+@dataclass
+class QQReplyBudget:
+    max_total: int = 5
+    used: int = 0
+
+    @property
+    def remaining(self) -> int:
+        return max(0, self.max_total - self.used)
+
+    def consume(self) -> None:
+        if self.used >= self.max_total:
+            raise QQReplyBudgetExceeded("QQ group reply budget exhausted")
+        self.used += 1
+
+    def refund(self) -> None:
+        if self.used > 0:
+            self.used -= 1
+
+
+_qq_reply_budget_var: contextvars.ContextVar[QQReplyBudget | None] = (
+    contextvars.ContextVar("qq_reply_budget", default=None)
+)
 
 
 def _refresh_runtime_owner_id(owner_id: str) -> None:
@@ -114,11 +160,41 @@ def _refresh_runtime_owner_id(owner_id: str) -> None:
 
 
 def _next_msg_seq() -> int:
+    budget = _qq_reply_budget_var.get()
+    if budget is not None:
+        budget.consume()
     global _msg_seq_counter
     with _msg_seq_lock:
         now_s = int(time.time())
         _msg_seq_counter = max(_msg_seq_counter + 1, now_s)
         return _msg_seq_counter
+
+
+async def _budgeted_await(
+    factory: Callable[[int], Awaitable[Any]],
+    *,
+    none_is_failure: bool = True,
+) -> Any:
+    """Run one QQ send and refund its budget when delivery clearly fails."""
+    budget = _qq_reply_budget_var.get()
+    msg_seq = _next_msg_seq()
+    try:
+        result = await factory(msg_seq)
+    except BaseException:
+        if budget is not None:
+            budget.refund()
+        raise
+    if budget is not None and (result is False or (none_is_failure and result is None)):
+        budget.refund()
+        raise RuntimeError("QQ platform send returned no success result")
+    return result
+
+
+async def _budgeted_reply(message: Any, content: str, **kwargs: Any) -> Any:
+    return await _budgeted_await(
+        lambda msg_seq: message.reply(content=content, msg_seq=msg_seq, **kwargs),
+        none_is_failure=False,
+    )
 
 
 def _save_master_openid(openid: str) -> None:
@@ -263,12 +339,19 @@ class QQPipelineRequest(CoreProcessRequest):
 
     C2C 与群聊的全部行为差异以 ``is_group`` 为单一事实源派生：
     发送器（_bus_reply_fn）、ACK 容错、EventBus notify_started、错误日志
-    exc_info、是否传 session_id——禁止在钩子之外散落通道判别。
+    exc_info、session_id 形态（C2C=真实 DB 会话 ID，群聊=qq_group:{群 openid}
+    合成边界，core 侧再拼装为 qq_group:{openid}:{group}）——禁止在钩子之外
+    散落通道判别。
     """
 
     message: Any = None       # botpy 消息对象（C2CMessage / GroupMessage）
     is_group: bool = False    # False=C2C，True=群聊
+    image_data: Any = None
     is_master: bool = True
+    group_context_enabled: bool = False
+    system_context: str = ""
+    group_context_metadata: dict[str, Any] | None = None
+    user_context_token: Any = None
 
     @property
     def channel_key(self) -> str:
@@ -301,6 +384,7 @@ class AIQQBot(ChannelAdapterBase, botpy.Client):
         # per-user asyncio.Lock：同一用户消息串行，不同用户并发（避免堵塞）
         self._c2c_locks: dict[str, asyncio.Lock] = {}
         self._group_locks: dict[str, asyncio.Lock] = {}
+        self._group_context_registry = GroupContextRegistry()
         self._c2c_session_cache_ttl = 3600  # 缓存有效期 1 小时
         self._c2c_session_cache_ts: dict[str, float] = {}
         # P1-1: 缓存上限，超过时按 FIFO 淘汰最旧条目（防多用户长期运行内存泄漏）
@@ -448,7 +532,9 @@ class AIQQBot(ChannelAdapterBase, botpy.Client):
             logger.warning("qq_bot.approval_no_message_context text=%s", text[:80])
             return
         try:
-            await msg.reply(content=text, msg_seq=_next_msg_seq())
+            await _budgeted_reply(msg, text)
+        except QQReplyBudgetExceeded:
+            logger.info("qq_bot.approval_budget_exhausted")
         except (OSError, RuntimeError, ConnectionError) as e:
             logger.warning("qq_bot.approval_send_failed error=%s", str(e)[:200])
 
@@ -680,9 +766,10 @@ class AIQQBot(ChannelAdapterBase, botpy.Client):
         返回 True 表示已处理，跳过正常流程。
         """
         if content.strip() in ("/whoami", "/whoami "):
-            await message.reply(
-                content=f"你的 OpenID 是：\n{openid}\n\n在 Setup 配置页面的「主人 QQ OpenID」填入此值即可绑定主人身份。",
-                msg_seq=_next_msg_seq())
+            await _budgeted_reply(
+                message,
+                f"你的 OpenID 是：\n{openid}\n\n在 Setup 配置页面的「主人 QQ OpenID」填入此值即可绑定主人身份。",
+            )
             return True
         if self.hitl_enabled:
             approval_user = openid or user_id
@@ -699,7 +786,8 @@ class AIQQBot(ChannelAdapterBase, botpy.Client):
     async def _run_message_pipeline(self, message: Any, *, is_group: bool,
                                     user_input: str, user_id: str, openid: str,
                                     is_master: bool, image_data: Any,
-                                    session_id: str | None = None) -> None:
+                                    session_id: str | None = None,
+                                    group_key: str = "") -> ProcessResult | None:
         """C2C/群聊统一回复管道（模板方法）。
 
         覆盖原两侧逐字复制的区段：ACK → 绑定 EventBus 用户 →
@@ -708,21 +796,84 @@ class AIQQBot(ChannelAdapterBase, botpy.Client):
         调用方（on_c2c_message_create / _handle_group_at_message）保留各自的
         解析/去重/锁时序，保证消息去重键与 HITL 触发条件不变。
         """
+        system_context = ""
+        group_context_metadata = None
+        group_buffer = None
+        snapshot: GroupSnapshot | None = None
+        group_context_enabled = bool(
+            is_group and group_key and GROUP_CHAT_BUFFER_ENABLED
+        )
+        if is_group and group_key:
+            group_context_metadata = {
+                "chat_type": "qq_group",
+                "group_key": hashlib.sha256(group_key.encode("utf-8")).hexdigest(),
+                "actor_alias": "群成员",
+                "is_owner": is_master,
+                "message_id": (
+                    getattr(message, "id", "")
+                    or getattr(message, "message_id", "")
+                ),
+            }
+        if group_context_enabled:
+            group_buffer = await self._group_context_registry.get(group_key)
+            current, snapshot = await group_buffer.append_and_snapshot(
+                message_id=(getattr(message, "id", "") or getattr(message, "message_id", "")),
+                member_id=openid,
+                role="user",
+                content=user_input,
+                observed_at=time.time(),
+            )
+            system_context = format_group_snapshot(snapshot)
+            group_context_metadata = {
+                "chat_type": "qq_group",
+                "group_key": hashlib.sha256(group_key.encode("utf-8")).hexdigest(),
+                "actor_alias": current.actor_alias,
+                "is_owner": is_master,
+                "message_id": current.message_id,
+            }
+
         req = QQPipelineRequest(
             text=user_input,
             user_id=user_id,
             source="qq_group" if is_group else "qq_c2c",
             user_openid=openid,
             session_id=session_id,
-            extra_kwargs={
-                "image_data": image_data if image_data else None,
-                "is_master": is_master,
-            },
+            image_data=image_data if image_data else None,
             message=message,
             is_group=is_group,
             is_master=is_master,
+            group_context_enabled=group_context_enabled,
+            system_context=system_context,
+            group_context_metadata=group_context_metadata,
         )
-        await self._process_with_core(req)
+        budget_token = _qq_reply_budget_var.set(
+            QQReplyBudget() if is_group else None
+        )
+        enabled_token = _group_context_enabled_var.set(group_context_enabled)
+        metadata_token = _group_context_metadata_var.set(group_context_metadata)
+        audit_token = set_current_request_context(group_context_metadata or {})
+        try:
+            result = await self._process_with_core(req)
+        except BaseException:
+            if group_buffer is not None and snapshot is not None:
+                await group_buffer.commit_failure(snapshot)
+            raise
+        finally:
+            reset_current_request_context(audit_token)
+            _group_context_metadata_var.reset(metadata_token)
+            _group_context_enabled_var.reset(enabled_token)
+            _qq_reply_budget_var.reset(budget_token)
+        if group_buffer is not None and snapshot is not None:
+            if result is None or not result.reply or is_degraded_reply(result.reply):
+                await group_buffer.commit_failure(snapshot)
+            else:
+                await group_buffer.commit_success(
+                    snapshot,
+                    message_id=f"assistant:{snapshot.through_seq}",
+                    content=result.reply,
+                    observed_at=time.time(),
+                )
+        return result
 
     async def _process_c2c_reply(self, message: C2CMessage, user_input: str, user_id: str,
                                   user_openid: str, session_id: str, is_master: bool,
@@ -738,15 +889,40 @@ class AIQQBot(ChannelAdapterBase, botpy.Client):
     def _get_core(self) -> Any:
         return self.agent
 
+    def _build_process_kwargs(
+        self,
+        req: QQPipelineRequest,
+        session_id: str | None,
+    ) -> dict[str, Any]:
+        kwargs = super()._build_process_kwargs(req, session_id)
+        kwargs["image_data"] = req.image_data
+        kwargs["is_master"] = req.is_master
+        kwargs["user_context_token_callback"] = (
+            lambda token: setattr(req, "user_context_token", token)
+        )
+        if req.group_context_enabled:
+            kwargs["system_context"] = req.system_context
+        return kwargs
+
     async def _send_ack(self, req: QQPipelineRequest) -> None:
         """处理前 ACK。C2C 失败上抛走骨架错误兜底（原行为）；
         群聊容忍失败只记 debug——群聊被动回复配额 5 次/5 分钟，ACK 失败不应
         再消耗兜底配额（原 _send_group_ack 行为）。"""
         if not req.is_group:
-            await req.message.reply(content=get_ack_message('xiaoda'), msg_seq=_next_msg_seq())
+            await _budgeted_await(
+                lambda msg_seq: req.message.reply(
+                    content=get_ack_message('xiaoda'), msg_seq=msg_seq,
+                ),
+            )
             return
         try:
-            await req.message.reply(content=get_ack_message('xiaoda'), msg_seq=_next_msg_seq())
+            await _budgeted_await(
+                lambda msg_seq: req.message.reply(
+                    content=get_ack_message('xiaoda'), msg_seq=msg_seq,
+                ),
+            )
+        except QQReplyBudgetExceeded:
+            logger.info("qq_bot.ack_budget_exhausted")
         except (OSError, RuntimeError, ConnectionError) as e:
             logger.debug("qq_bot.ack_send_failed", error=str(e))
 
@@ -800,18 +976,30 @@ class AIQQBot(ChannelAdapterBase, botpy.Client):
             await self._send_reply_with_sticker(req.message, result)
         return result
 
-    async def _pipeline_timeout_fallback(self, channel_key: str, message: Any,
-                                         user_id: str, user_input: str) -> None:
+    async def _pipeline_timeout_fallback(
+        self,
+        channel_key: str,
+        message: Any,
+        user_id: str,
+        user_input: str,
+        user_context_token: Any = None,
+    ) -> None:
         """超时兜底（C2C/群聊共用）：记录失败状态 + 发送超时文案（原文案逐字节保留）。"""
         logger.warning(f"qq_bot.{channel_key}_timeout user=%s", user_id)
         # 记录失败状态，供下次消息恢复上下文
         if hasattr(self.agent, 'context') and self.agent.context:
-            self.agent.context.record_failure("处理超时", user_input)
-        try:
-            await message.reply(
-                content=f"{get_agent_display_name('xiaoda')}想得太入神了……能再说一次吗？🌱",
-                msg_seq=_next_msg_seq(),
+            await self.agent.context.record_failure(
+                user_context_token,
+                "处理超时",
+                user_input,
             )
+        try:
+            await _budgeted_reply(
+                message,
+                f"{get_agent_display_name('xiaoda')}想得太入神了……能再说一次吗？🌱",
+            )
+        except QQReplyBudgetExceeded:
+            logger.info(f"qq_bot.{channel_key}_timeout_budget_exhausted")
         except (OSError, RuntimeError, ConnectionError) as _e:
             logger.debug(f"qq_bot.{channel_key}_timeout_reply_failed", error=str(_e))
 
@@ -826,13 +1014,21 @@ class AIQQBot(ChannelAdapterBase, botpy.Client):
         if invalidate_session and openid and isinstance(exc, ValueError):
             self._invalidate_c2c_session(openid)
         try:
-            await message.reply(content="嗯……出了点小问题，等会儿再聊好不好？", msg_seq=_next_msg_seq())
+            await _budgeted_reply(message, "嗯……出了点小问题，等会儿再聊好不好？")
+        except QQReplyBudgetExceeded:
+            logger.info(f"qq_bot.{channel_key}_fallback_budget_exhausted")
         except (OSError, RuntimeError, ConnectionError) as e:
             logger.error(f"qq_bot.{channel_key}_fallback_reply_failed: {e}")
 
     async def _on_core_timeout(self, req: QQPipelineRequest) -> None:
         key = req.channel_key
-        await self._pipeline_timeout_fallback(key, req.message, req.user_id, req.text)
+        await self._pipeline_timeout_fallback(
+            key,
+            req.message,
+            req.user_id,
+            req.text,
+            req.user_context_token,
+        )
 
     async def _on_core_error(self, req: QQPipelineRequest, exc: BaseException) -> None:
         await self._pipeline_error_fallback(
@@ -894,7 +1090,11 @@ class AIQQBot(ChannelAdapterBase, botpy.Client):
                 await self._run_message_pipeline(
                     message, is_group=True,
                     user_input=user_input, user_id=user_id, openid=member_openid,
-                    is_master=is_master, image_data=image_data)
+                    is_master=is_master, image_data=image_data,
+                    # 群边界 session_id：core 侧 _init_and_restore_context 会拼成
+                    # qq_group:{member_openid}:{group_openid}，实现跨群/跨用户上下文隔离
+                    session_id=f"qq_group:{group_lock_key}",
+                    group_key=group_lock_key)
         except TimeoutError:
             # 解析/鉴权阶段的超时兜底（process 阶段由骨架 _on_core_timeout 兜底，
             # 两者共用同一实现避免文案漂移）
@@ -922,7 +1122,7 @@ class AIQQBot(ChannelAdapterBase, botpy.Client):
                                       image_path: Path | None = None,
                                       image_url: str | None = None) -> None:
         if not image_path and not image_url:
-            await message.reply(content=reply, msg_seq=_next_msg_seq())
+            await _budgeted_reply(message, reply)
             return
 
         try:
@@ -931,12 +1131,17 @@ class AIQQBot(ChannelAdapterBase, botpy.Client):
             elif isinstance(message, GroupMessage):
                 await self._send_group_media(message, reply, image_path, image_url)
             else:
-                await message.reply(content=reply, msg_seq=_next_msg_seq())
+                await _budgeted_reply(message, reply)
+        except QQReplyBudgetExceeded:
+            logger.info("qq_bot.media_budget_exhausted")
+            return
         except (OSError, RuntimeError, ConnectionError, ValueError) as e:
             logger.warning("qq_bot.media_send_failed", error=str(e))
             # 最终兜底：尝试纯文本回复
             try:
-                await message.reply(content=reply, msg_seq=_next_msg_seq())
+                await _budgeted_reply(message, reply)
+            except QQReplyBudgetExceeded:
+                logger.info("qq_bot.media_fallback_budget_exhausted")
             except (OSError, RuntimeError, ConnectionError) as _e:
                 logger.debug("qq_bot.fallback_reply_failed", error=str(_e))
 
@@ -953,10 +1158,12 @@ class AIQQBot(ChannelAdapterBase, botpy.Client):
             file_info = getattr(media, "file_info", "")
         if not file_info:
             raise RuntimeError("C2C媒体接口返回空file_info")
-        response = await self.api.post_c2c_message(
-            openid=openid, msg_id=message.id,
-            msg_type=7, content=reply,
-            media={"file_info": file_info}, msg_seq=_next_msg_seq()
+        response = await _budgeted_await(
+            lambda msg_seq: self.api.post_c2c_message(
+                openid=openid, msg_id=message.id,
+                msg_type=7, content=reply,
+                media={"file_info": file_info}, msg_seq=msg_seq,
+            ),
         )
         if response is None:
             raise RuntimeError("C2C消息接口返回None")
@@ -979,10 +1186,12 @@ class AIQQBot(ChannelAdapterBase, botpy.Client):
             raise RuntimeError("群媒体接口返回空file_info")
         try:
             # 被动回复（需要 msg_id）；无主动消息权限，超限直接失败
-            await self.api.post_group_message(
-                group_openid=group_openid, msg_id=message.id,
-                msg_type=7, content=reply,
-                media={"file_info": file_info}, msg_seq=_next_msg_seq()
+            await _budgeted_await(
+                lambda msg_seq: self.api.post_group_message(
+                    group_openid=group_openid, msg_id=message.id,
+                    msg_type=7, content=reply,
+                    media={"file_info": file_info}, msg_seq=msg_seq,
+                ),
             )
         except (OSError, RuntimeError, ConnectionError) as e:
             if "被动回复" in str(e) or "超过限制" in str(e):
@@ -1081,8 +1290,9 @@ class AIQQBot(ChannelAdapterBase, botpy.Client):
         所有中间临时文件会在方法内部清理，只保留最终成功的文件。
         调用者负责在不再需要时删除返回的临时文件。
         """
-        from PIL import Image
         import tempfile
+
+        from PIL import Image
 
         tmp_path: Path | None = None
 
@@ -1191,17 +1401,22 @@ class AIQQBot(ChannelAdapterBase, botpy.Client):
         group_no_proactive = ("被动回复", "超过限制", "无权限", "40034105")
         try:
             if is_group or passive or not getattr(self, "api", None):
-                await message.reply(content=text, msg_seq=_next_msg_seq())
-            else:
-                response = await self.api.post_c2c_message(
-                    openid=message.author.user_openid,
-                    content=text,
-                    msg_type=0,
-                    msg_seq=_next_msg_seq(),
+                await _budgeted_await(
+                    lambda msg_seq: message.reply(content=text, msg_seq=msg_seq),
                 )
-                if response is None:
-                    raise RuntimeError("C2C主动消息接口返回None")
+            else:
+                await _budgeted_await(
+                    lambda msg_seq: self.api.post_c2c_message(
+                        openid=message.author.user_openid,
+                        content=text,
+                        msg_type=0,
+                        msg_seq=msg_seq,
+                    ),
+                )
             return True
+        except QQReplyBudgetExceeded:
+            logger.info(f"{log_key}_budget_exhausted")
+            raise
         except (TimeoutError, OSError, RuntimeError, ValueError) as e:
             err_str = str(e)
             if is_group and any(k in err_str for k in group_no_proactive):
@@ -1266,61 +1481,86 @@ class AIQQBot(ChannelAdapterBase, botpy.Client):
         # 长回复：首片前发送打字指示（仅 C2C，群聊无主动消息权限会失败）
         if not is_group:
             try:
-                await message.reply(content=f"{get_agent_display_name('xiaoda')}正在打字...", msg_seq=_next_msg_seq())
+                await _budgeted_reply(
+                    message, f"{get_agent_display_name('xiaoda')}正在打字...",
+                )
+            except QQReplyBudgetExceeded:
+                logger.info("qq_bot.typing_indicator_budget_exhausted")
             except (OSError, RuntimeError) as e:
                 logger.debug("qq_bot.typing_indicator_failed", error=str(e))
 
         sent_count = 0
-        for i, seg in enumerate(segments):
-            try:
-                if i > 0:
-                    await asyncio.sleep(random.uniform(0.8, 1.2))
-                t0 = time.monotonic()
-                ok = await self._send_stream_segment(message, seg, passive=i == 0, is_group=is_group, log_key="qq_bot.stream")
-                seg_ms = (time.monotonic() - t0) * 1000
-                if ok:
-                    sent_count += 1
-                    logger.debug("qq_bot.stream_segment", index=i, size=len(seg),
-                                 ms=round(seg_ms, 1), sent=sent_count)
-                else:
-                    # 配额耗尽：合并本段 + 剩余所有段为单条最终片发送
-                    logger.warning("qq_bot.stream_segment_quota_exhausted",
-                                   at_segment=i, sent_segments=sent_count,
-                                   total_segments=num_segments)
-                    remaining = "".join(segments[i:])
-                    merged_sent, _ = await self._send_remaining_segments(
-                        remaining,
-                        send_piece=lambda p: self._send_stream_segment(
-                            message, p, passive=False, is_group=is_group,
-                            log_key="qq_bot.stream"),
-                        log_key="qq_bot.stream")
-                    sent_count += merged_sent
-                    if sent_count > 0:
-                        logger.info("qq_bot.stream_quota_recovered_with_merge",
-                                    merged_from=num_segments - i, sent=sent_count,
-                                    ms=round(seg_ms, 1))
-                    return
-            except (TimeoutError, OSError, RuntimeError) as e:
-                logger.warning("qq_bot.stream_segment_failed",
-                               error=str(e), sent_segments=sent_count)
-                # 异常恢复：合并剩余内容为最终片发送。
-                # P0 治本修复（大量文本重复发送根因）：
-                #   - TimeoutError：请求已发出但响应超时，QQ 服务端可能已接收当前段，
-                #     重发会重复 → 跳过当前段（segments[i+1:]），宁可丢一段也不重复。
-                #   - OSError/RuntimeError：连接错误，当前段可能没发出 → 重发含当前段（segments[i:]），
-                #     避免丢失。重复只在超时场景发生，连接错误场景不会重复。
-                remaining = self._remaining_segments_after_error(segments, i, e)
-                merged_sent, _ = await self._send_remaining_segments(
-                    remaining,
-                    send_piece=lambda p: self._send_stream_segment(
-                        message, p, passive=False, is_group=is_group,
-                        log_key="qq_bot.stream"),
-                    log_key="qq_bot.stream")
-                if merged_sent > 0:
-                    recovery_ms = (time.monotonic() - stream_start) * 1000
-                    logger.info("qq_bot.stream_recovery_done",
-                                sent=sent_count + merged_sent, ms=round(recovery_ms, 1))
+
+        async def _send_one(segment: str) -> bool:
+            nonlocal sent_count
+            index = sent_count
+            ok = await self._send_stream_segment(
+                message,
+                segment,
+                passive=index == 0,
+                is_group=is_group,
+                log_key="qq_bot.stream",
+            )
+            if ok:
+                sent_count += 1
+            return ok
+
+        async def _recover(index: int, failure: Any) -> None:
+            nonlocal sent_count
+            if isinstance(failure, QQReplyBudgetExceeded):
+                logger.info(
+                    "qq_bot.stream_budget_exhausted",
+                    at_segment=index,
+                    sent_segments=sent_count,
+                    total_segments=num_segments,
+                )
                 return
+            if failure is False:
+                logger.warning(
+                    "qq_bot.stream_segment_quota_exhausted",
+                    at_segment=index,
+                    sent_segments=sent_count,
+                    total_segments=num_segments,
+                )
+                remaining = "".join(segments[index:])
+            else:
+                logger.warning(
+                    "qq_bot.stream_segment_failed",
+                    error=str(failure),
+                    sent_segments=sent_count,
+                )
+                remaining = self._remaining_segments_after_error(
+                    segments,
+                    index,
+                    failure,
+                )
+            merged_sent, _ = await self._send_remaining_segments(
+                remaining,
+                send_piece=lambda piece: self._send_stream_segment(
+                    message,
+                    piece,
+                    passive=False,
+                    is_group=is_group,
+                    log_key="qq_bot.stream",
+                ),
+                log_key="qq_bot.stream",
+            )
+            sent_count += merged_sent
+            if merged_sent > 0:
+                logger.info(
+                    "qq_bot.stream_recovery_done",
+                    sent=sent_count,
+                    ms=round((time.monotonic() - stream_start) * 1000, 1),
+                )
+
+        all_sent = await self._send_segments_paced(
+            segments,
+            _send_one,
+            on_failure=_recover,
+            log_prefix="qq_bot",
+        )
+        if not all_sent:
+            return
 
         total_ms = (time.monotonic() - stream_start) * 1000
         logger.info("qq_bot.stream_done", total_len=total_len,
@@ -1375,9 +1615,11 @@ class AIQQBot(ChannelAdapterBase, botpy.Client):
             # 短回复：文字+表情包合并为一条消息发送
             try:
                 await self._send_reply_with_media(message, clean_reply, image_path=result.sticker_path)
+            except QQReplyBudgetExceeded:
+                logger.info("qq_bot.sticker_budget_exhausted")
             except (OSError, RuntimeError, ConnectionError) as e:
                 logger.warning("qq_bot.sticker_send_failed", error=str(e))
-                await message.reply(content=clean_reply, msg_seq=_next_msg_seq())
+                await _budgeted_reply(message, clean_reply)
             return
 
         # 长回复：前 N-1 片流式发送，最后一片与表情包合并发送
@@ -1410,7 +1652,7 @@ class AIQQBot(ChannelAdapterBase, botpy.Client):
                                      error=str(e2), remaining_len=len(remaining))
                         # 最终兜底：放弃 sticker，仅发送文本
                         try:
-                            await message.reply(content=remaining, msg_seq=_next_msg_seq())
+                            await _budgeted_reply(message, remaining)
                         except (TimeoutError, OSError, RuntimeError) as e3:
                             logger.error("qq_bot.stream_sticker_fallback_failed",
                                          error=str(e3))
@@ -1461,7 +1703,7 @@ class AIQQBot(ChannelAdapterBase, botpy.Client):
         取第 1 片（无标记截断，自动闭合代码块）。
         C2C 场景：保持原分片逻辑。
         """
-        from utils.text_utils import split_long_reply, split_for_group_passive
+        from utils.text_utils import split_for_group_passive, split_long_reply
 
         is_group = isinstance(message, GroupMessage)
 
@@ -1485,7 +1727,7 @@ class AIQQBot(ChannelAdapterBase, botpy.Client):
             sent_count = 0
             for i, seg in enumerate(segments[:-1]):
                 try:
-                    await message.reply(content=seg, msg_seq=_next_msg_seq())
+                    await _budgeted_reply(message, seg)
                     sent_count += 1
                 except (OSError, RuntimeError, ConnectionError) as e:
                     logger.warning("qq_bot.group_reply_part_failed",
@@ -1496,7 +1738,7 @@ class AIQQBot(ChannelAdapterBase, botpy.Client):
                     #   其他异常重发含当前段（可能没发，避免丢失）。
                     remaining = self._remaining_segments_after_error(segments, i, e)
                     try:
-                        await message.reply(content=remaining, msg_seq=_next_msg_seq())
+                        await _budgeted_reply(message, remaining)
                         sent_count += 1
                         logger.info("qq_bot.group_reply_merge_recovered",
                                     merged_from=len(segments) - i)
@@ -1529,7 +1771,7 @@ class AIQQBot(ChannelAdapterBase, botpy.Client):
                 merge_done = False
                 for i, part in enumerate(parts[:-1]):
                     try:
-                        await message.reply(content=part, msg_seq=_next_msg_seq())
+                        await _budgeted_reply(message, part)
                     except (OSError, RuntimeError, ConnectionError) as e:
                         logger.warning("qq_bot.long_reply_part_failed_merging",
                                        part_index=i, total_parts=len(parts), error=str(e))
@@ -1540,8 +1782,7 @@ class AIQQBot(ChannelAdapterBase, botpy.Client):
                         remaining = self._remaining_segments_after_error(parts, i, e)
                         merged_sent, merged_total = await self._send_remaining_segments(
                             remaining,
-                            send_piece=lambda p: message.reply(
-                                content=p, msg_seq=_next_msg_seq()),
+                            send_piece=lambda p: _budgeted_reply(message, p),
                             log_key="qq_bot.long_reply")
                         if merged_sent == merged_total:
                             logger.info("qq_bot.long_reply_merge_recovered",
@@ -1566,13 +1807,13 @@ class AIQQBot(ChannelAdapterBase, botpy.Client):
             except (OSError, RuntimeError, ConnectionError) as e:
                 logger.warning("qq_bot.sticker_send_failed", error=str(e))
                 try:
-                    await message.reply(content=final_text, msg_seq=_next_msg_seq())
+                    await _budgeted_reply(message, final_text)
                 except (OSError, RuntimeError, ConnectionError) as e2:
                     logger.error("qq_bot.sticker_fallback_reply_failed", error=str(e2))
         elif final_text:
             # 仅当还有内容未发送时才发（避免合并成功后发空消息）
             try:
-                await message.reply(content=final_text, msg_seq=_next_msg_seq())
+                await _budgeted_reply(message, final_text)
             except (OSError, RuntimeError, ConnectionError) as e:
                 logger.error("qq_bot.final_text_reply_failed", error=str(e))
 
@@ -1623,7 +1864,9 @@ class AIQQBot(ChannelAdapterBase, botpy.Client):
                     except (OSError, RuntimeError, ConnectionError) as e:
                         logger.error("qq_bot.image_send_error", error=str(e), path=str(img_path))
                         try:
-                            await message.reply(content="图片生成成功，但发送失败", msg_seq=_next_msg_seq())
+                            await _budgeted_reply(
+                                message, "图片生成成功，但发送失败",
+                            )
                         except (OSError, RuntimeError, ConnectionError) as e2:
                             logger.error(f"qq_bot.image_fallback_reply_failed: {e2}")
             send_tasks.append(_send_images())
@@ -1635,43 +1878,53 @@ class AIQQBot(ChannelAdapterBase, botpy.Client):
         try:
             if isinstance(message, C2CMessage):
                 file_info = await self._upload_c2c_base64(message.author.user_openid, video_path, file_type=2)
-                await self.api.post_c2c_message(
-                    openid=message.author.user_openid,
-                    msg_type=7,
-                    content="",
-                    media={"file_info": file_info},
-                    msg_seq=_next_msg_seq(),
-                    msg_id=message.id
+                await _budgeted_await(
+                    lambda msg_seq: self.api.post_c2c_message(
+                        openid=message.author.user_openid,
+                        msg_type=7,
+                        content="",
+                        media={"file_info": file_info},
+                        msg_seq=msg_seq,
+                        msg_id=message.id,
+                    ),
                 )
             elif isinstance(message, GroupMessage):
                 file_info = await self._upload_group_base64(message.group_openid, video_path, file_type=2)
                 try:
-                    await self.api.post_group_message(
-                        group_openid=message.group_openid,
-                        msg_type=7,
-                        content="",
-                        media={"file_info": file_info},
-                        msg_seq=_next_msg_seq(),
-                        msg_id=message.id
-                    )
-                except (OSError, RuntimeError, ConnectionError, ValueError) as e:
-                    if "被动回复" in str(e) or "超过限制" in str(e):
-                        logger.info("qq_bot.video_passive_limited_switching_to_proactive")
-                        await self.api.post_group_message(
+                    await _budgeted_await(
+                        lambda msg_seq: self.api.post_group_message(
                             group_openid=message.group_openid,
                             msg_type=7,
                             content="",
                             media={"file_info": file_info},
-                            msg_seq=_next_msg_seq(),
+                            msg_seq=msg_seq,
+                            msg_id=message.id,
+                        ),
+                    )
+                except (OSError, RuntimeError, ConnectionError, ValueError) as e:
+                    if "被动回复" in str(e) or "超过限制" in str(e):
+                        logger.info("qq_bot.video_passive_limited_switching_to_proactive")
+                        await _budgeted_await(
+                            lambda msg_seq: self.api.post_group_message(
+                                group_openid=message.group_openid,
+                                msg_type=7,
+                                content="",
+                                media={"file_info": file_info},
+                                msg_seq=msg_seq,
+                            ),
                         )
                     else:
                         raise
             logger.info("qq_bot.video_sent", video_path=str(video_path))
+        except QQReplyBudgetExceeded:
+            logger.info("qq_bot.video_budget_exhausted")
         except (OSError, RuntimeError, ConnectionError) as e:
             logger.error("qq_bot.video_send_error", error=str(e), video_path=str(video_path))
             # 降级为文本消息
             try:
-                await message.reply(content=f"视频生成成功，但发送失败: {e}", msg_seq=_next_msg_seq())
+                await _budgeted_reply(
+                    message, f"视频生成成功，但发送失败: {e}",
+                )
             except (OSError, RuntimeError, ConnectionError) as e:
                 logger.error(f"qq_bot.video_fallback_reply_failed: {e}")
 
@@ -1681,36 +1934,55 @@ class AIQQBot(ChannelAdapterBase, botpy.Client):
             silk_path = await self._convert_to_silk(audio_path)
             if silk_path is None:
                 logger.warning("qq_bot.silk_convert_failed", path=str(audio_path))
-                await message.reply(content="语音消息发送失败：缺少 SILK 编码库，请联系管理员安装 pilk", msg_seq=_next_msg_seq())
+                await _budgeted_reply(
+                    message,
+                    "语音消息发送失败：缺少 SILK 编码库，请联系管理员安装 pilk",
+                )
                 return
 
             if isinstance(message, C2CMessage):
                 openid = message.author.user_openid
                 file_info = await self._upload_c2c_base64(openid, silk_path, file_type=3)
-                await self.api.post_c2c_message(
-                    openid=openid, msg_id=message.id,
-                    msg_type=7, content="",
-                    media={"file_info": file_info}, msg_seq=_next_msg_seq()
+                await _budgeted_await(
+                    lambda msg_seq: self.api.post_c2c_message(
+                        openid=openid,
+                        msg_id=message.id,
+                        msg_type=7,
+                        content="",
+                        media={"file_info": file_info},
+                        msg_seq=msg_seq,
+                    ),
                 )
             elif isinstance(message, GroupMessage):
                 group_openid = message.group_openid
                 file_info = await self._upload_group_base64(group_openid, silk_path, file_type=3)
                 try:
-                    await self.api.post_group_message(
-                        group_openid=group_openid, msg_id=message.id,
-                        msg_type=7, content="",
-                        media={"file_info": file_info}, msg_seq=_next_msg_seq()
+                    await _budgeted_await(
+                        lambda msg_seq: self.api.post_group_message(
+                            group_openid=group_openid,
+                            msg_id=message.id,
+                            msg_type=7,
+                            content="",
+                            media={"file_info": file_info},
+                            msg_seq=msg_seq,
+                        ),
                     )
                 except (OSError, RuntimeError, ConnectionError, ValueError) as e:
                     if "被动回复" in str(e) or "超过限制" in str(e):
                         logger.info("qq_bot.audio_passive_limited_switching_to_proactive")
-                        await self.api.post_group_message(
-                            group_openid=group_openid,
-                            msg_type=7, content="",
-                            media={"file_info": file_info}, msg_seq=_next_msg_seq()
+                        await _budgeted_await(
+                            lambda msg_seq: self.api.post_group_message(
+                                group_openid=group_openid,
+                                msg_type=7,
+                                content="",
+                                media={"file_info": file_info},
+                                msg_seq=msg_seq,
+                            ),
                         )
                     else:
                         raise
+        except QQReplyBudgetExceeded:
+            logger.info("qq_bot.audio_budget_exhausted")
         except (OSError, RuntimeError, ConnectionError) as e:
             logger.warning("qq_bot.audio_send_error", error=str(e))
         finally:

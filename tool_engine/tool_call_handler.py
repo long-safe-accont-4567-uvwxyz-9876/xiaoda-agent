@@ -155,7 +155,16 @@ class ToolCallHandler:
             except (RuntimeError, OSError, ConnectionError) as e:
                 logger.warning("工具调用状态回调通知失败: {}", e)
 
-    async def _notify_tool_status(self, tool_name: str, stage: str, detail: str = "") -> None:
+    async def _notify_tool_status(
+        self,
+        tool_name: str,
+        stage: str,
+        detail: str = "",
+        *,
+        tool_call_id: str = "",
+        turn: int = 0,
+        index: int = 0,
+    ) -> None:
         """推送工具调用的中间状态 — 通过 EventBus 发射 TOOL_* 事件。
 
         Args:
@@ -179,7 +188,13 @@ class ToolCallHandler:
                 type=event_type,
                 agent=getattr(self, "_agent_name", ""),
                 task_id=getattr(self, "_task_id", ""),
-                data={"tool_name": tool_name, "detail": detail[:100] if detail else ""},
+                data={
+                    "tool_name": tool_name,
+                    "detail": detail[:100] if detail else "",
+                    "tool_call_id": tool_call_id,
+                    "turn": turn,
+                    "index": index,
+                },
             ))
 
         # 保留 status_callback 兜底（向后兼容）
@@ -195,6 +210,9 @@ class ToolCallHandler:
                 "stage": stage,
                 "label": f"{label} {display}...",
                 "detail": detail[:100] if detail else "",
+                "tool_call_id": tool_call_id,
+                "turn": turn,
+                "index": index,
             })
         except (RuntimeError, OSError, ConnectionError) as e:
             logger.debug("tool_status_push_failed: {}", e)
@@ -252,7 +270,15 @@ class ToolCallHandler:
 
         tool_results = []
         tool_messages = []
-        assistant_msg = {"role": "assistant", "content": assistant_content, "tool_calls": tool_calls}
+        assistant_calls = [
+            {key: value for key, value in call.items() if not key.startswith("_stream_")}
+            for call in tool_calls
+        ]
+        assistant_msg = {
+            "role": "assistant",
+            "content": assistant_content,
+            "tool_calls": assistant_calls,
+        }
         if reasoning_content:
             assistant_msg["reasoning_content"] = reasoning_content
 
@@ -396,7 +422,12 @@ class ToolCallHandler:
                         return (tc["id"], ToolResult.fail(err_msg), f"错误: {err_msg}", display_name)
 
             # 优先使用带钩子的工具执行回调，否则直接执行
-            await self._notify_tool_status(t_name, "started")
+            status_meta = {
+                "tool_call_id": str(tc.get("id", "")),
+                "turn": int(tc.get("_stream_turn", 0) or 0),
+                "index": int(tc.get("_stream_index", 0) or 0),
+            }
+            await self._notify_tool_status(t_name, "started", **status_meta)
             _tool_start = time.time()
             try:
                 if self._tool_execute_callback:
@@ -406,7 +437,9 @@ class ToolCallHandler:
             except (RuntimeError, OSError, ValueError, TimeoutError, KeyError) as e:
                 _tool_elapsed = round(time.time() - _tool_start, 2)
                 logger.warning("tool.exec_failed", tool=t_name, elapsed=_tool_elapsed, error=str(e)[:100])
-                await self._notify_tool_status(t_name, "failed", detail=str(e)[:100])
+                await self._notify_tool_status(
+                    t_name, "failed", detail=str(e)[:100], **status_meta,
+                )
                 raise
 
             _tool_elapsed = round(time.time() - _tool_start, 2)
@@ -418,10 +451,12 @@ class ToolCallHandler:
             result_text = ""
             if result.success:
                 result_text = json.dumps(result.data, ensure_ascii=False) if not isinstance(result.data, str) else result.data
-                await self._notify_tool_status(t_name, "completed")
+                await self._notify_tool_status(t_name, "completed", **status_meta)
             else:
                 result_text = f"错误: {result.error}"
-                await self._notify_tool_status(t_name, "failed", detail=str(result.error)[:100])
+                await self._notify_tool_status(
+                    t_name, "failed", detail=str(result.error)[:100], **status_meta,
+                )
                 # P5: 工具失败后异步触发规则提取（不阻塞主流程）
                 if self._error_pipeline is not None and result.error:
                     try:

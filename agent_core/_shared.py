@@ -14,7 +14,6 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-
 # ── 模块级常量 ─────────────────────────────────────────────────
 DEGRADED_REPLY = "嗯……人家现在有点不太舒服，等会儿再聊好不好？"
 
@@ -116,6 +115,12 @@ def is_degraded_reply(reply: str) -> bool:
 _current_request_ctx: ContextVar[RequestContext | None] = ContextVar(
     "_current_request_ctx", default=None
 )
+_group_context_enabled_var: ContextVar[bool] = ContextVar(
+    "_group_context_enabled", default=False
+)
+_group_context_metadata_var: ContextVar[dict[str, Any] | None] = ContextVar(
+    "_group_context_metadata", default=None
+)
 
 # 工具生成的 TTS 音频路径（synthesize_voice 工具设置，message_processor 读取后清除）
 # 用于让 LLM 主动调用 TTS 工具后，将音频路径回传到 ProcessResult.audio_path
@@ -175,8 +180,13 @@ class RequestContext:
     delegate_depth: int = 0
     is_master: bool = True
     identity: Any = None  # UserIdentity 运行时身份解析结果
+    user_context_token: Any = None  # 本次 (user_id, epoch) 激活标识
+    user_context_token_callback: Any = None  # 通道超时兜底捕获不可变 token
     principal: Any = None
     conversation_session: Any = None
+    # P0-4: disabled by default; group-capable adapters opt in per request.
+    group_context_enabled: bool = False
+    group_context_metadata: dict[str, Any] | None = None
     # P0 新增：系统上下文提示（主动问候等内部场景）
     # 注入为 system message，不写入 conversation_logs.user_message
     system_context: str = ""

@@ -19,21 +19,21 @@ import json
 import sqlite3
 import threading as _threading
 import time
-from typing import Any, TYPE_CHECKING, ClassVar
+from typing import TYPE_CHECKING, Any, ClassVar
 
 from loguru import logger
 
+from core.self_wake import SelfWakeManager, get_self_wake_manager
 from utils.metrics import metrics
-from core.self_wake import SelfWakeManager, WakeTrigger, get_self_wake_manager
 
 if TYPE_CHECKING:
+    from agent_context import AgentContext
     from db.database import DatabaseManager
+    from emotion.portrait_manager import PortraitManager
+    from instinct_manager import InstinctManager
+    from memory.learning_manager import LearningManager
     from memory.memory_manager import MemoryManager
     from memory.notebook_manager import NotebookManager
-    from emotion.portrait_manager import PortraitManager
-    from memory.learning_manager import LearningManager
-    from instinct_manager import InstinctManager
-    from agent_context import AgentContext
 
 # 全局后台任务集合，用于跟踪和清理
 _bg_tasks: set[asyncio.Task] = set()
@@ -190,16 +190,48 @@ class BackgroundTaskManager:
         tool_results: list,
         session_id: str = "",
         model_used: str = "",
+        request_context: dict | None = None,
+        user_context_token: Any | None = None,
     ) -> None:
         """启动所有后台任务（fire-and-forget）。
 
         model_used: 本次回复实际使用的 LLM 模型名，透传到 insert_conversation_log，
         便于后续追溯每条对话使用的模型（排查模型输出质量问题/降级链路分析）。
         """
+        if user_context_token is None:
+            user_context_token = self.context.get_user_context_token()
+        address_term = (
+            self.context.current_address_term if user_context_token is not None else ""
+        )
         self._spawn(
             self._background_tasks(
                 user_input, reply, user_id, source, emotion, tool_results,
                 session_id=session_id, model_used=model_used,
+                request_context=request_context,
+                user_context_token=user_context_token,
+                address_term=address_term,
+            )
+        )
+
+    def log_conversation_only(
+        self,
+        user_input: str,
+        reply: str,
+        user_id: str,
+        source: str,
+        emotion: dict,
+        *,
+        session_id: str = "",
+        model_used: str = "",
+        request_context: dict | None = None,
+    ) -> None:
+        """Write the audit log without personal memory or manager side effects."""
+        self._spawn(
+            self._run_persistence_tasks(
+                user_input, reply, user_id, source, emotion, session_id,
+                model_used=model_used,
+                log_only=True,
+                request_context=request_context,
             )
         )
 
@@ -213,15 +245,26 @@ class BackgroundTaskManager:
         tool_results: list,
         session_id: str = "",
         model_used: str = "",
+        request_context: dict | None = None,
+        user_context_token: Any | None = None,
+        address_term: str = "",
     ) -> None:
-        # 持久化任务独立 fire-and-forget，避免 DB 长事务阻塞其他后台任务启动
         self._spawn(
             self._run_persistence_tasks(
                 user_input, reply, user_id, source, emotion, session_id,
                 model_used=model_used,
+                request_context=request_context,
+                user_context_token=user_context_token,
             )
         )
-        await self._run_manager_tasks(user_input, reply, tool_results, session_id)
+        await self._run_manager_tasks(
+            user_input,
+            reply,
+            tool_results,
+            session_id,
+            user_context_token=user_context_token,
+            address_term=address_term,
+        )
         await self._run_scheduled_tasks()
 
     async def _run_persistence_tasks(
@@ -233,6 +276,10 @@ class BackgroundTaskManager:
         emotion: dict,
         session_id: str,
         model_used: str = "",
+        *,
+        log_only: bool = False,
+        request_context: dict | None = None,
+        user_context_token: Any | None = None,
     ) -> None:
         """对话日志、会话更新、记忆编码等持久化任务。
 
@@ -240,10 +287,22 @@ class BackgroundTaskManager:
         减少 aiosqlite 线程切换次数（Windows SelectorEventLoop 下每次 commit ~30ms）。
         try_idle_encode 涉及向量存储，不纳入批量提交。
         """
-        any_write_ok = False
-        request_context_json = json.dumps(
-            _request_context_var.get() or {}, ensure_ascii=False,
+        effective_request_context = (
+            request_context
+            if request_context is not None
+            else (_request_context_var.get() or {})
         )
+        request_context_json = json.dumps(
+            effective_request_context,
+            ensure_ascii=False,
+        )
+        is_group_audit = source == "qq_group"
+        if is_group_audit:
+            group_key = str(effective_request_context.get("group_key") or "unknown")
+            audit_user_id = audit_session_id = f"qq_group:{group_key}"
+        else:
+            audit_user_id = user_id
+            audit_session_id = session_id
         # 1. 对话日志（不立即 commit）
         # P0 修复（Task 3.1）：空回复不入库，避免上下文割裂
         # 根因：call_failed 时 reply="" 仍写入 conversation_logs，
@@ -262,8 +321,8 @@ class BackgroundTaskManager:
             # 根因：微信 bot 不传 session_id（session_id=""），写入 conversation_logs 后
             #   WebUI 会话列表 WHERE session_id != '' 过滤掉 → 微信聊天记录不显示。
             # 修复：空 session_id 用 user_id 作为会话标识，确保 WebUI 能显示微信会话。
-            if not session_id and user_id:
-                session_id = user_id
+            if not audit_session_id and audit_user_id:
+                audit_session_id = audit_user_id
             # P0 修复（greeting 占位符污染根因）：
             # greeting_scheduler 传 user_input="（主动问候）" 占位符，被入库为
             # conversation_logs.user_message。用户浏览历史时看到系统占位符，且
@@ -283,32 +342,35 @@ class BackgroundTaskManager:
                 async with self.db.write_transaction():
                     try:
                         await self.db.insert_conversation_log(
-                            user_id=user_id,
+                            user_id=audit_user_id,
                             source=source,
                             user_message=_logged_user_input,
                             assistant_reply=reply,
                             emotion_label=emotion.get("primary", ""),
                             model_used=model_used,
-                            session_id=session_id,
+                            session_id=audit_session_id,
                             request_context_json=request_context_json,
                             auto_commit=False,
                         )
-                        any_write_ok = True
                     # CodeRabbit 修复：补充 sqlite3.Error（aiosqlite 抛 sqlite3 异常子类：
                     # OperationalError/IntegrityError 等），否则 DB 错误会传播到 write_transaction
                     # 触发回滚、跳过 update_session，丢失原"两条独立、任一成功即提交"语义
                     except (OSError, ValueError, RuntimeError, sqlite3.Error) as e:
                         logger.error("degradation_triggered bg.conversation_log_failed error={}", str(e))
                     # 2. 会话更新（同一事务内，不单独 commit）
-                    if session_id:
+                    if audit_session_id and not log_only and not is_group_audit:
                         try:
-                            await self.db.update_session(session_id, auto_commit=False)
-                            any_write_ok = True
+                            await self.db.update_session(
+                                audit_session_id, auto_commit=False
+                            )
                         except (KeyError, OSError, RuntimeError, sqlite3.Error) as e:
                             logger.error("degradation_triggered bg.session_update_failed error={}", str(e))
             except Exception as e:
                 # write_transaction 内部已 shield(rollback)，这里仅记录未预期异常
                 logger.error("bg.persistence_txn_failed error={}", str(e), exc_info=True)
+
+        if log_only:
+            return
 
         # 3. 记忆编码（独立，不纳入批量提交，改为 _spawn 避免阻塞持久化任务）
         # 根因：try_idle_encode 涉及 LLM 调用，可能需要几十秒，await 会阻塞整个 _run_persistence_tasks
@@ -317,14 +379,27 @@ class BackgroundTaskManager:
         if self.memory and _hist_len >= 4:
             async def _encode_task():
                 try:
-                    pre_compressed = await self.context.flush_pre_compressed_buffer()
-                    exchanges = self.context.get_last_n(6)
+                    snapshot_method = getattr(
+                        self.context,
+                        "take_memory_encoding_snapshot",
+                        None,
+                    )
+                    if user_context_token is not None and callable(snapshot_method):
+                        snapshot = await snapshot_method(user_context_token, last_n=6)
+                        if snapshot is None:
+                            return
+                        pre_compressed, exchanges, history_len = snapshot
+                    else:
+                        # 兼容只实现旧接口的轻量测试桩。
+                        pre_compressed = await self.context.flush_pre_compressed_buffer()
+                        exchanges = self.context.get_last_n(6)
+                        history_len = _hist_len
                     if pre_compressed:
                         for msg in pre_compressed[-12:]:
                             if msg.get("role") in ("user", "assistant") and msg.get("content"):
                                 exchanges.insert(0, {"role": msg["role"], "content": msg["content"][:500]})
                     ctx = {"exchanges": exchanges, "emotion": emotion}
-                    logger.info("bg.memory_encode_start", history_len=_hist_len,
+                    logger.info("bg.memory_encode_start", history_len=history_len,
                                 exchanges=len(exchanges))
                     # 修复 P2 Bug 11: _encode_task 慢任务（曾 134s）
                     # 根因：try_idle_encode 涉及多次 LLM + embed 调用，无整体超时保护
@@ -351,19 +426,29 @@ class BackgroundTaskManager:
         reply: str,
         tool_results: list,
         session_id: str,
+        *,
+        user_context_token: Any | None = None,
+        address_term: str = "",
     ) -> None:
         """笔记、画像、学习、本能等管理器任务。"""
         # 4. 笔记自动提取
         if self.notebook_manager:
             self._spawn(self.notebook_manager.auto_note_after_message(
-                user_input, reply, address_term=self.context.current_address_term))
+                user_input, reply, address_term=address_term))
 
         # 5. 画像标记脏 + 冷启动
         if self.portrait_manager:
             self.portrait_manager.mark_dirty()
 
-        if self.portrait_manager and len(self.context.history) >= 4:
-            self._spawn(self._portrait_cold_start())
+        if (
+            self.portrait_manager
+            and user_context_token is not None
+            and len(self.context.history) >= 4
+        ):
+            self._spawn(self._portrait_cold_start(
+                user_token=user_context_token,
+                address_term=address_term,
+            ))
 
         # 6. 学习评估
         if self.learning_manager:
@@ -474,13 +559,24 @@ class BackgroundTaskManager:
         except (OSError, RuntimeError) as e:
             logger.warning("session.auto_archive_failed", error=str(e))
 
-    async def _portrait_cold_start(self) -> None:
+    async def _portrait_cold_start(
+        self,
+        user_token: Any | None = None,
+        address_term: str = "",
+    ) -> None:
+        token = user_token or self.context.get_user_context_token()
+        if token is None:
+            return
         try:
             result = await self.portrait_manager.ensure_exists(
-                address_term=self.context.current_address_term)
+                address_term=address_term or self.context.current_address_term)
             if result:
-                self.context.user_portrait = result
-                logger.info("portrait.cold_start_done", length=len(result))
+                committed = await self.context.commit_user_context(
+                    token,
+                    user_portrait=result,
+                )
+                if committed:
+                    logger.info("portrait.cold_start_done", length=len(result))
         except (OSError, ValueError, RuntimeError) as e:
             logger.warning("portrait.cold_start_failed", error=str(e))
 
@@ -557,8 +653,9 @@ class BackgroundTaskManager:
             _vec = getattr(self.memory, "vec", None)
             if _vec is None or not getattr(_vec, "enabled", False):
                 return
-            from core.dream_engine_v2 import get_dream_engine_v2, get_cognitive_memory
             import numpy as np
+
+            from core.dream_engine_v2 import get_cognitive_memory, get_dream_engine_v2
             cog = get_cognitive_memory()
             # 首次加载：从 DB 读记忆并计算 embedding 填充 CognitiveMemory
             if cog.episodic_size() == 0:

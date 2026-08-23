@@ -45,22 +45,22 @@
 """
 from __future__ import annotations
 
-import contextlib
 import asyncio
+import contextlib
 import json
 import os
 import random
 import sqlite3
 import time
 from collections.abc import Awaitable, Callable
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
 from loguru import logger
 
 try:
-    from utils.atomic_write import atomic_write, _restrict_file_permissions_windows
+    from utils.atomic_write import _restrict_file_permissions_windows, atomic_write
 except (ImportError, AttributeError):
     atomic_write = None  # type: ignore[assignment]
     def _restrict_file_permissions_windows(path):  # type: ignore[no-redef]
@@ -305,13 +305,16 @@ class TTLCache:
         """对绑定的双 dict 执行一次清理。"""
         self.prune_pairs(self.values, self.stamps, ttl=self.ttl, max_size=self.max_size)
 
-    def set(self, key: str, value: Any) -> None:
-        """写入并刷新时间戳，随后立即执行清理（CodeRabbit F8 语义）。"""
+    def set(self, key: str, value: Any, *, prune: bool = True) -> None:
+        """写入并刷新时间戳；默认立即清理以维持容量上限。"""
         self.values[key] = value
         self.stamps[key] = time.time()
-        self.prune()
+        if prune:
+            self.prune()
 
-    def get(self, key: str, default: Any = None) -> Any:
+    def get(self, key: str, default: Any = None, *, prune: bool = True) -> Any:
+        if prune:
+            self.prune()
         return self.values.get(key, default)
 
     def pop(self, key: str, default: Any = None) -> Any:
@@ -339,7 +342,6 @@ class CoreProcessRequest:
     source: str               # 渠道标识：qq_c2c / qq_group / wechat_c2c
     user_openid: str          # 发送者 openid / from_user_id / member_openid
     session_id: str | None = None   # 预解析会话；None 时由骨架钩子 _resolve_session 决定
-    extra_kwargs: dict[str, Any] = field(default_factory=dict)  # image_data/is_master 等直传参
 
 
 class ChannelAdapterBase:
@@ -508,8 +510,10 @@ class ChannelAdapterBase:
 
     def _build_process_kwargs(self, req: CoreProcessRequest,
                               session_id: str | None) -> dict[str, Any]:
-        """构造 process 关键字参数。session_id 仅在有值时传递——
-        QQ 群聊原实现即省略该参数（与传 None 语义不同，勿合并）。"""
+        """构造 process 关键字参数。session_id 仅在真值时传递——
+        None/空串时省略该键（core.process 默认 session_id=""）。
+        QQ 群聊经 _resolve_session 透传合成边界 qq_group:{群 openid}，
+        由 core 侧拼装为按用户隔离的会话键；微信自行查缓存/DB 后传入。"""
         kwargs: dict[str, Any] = {
             "user_id": req.user_id,
             "source": req.source,
@@ -518,7 +522,6 @@ class ChannelAdapterBase:
         }
         if session_id:
             kwargs["session_id"] = session_id
-        kwargs.update(req.extra_kwargs)
         return kwargs
 
     def _bind_bus_user(self, req: CoreProcessRequest) -> Any:
@@ -557,7 +560,15 @@ class ChannelAdapterBase:
             return None
         try:
             await self._send_ack(req)
-            session_id = await self._resolve_session(req)
+        except TimeoutError:
+            await self._on_core_timeout(req)
+            return None
+        except self.CORE_ERROR_TYPES as e:
+            await self._on_core_error(req, e)
+            return None
+
+        session_id = await self._resolve_session(req)
+        try:
             token = self._bind_bus_user(req)
             try:
                 result = await asyncio.wait_for(
@@ -577,64 +588,46 @@ class ChannelAdapterBase:
     async def _send_segments_paced(
         self,
         segments: list[str],
-        send_one: Callable[[str], Awaitable[Any]],
+        send_one: Callable[[str], Awaitable[bool]],
         *,
+        on_failure: Callable[[int, Any], Awaitable[Any]],
         log_prefix: str,
     ) -> bool:
-        """流式分段发送共享内核（wechat 接入；打字节奏参数为两通道行为契约）。
+        """按固定节奏逐片发送，并把首次失败原样交给通道恢复钩子。
 
-        - 段间停顿 ``random.uniform(0.8, 1.2)`` 秒模拟打字节奏（对齐 QQ 原实现）；
-        - send_one 返回 False（或抛异常）视为该段未送达：合并剩余段
-          （含当前段，服务端 ret!=0 表示未接受，对齐 QQ 连接错误路径）
-          为单条重发一次后停止；
-        - send_one 内部异常按原 wechat 语义吞掉记 warning（send_message 本身
-          已兜底全部异常返回 bool，此处仅防御）。
-
-        Returns:
-            True=全部分片送达；False=某段失败（已尝试合并重发）。
+        共享层只负责段间停顿和顺序发送。仅返回 ``True`` 表示成功；其他
+        返回值与发送时抛出的原异常对象均不改写地传给
+        ``on_failure(index, failure)``。恢复范围、重切上限和停止策略由各通道实现。
         """
         num_segments = len(segments)
-        for i, seg in enumerate(segments):
-            if i > 0:
+        for index, segment in enumerate(segments):
+            if index > 0:
                 await asyncio.sleep(random.uniform(0.8, 1.2))
             try:
-                ok = await send_one(seg)
-            except Exception as e:
+                result = await send_one(segment)
+            except Exception as exc:
                 logger.warning(
                     log_prefix + ".stream_segment_exception index={} total={} error={}",
-                    i, num_segments, str(e)[:200],
+                    index,
+                    num_segments,
+                    str(exc)[:200],
                 )
-                ok = False
-            if ok:
-                logger.debug(
-                    log_prefix + ".stream_segment index={} total={} sent=True size={}",
-                    i, num_segments, len(seg),
+                await on_failure(index, exc)
+                return False
+            if result is not True:
+                logger.warning(
+                    log_prefix + ".stream_segment_failed index={} total={}",
+                    index,
+                    num_segments,
                 )
-                continue
-            logger.warning(
-                log_prefix + ".stream_segment_failed index={} total={} merging_remaining",
-                i, num_segments,
+                await on_failure(index, result)
+                return False
+            logger.debug(
+                log_prefix + ".stream_segment index={} total={} sent=True size={}",
+                index,
+                num_segments,
+                len(segment),
             )
-            remaining = "".join(segments[i:])
-            try:
-                merged_ok = await send_one(remaining)
-            except Exception as e:
-                logger.warning(
-                    log_prefix + ".stream_merged_exception size={} error={}",
-                    len(remaining), str(e)[:200],
-                )
-                merged_ok = False
-            if merged_ok:
-                logger.info(
-                    log_prefix + ".stream_merged_resend_ok merged_from={} size={}",
-                    num_segments - i, len(remaining),
-                )
-            else:
-                logger.warning(
-                    log_prefix + ".stream_merged_resend_failed size={}",
-                    len(remaining),
-                )
-            return False
         return True
 
     def _init_dedup_state(self) -> None:

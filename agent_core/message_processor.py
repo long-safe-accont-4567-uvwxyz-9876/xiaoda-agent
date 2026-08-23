@@ -29,6 +29,10 @@ from loguru import logger
 from agent_core._shared import (
     ALLOWED_NON_MASTER_TOOLS as _ALLOWED_NON_MASTER_TOOLS,
 )
+from agent_core._shared import (
+    _group_context_enabled_var,
+    _group_context_metadata_var,
+)
 
 # 从 _shared 导入共享常量, 避免重复定义 (该模块极轻量, 无循环导入风险)
 from agent_core._shared import (
@@ -198,14 +202,15 @@ class MessageProcessorMixin(StreamingMixin, ChatTargetMixin, VisionMixin, Person
 
     async def _call_with_timeout(self, coro: Any, *, timeout: float,
                                  timeout_log: str, error_log: str,
-                                 timeout_kwargs: dict | None = None) -> None:
-        """带超时执行协程；超时/异常均降级跳过并记录日志，不抛异常。"""
+                                 timeout_kwargs: dict | None = None) -> Any | None:
+        """带超时执行协程；成功返回结果，超时/异常时降级返回 None。"""
         try:
-            await asyncio.wait_for(coro, timeout=timeout)
+            return await asyncio.wait_for(coro, timeout=timeout)
         except asyncio.TimeoutError:
             logger.warning(timeout_log, timeout=timeout, **(timeout_kwargs or {}))
         except Exception as e:
             logger.warning(error_log, error=str(e))
+        return None
 
     def _spawn_xp_and_profile(self, user_input: str, user_id: str, user_openid: str) -> None:
         """XP 加成 + 用户画像统计（fire-and-forget，不阻塞主消息流程）。"""
@@ -234,6 +239,8 @@ class MessageProcessorMixin(StreamingMixin, ChatTargetMixin, VisionMixin, Person
                              status_callback: Any, image_data: list[dict] | None,
                              is_master: bool = True,
                              system_context: str = "") -> ProcessResult:
+        ctx.group_context_enabled = bool(_group_context_enabled_var.get())
+        ctx.group_context_metadata = _group_context_metadata_var.get()
         # P0 新增：system_context 注入（主动问候等内部场景）
         # 存储在 self 上供 _build_main_messages 使用，不写入 conversation_logs
         # P0-2 修复：同时写入 ContextVar，实现 asyncio.Task 级隔离，避免单例并发覆写。
@@ -252,8 +259,9 @@ class MessageProcessorMixin(StreamingMixin, ChatTargetMixin, VisionMixin, Person
             trace.warning("agent.blocked", reason=reason)
             return ProcessResult(reply="")
 
-        # XP 加成 + 用户画像统计（fire-and-forget）
-        self._spawn_xp_and_profile(user_input, user_id, user_openid)
+        # XP/profile may consume the current owner's group turn, but never guest data.
+        if source != "qq_group" or is_master:
+            self._spawn_xp_and_profile(user_input, user_id, user_openid)
 
         # slash 命令
         if self.slash_handler and self.slash_handler.is_slash_command(user_input):
@@ -352,43 +360,110 @@ class MessageProcessorMixin(StreamingMixin, ChatTargetMixin, VisionMixin, Person
             _orig_suffix = session_id.rsplit(":", 1)[-1] if session_id else ""
             session_id = f"qq_group:{user_openid}:{_orig_suffix}" if _orig_suffix else f"qq_group:{user_openid}"
 
-        # 按当前用户恢复历史摘要（群聊多用户上下文隔离），带超时降级
+        # portrait/notebook 仍是全局单主人表，个人资源必须严格 owner-only。
+        identity = getattr(ctx, "identity", None)
+        principal = getattr(ctx, "principal", None)
+        is_owner = (
+            getattr(principal, "is_owner", False) is True
+            or getattr(identity, "is_owner", False) is True
+        )
         _restore_id = user_id or user_openid
         if _restore_id:
-            await MessageProcessorMixin._restore_user_context(self, _restore_id)
+            address_term = getattr(identity, "address_term", "")
+            ctx.user_context_token = await MessageProcessorMixin._restore_user_context(
+                self,
+                _restore_id,
+                address_term=address_term,
+                load_user_resources=is_owner,
+                token_callback=getattr(ctx, "user_context_token_callback", None),
+            )
 
         logger.info("pipeline.restore.done proc_id={} elapsed_ms={}",
                     _proc_id, int((time.time() - _restore_t0) * 1000))
         return InitRestoreResult(trace, session_id, allowed, reason)
 
-    async def _restore_user_context(self, _restore_id: str) -> None:
-        """按当前用户恢复历史摘要（群聊多用户上下文隔离），带超时降级。
-
-        P0 修复（用户反馈"对话链路阻塞"根因）：switch_user_context 和 restore_from_db
-        曾因数据库连接竞争/锁等待阻塞 38 秒，故给两步分别加超时，超时降级跳过
-        （宁可上下文不完整也不阻塞主流程）。
-        P0-1 修复（QQ 会话恢复键与写库键不一致 → 突然失忆）：写库键为 qq_{openid}，
-        恢复必须用同一 user_id，否则 restore_from_db 用裸 openid 查询 → DB 0 行 → 失忆。
-        """
-        await MessageProcessorMixin._call_with_timeout(
+    async def _restore_user_context(
+        self,
+        _restore_id: str,
+        *,
+        address_term: str = "",
+        load_user_resources: bool = False,
+        token_callback: Any = None,
+    ) -> Any | None:
+        """激活目标用户，并用同一 activation token 加载其动态资源。"""
+        token = await MessageProcessorMixin._call_with_timeout(
             self,
-            self.context.switch_user_context(_restore_id),
+            self.context.switch_user_context(
+                _restore_id,
+                address_term=address_term,
+            ),
             timeout=5.0,
             timeout_log="agent.switch_user_context_timeout",
             error_log="agent.switch_user_context_failed",
             timeout_kwargs={"user_id": _restore_id, "hint": "锁竞争或事件循环阻塞，跳过用户切换"},
         )
-        if self.db:
-            await MessageProcessorMixin._call_with_timeout(
-                self,
-                self.context.restore_from_db(
-                    self.db, user_id=_restore_id,
-                    address_term=self.context.current_address_term),
-                timeout=10.0,
-                timeout_log="agent.restore_from_db_timeout",
-                error_log="agent.restore_failed",
-                timeout_kwargs={"user_id": _restore_id, "hint": "数据库查询阻塞，跳过历史摘要恢复"},
-            )
+        if token is None:
+            return None
+        if token_callback is not None:
+            token_callback(token)
+
+        if load_user_resources:
+            claimed = await self.context.claim_user_context_resources(token)
+            if not claimed:
+                return token
+            try:
+                resource_load = self._load_user_context_resources(token)
+                resources_loaded = (
+                    await resource_load
+                    if asyncio.iscoroutine(resource_load)
+                    else bool(resource_load)
+                )
+                if not resources_loaded:
+                    await self.context.fail_user_context_resources(token)
+                    return token
+                if self.db:
+                    restored = await MessageProcessorMixin._call_with_timeout(
+                        self,
+                        self.context.restore_from_db(
+                            self.db,
+                            user_id=_restore_id,
+                            address_term=address_term,
+                            user_token=token,
+                        ),
+                        timeout=10.0,
+                        timeout_log="agent.restore_from_db_timeout",
+                        error_log="agent.restore_failed",
+                        timeout_kwargs={"user_id": _restore_id, "hint": "数据库查询阻塞，跳过历史摘要恢复"},
+                    )
+                    if restored is not True:
+                        await self.context.fail_user_context_resources(token)
+                        return token
+                await self.context.complete_user_context_resources(token)
+            except BaseException:
+                await self.context.fail_user_context_resources(token)
+                raise
+        return token
+
+    async def _load_user_context_resources(self, token: Any) -> bool:
+        """为一个明确 owner activation 加载全局单主人资源。"""
+        portrait_manager = getattr(self, "portrait_manager", None)
+        if portrait_manager is not None:
+            try:
+                portrait = await portrait_manager.get_current_portrait()
+                content = portrait.get("content") if portrait else None
+                if content:
+                    committed = await self.context.commit_user_context(
+                        token,
+                        user_portrait=content,
+                    )
+                    if not committed:
+                        return False
+                    logger.info("portrait.loaded", version=portrait.get("version"))
+            except Exception as e:
+                logger.warning("portrait.load_failed", error=str(e))
+                return False
+
+        return bool(await self._load_notebook_context(user_token=token))
 
     # _dedup_buf / _dedup_reply_against_recent（跨对话回复去重）已随 Phase 4 拆分迁至
     # agent_core/mixins/reply_dedup.py（ReplyDedupMixin），经 MRO 组合使用。

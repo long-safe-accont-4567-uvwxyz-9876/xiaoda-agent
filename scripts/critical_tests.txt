@@ -26,3 +26,4 @@ tests/test_manifest_consistency.py
 tests/test_terminal_output_coalescing.py
 tests/test_bootstrap_degraded_isolation.py
 tests/test_dangerous_targets_consistency.py
+tests/test_adapter_pipeline_contracts.py
