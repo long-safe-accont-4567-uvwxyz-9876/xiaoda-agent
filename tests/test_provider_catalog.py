@@ -250,11 +250,15 @@ def test_credential_pool_free_providers_delegate_to_catalog(monkeypatch, alias, 
 @pytest.mark.asyncio
 async def test_setup_validates_each_modelscope_alias(monkeypatch, alias: str):
     from web.routers import setup
+    from web.routers import setup_key_probes
 
     async def validate(value):
         return True, value
 
-    monkeypatch.setattr(setup, "_test_modelscope", validate)
+    # 打桩必须落在名字被查找的模块：test_single_key 已随拆分蓝图 P1 迁入
+    # setup_key_probes（setup 侧仅 re-export），patch 旧位置不再拦截
+    monkeypatch.setattr(setup_key_probes, "_test_modelscope", validate)
+    assert setup.test_single_key is not None
 
     assert await setup.test_single_key(alias, "modelscope-token") == (
         True,

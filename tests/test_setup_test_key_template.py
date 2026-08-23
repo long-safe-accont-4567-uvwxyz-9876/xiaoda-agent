@@ -23,7 +23,7 @@ async def test_test_mimo_success():
     mock_resp = MagicMock()
     mock_resp.status_code = 200
     mock_resp.json.return_value = {"choices": [{"message": {"content": "hi"}}]}
-    with patch("web.routers.setup.httpx.AsyncClient") as MockClient:
+    with patch("web.routers.setup_key_probes.httpx.AsyncClient") as MockClient:
         client = MagicMock()
         client.post = AsyncMock(return_value=mock_resp)
         client.__aenter__ = AsyncMock(return_value=client)
@@ -40,7 +40,7 @@ async def test_test_mimo_http_error():
     from web.routers import setup as mod
     mock_resp = MagicMock()
     mock_resp.status_code = 401
-    with patch("web.routers.setup.httpx.AsyncClient") as MockClient:
+    with patch("web.routers.setup_key_probes.httpx.AsyncClient") as MockClient:
         client = MagicMock()
         client.post = AsyncMock(return_value=mock_resp)
         client.__aenter__ = AsyncMock(return_value=client)
@@ -57,7 +57,7 @@ async def test_test_siliconflow_401():
     from web.routers import setup as mod
     mock_resp = MagicMock()
     mock_resp.status_code = 401
-    with patch("web.routers.setup.httpx.AsyncClient") as MockClient:
+    with patch("web.routers.setup_key_probes.httpx.AsyncClient") as MockClient:
         client = MagicMock()
         client.post = AsyncMock(return_value=mock_resp)
         client.__aenter__ = AsyncMock(return_value=client)
@@ -78,7 +78,7 @@ async def test_test_timeout_mimo():
     async def _timeout_post(*args, **kwargs):
         raise httpx.TimeoutException("timeout")
 
-    with patch("web.routers.setup.httpx.AsyncClient") as MockClient:
+    with patch("web.routers.setup_key_probes.httpx.AsyncClient") as MockClient:
         client = MagicMock()
         client.post = _timeout_post
         client.get = _timeout_post
@@ -97,7 +97,7 @@ async def test_test_qqbot_success():
     mock_resp = MagicMock()
     mock_resp.status_code = 200
     mock_resp.json.return_value = {"access_token": "tok_xxx"}
-    with patch("web.routers.setup.httpx.AsyncClient") as MockClient:
+    with patch("web.routers.setup_key_probes.httpx.AsyncClient") as MockClient:
         client = MagicMock()
         client.post = AsyncMock(return_value=mock_resp)
         client.__aenter__ = AsyncMock(return_value=client)
@@ -121,7 +121,7 @@ async def test_get_200_success(fn_name, key_name):
     from web.routers import setup as mod
     mock_resp = MagicMock()
     mock_resp.status_code = 200
-    with patch("web.routers.setup.httpx.AsyncClient") as MockClient:
+    with patch("web.routers.setup_key_probes.httpx.AsyncClient") as MockClient:
         client = MagicMock()
         client.get = AsyncMock(return_value=mock_resp)
         client.__aenter__ = AsyncMock(return_value=client)
