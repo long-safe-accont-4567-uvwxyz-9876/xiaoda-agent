@@ -143,3 +143,42 @@ async def test_real_pty_session_end_to_end(clean_buffers):
             os.waitpid(child_pid, 0)
         except ChildProcessError:
             pass
+
+
+@pytest.mark.asyncio
+async def test_win_pipe_thread_path_coalesces(clean_buffers):
+    """Windows 路径模拟：reader 线程经 call_soon_threadsafe 投递合帧——
+    帧合并语义与 Linux PTY 一致（跨线程进 loop 单线程串行执行）。"""
+    sent: list[dict] = []
+    orig_send = hub.manager.send_to
+
+    async def _capture(conn_id, event):
+        sent.append(event)
+
+    hub.manager.send_to = _capture
+    loop = asyncio.get_running_loop()
+    with hub._pty_sessions_lock:
+        hub._pty_sessions["w1"] = {
+            "pid": 0, "proc": None, "conn_id": "cw", "shell": "powershell",
+            "alive": True, "loop": loop, "is_windows": True,
+        }
+    try:
+        import threading
+
+        def _reader():
+            for i in range(200):
+                loop.call_soon_threadsafe(
+                    hub._queue_term_output, "w1", "cw", "z" * 100)
+
+        t = threading.Thread(target=_reader)
+        t.start()
+        await asyncio.to_thread(t.join)
+        await asyncio.sleep(0.05)
+        frames = [e for e in sent if e["type"] == "terminal_output"]
+        assert sum(len(f["data"]) for f in frames) == 200 * 100
+        assert len(frames) < 30
+    finally:
+        with hub._pty_sessions_lock:
+            hub._pty_sessions.pop("w1", None)
+        hub.manager.send_to = orig_send
+
