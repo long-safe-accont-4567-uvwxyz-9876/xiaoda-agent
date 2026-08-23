@@ -432,7 +432,7 @@ function onPanelOpened() {
 .term-fab {
   position: fixed;
   right: 20px;
-  bottom: 80px;
+  bottom: 132px; /* 与 J-Space 浮窗球(bottom:80px)垂直错开，避免重叠 */
   width: 44px;
   height: 44px;
   border-radius: 12px;
