@@ -24,8 +24,9 @@ utils.common 复用）。函数体自 config.py 逐字节搬移。
 """
 from __future__ import annotations
 
-import logging
 import os
+
+from loguru import logger
 
 from config_paths import DATA_DIR
 from config_providers import get_base_url_for_provider, get_default_model_for_provider
@@ -33,8 +34,6 @@ from security import credential_vault
 from utils.common import safe_float as _safe_float
 from utils.common import safe_int as _safe_int
 from utils.encrypted_credential import protect_credential
-
-logger = logging.getLogger(__name__)
 
 
 def get_secret(name: str, default: str = "") -> str:
@@ -52,7 +51,7 @@ def get_secret(name: str, default: str = "") -> str:
     try:
         return credential_vault.decrypt(value)
     except credential_vault.DecryptionError as e:
-        logger.warning("config.decrypt_failed: %s (%s)", name, e)
+        logger.warning("config.decrypt_failed: {} ({})", name, e)
         return default
 
 

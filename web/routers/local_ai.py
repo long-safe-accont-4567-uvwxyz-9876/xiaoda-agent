@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import asyncio
-import logging
 import shutil
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
@@ -9,9 +8,8 @@ from pathlib import Path
 from typing import Any
 from uuid import uuid4
 
-logger = logging.getLogger(__name__)
-
 from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
+from loguru import logger
 from pydantic import BaseModel, Field
 
 # hub/search 专用独立线程池：search_hub 内部嵌套 3 层 ThreadPoolExecutor，
@@ -86,10 +84,9 @@ class LocalAIServices:
             except asyncio.CancelledError:
                 return
             if exc is not None:
-                logger.error(
-                    "background task failed: %s",
+                logger.opt(exception=exc).error(
+                    "background task failed: {}",
                     getattr(coroutine, "__qualname__", type(coroutine).__name__),
-                    exc_info=(type(exc), exc, exc.__traceback__),
                 )
 
         task.add_done_callback(_on_done)

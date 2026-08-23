@@ -18,13 +18,11 @@ JSON5 注释剥离器（_strip_json5_comments / load_agent_config）留在 confi
 """
 from __future__ import annotations
 
-import logging
 from pathlib import Path
 
+from loguru import logger
+
 from config_paths import AGENTS_CONFIG_DIR
-
-logger = logging.getLogger(__name__)
-
 
 # ── Agent display_name 动态读取（规避 IP 风险，用户可自定义）──
 # 默认 display_name（当用户未自定义时的 fallback）
@@ -54,7 +52,7 @@ def clear_display_name_cache(name: str | None = None):
         from prompt_builder import clear_module_cache
         clear_module_cache()
     except ImportError:
-        logger.debug("config.prompt_builder_import_unavailable", exc_info=True)
+        logger.opt(exception=True).debug("config.prompt_builder_import_unavailable")
 
 
 def agent_names() -> list[str]:

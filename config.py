@@ -1,40 +1,12 @@
-import logging
+import json
 import os
 import re
-import json
-import sys
-
-logger = logging.getLogger(__name__)
-from typing import Any
 import shutil
+import sys
 from pathlib import Path
+from typing import Any
 
-
-# ── Phase 1 拆分：路径与 workspace 引导块抽为 config_paths（逐字节搬移）──
-# 同名 re-export 保持兼容：from config import DATA_DIR / get_config_dir 等
-# 既有用法不受影响（契约见 tests/test_config_paths_module.py）。
-from config_paths import (  # noqa: F401,E402
-    get_base_dir, get_env_path, get_credentials_dir, get_config_dir,
-    is_data_dir_writable, _ensure_workspace, _init_user_resources,
-    _migrate_old_data, _merge_dir, _resolve_data_path, _ensure_fallback,
-    _get_fallback_base, _init_agent_json5, _init_agents_subdir,
-    _init_workspace_templates, _workspace_initialized,
-    ENV_PATH, _KIOXIA_BASE, _FALLBACK_BASE, _KIOXIA_AVAILABLE,
-    DATA_DIR, LOG_DIR, WORKSPACE_DIR, CREDENTIALS_DIR,
-    CONFIG_DIR, AGENT_CONFIG_PATH, STICKER_DIR, XIAOLI_STICKER_DIR,
-    AGENT_STICKER_BASE, FILE_DIR, MEDIA_DIR, VOICE_REF_DIR,
-    MEMORY_STATE_DIR, PLUGINS_CONFIG_DIR, AGENTS_CONFIG_DIR,
-)
-
-# ── Phase 2 拆分：provider 目录块抽为 config_providers（逐字节搬移）──
-# 同名 re-export 保持兼容（契约见 tests/test_config_providers_module.py）。
-# 可变状态 DEFAULT_PROVIDER/set_default_provider 保留在本模块（见 config_providers docstring）。
-from config_providers import (  # noqa: F401,E402
-    get_provider_catalog, get_default_model_for_provider,
-    get_base_url_for_provider, get_default_provider, get_builtin_providers,
-    get_provider_config,
-    MIMO_MODEL, MIMO_BASE_URL, DEEPSEEK_BASE_URL,
-)
+from loguru import logger
 
 # ── Phase 3 拆分：agent 命名/display_name 块抽为 config_agents（逐字节搬移）──
 # 同名 re-export 保持兼容（契约见 tests/test_config_agents_module.py）。
@@ -58,34 +30,139 @@ from config_agents import (  # noqa: F401,E402
 # 例外（2026-08-22 副作用瘦身）：DEEPSEEK/MIMO/AGNES/ASR/JINA/RERANKER 六个
 # *_API_KEY 已改为经模块 __getattr__ 懒转发（凭证解密不再发生在 import 期）。
 from config_constants import (  # noqa: F401,E402
-    get_secret, _safe_positive_float, _safe_float,
-    TRUST_FORWARDED_FOR,
-    AGNES_BASE_URL, AGNES_TEXT_MODEL, AGNES_IMAGE_MODEL, AGNES_VIDEO_MODEL,
-    ASR_BASE_URL, ASR_MODEL,
-    AGENT_ROUTE_KEYWORDS, AGENT_TASK_MAP,
-    RERANKER_BASE_URL, RERANKER_MODEL, RERANKER_ENABLED,
+    AGENT_ROUTE_KEYWORDS,
+    AGENT_TASK_MAP,
+    AGNES_BASE_URL,
+    AGNES_IMAGE_MODEL,
+    AGNES_TEXT_MODEL,
+    AGNES_VIDEO_MODEL,
+    ASR_BASE_URL,
+    ASR_MODEL,
+    CHILD_CHUNK_MAX_PER_PARENT,
+    CHILD_CHUNK_OVERLAP_CHARS,
+    CHILD_CHUNK_SEGMENT_MAX_LEN,
+    CHILD_CHUNK_TYPES,
+    CHILD_VEC_TABLE,
+    CIRCUIT_BREAKER_COOLDOWN,
+    CIRCUIT_BREAKER_HALF_OPEN_PROBES,
+    CIRCUIT_BREAKER_MAX_COOLDOWN,
+    CONTEXTUAL_RETRIEVAL_ENABLED,
+    DIRECTION_REGISTRY_PATH,
+    EMOTION_TRIGGER_THRESHOLD,
+    ENABLE_EMOTION_LLM,
+    ENABLE_J_SPACE_HOOKS,
+    ERROR_RULE_STRICT_MODE,
+    FTS_CJK_STOP_WORDS_FILTER,
+    FTS_DROP_CJK_SINGLE,
+    HYDE_ENABLED,
+    INTENT_CLASSIFY_TIMEOUT,
+    INTENT_LLM_CLASSIFY,
+    INTERVENTION_DEFAULT_COOLDOWN,
+    KG_V2_ENABLED,
+    MAX_EPISODIC_MEMORIES,
+    MAX_EPISODIC_ROWS,
+    MEMORY_COLD_MAX,
+    MEMORY_DISTILL_BATCH,
+    MEMORY_DISTILL_ENABLED,
+    MEMORY_RETRIEVAL_DIFFUSION,
+    MEMORY_RETRIEVE_TIMEOUT,
+    MEMORY_WARM_MAX,
+    MEMORY_WARM_VEC_WEIGHT,
+    PARENT_CHILD_CHUNK_ENABLED,
+    PROMPT_CACHING_ENABLED,
+    QUERY_CACHE_ENABLED,
+    QUERY_CACHE_MAX_SIZE,
+    QUERY_CACHE_THRESHOLD,
+    QUERY_CACHE_TTL,
+    QUERY_EXPAND_COUNT,
+    QUERY_TRANSFORM_ENABLED,
+    RAG_IMPORTANCE_WEIGHT,
+    RAG_KG_WEIGHT,
+    RAG_MIN_FINAL_SCORE,
+    RAG_RECALL_LIMIT,
+    RAG_RERANK_LIMIT,
+    RAG_RERANK_WEIGHT,
+    RAG_RRF_RANK_PENALTY,
+    RAG_VEC_MAX_DISTANCE,
+    RAG_VEC_SOFT_PENALTY,
+    RERANKER_BASE_URL,
+    RERANKER_ENABLED,
+    RERANKER_MODEL,
     RERANKER_OVERSAMPLE_RATIO,
-    QUERY_TRANSFORM_ENABLED, QUERY_EXPAND_COUNT, MEMORY_RETRIEVAL_DIFFUSION, HYDE_ENABLED,
-    INTENT_LLM_CLASSIFY, INTENT_CLASSIFY_TIMEOUT,
-    RETRIEVAL_SMART_SKIP, RETRIEVAL_PARALLEL_TRANSFORM, RETRIEVAL_PARALLEL_SEARCH,
-    QUERY_CACHE_ENABLED, QUERY_CACHE_THRESHOLD, QUERY_CACHE_MAX_SIZE, QUERY_CACHE_TTL,
-    MEMORY_RETRIEVE_TIMEOUT, RUST_HYBRID_ENABLED,
-    PARENT_CHILD_CHUNK_ENABLED, KG_V2_ENABLED, CONTEXTUAL_RETRIEVAL_ENABLED,
-    CHILD_CHUNK_OVERLAP_CHARS, CHILD_CHUNK_MAX_PER_PARENT, CHILD_CHUNK_SEGMENT_MAX_LEN,
-    CHILD_VEC_TABLE, CHILD_CHUNK_TYPES,
-    SUB_AGENT_API_TIMEOUT, SUB_AGENT_TOTAL_TIMEOUT, SUB_AGENT_API_RETRY,
-    TTS_ASYNC_MODE, STREAM_STATUS_PUSH, SIMPLE_CHAT_FASTPATH, STREAM_TEXT_PUSH,
+    RETRIEVAL_PARALLEL_SEARCH,
+    RETRIEVAL_PARALLEL_TRANSFORM,
+    RETRIEVAL_SMART_SKIP,
+    RUST_HYBRID_ENABLED,
+    SCENE_STICKINESS_THRESHOLD,
+    SIGNAL_STREAM_MAX_HISTORY,
+    SIMPLE_CHAT_FASTPATH,
+    STREAM_STATUS_PUSH,
+    STREAM_TEXT_PUSH,
     STREAM_TOOL_STATUS,
-    CIRCUIT_BREAKER_COOLDOWN, CIRCUIT_BREAKER_HALF_OPEN_PROBES, CIRCUIT_BREAKER_MAX_COOLDOWN,
-    ERROR_RULE_STRICT_MODE, PROMPT_CACHING_ENABLED,
-    RAG_RERANK_WEIGHT, RAG_KG_WEIGHT, RAG_IMPORTANCE_WEIGHT,
-    RAG_RECALL_LIMIT, RAG_RERANK_LIMIT, RAG_MIN_FINAL_SCORE, RAG_VEC_MAX_DISTANCE,
-    RAG_VEC_SOFT_PENALTY, RAG_RRF_RANK_PENALTY, FTS_DROP_CJK_SINGLE, FTS_CJK_STOP_WORDS_FILTER,
-    EMOTION_TRIGGER_THRESHOLD, SCENE_STICKINESS_THRESHOLD,
-    MEMORY_COLD_MAX, MEMORY_WARM_MAX, MEMORY_WARM_VEC_WEIGHT,
-    MAX_EPISODIC_MEMORIES, MEMORY_DISTILL_BATCH, MEMORY_DISTILL_ENABLED, MAX_EPISODIC_ROWS,
-    ENABLE_J_SPACE_HOOKS, ENABLE_EMOTION_LLM, DIRECTION_REGISTRY_PATH,
-    SIGNAL_STREAM_MAX_HISTORY, INTERVENTION_DEFAULT_COOLDOWN,
+    SUB_AGENT_API_RETRY,
+    SUB_AGENT_API_TIMEOUT,
+    SUB_AGENT_TOTAL_TIMEOUT,
+    TRUST_FORWARDED_FOR,
+    TTS_ASYNC_MODE,
+    _safe_float,
+    _safe_positive_float,
+    get_secret,
+)
+
+# ── Phase 1 拆分：路径与 workspace 引导块抽为 config_paths（逐字节搬移）──
+# 同名 re-export 保持兼容：from config import DATA_DIR / get_config_dir 等
+# 既有用法不受影响（契约见 tests/test_config_paths_module.py）。
+from config_paths import (  # noqa: F401,E402
+    _FALLBACK_BASE,
+    _KIOXIA_AVAILABLE,
+    _KIOXIA_BASE,
+    AGENT_CONFIG_PATH,
+    AGENT_STICKER_BASE,
+    AGENTS_CONFIG_DIR,
+    CONFIG_DIR,
+    CREDENTIALS_DIR,
+    DATA_DIR,
+    ENV_PATH,
+    FILE_DIR,
+    LOG_DIR,
+    MEDIA_DIR,
+    MEMORY_STATE_DIR,
+    PLUGINS_CONFIG_DIR,
+    STICKER_DIR,
+    VOICE_REF_DIR,
+    WORKSPACE_DIR,
+    XIAOLI_STICKER_DIR,
+    _ensure_fallback,
+    _ensure_workspace,
+    _get_fallback_base,
+    _init_agent_json5,
+    _init_agents_subdir,
+    _init_user_resources,
+    _init_workspace_templates,
+    _merge_dir,
+    _migrate_old_data,
+    _resolve_data_path,
+    _workspace_initialized,
+    get_base_dir,
+    get_config_dir,
+    get_credentials_dir,
+    get_env_path,
+    is_data_dir_writable,
+)
+
+# ── Phase 2 拆分：provider 目录块抽为 config_providers（逐字节搬移）──
+# 同名 re-export 保持兼容（契约见 tests/test_config_providers_module.py）。
+# 可变状态 DEFAULT_PROVIDER/set_default_provider 保留在本模块（见 config_providers docstring）。
+from config_providers import (  # noqa: F401,E402
+    DEEPSEEK_BASE_URL,
+    MIMO_BASE_URL,
+    MIMO_MODEL,
+    get_base_url_for_provider,
+    get_builtin_providers,
+    get_default_model_for_provider,
+    get_default_provider,
+    get_provider_catalog,
+    get_provider_config,
 )
 
 # ── 默认 Provider ──

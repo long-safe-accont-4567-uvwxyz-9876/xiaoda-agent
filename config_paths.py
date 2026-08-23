@@ -12,15 +12,13 @@ fallback、全部目录常量（DATA_DIR/LOG_DIR/CONFIG_DIR/WORKSPACE_DIR/…）
 """
 from __future__ import annotations
 
-import logging
 import os
 import shutil
 import sys
 from pathlib import Path
 
 from dotenv import load_dotenv
-
-logger = logging.getLogger(__name__)
+from loguru import logger
 
 
 def get_base_dir() -> Path:
@@ -51,7 +49,7 @@ def get_env_path() -> Path:
                     migration_marker.touch()
                     print(f"[config] .env migrated from {old_env} to {user_env}")
                 except (OSError, shutil.Error) as e:
-                    logger.debug("config.env_migrate_failed: %s", e)
+                    logger.debug("config.env_migrate_failed: {}", e)
         return user_env
     # 开发模式：使用项目根目录
     return Path(__file__).resolve().parent / ".env"
@@ -108,8 +106,7 @@ def _migrate_old_data(old_dir: Path, new_dir: Path, name: str, ignore_names: tup
         shutil.copytree(old_dir, new_dir, dirs_exist_ok=True)
         print(f"[config] {name} migrated from {old_dir} to {new_dir}")
     except Exception as e:
-        import logging
-        logging.getLogger(__name__).warning("config.migrate_failed name=%s error=%s", name, e)
+        logger.warning("config.migrate_failed name={} error={}", name, e)
 
 
 def _merge_dir(old_dir: Path, new_dir: Path, name: str) -> None:
@@ -137,8 +134,7 @@ def _merge_dir(old_dir: Path, new_dir: Path, name: str) -> None:
         if _copied:
             print(f"[config] {name} merged {_copied} items from {old_dir} to {new_dir}")
     except Exception as e:
-        import logging
-        logging.getLogger(__name__).warning("config.merge_failed name=%s error=%s", name, e)
+        logger.warning("config.merge_failed name={} error={}", name, e)
 
 def get_credentials_dir() -> Path:
     """获取凭证目录（固定系统盘 ~/.ai-agent/credentials）。
@@ -175,9 +171,9 @@ def get_config_dir() -> Path:
             try:
                 if not (CONFIG_DIR / "agent.json5").exists():
                     shutil.copytree(old_config, CONFIG_DIR, dirs_exist_ok=True)
-                    logger.debug("config.dir_migrated_to=%s", CONFIG_DIR)
+                    logger.debug("config.dir_migrated_to={}", CONFIG_DIR)
             except (OSError, shutil.Error) as e:
-                logger.debug("config.dir_migrate_failed: %s", e)
+                logger.debug("config.dir_migrate_failed: {}", e)
     return CONFIG_DIR
 
 def _resolve_data_path(kioxia_path: Path, fallback_path: Path) -> Path:
@@ -223,16 +219,16 @@ def _resolve_data_path(kioxia_path: Path, fallback_path: Path) -> Path:
             # 读回验证写入确实落盘（区分真正的只读 FS：写入不报错但读回为空/旧内容）
             if _probe.read_text(encoding="utf-8") != "probe":
                 raise OSError("write not persisted")
-            logger.debug("config.data_path_writable path=%s", kioxia_path)
+            logger.debug("config.data_path_writable path={}", kioxia_path)
         except (OSError, PermissionError):
-            logger.warning("config.data_path_readonly path=%s", kioxia_path)
+            logger.warning("config.data_path_readonly path={}", kioxia_path)
             raise OSError(f"Filesystem is read-only: {kioxia_path}") from None
         finally:
             # 删除探针：即便被 safe-delete 拦截抛错也忽略，不影响可写性结论
             try:
                 _probe.unlink(missing_ok=True)
             except (OSError, PermissionError):
-                logger.debug("config.data_path_probe_cleanup_skipped path=%s", kioxia_path)
+                logger.debug("config.data_path_probe_cleanup_skipped path={}", kioxia_path)
         return kioxia_path
     except (OSError, PermissionError):
         logger.debug("config.data_path_resolve_failed", exc_info=True)
@@ -318,8 +314,7 @@ def _init_agent_json5(bundled_config: Path, user_config_dir: Path) -> None:
         except (OSError, shutil.Error) as e:
             print(f"[config] Warning: failed to copy agent.json5: {e}")
         except Exception as e:
-            import logging
-            logging.getLogger(__name__).exception("config.agent_json5_copy_unexpected")
+            logger.exception("config.agent_json5_copy_unexpected")
             print(f"[config] Warning: failed to copy agent.json5: {e}")
 
 
@@ -340,8 +335,7 @@ def _init_agents_subdir(bundled_config: Path, user_config_dir: Path) -> None:
                     except (OSError, shutil.Error) as e:
                         print(f"[config] Warning: failed to copy {item.name}: {e}")
                     except Exception as e:
-                        import logging
-                        logging.getLogger(__name__).exception("config.agent_file_copy_unexpected name=%s", item.name)
+                        logger.exception("config.agent_file_copy_unexpected name={}", item.name)
                         print(f"[config] Warning: failed to copy {item.name}: {e}")
 
     # 清理旧版 agent 配置文件（升级后旧名称不应残留）
@@ -356,8 +350,7 @@ def _init_agents_subdir(bundled_config: Path, user_config_dir: Path) -> None:
                 except (OSError, PermissionError) as e:
                     print(f"[config] Warning: failed to remove {old_file}: {e}")
                 except Exception as e:
-                    import logging
-                    logging.getLogger(__name__).exception("config.agent_deprecated_remove_unexpected name=%s", old_file)
+                    logger.exception("config.agent_deprecated_remove_unexpected name={}", old_file)
                     print(f"[config] Warning: failed to remove {old_file}: {e}")
 
 
@@ -401,7 +394,7 @@ def _init_workspace_templates(bundled_config: Path) -> None:
             try:
                 shutil.copy2(item, target)
             except (OSError, shutil.Error) as e:
-                logger.debug("config.workspace_copy_failed %s: %s", target_name, e)
+                logger.debug("config.workspace_copy_failed {}: {}", target_name, e)
 
     # 复制 workspace/ 子目录（workflows/, skills/ 等默认资源，不覆盖已有文件）
     for sub_name in ("workflows", "skills"):
@@ -418,7 +411,7 @@ def _init_workspace_templates(bundled_config: Path) -> None:
                 try:
                     shutil.copy2(item, target)
                 except (OSError, shutil.Error) as e:
-                    logger.debug("config.workspace_sub_copy_failed %s: %s", item.name, e)
+                    logger.debug("config.workspace_sub_copy_failed {}: {}", item.name, e)
 
 
 _workspace_initialized = False

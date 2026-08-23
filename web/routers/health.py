@@ -1,6 +1,5 @@
 """健康测试中心路由（R12）：LLM/TTS/视频/MCP/DB/向量 探针、系统信息、报告。"""
 from __future__ import annotations
-from typing import Any
 
 import asyncio
 import json
@@ -8,12 +7,13 @@ import os
 import shutil
 import subprocess
 import time
+from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 from loguru import logger
 
-from web.schemas import Envelope
 from web.routers.auth import get_current_user
+from web.schemas import Envelope
 
 router = APIRouter(tags=["health"], dependencies=[Depends(get_current_user)])
 
@@ -165,9 +165,12 @@ async def system_info() -> Any:
     except Exception:
         logger.exception("health.system_info.unexpected_error")
         return Envelope(data=data)
-    data.update(_collect_cpu_mem_metrics(psutil))
-    data.update(_collect_disk_temp_metrics(psutil))
-    data.update(_collect_proc_net_metrics(psutil))
+    # 三个收集器含同步子进程探测（nvidia-smi/lspci 各至多 3s）与
+    # psutil.cpu_percent(interval=0.5) 的 500ms 阻塞——统一下放线程池，
+    # 避免仪表盘 5s 轮询周期性卡住事件循环。
+    data.update(await asyncio.to_thread(_collect_cpu_mem_metrics, psutil))
+    data.update(await asyncio.to_thread(_collect_disk_temp_metrics, psutil))
+    data.update(await asyncio.to_thread(_collect_proc_net_metrics, psutil))
     return Envelope(data=data)
 
 

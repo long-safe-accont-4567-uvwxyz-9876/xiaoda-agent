@@ -5,20 +5,20 @@ WebUI 侧边栏"本地部署"页：选择向量嵌入引擎——远程 API（�
 页面下方展示启动/运行日志。
 """
 from __future__ import annotations
+
+import asyncio
+import os
 import platform
 import re
 import time
 from typing import Any
 
-import asyncio
-import os
-
 from fastapi import APIRouter, Depends, HTTPException, Request
 from loguru import logger
 
-from web.schemas import Envelope
-from web.routers.auth import get_current_user
 from web.config_service import get_config_service
+from web.routers.auth import get_current_user
+from web.schemas import Envelope
 
 router = APIRouter(tags=["local-deploy"], dependencies=[Depends(get_current_user)])
 
@@ -374,7 +374,8 @@ async def _attach_live_stats(data: dict, request: Request) -> None:
         if dev["id"] == "cpu":
             dev["stats"] = await asyncio.to_thread(_cpu_stats)
         elif dev["id"] == "npu":
-            dev["stats"] = _npu_stats(vs)
+            # 与 CPU 分支一致下放线程池：NPU 探测含同步子进程调用
+            dev["stats"] = await asyncio.to_thread(_npu_stats, vs)
         else:
             dev["stats"] = {"status": "unavailable"}
 

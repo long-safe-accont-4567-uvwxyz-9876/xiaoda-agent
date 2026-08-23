@@ -17,13 +17,12 @@ MIMO_MODEL、get_provider_config 配置映射。函数体自 config.py 逐字节
 from __future__ import annotations
 
 import json
-import logging
 import os
 from pathlib import Path
 
-from config_paths import get_config_dir
+from loguru import logger
 
-logger = logging.getLogger(__name__)
+from config_paths import get_config_dir
 
 # ── 默认模型解析（从 provider_metadata.json 读，无硬编码）──
 # 用户约束：默认用 MiMo，但模型 ID 不在代码里硬编码
@@ -55,7 +54,7 @@ def _load_provider_metadata_cached() -> dict:
                 _PROVIDER_METADATA_CACHE = json.load(fp)
                 return _PROVIDER_METADATA_CACHE
     except (OSError, ValueError) as e:
-        logger.warning("config.provider_metadata_user_load_failed error=%s", str(e))
+        logger.warning("config.provider_metadata_user_load_failed error={}", str(e))
     # 2. 打包/源码目录（内置默认值）
     try:
         meta_path = Path(__file__).resolve().parent / "config" / "provider_metadata.json"
@@ -64,7 +63,7 @@ def _load_provider_metadata_cached() -> dict:
                 _PROVIDER_METADATA_CACHE = json.load(fp)
                 return _PROVIDER_METADATA_CACHE
     except (OSError, ValueError) as e:
-        logger.warning("config.provider_metadata_load_failed error=%s", str(e))
+        logger.warning("config.provider_metadata_load_failed error={}", str(e))
     # 3. 极端兜底
     logger.error("config.provider_metadata_all_load_failed using empty dict")
     _PROVIDER_METADATA_CACHE = {}
@@ -80,7 +79,7 @@ def get_provider_catalog():
         bundled_path = Path(__file__).resolve().parent / "config" / "provider_metadata.json"
         _PROVIDER_CATALOG_CACHE = ProviderCatalog.from_paths(user_path, bundled_path)
         for source_path, error in _PROVIDER_CATALOG_CACHE.load_errors:
-            logger.warning("config.provider_catalog_load_failed source=%s error=%s", source_path, error)
+            logger.warning("config.provider_catalog_load_failed source={} error={}", source_path, error)
     return _PROVIDER_CATALOG_CACHE
 
 
