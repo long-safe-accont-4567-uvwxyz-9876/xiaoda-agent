@@ -8,6 +8,7 @@ import json
 import os
 import platform
 import shutil
+import signal
 import struct
 import subprocess
 import threading
@@ -1281,18 +1282,30 @@ def _cleanup_pty(term_sid: str) -> None:
                         logger.debug("ws.process_kill_error", exc_info=True)
                     rc = -1
     else:
-        # ── Unix: 关闭 PTY fd + 等待子进程 ──
+        # ── Unix: 关闭 PTY fd + 收割子进程（防僵尸） ──
         fd = session["fd"]
         try:
             loop.remove_reader(fd)
         except (OSError, ValueError):
             logger.debug("ws.remove_reader_error", exc_info=True)
+        # reader 看到 EOF/EIO 时子进程可能尚未真正退出；旧实现
+        # waitpid(WNOHANG) 拿到 (0,0) 会被误判为 rc=0 且不再收割 → defunct 堆积。
+        # 先 SIGKILL 补刀（已退出则为无害 no-op），再有界轮询等收割。
+        pid = session["pid"]
         try:
-            _, status = os.waitpid(session["pid"], os.WNOHANG)
-            rc = os.WEXITSTATUS(status) if os.WIFEXITED(status) else -1
-        except (OSError, ChildProcessError):
-            logger.debug("ws.waitpid_error", exc_info=True)
-            rc = -1
+            os.kill(pid, signal.SIGKILL)
+        except (ProcessLookupError, PermissionError):
+            pass
+        rc = -1
+        for _ in range(30):  # ≤300ms：SIGKILL 后通常首轮即收走
+            try:
+                wpid, status = os.waitpid(pid, os.WNOHANG)
+            except ChildProcessError:
+                break  # 已无此子进程（被别处收割）
+            if wpid == pid:
+                rc = os.WEXITSTATUS(status) if os.WIFEXITED(status) else -1
+                break
+            time.sleep(0.01)
         try:
             os.close(fd)
         except OSError:

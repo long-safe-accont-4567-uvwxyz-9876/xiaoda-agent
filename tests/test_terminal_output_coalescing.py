@@ -146,6 +146,31 @@ async def test_real_pty_session_end_to_end(clean_buffers):
 
 
 @pytest.mark.asyncio
+async def test_cleanup_reaps_child_no_zombie(clean_buffers):
+    """cleanup 必须真正收割已退出的 shell——不留 defunct。
+
+    回归：waitpid(WNOHANG) 在子进程尚未退出时返回 (0,0)，旧实现误判为
+    rc=0 且不再收割，服务进程下 [zsh] <defunct> 持续堆积。
+    判定：收割成功的 pid 对 kill(pid,0) 报 ProcessLookupError；
+    未收割的僵尸对 kill() 仍然"成功"。"""
+    child_pid, master_fd = pty.fork()
+    if child_pid == 0:  # 子进程：立即退出
+        os._exit(0)
+    loop = asyncio.get_running_loop()
+    with hub._pty_sessions_lock:
+        hub._pty_sessions["reap"] = {
+            "pid": child_pid, "fd": master_fd, "conn_id": "c-reap",
+            "shell": "bash", "alive": True, "loop": loop,
+            "is_windows": False,
+        }
+    await asyncio.to_thread(hub._cleanup_pty, "reap")
+    with pytest.raises(ProcessLookupError):
+        os.kill(child_pid, 0)  # 僵尸残留时这里不会抛
+    # 退出码也应真实反映（0），而不是 WNOHANG 竞态下的伪 rc
+    assert hub._pty_sessions.get("reap") is None
+
+
+@pytest.mark.asyncio
 async def test_win_pipe_thread_path_coalesces(clean_buffers):
     """Windows 路径模拟：reader 线程经 call_soon_threadsafe 投递合帧——
     帧合并语义与 Linux PTY 一致（跨线程进 loop 单线程串行执行）。"""
