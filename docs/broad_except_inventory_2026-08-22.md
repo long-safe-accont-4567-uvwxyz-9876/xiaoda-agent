@@ -28,22 +28,30 @@
 形态分布：~294 处伴随 `logger.debug`（原审计口径的"静默降级"主力）；
 其余为 warn/error 日志或带回退值。
 
-## 分批治理策略（后续专项会话按此推进）
+## 分批治理策略（v2，2026-08-22 晚按实测判读修订）
 
-原则：**一次一批、批内全测、只窄不删**——把 `except Exception` 收窄到该调用点
-实际可能抛出的类型集合，而不是删除容错。
+**打法修正**：切片 1（health/insight 全量判读）发现 routers 的宽捕获绝大
+多数是"降级继续 + exception 级全栈日志"的正当形态——机械收窄会把单个
+传感器/子系统故障放大成 500，反而劣化。真实债务经形态扫描量化为
+**约 36 处假成功/debug 静默点**：
 
-- **批次 A（web/routers/*，约 130 处）**：请求路径，静默吞掉会把 bug 变成
-  200+空响应。逐点判断：参数类→ValueError/KeyError/TypeError；IO 类→OSError/
-  sqlite3.Error；外部服务→httpx.HTTPError/TimeoutException。API 层应让意外
-  异常冒泡到统一 exception handler 返回 500 而非假成功。
-- **批次 B（memory/*，约 130 处）**：检索/编码链路，多为"降级继续"语义——保留
-  宽捕获但补结构化日志字段（stage/reason），并区分 LocalModelUnavailableError
-  与意外异常。
-- **批次 C（core/bootstrap + adapters，约 80 处）**：启动容错语义明确
-  （单步失败不阻断核心聊天），收窄为 (OSError, RuntimeError, ValueError,
-  json.JSONDecodeError) 组合即可覆盖 95% 实际场景。
-- **批次 D（长尾 205 文件）**：随触碰随治理（boy-scout），不单独开批。
+```
+jspace.py 7 | agents.py 6 | model_discovery.py 6 | chat.py 3 |
+setup.py 2 | 其余各 1（mail_manage/market/mcp/models/retrieval/system/
+tools/wechat/workflows）
+```
+
+治理三分法：
+1. **写操作假成功**（如 jspace config_set 返回 updated:[] 成功信封）→
+   可预期失败转 HTTPException(500) 带原因；意外异常冒泡标准 500
+2. **读路径 debug 级静默降级** → 保留降级语义，debug→warning 可见化
+3. **双段捕获参考惯用法**（health.py：预期窄类型 warning + 意外桶
+   exception 全栈）→ 保留不动，作为批次 B/C 的范本
+
+- ~~切片 1：health.py（2 处真收窄+1 日志名）+ jspace.py（9 处可见化+
+  假成功写修复）~~ ✅ `c0919853`
+- 切片 2（候选）：model_discovery(6) + agents(6) + chat(3)
+- 批次 B/C 策略不变：memory/bootstrap/adapters 按降级语义补结构化字段
 
 ## 已完成的定点清除
 
