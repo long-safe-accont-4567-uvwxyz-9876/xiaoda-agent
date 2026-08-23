@@ -159,6 +159,13 @@ OPTIONAL_KEYS = [
         "url_desc": "注册 → API Keys",
     },
     {
+        "key": "ANYSEARCH_API_KEY",
+        "label": "AnySearch 统一搜索密钥",
+        "desc": "统一搜索基础设施（意图识别+分层路由+跨源融合）。选填；填写后作为搜索首选引擎，失败自动回退 Tavily/Bing。无 Key 也可在 .env 设 ANYSEARCH_ENABLED=true 走匿名额度",
+        "url": "https://www.coze.cn/s/qBK5eb8QVoE/",
+        "url_desc": "使用手册（含 Key 获取方式）",
+    },
+    {
         "key": "EMBED_API_KEY",
         "label": "向量嵌入 API 密钥（选填）",
         "desc": "远程向量嵌入密钥。默认使用本地内置 BGE 模型（NPU/CPU 推理），仅当 EMBED_MODE=remote 或需要硅基流动嵌入时才需填写",

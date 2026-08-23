@@ -257,6 +257,7 @@ _FALLBACK_REQUIRED_KEYS_META = [
 _FALLBACK_OPTIONAL_KEYS_META = [
     {"key": "WEBUI_PASSWORD", "label": "Web UI 密码", "desc": "留空则无需密码登录", "url": "", "url_desc": ""},
     {"key": "TAVILY_API_KEY", "label": "Tavily 搜索 API 密钥", "desc": "AI 搜索引擎", "url": "https://tavily.com", "url_desc": "注册 → API Keys"},
+    {"key": "ANYSEARCH_API_KEY", "label": "AnySearch 统一搜索密钥", "desc": "统一搜索基础设施（选填，搜索首选引擎，失败自动回退）", "url": "https://www.coze.cn/s/qBK5eb8QVoE/", "url_desc": "使用手册（含 Key 获取方式）"},
     {"key": "DEEPSEEK_API_KEY", "label": "DeepSeek API 密钥", "desc": "DeepSeek 大模型 API 密钥", "url": "https://platform.deepseek.com", "url_desc": "注册 → API Keys"},
     {"key": "OPENROUTER_API_KEY", "label": "OpenRouter API 密钥", "desc": "OpenRouter API 密钥", "url": "https://openrouter.ai", "url_desc": "注册 → API Keys"},
     {"key": "WOLFRAMALPHA_API_KEY", "label": "WolframAlpha 知识计算密钥", "desc": "知识计算引擎", "url": "https://products.wolframalpha.com/api/", "url_desc": "注册 → Get AppID"},
@@ -272,7 +273,7 @@ from web.routers.setup_key_probes import (  # noqa: F401
     _test_siliconflow, _test_openrouter, _test_deepseek, _test_agnes,
     _test_wolframalpha, _test_modelscope, _test_tavily, _test_github,
     _test_ollama, _test_llama_cpp, _test_key_by_catalog, _test_key_by_name,
-    test_single_key,
+    _test_anysearch, test_single_key,
 )
 
 def _build_key_list(items: list[dict], current: dict[str, str], required: bool) -> list[dict[str, Any]]:

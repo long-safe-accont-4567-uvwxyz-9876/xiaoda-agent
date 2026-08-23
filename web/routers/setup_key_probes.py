@@ -215,6 +215,35 @@ async def _test_tavily(key_value: str) -> tuple[bool, str]:
         return False, f"Tavily API 请求失败: {e}"
 
 
+async def _test_anysearch(key_value: str) -> tuple[bool, str]:
+    """测试 AnySearch API Key（统一信封：code:0 成功；401/403 为 Key 无效）。"""
+    try:
+        async with httpx.AsyncClient(
+                timeout=_TIMEOUT,
+                headers={"Authorization": f"Bearer {key_value}",
+                         "X-Anysearch-Client": "ai-agent/1.0"}) as client:
+            resp = await client.post(
+                "https://api.anysearch.com/v1/search",
+                json={"query": "test", "max_results": 1, "format": "json"},
+            )
+            if resp.status_code == 200:
+                data = resp.json()
+                if data.get("code") == 0:
+                    return True, "AnySearch API Key 验证成功"
+                return False, (f"AnySearch 返回业务错误 {data.get('error_code', 'unknown')}: "
+                               f"{str(data.get('message', ''))[:80]}")
+            if resp.status_code in (401, 403):
+                return False, f"AnySearch Key 无效或被拒（HTTP {resp.status_code}）"
+            return False, f"AnySearch API 返回 HTTP {resp.status_code}"
+    except httpx.TimeoutException:
+        return False, "AnySearch API 请求超时"
+    except (httpx.HTTPError, OSError, RuntimeError, ValueError) as e:
+        return False, f"AnySearch API 请求失败: {e}"
+    except Exception as e:
+        logger.exception("setup._test_anysearch.unexpected_error")
+        return False, f"AnySearch API 请求失败: {e}"
+
+
 async def _test_github(key_value: str) -> tuple[bool, str]:
     """测试 GitHub Personal Access Token。"""
     # GitHub 需额外 Accept 头，无法复用 _test_get_with_bearer（其只发 Authorization）
@@ -356,6 +385,8 @@ async def _test_key_by_name(key_name: str, key_value: str, extra: dict) -> tuple
         return await _test_wolframalpha(key_value)
     if key_name == "TAVILY_API_KEY":
         return await _test_tavily(key_value)
+    if key_name == "ANYSEARCH_API_KEY":
+        return await _test_anysearch(key_value)
     if key_name == "GITHUB_PERSONAL_ACCESS_TOKEN":
         return await _test_github(key_value)
     if key_name == "OLLAMA_BASE_URL":
