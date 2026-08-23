@@ -14,14 +14,18 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ## 常用命令
 
 ```bash
-# 语法检查（无 lint 配置，最低限度用编译检查）
+# 语法检查（快速校验单个文件）
 .venv/bin/python -m py_compile <file.py>
 
-# 测试（无 pytest 配置，测试是独立脚本，直接运行）
-.venv/bin/python tests/manual/e2e_test.py
+# lint（ruff 已在 pyproject.toml 配置）
+.venv/bin/python -m ruff check .
+
+# 测试（pytest.ini 已配置 markers/timeout；500+ 自动化用例）
+.venv/bin/python -m pytest tests/ -m "not slow and not e2e_real" -q
 
 # pre-push 门禁（每个 clone 一次性启用。仓库在 Gitee，.github/workflows 不会执行，
-# 本地门禁是唯一自动化防线）：push 前 19 文件 critical 子集约 20s + 前端构建物
+# 本地门禁是唯一自动化防线）：push 前 critical 子集（清单见 scripts/critical_tests.txt，
+# 与两份 workflow 共用单一事实源）约 20s + lock↔txt 依赖一致性 + 前端构建物
 # 新鲜度时间戳检查（改了 web/frontend 必须重新 build 并提交 web/dist，否则拦截）；
 # PUSH_FULL_TESTS=1 git push 跑全集约 5 分钟，全绿后追加 scripts/check_dist_freshness.sh
 # 完整重建校验（约 +1 分钟）；--no-verify 紧急跳过
@@ -43,7 +47,7 @@ curl -s http://127.0.0.1:8080/api/v1/agents -H "Authorization: Bearer $TOKEN"
 sqlite3 /mnt/usb2/nahida-data/db/agent.db ".tables"
 ```
 
-注意：**WebUI 与 QQ Bot 已合并为单进程**——`agent.py --web` 启动后在 `web/server.py:559` 内联 `run_qq_bot()` 异步任务，共享同一 AgentCore。改后端代码只需重启 nahida-web；改了前端只需 `npm run build`（dist 由运行中的 FastAPI 直接服务，无需重启，浏览器强刷即可），**但必须把重建后的 dist 一并提交**——pre-push 会拦截"源码新、dist 旧"的推送。旧双进程形态的 `deploy/qq-agent.service` 单元文件已废弃未安装。
+注意：**WebUI 与 QQ Bot 已合并为单进程**——`agent.py --web` 启动后由 `web/server.py` 的 `ensure_qq_bot_task()`（约 :437 定义、:563 处 create_task）拉起 QQ Bot 异步任务，共享同一 AgentCore。改后端代码只需重启 nahida-web；改了前端只需 `npm run build`（dist 由运行中的 FastAPI 直接服务，无需重启，浏览器强刷即可），**但必须把重建后的 dist 一并提交**——pre-push 会拦截"源码新、dist 旧"的推送。旧双进程形态的 `deploy/qq-agent.service` 单元文件已废弃未安装。
 
 ## 架构
 
@@ -51,7 +55,7 @@ sqlite3 /mnt/usb2/nahida-data/db/agent.db ".tables"
 
 ```
 用户消息 → 通道适配层（qq_bot_adapter / web/ws_hub / cli）
-  → AgentCore.process()                  # agent_core.py，主体纳西妲
+  → AgentCore.process()                  # agent_core/ 包（core.py），主体纳西妲
       安全检查 → 斜杠命令 → @mention 目标解析 → 表情包意图预选
       → AgentContext.build_messages()    # 三层提示：Stable/Context/Volatile
       → ModelRouter.route()              # ROUTE_TABLE 查表 + 重试 + 降级 + 凭证轮换
@@ -65,9 +69,8 @@ sqlite3 /mnt/usb2/nahida-data/db/agent.db ".tables"
 - 统一工具 `delegate_task(agent, task)`，在 `core/bootstrap.py::_register_delegate_tool()` **启动时动态注册**——描述里嵌入各子代理的 `route_description`，agent 参数带 enum 约束
 - 执行端 `AgentCore.delegate_to_agent()` → `dispatcher.dispatch()`；旧 `delegate_to_klee()` 专用路径已随 call_klee 一并删除，xiaoli 统一走 delegate_task/dispatcher
 - 子代理不能再委托（`DELEGATE_BLOCKED_TOOLS` in agent_dispatcher.py + xiaoli_agent.py 的 `EXCLUDED_TOOLS`）
-- 路由护栏：`agent_core.py` 检测到表情包意图（"表情包/贴纸"等关键词）时，当轮从工具列表硬移除 `delegate_task`——表情包由主体流程自动附带，委托出去会丢失
+- 路由护栏：`agent_core/mixins/main_path.py` 检测到表情包意图（"表情包/贴纸"等关键词）时，当轮从工具列表硬移除 `delegate_task`——表情包由主体流程自动附带，委托出去会丢失
 - 用户在 WebUI 顶栏直接切换子代理时，`web/ws_hub.py::process_and_serialize` 走 `core._dispatch_single_sub_agent()`（与 QQ 通道同款完整流程，带表情包/情绪/落库）。**不要**改回裸 `dispatcher.dispatch()`，那会丢掉所有媒体能力
-- 子代理表情包匹配注意：可莉的标识名是 `keli`（不是 klee），判断用 `target.lower() in ("keli", "klee")`
 
 ### Web UI 全栈（web/）
 

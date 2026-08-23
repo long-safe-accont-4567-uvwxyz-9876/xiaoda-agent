@@ -1,31 +1,33 @@
-from typing import Any
 import asyncio
 import fnmatch
 import json
 import re
 import time
 from pathlib import Path
+from typing import Any
 
 from loguru import logger
-from .tool_executor import ToolExecutor, ToolResult
-from .tool_repair import ToolCallRepair
-from utils.text_utils import smart_truncate
-from emotion.emoji_config import get_status_msg
+
+from agent_core._shared import (
+    ALLOWED_NON_MASTER_TOOLS as _ALLOWED_NON_MASTER_TOOLS,
+)
+from agent_core._shared import (
+    _current_request_ctx,
+    is_degraded_reply,
+)
 from config import ERROR_RULE_STRICT_MODE
 from core.background_tasks import _spawn
 from core.error_codes import ErrorCodeEnum
-from core.event_bus import event_bus, AgentEvent, AgentEventType
+from core.event_bus import AgentEvent, AgentEventType, event_bus
+from emotion.emoji_config import get_status_msg
 from security.instruction_hierarchy import (
     InstructionLevel,
     format_instruction,
     sanitize_external_content,
 )
-from agent_core._shared import (
-    is_degraded_reply,
-    ALLOWED_NON_MASTER_TOOLS as _ALLOWED_NON_MASTER_TOOLS,
-    _current_request_ctx,
-)
 
+from .tool_executor import ToolExecutor, ToolResult
+from .tool_repair import ToolCallRepair
 
 # 写操作工具集合：这些工具会修改文件系统/配置，需进行路径白名单校验
 _WRITE_TOOLS: set[str] = {
@@ -456,7 +458,8 @@ class ToolCallHandler:
         return None
 
     async def _handle_delegation(self, result: Any) -> Any:
-        """处理工具结果中的委托请求（Klee 委托等）。"""
+        """处理工具结果中的委托请求（delegate_task → xiaoli）。
+        [KLEE_PENDING] 为已删除的 klee 时代遗留前缀，仅作兼容识别。"""
         from core.delegation import DelegationRequest
         if not (result.success and result.data):
             return result
