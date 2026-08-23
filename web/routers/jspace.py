@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from fastapi import APIRouter, Depends, Request
+from fastapi import APIRouter, Depends, HTTPException, Request
 from loguru import logger
 
 from web.schemas import Envelope
@@ -39,7 +39,7 @@ async def jspace_status(request: Request) -> Any:
         from config import ENABLE_J_SPACE_HOOKS
         status["enabled"] = ENABLE_J_SPACE_HOOKS
     except Exception as exc:  # 配置缺失时保持默认 False，仅记录不阻断状态接口
-        logger.debug("jspace.status_config_skipped: {}", str(exc)[:120])
+        logger.warning("jspace.status_config_skipped error={}", str(exc)[:120])
 
     try:
         from core.j_space_bootstrap import (
@@ -67,7 +67,7 @@ async def jspace_status(request: Request) -> Any:
         if er is not None:
             status["enhanced_router"] = {"active": True}
     except Exception as e:
-        logger.debug("jspace.status_partial: {}", e)
+        logger.warning("jspace.status_partial error={}", e)
 
     return Envelope(data=status)
 
@@ -99,7 +99,7 @@ async def jspace_signals(
             "total": len(entries),
         })
     except Exception as e:
-        logger.debug("jspace.signals_failed: {}", e)
+        logger.warning("jspace.signals_failed error={}", e)
         return Envelope(data={"entries": [], "total": 0})
 
 
@@ -118,7 +118,7 @@ async def jspace_signals_aggregate(
         value = ss.aggregate(signal_type=signal_type, strategy=strategy)
         return Envelope(data={"value": value, "signal_type": signal_type, "strategy": strategy})
     except Exception as e:
-        logger.debug("jspace.aggregate_failed: {}", e)
+        logger.warning("jspace.aggregate_failed error={}", e)
         return Envelope(data={"value": 0.0, "signal_type": signal_type, "strategy": strategy})
 
 
@@ -141,7 +141,7 @@ async def jspace_directions(request: Request) -> Any:
                 }
         return Envelope(data={"directions": result})
     except Exception as e:
-        logger.debug("jspace.directions_failed: {}", e)
+        logger.warning("jspace.directions_failed error={}", e)
         return Envelope(data={"directions": {}})
 
 
@@ -158,7 +158,7 @@ async def jspace_interventions(request: Request) -> Any:
         history = il.recent_interventions
         return Envelope(data={"rules": rules, "convergence": convergence, "history": history})
     except Exception as e:
-        logger.debug("jspace.interventions_failed: {}", e)
+        logger.warning("jspace.interventions_failed error={}", e)
         return Envelope(data={"rules": [], "convergence": {}, "history": []})
 
 
@@ -183,7 +183,7 @@ async def jspace_decompose(request: Request, body: dict) -> Any:
             "sparsity": result.sparsity,
         })
     except Exception as e:
-        logger.debug("jspace.decompose_failed: {}", e)
+        logger.warning("jspace.decompose_failed error={}", e)
         return Envelope(data={"factors": [], "residual": 1.0, "dominant": None, "sparsity": 0.0})
 
 
@@ -200,7 +200,7 @@ async def jspace_config_get(request: Request) -> Any:
             "intent_llm_timeout": cfg.get("jspace.intent_llm_timeout", 10.0),
         })
     except Exception as e:
-        logger.debug("jspace.config_get_failed: {}", e)
+        logger.warning("jspace.config_get_failed error={}", e)
         return Envelope(data={
             "enabled": True, "signal_max_history": 1000,
             "intent_use_llm": True, "intent_llm_timeout": 10.0,
@@ -210,6 +210,9 @@ async def jspace_config_get(request: Request) -> Any:
 @router.put("/jspace/config", response_model=Envelope[dict])
 async def jspace_config_set(request: Request, body: dict) -> Any:
     """更新 J-Space 配置项。"""
+    # 批次 A 语义修正（2026-08-22）：写操作失败原返回 {"updated": []} 成功信封
+    # ——用户以为保存成功实际没写（假成功最恶劣形态）。现：可预期失败转 500
+    # 带原因；意外异常不捕获，冒泡为标准 500。
     try:
         from web.config_service import get_config_service
         cfg = get_config_service()
@@ -225,6 +228,6 @@ async def jspace_config_set(request: Request, body: dict) -> Any:
         if updates:
             cfg.set_many(updates)
         return Envelope(data={"updated": list(updates.keys())})
-    except Exception as e:
-        logger.debug("jspace.config_set_failed: {}", e)
-        return Envelope(data={"updated": []})
+    except (OSError, ValueError, TypeError, KeyError) as e:
+        logger.warning("jspace.config_set_failed error={}", e)
+        raise HTTPException(500, f"J-Space 配置保存失败: {e}") from None

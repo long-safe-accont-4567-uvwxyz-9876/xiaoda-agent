@@ -26,7 +26,8 @@ function translateToEn(zhName: string): string {
   return joined.charAt(0).toUpperCase() + joined.slice(1).toLowerCase()
 }
 
-const WALLPAPER_CACHE_KEY = 'agents.mainWallpaper'
+// 会话级壁纸缓存键（登出清理复用，导出避免字面量耦合）
+export const WALLPAPER_CACHE_KEY = 'agents.mainWallpaper'
 
 export const useAgentsStore = defineStore('agents', () => {
   const agents = ref<AgentInfo[]>([])

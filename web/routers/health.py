@@ -255,8 +255,10 @@ def _system_has_gpu() -> bool:
                 )
             except (OSError, subprocess.SubprocessError):
                 present = False
-    except Exception:
-        logger.debug("health.gpu_probe_failed", exc_info=True)
+    except (OSError, subprocess.SubprocessError) as e:
+        # 外层兜底收窄（批次 A）：内部已逐段窄捕获，此处只可能漏出
+        # which/exec 环境类异常；原 except Exception 属过度宽泛
+        logger.debug("health.gpu_probe_failed error={}", str(e))
         present = False
 
     _gpu_probe_cache.update(ts=now, present=present)
@@ -332,7 +334,7 @@ def _collect_disk_temp_metrics(psutil: Any) -> dict:
         logger.warning("health.temps_failed error={}", str(e))
         data["temperatures"] = []
     except Exception:
-        logger.exception("health.unknown.unexpected_error")
+        logger.exception("health.temps.unexpected_error")
     return data
 
 

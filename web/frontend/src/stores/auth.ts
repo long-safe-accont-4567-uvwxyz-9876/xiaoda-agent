@@ -2,6 +2,7 @@ import { defineStore } from 'pinia'
 import { ref, computed } from 'vue'
 import { api } from '../api'
 import { getWsClient } from '../api/ws'
+import { WALLPAPER_CACHE_KEY } from './agents'
 
 export const useAuthStore = defineStore('auth', () => {
   const token = ref(localStorage.getItem('token') || '')
@@ -33,6 +34,8 @@ export const useAuthStore = defineStore('auth', () => {
     expiresAt.value = 0
     localStorage.removeItem('token')
     localStorage.removeItem('expires_at')
+    // 清理会话级壁纸缓存：避免登出后同标签页短暂残留上一会话的背景（review P2）
+    try { sessionStorage.removeItem(WALLPAPER_CACHE_KEY) } catch { /* 存储不可用则跳过 */ }
     getWsClient().disconnect()
   }
 
