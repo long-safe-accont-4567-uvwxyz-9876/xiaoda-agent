@@ -176,16 +176,26 @@ def _dedup_results(results: list[dict]) -> list[dict]:
     return unique
 
 
+def _engine_order() -> list[str]:
+    """引擎优先序：SEARCH_ENGINE_PRIMARY(anysearch/tavily/bing) 指定者置首，
+    其余保持默认序；未指定（auto）= AnySearch → Tavily → Bing。"""
+    primary = os.getenv("SEARCH_ENGINE_PRIMARY", "").strip().lower()
+    base = ["anysearch", "tavily", "bing"]
+    if primary in base:
+        return [primary] + [e for e in base if e != primary]
+    return base
+
+
 async def _do_search(query: str, max_results: int = 8,
                      use_tavily: bool = True) -> tuple[list[dict], str, str]:
     """引擎降级策略，返回 (results, engine, ai_answer)。
 
-    优先级（依据 AnySearch 手册的分层路由思想：意图识别→路由→融合）：
-    0. AnySearch 统一搜索（默认关；ANYSEARCH_API_KEY/ANYSEARCH_ENABLED 开启，
-       服务端做意图识别与实时路由，含新鲜度意图）——熔断器防不可达拖慢
-    1. 时效性查询 → Tavily 新闻（带日期+AI摘要）
-    2. Tavily basic（质量高、带AI摘要，对中文专有名词/游戏术语匹配准确）
-    3. Bing 抓取（免费兜底）
+    优先序 = _engine_order()（依据 AnySearch 手册的分层路由思想：意图识别→路由→融合；
+    WebUI「搜索引擎配置」页可设 SEARCH_ENGINE_PRIMARY 调整）：
+    - anysearch：统一搜索（服务端意图识别与实时路由，含新鲜度意图）
+    - tavily：时效性查询先走新闻通道（带日期+AI摘要），再 basic
+      （对中文专有名词/游戏术语匹配准确）
+    - bing：免费兜底（中文专有名词易跑偏——历史已知问题，故默认殿后）
 
     修复说明：原实现 Bing 优先，但 Bing 中文搜索会把"纳西妲"（原神角色）
     匹配成"纳西族"返回无关结果，且 Bing 返回非空结果后不再触发 Tavily 兜底，
@@ -194,47 +204,49 @@ async def _do_search(query: str, max_results: int = 8,
     time_sensitive = _is_time_sensitive(query)
     logger.info("web_search.do_search query={} fresh={}", query[:40], time_sensitive)
 
-    # 0. AnySearch（开启时）：401/403 按手册不降级匿名，直接换下一引擎
-    if anysearch_available():
-        try:
-            results, answer = await asyncio.to_thread(
-                anysearch_search_sync, query, max_results)
+    for engine in _engine_order():
+        if engine == "anysearch":
+            # 401/403 按手册不降级匿名，直接换下一引擎
+            if not anysearch_available():
+                continue
+            try:
+                results, answer = await asyncio.to_thread(
+                    anysearch_search_sync, query, max_results)
+                if results:
+                    return _dedup_results(results), "AnySearch", answer
+            except AnySearchAuthError as e:
+                logger.warning("anysearch.auth_failed error={}", str(e)[:150])
+            except (RuntimeError, OSError, ValueError, ConnectionError) as e:
+                logger.warning("anysearch.failed error={}", str(e)[:150])
+        elif engine == "tavily":
+            if not (use_tavily and _tavily_available()):
+                continue
+            # 时效性查询 → 新闻优先（带日期+AI摘要）
+            if time_sensitive:
+                try:
+                    results, answer = await asyncio.to_thread(
+                        _tavily_search_sync, query, max_results, "basic", True)
+                    if results:
+                        return _dedup_results(results), "Tavily新闻", answer
+                except (RuntimeError, OSError, ConnectionError, ValueError) as e:
+                    logger.warning("tavily.news_failed error={}", repr(e)[:150])
+            # basic（质量高、带AI摘要，中文专有名词比 Bing 准）
+            try:
+                results, answer = await asyncio.to_thread(
+                    _tavily_search_sync, query, max_results, "basic", False)
+                if results:
+                    return _dedup_results(results), "Tavily", answer
+            except (RuntimeError, OSError, ConnectionError, ValueError) as e:
+                logger.warning("tavily.primary_failed error={}", repr(e)[:150])
+        elif engine == "bing":
+            results = await asyncio.to_thread(_bing_search_sync, query, max_results)
             if results:
-                return _dedup_results(results), "AnySearch", answer
-        except AnySearchAuthError as e:
-            logger.warning("anysearch.auth_failed error={}", str(e)[:150])
-        except (RuntimeError, OSError, ValueError, ConnectionError) as e:
-            logger.warning("anysearch.failed error={}", str(e)[:150])
+                return _dedup_results(results), "Bing", ""
 
-    # 1. 时效性查询 → Tavily 新闻优先（带日期+AI摘要）
-    if time_sensitive and use_tavily and _tavily_available():
-        try:
-            results, answer = await asyncio.to_thread(
-                _tavily_search_sync, query, max_results, "basic", True)
+            await asyncio.sleep(1)
+            results = await asyncio.to_thread(_bing_search_sync, query, max_results)
             if results:
-                return _dedup_results(results), "Tavily新闻", answer
-        except (RuntimeError, OSError, ConnectionError, ValueError) as e:
-            logger.warning("tavily.news_failed error={}", repr(e)[:150])
-
-    # 2. Tavily basic 优先（质量高、带AI摘要，中文专有名词比 Bing 准）
-    if use_tavily and _tavily_available():
-        try:
-            results, answer = await asyncio.to_thread(
-                _tavily_search_sync, query, max_results, "basic", False)
-            if results:
-                return _dedup_results(results), "Tavily", answer
-        except (RuntimeError, OSError, ConnectionError, ValueError) as e:
-            logger.warning("tavily.primary_failed error={}", repr(e)[:150])
-
-    # 3. Bing 抓取（免费兜底）
-    results = await asyncio.to_thread(_bing_search_sync, query, max_results)
-    if results:
-        return _dedup_results(results), "Bing", ""
-
-    await asyncio.sleep(1)
-    results = await asyncio.to_thread(_bing_search_sync, query, max_results)
-    if results:
-        return _dedup_results(results), "Bing", ""
+                return _dedup_results(results), "Bing", ""
 
     return [], "", ""
 

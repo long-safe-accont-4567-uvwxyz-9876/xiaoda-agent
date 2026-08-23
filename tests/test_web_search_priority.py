@@ -29,9 +29,15 @@ def _mock_bing(results):
 
 @pytest.fixture
 def enable_tavily(monkeypatch):
-    """确保走 Tavily 分支（设置 key + 强制 _tavily_available 为 True）。"""
+    """确保走 Tavily 分支（设置 key + 强制 _tavily_available 为 True）。
+
+    同时中和 AnySearch：本组测试断言 Tavily 优先序，须排除真实 .env 里
+    ANYSEARCH_API_KEY 泄入测试进程的干扰（AnySearch 引擎默认排在 Tavily 前）。"""
     monkeypatch.setenv("TAVILY_API_KEY", "tvly-test-key")
     monkeypatch.setattr(wt, "_tavily_available", lambda: True)
+    monkeypatch.delenv("ANYSEARCH_API_KEY", raising=False)
+    monkeypatch.delenv("ANYSEARCH_ENABLED", raising=False)
+    monkeypatch.setattr(wt, "anysearch_available", lambda: False)
     yield
 
 
@@ -143,6 +149,9 @@ def test_no_tavily_key_uses_bing(monkeypatch):
 
     monkeypatch.delenv("TAVILY_API_KEY", raising=False)
     monkeypatch.setattr(wt, "_tavily_available", lambda: False)
+    monkeypatch.delenv("ANYSEARCH_API_KEY", raising=False)
+    monkeypatch.delenv("ANYSEARCH_ENABLED", raising=False)
+    monkeypatch.setattr(wt, "anysearch_available", lambda: False)
     monkeypatch.setattr(wt, "_tavily_search_sync", fake_tavily)
     monkeypatch.setattr(wt, "_bing_search_sync", fake_bing)
 

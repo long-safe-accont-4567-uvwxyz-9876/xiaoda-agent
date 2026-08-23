@@ -15,6 +15,7 @@ const navItems = [
   { icon: 'agents', labelKey: 'nav.agents', route: '/settings/agents' },
   { icon: 'models', labelKey: 'nav.models', route: '/settings/models' },
   { icon: 'tools', labelKey: 'nav.tools', route: '/settings/tools' },
+  { icon: 'search', labelKey: 'nav.searchEngines', route: '/settings/search-engines' },
   { icon: 'mcp', labelKey: 'nav.mcp', route: '/settings/mcp' },
   { icon: 'flow', labelKey: 'nav.workflows', route: '/workflows' },
   { icon: 'plugins', labelKey: 'nav.plugins', route: '/settings/plugins' },

@@ -33,6 +33,7 @@ export const routes: RouteRecordRaw[] = [
       { path: 'settings/agents', name: 'agents', component: () => import('./views/AgentsView.vue') },
       { path: 'settings/models', name: 'models', component: () => import('./views/ModelsView.vue') },
       { path: 'settings/tools', name: 'tools', component: () => import('./views/ToolsView.vue') },
+      { path: 'settings/search-engines', name: 'search-engines', component: () => import('./views/SearchEnginesView.vue') },
       { path: 'settings/mcp', name: 'mcp', component: () => import('./views/McpView.vue') },
       { path: 'settings/plugins', name: 'plugins', component: () => import('./views/PluginsView.vue') },
       { path: 'settings/mail', name: 'mail', component: () => import('./views/MailView.vue') },

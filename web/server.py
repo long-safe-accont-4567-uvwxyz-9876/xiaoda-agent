@@ -1121,6 +1121,7 @@ def _register_routes(app: FastAPI) -> None:
     from web.routers.local_deploy import router as local_deploy_router
     from web.routers.local_ai_storage import router as local_ai_storage_router
     from web.routers.retrieval import router as retrieval_router
+    from web.routers.search_engines import router as search_engines_router
     from web.routers.jspace import router as jspace_router
 
     for r in (auth_router, chat_router, system_router, agents_router,
@@ -1129,7 +1130,7 @@ def _register_routes(app: FastAPI) -> None:
               setup_router, model_discovery_router, market_router,
               mail_manage_router, workflows_router, workflows_v2_router, workspace_router,
               wechat_router, local_ai_router, local_deploy_router, local_ai_storage_router,
-              retrieval_router, jspace_router,
+              retrieval_router, search_engines_router, jspace_router,
               system_public_router, wechat_public_router):
         app.include_router(r, prefix="/api/v1")
 
