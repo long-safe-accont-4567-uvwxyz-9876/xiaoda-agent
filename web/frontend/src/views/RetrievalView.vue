@@ -17,9 +17,15 @@ const config = reactive<Record<string, boolean | number>>({})
 const defaults = ref<Record<string, boolean | number>>({})
 const testQuery = ref('')
 const testTopK = ref(5)
+const testExpect = ref('')
 const testResults = ref<any[]>([])
 const testCount = ref(0)
+const testMetrics = ref<Record<string, any> | null>(null)
 const testError = ref('')
+
+const evalText = ref('')
+const evaluating = ref(false)
+const evalReport = ref<Record<string, any> | null>(null)
 
 const boolKeys = computed(() => [
   { key: 'RERANKER_ENABLED', label: t('retrieval.labels.RERANKER_ENABLED'), desc: t('retrieval.descs.RERANKER_ENABLED') },
@@ -126,16 +132,99 @@ async function runTest() {
   testing.value = true
   testError.value = ''
   testResults.value = []
+  testMetrics.value = null
   try {
-    const data = await post('/retrieval/test', { query: testQuery.value, top_k: testTopK.value })
+    const data = await post('/retrieval/test', {
+      query: testQuery.value,
+      top_k: testTopK.value,
+      expect_keywords: splitKeywords(testExpect.value),
+    })
     testResults.value = data.results || []
     testCount.value = data.count || 0
+    testMetrics.value = data.metrics || null
     if (data.error) testError.value = data.error
   } catch (e: any) {
     testError.value = e.message
   } finally {
     testing.value = false
   }
+}
+
+function splitKeywords(s: string): string[] {
+  return s.split(/[,，]/).map(x => x.trim()).filter(Boolean)
+}
+
+function pct(v: unknown): string {
+  return typeof v === 'number' ? `${(v * 100).toFixed(1)}%` : '—'
+}
+
+async function runEval() {
+  const cases = parseEvalCases(evalText.value)
+  if (!cases.length) {
+    message.warning(t('retrieval.evalNeedCases'))
+    return
+  }
+  evaluating.value = true
+  try {
+    const data = await post('/retrieval/evaluate', { cases, top_k: testTopK.value })
+    evalReport.value = data
+  } catch (e: any) {
+    message.error(e.message)
+  } finally {
+    evaluating.value = false
+  }
+}
+
+function parseEvalCases(text: string): Array<{ query: string; expect_keywords?: string[] }> {
+  return text.split('\n').map(line => line.trim()).filter(Boolean).map(line => {
+    const [query, kws] = line.split(/[|｜]/)
+    const expect = splitKeywords(kws || '')
+    return expect.length ? { query: query.trim(), expect_keywords: expect }
+      : { query: query.trim() }
+  }).filter(c => c.query)
+}
+
+function downloadJson(filename: string, data: unknown) {
+  const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' })
+  const url = URL.createObjectURL(blob)
+  const a = document.createElement('a')
+  a.href = url
+  a.download = filename
+  a.click()
+  URL.revokeObjectURL(url)
+}
+
+function tsSuffix(): string {
+  const d = new Date()
+  const p = (n: number) => String(n).padStart(2, '0')
+  return `${d.getFullYear()}${p(d.getMonth() + 1)}${p(d.getDate())}-${p(d.getHours())}${p(d.getMinutes())}${p(d.getSeconds())}`
+}
+
+async function exportConfig() {
+  try {
+    const data = await get<any>('/retrieval/config')
+    const modified = Object.keys(data._defaults || {}).filter(
+      k => k !== '_defaults' && data[k] !== data._defaults[k])
+    downloadJson(`retrieval-config-${tsSuffix()}.json`, {
+      exported_at: new Date().toISOString(),
+      modified_keys: modified,
+      values: Object.fromEntries(Object.keys(data).filter(k => k !== '_defaults').map(k => [k, data[k]])),
+      defaults: data._defaults,
+    })
+    message.success(t('retrieval.exportDone'))
+  } catch (e: any) {
+    message.error(e.message)
+  }
+}
+
+function exportEvalReport() {
+  if (!evalReport.value) return
+  downloadJson(`retrieval-eval-${tsSuffix()}.json`, {
+    exported_at: new Date().toISOString(),
+    top_k: evalReport.value.top_k,
+    ...evalReport.value,
+  })
+  message.success(t('retrieval.exportDone'))
 }
 
 function isDefault(key: string): boolean {
@@ -148,6 +237,7 @@ function isDefault(key: string): boolean {
     <div class="view-header">
       <h2 class="view-title">{{ t('retrieval.title') }}</h2>
       <div class="header-actions">
+        <n-button tertiary @click="exportConfig">{{ t('retrieval.exportConfig') }}</n-button>
         <n-button :disabled="!isModified" type="primary" :loading="saving" @click="saveConfig">
           {{ t('retrieval.save') }}
         </n-button>
@@ -237,20 +327,62 @@ function isDefault(key: string): boolean {
               />
               <n-button type="primary" :loading="testing" @click="runTest">{{ t('retrieval.testBtn') }}</n-button>
             </div>
+            <n-input
+              v-model:value="testExpect"
+              :placeholder="t('retrieval.expectPlaceholder')"
+              size="small"
+              class="test-expect-input"
+            />
 
             <div v-if="testError" class="test-error">
               <n-tag type="error">{{ testError }}</n-tag>
+            </div>
+
+            <div v-if="testMetrics" class="metrics-grid">
+              <div v-if="testMetrics.has_expect" class="metric-chip">
+                <span class="metric-label">{{ t('retrieval.recall') }}</span>
+                <span class="metric-value">{{ pct(testMetrics.recall) }}</span>
+              </div>
+              <div v-if="testMetrics.has_expect" class="metric-chip">
+                <span class="metric-label">{{ t('retrieval.precision') }}</span>
+                <span class="metric-value">{{ pct(testMetrics.precision) }}</span>
+              </div>
+              <div v-if="testMetrics.has_expect" class="metric-chip">
+                <span class="metric-label">{{ t('retrieval.f1') }}</span>
+                <span class="metric-value">{{ pct(testMetrics.f1) }}</span>
+              </div>
+              <div v-if="testMetrics.has_expect" class="metric-chip">
+                <span class="metric-label">{{ t('retrieval.mrr') }}</span>
+                <span class="metric-value">{{ pct(testMetrics.mrr) }}</span>
+              </div>
+              <div v-if="testMetrics.has_expect" class="metric-chip">
+                <span class="metric-label">{{ t('retrieval.firstHit') }}</span>
+                <span class="metric-value">{{ testMetrics.first_hit_rank || '—' }}</span>
+              </div>
+              <div class="metric-chip">
+                <span class="metric-label">{{ t('retrieval.aboveThr') }}</span>
+                <span class="metric-value">{{ testMetrics.above_threshold }}/{{ testMetrics.returned }}</span>
+              </div>
+              <div class="metric-chip">
+                <span class="metric-label">{{ t('retrieval.latency') }}</span>
+                <span class="metric-value">{{ testMetrics.latency_ms }}ms</span>
+              </div>
+              <div class="metric-chip">
+                <span class="metric-label">{{ t('retrieval.scoreStats') }}</span>
+                <span class="metric-value">{{ testMetrics.score_max }} / {{ testMetrics.score_mean }} / {{ testMetrics.score_min }}</span>
+              </div>
             </div>
 
             <div v-if="testResults.length" class="test-results">
               <div class="results-header">
                 <span>{{ (t('retrieval.hits') as string).replace('{n}', String(testCount)) }}</span>
               </div>
-              <div v-for="(r, i) in testResults" :key="r.id || i" class="result-item">
+              <div v-for="(r, i) in testResults" :key="r.id || i" class="result-item" :class="{ 'result-matched': r.matched }">
                 <div class="result-header">
                   <span class="result-rank">#{{ i + 1 }}</span>
                   <span class="result-score">{{ t('retrieval.score') }}: {{ (r.score || 0).toFixed(4) }}</span>
                   <span class="result-importance">{{ t('retrieval.importance') }}: {{ r.importance || 0 }}</span>
+                  <n-tag v-if="r.matched" size="tiny" type="success">{{ t('retrieval.matched') }}</n-tag>
                   <n-tag v-if="r.emotion_label" size="tiny" type="info">{{ r.emotion_label }}</n-tag>
                   <n-tag v-if="r.source" size="tiny">{{ r.source }}</n-tag>
                 </div>
@@ -259,6 +391,80 @@ function isDefault(key: string): boolean {
             </div>
             <div v-else-if="!testing && testQuery && !testError" class="test-empty">
               {{ t('retrieval.testEmpty') }}
+            </div>
+          </div>
+
+          <!-- 批量评测 -->
+          <div class="test-section glass-panel eval-section">
+            <div class="eval-header">
+              <h3 class="section-title">{{ t('retrieval.evalTitle') }}</h3>
+              <n-button v-if="evalReport" size="small" tertiary @click="exportEvalReport">
+                {{ t('retrieval.exportReport') }}
+              </n-button>
+            </div>
+            <p class="test-desc">{{ t('retrieval.evalDesc') }}</p>
+            <n-input
+              v-model:value="evalText"
+              type="textarea"
+              :rows="5"
+              :placeholder="t('retrieval.evalPlaceholder')"
+            />
+            <div class="test-input-row eval-run-row">
+              <n-button type="primary" :loading="evaluating" @click="runEval">
+                {{ t('retrieval.evalBtn') }}
+              </n-button>
+            </div>
+
+            <div v-if="evalReport" class="eval-summary">
+              <div class="metrics-grid">
+                <div class="metric-chip">
+                  <span class="metric-label">{{ t('retrieval.recall') }}</span>
+                  <span class="metric-value">{{ pct(evalReport.aggregate?.recall_macro) }}</span>
+                </div>
+                <div class="metric-chip">
+                  <span class="metric-label">{{ t('retrieval.precision') }}</span>
+                  <span class="metric-value">{{ pct(evalReport.aggregate?.precision_macro) }}</span>
+                </div>
+                <div class="metric-chip">
+                  <span class="metric-label">{{ t('retrieval.f1') }}</span>
+                  <span class="metric-value">{{ pct(evalReport.aggregate?.f1_macro) }}</span>
+                </div>
+                <div class="metric-chip">
+                  <span class="metric-label">{{ t('retrieval.mrr') }}</span>
+                  <span class="metric-value">{{ pct(evalReport.aggregate?.mrr_macro) }}</span>
+                </div>
+                <div class="metric-chip">
+                  <span class="metric-label">{{ t('retrieval.evalHitRate') }}</span>
+                  <span class="metric-value">{{ pct(evalReport.aggregate?.hit_rate) }}</span>
+                </div>
+                <div class="metric-chip">
+                  <span class="metric-label">{{ t('retrieval.avgLatency') }}</span>
+                  <span class="metric-value">{{ evalReport.aggregate?.latency_avg_ms }}ms</span>
+                </div>
+                <div class="metric-chip">
+                  <span class="metric-label">{{ t('retrieval.p95Latency') }}</span>
+                  <span class="metric-value">{{ evalReport.aggregate?.latency_p95_ms }}ms</span>
+                </div>
+                <div class="metric-chip">
+                  <span class="metric-label">{{ t('retrieval.casesStat') }}</span>
+                  <span class="metric-value">{{ evalReport.cases_ok }}/{{ evalReport.cases_total }}</span>
+                </div>
+              </div>
+              <div v-for="(c, i) in (evalReport.cases || [])" :key="i" class="eval-case" :class="{ 'eval-case-failed': !c.metrics }">
+                <div class="eval-case-header">
+                  <span class="eval-case-query">{{ c.query }}</span>
+                  <n-tag v-if="!c.metrics" size="tiny" type="error">{{ c.error || 'failed' }}</n-tag>
+                  <template v-else-if="c.metrics.has_expect">
+                    <n-tag size="tiny" :type="c.metrics.hit ? 'success' : 'warning'">
+                      {{ t('retrieval.recall') }} {{ pct(c.metrics.recall) }}
+                    </n-tag>
+                    <n-tag size="tiny">{{ t('retrieval.precision') }} {{ pct(c.metrics.precision) }}</n-tag>
+                    <n-tag size="tiny">F1 {{ pct(c.metrics.f1) }}</n-tag>
+                  </template>
+                  <n-tag v-else size="tiny">{{ c.count ?? 0 }} {{ t('retrieval.hitsShort') }}</n-tag>
+                  <span class="eval-case-latency">{{ c.metrics?.latency_ms ?? '—' }}ms</span>
+                </div>
+              </div>
             </div>
           </div>
         </n-tab-pane>
@@ -472,5 +678,96 @@ function isDefault(key: string): boolean {
   padding: 40px 0;
   color: var(--moon-dim);
   font-size: 13px;
+}
+
+.test-expect-input {
+  margin-top: 10px;
+}
+
+.metrics-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
+  gap: 8px;
+  margin-top: 14px;
+}
+
+.metric-chip {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 8px 10px;
+  border-radius: 8px;
+  background: rgba(10, 20, 14, 0.6);
+  border: 1px solid var(--glass-border);
+}
+
+.metric-label {
+  font-size: 11px;
+  color: var(--moon-dim);
+}
+
+.metric-value {
+  font-size: 14px;
+  font-weight: 700;
+  color: var(--dendro);
+  font-family: 'JetBrains Mono', monospace;
+}
+
+.result-matched {
+  border-color: rgba(102, 187, 106, 0.45);
+}
+
+.eval-section {
+  margin-top: 16px;
+}
+
+.eval-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.eval-header .section-title {
+  margin: 0;
+}
+
+.eval-run-row {
+  margin-top: 10px;
+}
+
+.eval-case {
+  padding: 8px 12px;
+  border-radius: 8px;
+  background: rgba(10, 20, 14, 0.6);
+  border: 1px solid var(--glass-border);
+  margin-bottom: 6px;
+}
+
+.eval-case-failed {
+  border-color: rgba(218, 82, 82, 0.45);
+}
+
+.eval-case-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.eval-case-query {
+  font-size: 13px;
+  color: var(--moon);
+  font-weight: 600;
+  flex: 1;
+  min-width: 120px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.eval-case-latency {
+  font-size: 12px;
+  color: var(--moon-dim);
+  font-family: 'JetBrains Mono', monospace;
 }
 </style>

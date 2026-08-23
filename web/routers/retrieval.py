@@ -3,12 +3,20 @@
 提供：
 - GET  /retrieval/config          — 读取当前检索相关配置（从 config_constants 实时读取）
 - PUT  /retrieval/config          — 修改检索配置（写入 webui_overrides.json，热生效）
-- POST /retrieval/test            — 用指定查询测试召回率，返回命中结果和分数
+- POST /retrieval/test            — 单查询召回测试；带期望基准(expect_keywords/expect_ids)
+                                    时返回 recall/precision/F1/MRR 等指标，另有耗时/分数分布
+- POST /retrieval/evaluate        — 批量评测：多变例宏平均指标 + P95 延迟 + 失败计数
 - POST /retrieval/config/reset    — 一键恢复默认值
+
+指标口径（期望项 = 关键词 + ID 的并集）：
+- recall    = 被任一返回结果覆盖的期望项 / 期望项总数
+- precision = 命中期望的结果数 / 返回结果数
+- f1        = 二者调和平均；mrr = 1/首个命中结果的名次
 """
 from __future__ import annotations
 
 import os
+import time
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Request
@@ -18,6 +26,8 @@ from web.routers.auth import get_current_user
 from web.schemas import Envelope
 
 router = APIRouter(tags=["retrieval"], dependencies=[Depends(get_current_user)])
+
+_EVAL_MAX_CASES = 50
 
 _RETRIEVAL_BOOL_KEYS = [
     "RERANKER_ENABLED",
@@ -155,7 +165,7 @@ async def reset_retrieval_config() -> Any:
 
 @router.post("/retrieval/test", response_model=Envelope[dict])
 async def test_retrieval(body: dict, request: Request) -> Any:
-    query = body.get("query", "").strip()
+    query = str(body.get("query", "")).strip()
     top_k = body.get("top_k", 5)
     if not query:
         raise HTTPException(400, "query 不能为空")
@@ -163,14 +173,80 @@ async def test_retrieval(body: dict, request: Request) -> Any:
         top_k = int(top_k)
     except (TypeError, ValueError):
         top_k = 5
+    expect_keywords, expect_ids = _parse_expectations(body)
     core = request.app.state.core
+    t0 = time.perf_counter()
     try:
         results = await core.memory.retrieve_memories_hybrid(
             query=query, k=top_k, use_kg=True
         )
-    except Exception as e:
+    except Exception as e:  # noqa: BLE001 —— 测试端点把失败作为数据返回
         logger.warning("retrieval.test_failed query={} error={}", query[:50], str(e))
         return Envelope(data={"query": query, "results": [], "error": str(e), "count": 0})
+    latency_ms = (time.perf_counter() - t0) * 1000
+    items = _build_items(results)
+    metrics = _annotate_and_measure(items, expect_keywords, expect_ids, latency_ms)
+    return Envelope(data={"query": query, "results": items, "count": len(items),
+                          "metrics": metrics})
+
+
+@router.post("/retrieval/evaluate", response_model=Envelope[dict])
+async def evaluate_retrieval(body: dict, request: Request) -> Any:
+    cases = body.get("cases")
+    if not isinstance(cases, list) or not cases:
+        raise HTTPException(400, "cases 不能为空（每项 {query, expect_keywords?, expect_ids?}）")
+    if len(cases) > _EVAL_MAX_CASES:
+        raise HTTPException(400, f"评测用例一次最多 {_EVAL_MAX_CASES} 条")
+    top_k = body.get("top_k", 5)
+    try:
+        top_k = int(top_k)
+    except (TypeError, ValueError):
+        top_k = 5
+    core = request.app.state.core
+    per_case: list[dict[str, Any]] = []
+    for idx, case in enumerate(cases):
+        if not isinstance(case, dict):
+            raise HTTPException(400, f"cases[{idx}] 必须是对象")
+        query = str(case.get("query", "")).strip()
+        if not query:
+            raise HTTPException(400, f"cases[{idx}].query 不能为空")
+        try:
+            expect_keywords, expect_ids = _parse_expectations(case)
+        except HTTPException as e:
+            raise HTTPException(400, f"cases[{idx}]: {e.detail}") from e
+        t0 = time.perf_counter()
+        try:
+            results = await core.memory.retrieve_memories_hybrid(
+                query=query, k=top_k, use_kg=True
+            )
+        except Exception as e:  # noqa: BLE001 —— 单用例失败不中断整批评测
+            logger.warning("retrieval.evaluate_case_failed query={} error={}",
+                           query[:50], str(e))
+            per_case.append({"query": query, "results": [], "count": 0,
+                             "error": str(e), "metrics": None})
+            continue
+        latency_ms = (time.perf_counter() - t0) * 1000
+        items = _build_items(results)
+        metrics = _annotate_and_measure(items, expect_keywords, expect_ids, latency_ms)
+        per_case.append({"query": query, "results": items, "count": len(items),
+                         "metrics": metrics})
+    return Envelope(data={"top_k": top_k, "cases": per_case, **_aggregate(per_case)})
+
+
+def _parse_expectations(body: dict) -> tuple[list[str], list[str]]:
+    expect_keywords = body.get("expect_keywords") or []
+    expect_ids = body.get("expect_ids") or []
+    if not isinstance(expect_keywords, list) or not all(isinstance(k, str) for k in expect_keywords):
+        raise HTTPException(400, "expect_keywords 必须是字符串数组")
+    if not isinstance(expect_ids, list) or not all(
+            isinstance(i, (str, int)) for i in expect_ids):
+        raise HTTPException(400, "expect_ids 必须是字符串/整数数组")
+    kws = [k.strip() for k in expect_keywords if k.strip()]
+    ids = [str(i).strip() for i in expect_ids if str(i).strip()]
+    return kws, ids
+
+
+def _build_items(results: list[Any]) -> list[dict[str, Any]]:
     items = []
     for r in results:
         items.append({
@@ -181,4 +257,93 @@ async def test_retrieval(body: dict, request: Request) -> Any:
             "emotion_label": getattr(r, "emotion_label", ""),
             "source": getattr(r, "source", ""),
         })
-    return Envelope(data={"query": query, "results": items, "count": len(items)})
+    return items
+
+
+def _result_matches(item: dict[str, Any], kws: list[str], ids: list[str]) -> list[str]:
+    """该结果命中的期望项：关键词（summary 子串，不区分大小写）+ ID。"""
+    hit: list[str] = []
+    summary = str(item.get("summary") or "").lower()
+    rid = item.get("id")
+    for kw in kws:
+        if kw.lower() in summary:
+            hit.append(kw)
+    for eid in ids:
+        if rid is not None and str(rid) == eid:
+            hit.append(f"id:{eid}")
+    return hit
+
+
+def _annotate_and_measure(items: list[dict[str, Any]], kws: list[str], ids: list[str],
+                          latency_ms: float) -> dict[str, Any]:
+    """就地给每条结果标 matched/matched_keywords，并汇总单查询指标。"""
+    covered: set[str] = set()
+    matched_count = 0
+    first_hit_rank = 0
+    for rank, it in enumerate(items, start=1):
+        hit = _result_matches(it, kws, ids)
+        it["matched"] = bool(hit)
+        it["matched_keywords"] = hit
+        if hit:
+            matched_count += 1
+            if not first_hit_rank:
+                first_hit_rank = rank
+            covered.update(hit)
+    scores = [float(it.get("score") or 0) for it in items]
+    threshold = float(getattr(_get_config_module(), "RAG_MIN_FINAL_SCORE", 0.08))
+    metrics: dict[str, Any] = {
+        "latency_ms": round(latency_ms, 1),
+        "returned": len(items),
+        "score_max": round(max(scores), 4) if scores else 0.0,
+        "score_min": round(min(scores), 4) if scores else 0.0,
+        "score_mean": round(sum(scores) / len(scores), 4) if scores else 0.0,
+        "threshold": threshold,
+        "above_threshold": sum(1 for s in scores if s >= threshold),
+        "has_expect": bool(kws or ids),
+    }
+    if metrics["has_expect"]:
+        total_expect = len(kws) + len(ids)
+        recall = len(covered) / total_expect if total_expect else 0.0
+        precision = matched_count / len(items) if items else 0.0
+        metrics.update({
+            "expect_total": total_expect,
+            "expect_covered": len(covered),
+            "matched_results": matched_count,
+            "recall": round(recall, 4),
+            "precision": round(precision, 4),
+            "f1": round(2 * precision * recall / (precision + recall), 4)
+                  if (precision + recall) else 0.0,
+            "first_hit_rank": first_hit_rank,
+            "mrr": round(1.0 / first_hit_rank, 4) if first_hit_rank else 0.0,
+            "hit": matched_count > 0,
+        })
+    return metrics
+
+
+def _aggregate(per_case: list[dict[str, Any]]) -> dict[str, Any]:
+    ok_cases = [c for c in per_case if c.get("metrics")]
+    with_expect = [c for c in ok_cases if c["metrics"].get("has_expect")]
+
+    def _macro(field: str) -> float:
+        vals = [c["metrics"][field] for c in with_expect]
+        return round(sum(vals) / len(vals), 4) if vals else 0.0
+
+    latencies = sorted(c["metrics"]["latency_ms"] for c in ok_cases)
+    p95_idx = max(0, -(-len(latencies) * 95 // 100) - 1)  # 向上取整的名次法
+    return {
+        "cases_total": len(per_case),
+        "cases_ok": len(ok_cases),
+        "cases_failed": len(per_case) - len(ok_cases),
+        "cases_with_expect": len(with_expect),
+        "aggregate": {
+            "recall_macro": _macro("recall"),
+            "precision_macro": _macro("precision"),
+            "f1_macro": _macro("f1"),
+            "mrr_macro": _macro("mrr"),
+            "hit_rate": round(
+                sum(1 for c in with_expect if c["metrics"]["hit"]) / len(with_expect), 4
+            ) if with_expect else 0.0,
+            "latency_avg_ms": round(sum(latencies) / len(latencies), 1) if latencies else 0.0,
+            "latency_p95_ms": latencies[p95_idx] if latencies else 0.0,
+        },
+    }
