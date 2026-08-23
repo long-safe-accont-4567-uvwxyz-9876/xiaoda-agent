@@ -756,5 +756,19 @@ function onPanelOpened() {
 }
 .empty-btn:hover { background: rgba(127, 214, 80, 0.15); border-color: var(--dendro, #7fd650); }
 
-@media (max-width: 600px) { .term-panel { width: 100vw; } }
+@media (max-width: 600px) {
+  .term-panel { width: 100vw; }
+
+  .term-fab {
+    right: 12px;
+    bottom: calc(198px + env(safe-area-inset-bottom, 0px));
+    width: 36px;
+    height: 36px;
+    border-radius: 8px;
+  }
+
+  .fab-icon {
+    font-size: 10px;
+  }
+}
 </style>

@@ -1,6 +1,7 @@
 import { defineStore } from 'pinia'
 import { ref, watch } from 'vue'
 import { get, put } from '../api'
+import type { SystemConfig } from '../api/types'
 import { sound } from '../utils/sound'
 
 export type ParticleDensity = 'off' | 'low' | 'medium' | 'high'
@@ -72,8 +73,10 @@ export const useUiStore = defineStore('ui', () => {
   async function loadRemote() {
     if (loaded.value) return
     try {
-      const cfg = await get('/system/config')
-      if (cfg?.ui?.particles) particles.value = cfg.ui.particles
+      const cfg = await get<SystemConfig>('/system/config')
+      if (cfg?.ui?.particles && ['off', 'low', 'medium', 'high'].includes(cfg.ui.particles)) {
+        particles.value = cfg.ui.particles as ParticleDensity
+      }
       if (cfg?.ui?.tilt3d !== undefined) tilt3d.value = !!cfg.ui.tilt3d
       if (cfg?.tts?.auto_speak !== undefined) autoSpeak.value = !!cfg.tts.auto_speak
       if (cfg?.ui?.sound_fx !== undefined) { soundFx.value = !!cfg.ui.sound_fx; sound.setEnabled(soundFx.value) }

@@ -2,8 +2,10 @@
 import { ref, onMounted, onBeforeUnmount } from 'vue'
 import { NButton, useMessage } from 'naive-ui'
 import { get, post } from '../api'
+import type { HealthProbeResult, HealthReportRow } from '../api/types'
 import { getWsClient } from '../api/ws'
 import Tilt3D from '../components/fx/Tilt3D.vue'
+import ViewTitleIcon from '../components/fx/ViewTitleIcon.vue'
 import { t, tf } from '../i18n'
 
 const message = useMessage()
@@ -16,13 +18,13 @@ interface ProbeCard {
   state: 'idle' | 'running' | 'ok' | 'fail'
   latency?: number
   info?: string
-  audioUrl?: string
+  audioUrl?: string | null
   flipped?: boolean
 }
 
 const probes = ref<ProbeCard[]>([])
 const runningAll = ref(false)
-const lastReport = ref<any>(null)
+const lastReport = ref<HealthReportRow | null>(null)
 
 onMounted(async () => {
   await load()
@@ -39,7 +41,7 @@ async function load() {
   try {
     const list = await get<any[]>('/health/probes')
     probes.value = list.map(p => ({ ...p, state: 'idle' as const }))
-    lastReport.value = await get('/health/report')
+    lastReport.value = await get<HealthReportRow>('/health/report')
   } catch (e: any) {
     message.error(e.message)
   }
@@ -81,14 +83,14 @@ function onProgress(e: any) {
 function onDone(e: any) {
   runningAll.value = false
   message.success(tf('healthView.fullCheckResult', String(e.passed), String(e.total)))
-  get('/health/report').then(r => { lastReport.value = r }).catch(() => {})
+  get<HealthReportRow>('/health/report').then(r => { lastReport.value = r }).catch(() => {})
 }
 
 async function runOne(card: ProbeCard) {
   card.state = 'running'
   card.flipped = false
   try {
-    const res = await post(`/health/test/${card.id}`)
+    const res = await post<HealthProbeResult>(`/health/test/${card.id}`)
     card.state = res.ok ? 'ok' : 'fail'
     card.latency = res.latency_ms
     card.info = res.error || res.reply_excerpt || res.note || ''
@@ -120,7 +122,7 @@ const stateIcon: Record<string, string> = {
 <template>
   <div class="health-view">
     <div class="view-header">
-      <h2>🩺 {{ t('healthView.title') }}</h2>
+      <h2 class="view-title view-title-icon"><ViewTitleIcon name="health" /> {{ t('healthView.title') }}</h2>
       <div class="header-right">
         <span v-if="lastReport?.run_at" class="last-report">
           {{ t('healthView.lastCheck') }}：{{ new Date(lastReport.run_at * 1000).toLocaleString('zh-CN') }}

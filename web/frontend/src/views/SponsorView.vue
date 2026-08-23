@@ -2,6 +2,7 @@
 import { t } from '../i18n'
 import Tilt3D from '../components/fx/Tilt3D.vue'
 import SumeruIcon from '../components/fx/SumeruIcon.vue'
+import ViewTitleIcon from '../components/fx/ViewTitleIcon.vue'
 
 const wechatImg = '/assets/sponsor/wechat_qr.png'
 </script>
@@ -10,7 +11,7 @@ const wechatImg = '/assets/sponsor/wechat_qr.png'
   <div class="sponsor-page">
     <Tilt3D :max-x="3" :max-y="5">
       <div class="sponsor-card">
-        <h1 class="page-title">── {{ t('sponsor.title') }} ──</h1>
+        <h1 class="page-title"><ViewTitleIcon name="sponsor" :size="30" /> {{ t('sponsor.title') }}</h1>
 
         <div class="sponsor-body">
           <p class="intro-text">{{ t('sponsor.intro') }}</p>
@@ -53,12 +54,16 @@ const wechatImg = '/assets/sponsor/wechat_qr.png'
   background: rgba(15, 31, 23, 0.55);
   backdrop-filter: blur(12px);
   border: 1px solid var(--glass-border);
-  border-radius: 16px;
+  border-radius: 8px;
   padding: 28px 32px;
   box-shadow: 0 8px 32px rgba(0, 0, 0, 0.3);
 }
 
 .page-title {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
   font-size: 18px;
   color: var(--wisdom);
   font-family: 'Noto Serif SC', serif;

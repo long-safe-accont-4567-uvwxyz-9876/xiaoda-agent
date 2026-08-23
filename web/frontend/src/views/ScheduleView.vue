@@ -9,6 +9,7 @@ import {
 import { get, post, put, del } from '../api'
 import { t, tf } from '../i18n'
 import Tilt3D from '../components/fx/Tilt3D.vue'
+import ViewTitleIcon from '../components/fx/ViewTitleIcon.vue'
 
 const message = useMessage()
 
@@ -51,8 +52,8 @@ async function saveConfig() {
 async function saveDnd() {
   try {
     const cleaned = dndPeriods.value.map(p => ({ start: p.start, end: p.end }))
-    const result = await put('/schedule/dnd', { periods: cleaned })
-    dndPeriods.value = result.map((p: any) => ({ ...p, _key: ++_dndSeq }))
+    const result = await put<Array<{ start: string; end: string }>>('/schedule/dnd', { periods: cleaned })
+    dndPeriods.value = result.map(p => ({ ...p, _key: ++_dndSeq }))
     message.success(t('scheduleView.quietUpdated'))
   } catch (e: any) { message.error(e.message) }
 }
@@ -112,7 +113,12 @@ async function removeGreeting(id: number) {
 async function testFire(channels: string[] = ['web']) {
   testing.value = true
   try {
-    const r = await post('/schedule/test-greeting', { prompt_hint: '', channels })
+    const r = await post<{
+      sent: boolean
+      message?: string
+      text?: string
+      channels?: Record<string, { ok: boolean; error?: string }>
+    }>('/schedule/test-greeting', { prompt_hint: '', channels })
     if (!r.sent) {
       message.warning(r.message || t('scheduleView.allChannelsFailed'))
     } else {
@@ -148,7 +154,7 @@ const reasonLabel: Record<string, string> = {
 
 <template>
   <div class="schedule-view">
-    <h2 class="view-title">⏰ {{ t('scheduleView.title') }}</h2>
+    <h2 class="view-title view-title-icon"><ViewTitleIcon name="schedule" /> {{ t('scheduleView.title') }}</h2>
 
     <Tilt3D :max-x="4" :max-y="6"><section class="glass-panel section">
       <h3>{{ t('scheduleView.masterSwitch') }}</h3>

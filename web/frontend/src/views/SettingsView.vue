@@ -1,11 +1,13 @@
 <script setup lang="ts">
 import { ref, onMounted, computed } from 'vue'
 import SumeruIcon from '../components/fx/SumeruIcon.vue'
+import ViewTitleIcon from '../components/fx/ViewTitleIcon.vue'
 import {
   NButton, NSwitch, NRadioGroup, NRadioButton, NInput, NModal,
   NSelect, NSlider, NCheckbox, NCheckboxGroup, NPopconfirm, NTag, NTabs, NTabPane, useMessage,
 } from 'naive-ui'
 import { get, put, post, api } from '../api'
+import type { PermissionModeInfo, SystemConfig } from '../api/types'
 import { useUiStore } from '../stores/ui'
 import { useAuthStore } from '../stores/auth'
 import { useWorkspaceStore } from '../stores/workspace'
@@ -54,7 +56,7 @@ const sharedPlatformOptions = [
 onMounted(async () => {
   await ui.loadRemote()
   try {
-    const p = await get('/system/permission-mode')
+    const p = await get<PermissionModeInfo>('/system/permission-mode')
     permissionMode.value = p.mode
     permissionOptions.value = p.options
   } catch (e: any) { message.error(e.message) }
@@ -62,7 +64,7 @@ onMounted(async () => {
   loadLanInfo()
   // 多平台共用上下文：加载已勾选的平台
   try {
-    const cfg = await get('/system/config')
+    const cfg = await get<SystemConfig>('/system/config')
     sharedPlatforms.value = Array.isArray(cfg?.context?.shared_platforms) ? cfg.context.shared_platforms : []
   } catch { /* 忽略加载失败 */ }
   // 工作目录授权状态、白名单、审计日志
@@ -87,7 +89,7 @@ function updateSharedPlatforms(values: Array<string | number>) {
 
 async function loadLanInfo() {
   try {
-    const data = await get('/system/lan-addresses')
+    const data = await get<{ localhost: string; lan_ips: string[]; lan_urls: string[]; port: number }>('/system/lan-addresses')
     lanInfo.value = data
   } catch { /* 忽略 */ }
 }
@@ -269,9 +271,9 @@ const permLabel = computed<Record<string, string>>(() => ({
 
 <template>
   <div class="settings-view">
-    <h2 class="view-title">{{ t('settings.title') }}</h2>
+    <h2 class="view-title view-title-icon"><ViewTitleIcon name="settings" />{{ t('settings.title').replace(/^⚙️\s*/, '') }}</h2>
 
-    <n-tabs type="line" animated display-directive="show" v-model:value="activeTab">
+    <n-tabs class="settings-tabs" type="line" animated display-directive="show" v-model:value="activeTab">
       <!-- 外观与语言 -->
       <n-tab-pane name="appearance" :tab="t('settings.tabs.appearance')">
         <Tilt3D :max-x="4" :max-y="6"><section class="glass-panel section">
@@ -298,12 +300,12 @@ const permLabel = computed<Record<string, string>>(() => ({
             <div class="soundfx-controls">
               <n-switch :value="ui.soundFx" @update:value="(v: boolean) => { ui.setSoundFx(v); sound.play('toggle') }" />
               <n-slider
+                class="sound-volume-slider"
                 :value="ui.soundVolume"
                 :min="0"
                 :max="1"
                 :step="0.05"
                 :disabled="!ui.soundFx"
-                style="width: 160px; margin-left: 12px"
                 @update:value="ui.setSoundVolume"
                 @dragend="() => sound.play('receive')"
               />
@@ -331,12 +333,12 @@ const permLabel = computed<Record<string, string>>(() => ({
                 <template #unchecked>{{ t('settings.manualBrightness') }}</template>
               </n-switch>
               <n-slider
+                class="brightness-slider"
                 :value="ui.manualBrightness"
                 :min="0.5"
                 :max="1.5"
                 :step="0.05"
                 :disabled="ui.autoBrightness"
-                style="width: 200px; margin-left: 12px"
                 @update:value="ui.setManualBrightness"
               />
             </div>
@@ -416,8 +418,8 @@ const permLabel = computed<Record<string, string>>(() => ({
           <!-- 命令白名单 -->
           <h4 class="sub-title">{{ t('settings.cmdWhitelist') }}</h4>
           <p class="apikey-desc">{{ t('settings.cmdWhitelistHint') }}</p>
-          <div class="setting-row">
-            <n-input v-model:value="newCmd" :placeholder="t('settings.cmdWhitelistAddPlaceholder')" size="small" style="flex:1" @keyup.enter="onAddCmd" />
+          <div class="setting-row whitelist-add-row">
+            <n-input class="whitelist-input" v-model:value="newCmd" :placeholder="t('settings.cmdWhitelistAddPlaceholder')" size="small" @keyup.enter="onAddCmd" />
             <n-button size="small" type="primary" @click="onAddCmd">{{ t('settings.cmdWhitelistAdd') }}</n-button>
           </div>
           <div v-if="ws.whitelist.length" class="ws-whitelist">
@@ -426,7 +428,7 @@ const permLabel = computed<Record<string, string>>(() => ({
           <p v-else class="perm-desc">{{ t('settings.cmdWhitelistEmpty') }}</p>
 
           <!-- 审计日志 -->
-          <div class="section-head" style="margin-top:14px">
+          <div class="section-head audit-section-head">
             <h4 class="sub-title">{{ t('settings.workspaceAudit') }}</h4>
             <n-button size="small" @click="onRefreshAudit">{{ t('settings.workspaceAuditRefresh') }}</n-button>
           </div>
@@ -501,7 +503,7 @@ const permLabel = computed<Record<string, string>>(() => ({
             <h3>{{ t('settings.logViewer') }}</h3>
             <div class="log-ops">
               <n-select v-model:value="logLevel" :options="['INFO', 'WARNING', 'ERROR'].map(l => ({ label: l, value: l }))"
-                        :placeholder="t('settings.logLevel')" clearable size="small" style="width: 120px"
+                        class="log-level-select" :placeholder="t('settings.logLevel')" clearable size="small"
                         @update:value="loadLogs" />
               <n-button size="small" :loading="logLoading" @click="loadLogs">{{ t('refresh') }}</n-button>
             </div>
@@ -644,33 +646,63 @@ const permLabel = computed<Record<string, string>>(() => ({
 </template>
 
 <style scoped>
+.settings-view {
+  min-width: 0;
+  max-width: 100%;
+  overflow-x: hidden;
+  overflow-x: clip;
+}
 .view-title { font-family: 'Noto Serif SC', serif; margin-bottom: 14px; }
+
+.settings-tabs {
+  min-width: 0;
+  max-width: 100%;
+}
+.settings-tabs :deep(.n-tabs-nav),
+.settings-tabs :deep(.n-tabs-nav-scroll-wrapper),
+.settings-tabs :deep(.v-x-scroll) {
+  min-width: 0;
+  max-width: 100%;
+}
 
 .section { padding: 16px 18px; margin-bottom: 14px; }
 .section h3 { font-size: 14px; color: var(--dendro); margin-bottom: 14px; }
 .section.danger { border-color: rgba(217, 106, 95, 0.3); }
-.section-head { display: flex; align-items: center; justify-content: space-between; }
+.section-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; min-width: 0; }
 .section-head h3 { margin: 0; }
+.audit-section-head { margin-top: 14px; }
 
 .setting-row {
   display: flex; align-items: center; justify-content: space-between;
-  padding: 8px 0; gap: 16px; flex-wrap: wrap;
+  padding: 8px 0; gap: 16px; flex-wrap: wrap; min-width: 0;
 }
-.s-label { font-size: 13.5px; }
-.soundfx-controls { display: flex; align-items: center; }
+.setting-row > * { min-width: 0; }
+.s-label { font-size: 13.5px; overflow-wrap: anywhere; }
+.soundfx-controls { display: flex; align-items: center; min-width: 0; }
+.sound-volume-slider {
+  width: min(160px, 32vw);
+  margin-left: 12px;
+}
+.brightness-slider {
+  width: min(200px, 40vw);
+  margin-left: 12px;
+}
 .url-link {
   font-size: 13.5px;
   color: var(--dendro);
   cursor: pointer;
   font-family: 'JetBrains Mono', monospace;
   word-break: break-all;
+  overflow-wrap: anywhere;
+  min-width: 0;
 }
 .url-link:hover { text-decoration: underline; }
 
 .perm-desc { font-size: 12.5px; color: var(--wisdom); margin-top: 10px; }
 .apikey-desc { font-size: 12.5px; color: var(--wisdom); margin: 0 0 12px; }
 
-.log-ops { display: flex; gap: 8px; }
+.log-ops { display: flex; gap: 8px; min-width: 0; }
+.log-level-select { width: 120px; max-width: 100%; }
 .log-box {
   margin-top: 12px;
   background: rgba(10, 20, 14, 0.85);
@@ -705,6 +737,7 @@ const permLabel = computed<Record<string, string>>(() => ({
   display: flex;
   align-items: center;
   gap: 8px;
+  min-width: 0;
 }
 .brightness-hint {
   font-size: 11.5px;
@@ -725,6 +758,8 @@ const permLabel = computed<Record<string, string>>(() => ({
   color: var(--moon);
   font-family: var(--mono, monospace);
   word-break: break-all;
+  overflow-wrap: anywhere;
+  min-width: 0;
   flex: 1;
   margin-left: 8px;
 }
@@ -740,6 +775,7 @@ const permLabel = computed<Record<string, string>>(() => ({
   gap: 6px;
   margin-top: 8px;
 }
+.whitelist-input { flex: 1 1 220px; }
 .ws-audit {
   margin-top: 8px;
   max-height: 240px;
@@ -755,6 +791,7 @@ const permLabel = computed<Record<string, string>>(() => ({
   padding: 4px 0;
   font-size: 12px;
   border-bottom: 1px solid rgba(255, 255, 255, 0.04);
+  min-width: 0;
 }
 .audit-entry:last-child { border-bottom: none; }
 .audit-time {
@@ -783,18 +820,78 @@ const permLabel = computed<Record<string, string>>(() => ({
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+  min-width: 0;
 }
 .doctor-result { margin-top: 10px; }
 .doctor-ok { color: var(--dendro); font-weight: 600; margin-bottom: 8px; }
 .doctor-warn { color: #e6a23c; font-weight: 600; margin-bottom: 8px; }
 .doctor-issues { display: flex; flex-direction: column; gap: 6px; margin-bottom: 10px; }
-.doctor-issue { display: flex; align-items: center; gap: 8px; font-size: 13px; }
-.issue-text { flex: 1; }
+.doctor-issue { display: flex; align-items: center; gap: 8px; font-size: 13px; min-width: 0; }
+.issue-text { flex: 1; min-width: 0; overflow-wrap: anywhere; }
 .issue-fixable { font-size: 11px; color: var(--dendro); background: rgba(76,175,80,0.1); padding: 1px 6px; border-radius: 4px; }
 .doctor-checks { display: flex; flex-direction: column; gap: 4px; }
-.doctor-check { display: flex; align-items: center; gap: 6px; font-size: 12.5px; }
+.doctor-check { display: flex; align-items: center; gap: 6px; font-size: 12.5px; min-width: 0; }
+.doctor-check > span:nth-child(2) { min-width: 0; overflow-wrap: anywhere; }
 .check-ok { color: var(--dendro); font-weight: 700; }
 .check-fail { color: #e74c3c; font-weight: 700; }
-.check-detail { color: var(--moon-dim); font-size: 11px; }
+.check-detail { color: var(--moon-dim); font-size: 11px; min-width: 0; overflow-wrap: anywhere; word-break: break-word; }
 .doctor-empty { color: var(--moon-dim); font-size: 13px; padding: 8px 0; }
+
+@media (max-width: 600px) {
+  .section { padding: 12px 14px; }
+  .section-head { align-items: flex-start; flex-wrap: wrap; }
+  .section-head h3,
+  .section-head .sub-title { flex: 1 1 180px; }
+  .log-ops { flex: 1 1 100%; flex-wrap: wrap; }
+  .log-level-select { flex: 1 1 120px; width: auto; }
+  .brightness-controls,
+  .soundfx-controls { width: min(100%, 300px); }
+  .brightness-slider,
+  .sound-volume-slider { flex: 1 1 auto; width: auto; margin-left: 0; }
+  .setting-row :deep(.n-radio-group),
+  .setting-row :deep(.n-checkbox-group),
+  .section > :deep(.n-radio-group) {
+    display: flex;
+    flex-wrap: wrap;
+    max-width: 100%;
+  }
+  .ws-time { margin-left: 0; overflow-wrap: anywhere; }
+}
+
+@media (max-width: 390px) {
+  .section { padding: 10px 12px; }
+  .setting-row { gap: 8px 10px; }
+  .setting-row > .s-label { flex: 1 1 150px; }
+  .brightness-controls,
+  .soundfx-controls { width: 100%; }
+  .whitelist-add-row { align-items: stretch; }
+  .whitelist-input { flex-basis: 100%; width: 100%; }
+  .whitelist-add-row :deep(.n-button) { margin-left: auto; }
+  .ws-audit { padding: 6px; }
+  .audit-entry {
+    display: grid;
+    grid-template-columns: auto minmax(0, 1fr);
+    align-items: start;
+    gap: 5px 8px;
+    padding: 7px 0;
+  }
+  .audit-time { grid-column: 1 / -1; width: auto; }
+  .audit-action { max-width: 100%; overflow-wrap: anywhere; white-space: normal; }
+  .audit-target {
+    grid-column: 1 / -1;
+    overflow: visible;
+    text-overflow: clip;
+    white-space: normal;
+    overflow-wrap: anywhere;
+    word-break: break-word;
+  }
+  .doctor-issue,
+  .doctor-check {
+    display: grid;
+    grid-template-columns: auto minmax(0, 1fr);
+    align-items: start;
+  }
+  .issue-fixable,
+  .check-detail { grid-column: 2; }
+}
 </style>

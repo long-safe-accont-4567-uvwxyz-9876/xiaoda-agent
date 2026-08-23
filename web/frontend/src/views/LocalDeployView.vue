@@ -7,6 +7,7 @@ import DownloadTasksTab from '../components/local-ai/DownloadTasksTab.vue'
 import InstalledModelsTab from '../components/local-ai/InstalledModelsTab.vue'
 import ModelMarketTab from '../components/local-ai/ModelMarketTab.vue'
 import SystemModelNodesTab from '../components/local-ai/SystemModelNodesTab.vue'
+import ViewTitleIcon from '../components/fx/ViewTitleIcon.vue'
 import { useLocalAiStore } from '../stores/localAi'
 import { t } from '../i18n'
 
@@ -33,7 +34,7 @@ onBeforeUnmount(() => store.disconnectWebSocket())
 
 <template>
   <div class="local-deploy-view">
-    <header class="view-header"><div><h2>🖥️ {{ t('localDeployView.title') }}</h2><p>{{ summary }}</p></div><n-button :loading="store.loading" @click="load">{{ t('refresh') }}</n-button></header>
+    <header class="view-header"><div><h2 class="view-title view-title-icon"><ViewTitleIcon name="local-deploy" /> {{ t('localDeployView.title') }}</h2><p>{{ summary }}</p></div><n-button :loading="store.loading" @click="load">{{ t('refresh') }}</n-button></header>
     <n-alert v-if="store.error" type="error" :title="t('localDeployView.loadFailed')">{{ store.error }}</n-alert>
     <n-spin :show="store.loading && !store.devices.length && !store.catalog.length">
       <n-tabs v-model:value="activeTab" type="line" animated display-directive="show" class="local-ai-tabs">

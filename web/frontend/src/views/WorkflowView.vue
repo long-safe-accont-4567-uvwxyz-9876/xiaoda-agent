@@ -9,6 +9,7 @@ import { api, type Workflow, type WorkflowNode, type WorkflowSummary } from '../
 import { useChatStore } from '../stores/chat'
 import { t, tf } from '../i18n'
 import Tilt3D from '../components/fx/Tilt3D.vue'
+import ViewTitleIcon from '../components/fx/ViewTitleIcon.vue'
 
 const message = useMessage()
 const router = useRouter()
@@ -405,7 +406,7 @@ async function rollbackRevision(rev: any) {
 <template>
   <div class="workflows-view">
     <div class="view-header">
-      <h2>{{ t('workflowView.title') }}</h2>
+      <h2 class="view-title view-title-icon"><ViewTitleIcon name="workflow" /> {{ t('workflowView.title').replace(/^🌿\s*/, '') }}</h2>
       <span class="count">{{ t('workflowView.count') }} {{ workflows.length }} {{ t('workflowView.items') }}</span>
     </div>
 

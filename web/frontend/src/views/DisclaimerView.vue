@@ -4,6 +4,7 @@ import { NButton, NTag, NSpin, useMessage } from 'naive-ui'
 import { api } from '../api'
 import { t } from '../i18n'
 import Tilt3D from '../components/fx/Tilt3D.vue'
+import ViewTitleIcon from '../components/fx/ViewTitleIcon.vue'
 
 const message = useMessage()
 
@@ -57,7 +58,7 @@ function formatTime(ts: string): string {
 <template>
   <div class="disclaimer-page">
     <Tilt3D :max-x="4" :max-y="6"><div class="disclaimer-card">
-      <h1 class="page-title">── {{ t('disclaimer.title') }} ──</h1>
+      <h1 class="page-title"><ViewTitleIcon name="disclaimer" :size="30" /> {{ t('disclaimer.title') }}</h1>
 
       <n-spin :show="loading">
         <div class="disclaimer-body">
@@ -112,12 +113,16 @@ function formatTime(ts: string): string {
   background: rgba(15, 31, 23, 0.55);
   backdrop-filter: blur(12px);
   border: 1px solid var(--glass-border);
-  border-radius: 16px;
+  border-radius: 8px;
   padding: 32px 36px;
   box-shadow: 0 8px 32px rgba(0, 0, 0, 0.3);
 }
 
 .page-title {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
   font-size: 20px;
   color: var(--wisdom);
   font-family: 'Noto Serif SC', serif;

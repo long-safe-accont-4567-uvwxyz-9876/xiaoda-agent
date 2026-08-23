@@ -4,7 +4,10 @@ import hashlib
 import re
 import time
 from dataclasses import dataclass
+
 from loguru import logger
+
+from security.dangerous_targets import BLOCKED_PHRASE_RES, FATAL_SHELL_RE, INJECTION_SHELL_RE
 
 
 @dataclass
@@ -114,12 +117,15 @@ _TOOL_VALIDATION_RULES: dict[str, dict] = {
 }
 
 # L3: 一致性检查 —— 禁止危险模式
-_DANGEROUS_PATTERNS = [
-    (r"rm\s+-rf\s+/", "危险的递归删除命令"),
-    (r"curl.*\|\s*sh", "管道执行远程脚本"),
-    (r"chmod\s+777", "过于宽松的文件权限"),
-    (r">/dev/sd[a-z]", "直接写入磁盘设备"),
-]
+# 数据本体单一事实源：security/dangerous_targets.py。原本地 _DANGEROUS_PATTERNS
+# 四条（rm -rf /、curl|sh、chmod 777、>/dev/sd[a-z]）均被其
+# FATAL / BLOCKED_PHRASE / INJECTION 三组覆盖且更严（IGNORECASE + 旗标全排列），
+# 收编后只引用编译正则，不再手抄副本；描述按组语义映射，用于拦截提示文案。
+_L3_DANGEROUS_GROUPS: tuple[tuple[tuple[re.Pattern[str], ...], str], ...] = (
+    (FATAL_SHELL_RE, "致命系统命令"),
+    (BLOCKED_PHRASE_RES, "危险命令短语"),
+    (INJECTION_SHELL_RE, "注入/管道执行模式"),
+)
 
 
 class ToolGuardrails:
@@ -221,13 +227,10 @@ class ToolGuardrails:
         cmd = arguments.get("command", "")
         if not isinstance(cmd, str):
             return True, ""
-        for pattern, desc in _DANGEROUS_PATTERNS:
-            try:
-                if re.search(pattern, cmd):
+        for group_res, desc in _L3_DANGEROUS_GROUPS:
+            for compiled in group_res:
+                if compiled.search(cmd):
                     return False, f"L3验证失败: {desc}"
-            except re.error:
-                logger.warning("正则模式异常: {}", pattern)
-                continue
         return True, ""
 
     async def record_call(self, tool_name: str, arguments: dict,

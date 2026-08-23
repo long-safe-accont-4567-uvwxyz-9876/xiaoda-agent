@@ -10,7 +10,7 @@ from typing import Any
 
 from loguru import logger
 
-from db.db_memory_utils import _sql_placeholders, _scope_where, _rows_to_fts_results
+from db.db_memory_utils import _rows_to_fts_results, _scope_where, _sql_placeholders
 
 
 class SearchMixin:
@@ -84,18 +84,6 @@ class SearchMixin:
 
     async def search_memories_by_importance(self, min_importance: float = 0.3, limit: int = 10) -> Any:
         return await self._search_by_importance_impl(min_importance, limit, None)
-
-    async def search_memories_by_importance_scoped(self, min_importance: float = 0.3,
-                                                     limit: int = 10,
-                                                     scope: Any | None = None) -> list[dict]:
-        """按重要性排序检索 + scope 过滤（mem0 SPEC 优化）。
-
-        Args:
-            scope: Scope 对象。None 时退回无 scope 版本。
-        """
-        if scope is None:
-            return await self.search_memories_by_importance(min_importance, limit)
-        return await self._search_by_importance_impl(min_importance, limit, scope)
 
     async def _search_fts_impl(self, query: str, limit: int, scope: Any | None,
                                is_raw: int | None, event_label: str) -> list[dict]:

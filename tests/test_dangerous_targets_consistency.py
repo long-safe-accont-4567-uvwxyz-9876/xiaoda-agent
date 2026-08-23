@@ -3,7 +3,8 @@
 security/dangerous_targets.py 是"敏感工具名 / 危险 shell 命令"黑名单的
 唯一出处。本测试守卫四件事：
 
-1. 引用同一对象：三个消费方（hooks / permission_manager / file_tools_v2）
+1. 引用同一对象：四个消费方（hooks / permission_manager / file_tools_v2 /
+   tool_engine/tool_guardrails）
    import 的都是 dangerous_targets 模块属性本身，无再绑定副本；
 2. 无本地副本残留：AST 扫描消费方源码，黑名单常量不得重新定义，
    死条目字符串不得作为字面量出现；
@@ -31,11 +32,12 @@ import tool_engine  # noqa: F401 — 先于 tools.* 导入，触发懒注册避�
 from tools._builtin_manifest import BUILTIN_TOOLS
 from tools.file_tools_v2 import _is_command_dangerous
 
-# 黑名单的三个消费方（副本检查对象）
+# 黑名单的消费方（副本检查对象）
 CONSUMER_FILES = (
     Path("hooks.py"),
     Path("security/permission_manager.py"),
     Path("tools/file_tools_v2.py"),
+    Path("tool_engine/tool_guardrails.py"),
 )
 
 # 副本检查 + 死条目字面量扫描（含单一事实源模块自身）
@@ -90,6 +92,14 @@ def test_file_tools_v2_imports_single_source_objects():
     assert ftv2.BLOCKED_WORD_RES is dt.BLOCKED_WORD_RES
     assert ftv2.BLOCKED_PHRASE_RES is dt.BLOCKED_PHRASE_RES
     assert ftv2.INJECTION_SHELL_RE is dt.INJECTION_SHELL_RE
+
+
+def test_tool_guardrails_imports_single_source_objects():
+    import tool_engine.tool_guardrails as tg
+
+    assert tg.FATAL_SHELL_RE is dt.FATAL_SHELL_RE
+    assert tg.BLOCKED_PHRASE_RES is dt.BLOCKED_PHRASE_RES
+    assert tg.INJECTION_SHELL_RE is dt.INJECTION_SHELL_RE
 
 
 # ══ 2) 消费方源码无本地副本残留、死条目字面量绝迹 ══════════════

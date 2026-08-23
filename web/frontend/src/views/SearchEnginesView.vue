@@ -6,6 +6,7 @@ import {
 } from 'naive-ui'
 import { get, put, post } from '../api'
 import { t } from '../i18n'
+import ViewTitleIcon from '../components/fx/ViewTitleIcon.vue'
 
 const message = useMessage()
 const loading = ref(false)
@@ -59,7 +60,7 @@ async function saveConfig(withKeys: boolean) {
       body.keys = Object.fromEntries(
         Object.entries(keyInputs).filter(([, v]) => (v || '').trim() !== ''))
     }
-    const data = await put('/search-engines/config', body)
+    const data = await put<{ primary: string }>('/search-engines/config', body)
     if (withKeys) message.success(t('searchEngines.savedKeys'))
     else message.success(t('searchEngines.savedPrimary'))
     primary.value = data.primary ?? primary.value
@@ -80,7 +81,7 @@ async function runTest() {
   testing.value = true
   testResult.value = null
   try {
-    const data = await post('/search-engines/test', {
+    const data = await post<Record<string, unknown>>('/search-engines/test', {
       query: testQuery.value,
       engine: testEngine.value,
       top_k: testTopK.value,
@@ -106,7 +107,7 @@ export default { name: 'SearchEnginesView' }
 <template>
   <div class="se-view">
     <div class="view-header">
-      <h2 class="view-title">{{ t('searchEngines.title') }}</h2>
+      <h2 class="view-title view-title-icon"><ViewTitleIcon name="search" /> {{ t('searchEngines.title') }}</h2>
     </div>
 
     <n-spin :show="loading">

@@ -12,6 +12,10 @@
 消费方只许 import 本模块的常量，禁止再手抄副本；
 tests/test_dangerous_targets_consistency.py 守卫这一约束。
 
+2026-08 二轮收编：tool_engine/tool_guardrails.py 的本地 _DANGEROUS_PATTERNS
+（rm -rf /、curl|sh、chmod 777、>/dev/sd[a-z] 四条）确认被本模块
+FATAL / BLOCKED_PHRASE / INJECTION 三组覆盖后删除，改为引用编译正则。
+
 分组导出（数据本体只此一份，按消费语义分组）：
 - SENSITIVE_TOOLS / SENSITIVE_TOOL_MATCHER —— 敏感工具名集合及其派生正则
 - READ_TARGET_TOOLS                        —— 证据门禁"读取标记"类工具

@@ -1,287 +1,426 @@
-/* ============================================================
- * 草元素组件精修层 · 全局 naive-ui 视觉升级 + 丝滑交互
- * 优先级策略：body 前缀 (0-1-1) 压制 naive 动态注入的单类规则 (0-1-0)
- * ============================================================ */
-
-/* ---------- 按钮：玻璃质感 + 弹簧按压 ---------- */
+/* Shared Naive UI treatment. The body prefix outranks injected single-class rules. */
 body .n-button {
-  transition:
-    transform 0.18s var(--ease-spring, cubic-bezier(0.22, 1.4, 0.36, 1)),
-    box-shadow 0.25s var(--ease-smooth, cubic-bezier(0.4, 0, 0.2, 1)),
-    filter 0.2s,
-    background-color 0.2s,
-    border-color 0.2s,
-    color 0.2s;
+  --n-border-radius: var(--control-radius) !important;
+  border-radius: var(--control-radius);
+  font-weight: 600;
+  letter-spacing: 0;
+  transition: transform var(--motion-fast) var(--ease-out), box-shadow var(--motion-normal) var(--ease-smooth), filter var(--motion-fast), background-color var(--motion-fast), border-color var(--motion-fast), color var(--motion-fast);
 }
+
 body .n-button:not(:disabled):not(.n-button--disabled-type):hover {
   transform: translateY(-1px);
-  filter: brightness(1.08);
+  filter: brightness(1.04);
+  box-shadow: 0 7px 18px rgba(0, 0, 0, 0.2);
 }
+
 body .n-button:not(:disabled):not(.n-button--disabled-type):active {
-  transform: scale(0.95) translateY(0);
-  transition-duration: 0.08s;
+  transform: translateY(1px);
+  transition-duration: 70ms;
 }
 
-/* ---------- 按钮精修（轻量版）：保留胶囊圆角与柔和 hover，不做重背景 ----------
- * 用户反馈 v3 的深色玻璃/渐变实底背景不如原版。回退背景设计至朴素形态：
- * primary 保持 naive 原生绿色底，default 保持原生深色底；只统一胶囊圆角、
- * hover 提亮 + 轻投影，active 按压。 */
-body .n-button {
-  --n-border-radius: 999px !important;
-  border-radius: var(--n-border-radius);
+body .n-button:focus-visible {
+  outline: 2px solid var(--dendro-bright);
+  outline-offset: 2px;
 }
 
+body .n-button--primary-type {
+  font-weight: 700;
+}
 
-/* ---------- 输入类：玻璃底 + 聚焦光环 ---------- */
+body .n-button--error-type {
+  --n-ripple-color: rgba(240, 124, 114, 0.28) !important;
+}
+
 body .n-input,
 body .n-input-number,
 body .n-base-selection {
-  transition:
-    box-shadow 0.25s var(--ease-smooth, cubic-bezier(0.4, 0, 0.2, 1)),
-    border-color 0.25s,
-    background-color 0.25s;
+  --n-border-radius: var(--control-radius) !important;
+  border-radius: var(--control-radius);
+  box-shadow: inset 0 1px 3px rgba(0, 0, 0, 0.16);
+  transition: box-shadow var(--motion-fast), border-color var(--motion-fast), background-color var(--motion-fast);
 }
-body .n-input:not(.n-input--disabled):hover,
-body .n-base-selection:not(.n-base-selection--disabled):hover {
-  border-color: rgba(143, 229, 96, 0.45);
+
+body .n-input:not(.n-input--disabled):hover .n-input__state-border,
+body .n-input-number:hover .n-input:not(.n-input--disabled) .n-input__state-border,
+body .n-base-selection:not(.n-base-selection--disabled):hover .n-base-selection__state-border {
+  border-color: rgba(145, 232, 102, 0.34);
 }
+
 body .n-input:focus-within,
 body .n-input--focus,
 body .n-base-selection:focus-within,
 body .n-base-selection--active {
-  box-shadow:
-    0 0 0 2px rgba(143, 229, 96, 0.16),
-    0 0 18px rgba(143, 229, 96, 0.12);
+  box-shadow: 0 0 0 3px rgba(145, 232, 102, 0.12), inset 0 1px 3px rgba(0, 0, 0, 0.14);
 }
 
-/* ---------- 标签：胶囊玻璃 ---------- */
-body .n-tag {
-  border-radius: 999px;
-  backdrop-filter: blur(6px);
-  transition:
-    transform 0.2s var(--ease-spring, cubic-bezier(0.22, 1.4, 0.36, 1)),
-    box-shadow 0.25s;
-}
-body .n-tag:hover {
-  transform: translateY(-1px);
-  box-shadow: 0 2px 10px rgba(143, 229, 96, 0.14);
-}
-
-/* ---------- 开关：草光轨道 + 辉光 ---------- */
-body .n-switch .n-switch__rail {
-  transition:
-    background-color 0.3s var(--ease-smooth, cubic-bezier(0.4, 0, 0.2, 1)),
-    box-shadow 0.3s;
-}
-body .n-switch.n-switch--active .n-switch__rail {
-  box-shadow: 0 0 12px rgba(143, 229, 96, 0.35), inset 0 0 6px rgba(184, 255, 133, 0.25);
-}
-body .n-switch .n-switch__button {
-  transition: box-shadow 0.25s;
-}
-body .n-switch.n-switch--active .n-switch__button {
-  box-shadow: 0 0 8px rgba(184, 255, 133, 0.6), 0 1px 4px rgba(0, 0, 0, 0.3);
-}
-
-/* ---------- 滑条：渐变填充 + 弹性把手 ---------- */
-body .n-slider .n-slider-fill {
-  background: var(--gradient-dendro, linear-gradient(135deg, #b8ff85, #8fe560 45%, #4fd6a5)) !important;
-  box-shadow: 0 0 10px rgba(143, 229, 96, 0.3);
-}
-body .n-slider .n-slider-handle {
-  transition:
-    transform 0.2s var(--ease-spring, cubic-bezier(0.22, 1.4, 0.36, 1)),
-    box-shadow 0.2s;
-  box-shadow:
-    0 0 0 4px rgba(143, 229, 96, 0.14),
-    0 0 12px rgba(143, 229, 96, 0.3);
-}
-body .n-slider .n-slider-handle:hover,
-body .n-slider .n-slider-handle:focus {
-  transform: scale(1.18);
-  box-shadow:
-    0 0 0 5px rgba(143, 229, 96, 0.2),
-    0 0 18px rgba(143, 229, 96, 0.45);
-}
-
-/* ---------- 选项卡：悬浮微浮 + 渐变指示条 ---------- */
-body .n-tabs .n-tabs-tab {
-  transition:
-    color 0.25s,
-    transform 0.25s var(--ease-spring, cubic-bezier(0.22, 1.4, 0.36, 1));
-}
-body .n-tabs .n-tabs-tab:hover {
-  transform: translateY(-1px);
-}
-body .n-tabs .n-tabs-bar {
-  background: var(--gradient-dendro, linear-gradient(135deg, #b8ff85, #8fe560 45%, #4fd6a5)) !important;
-  border-radius: 2px;
-  box-shadow: 0 0 10px rgba(143, 229, 96, 0.45);
-}
-
-/* ---------- 单选按钮组：选中渐变 ---------- */
-body .n-radio-button {
-  transition:
-    background-color 0.25s,
-    color 0.25s,
-    box-shadow 0.25s,
-    transform 0.18s var(--ease-spring, cubic-bezier(0.22, 1.4, 0.36, 1));
-}
-body .n-radio-button:not(.n-radio-button--disabled):active {
-  transform: scale(0.96);
-}
-body .n-radio-button.n-radio-button--checked {
-  background: var(--gradient-dendro, linear-gradient(135deg, #b8ff85, #8fe560 45%, #4fd6a5));
-  color: var(--forest-deep, #0f1f17);
+body .n-form-item-label {
+  color: var(--moon-soft);
   font-weight: 600;
-  text-shadow: 0 1px 0 rgba(255, 255, 255, 0.25);
-  box-shadow: 0 2px 10px rgba(143, 229, 96, 0.3);
 }
 
-/* ---------- 弹层：玻璃拟态 ---------- */
+body .n-form-item-feedback-wrapper {
+  min-height: 20px;
+  font-size: 12px;
+}
+
+body .n-tag {
+  border-radius: 4px;
+  font-weight: 600;
+  letter-spacing: 0;
+  transition: border-color var(--motion-fast), background-color var(--motion-fast), color var(--motion-fast);
+}
+
+body .n-switch .n-switch__rail {
+  border: 1px solid var(--line);
+  box-shadow: inset 0 1px 3px rgba(0, 0, 0, 0.24);
+  transition: background-color var(--motion-normal) var(--ease-smooth), border-color var(--motion-normal), box-shadow var(--motion-normal);
+}
+
+body .n-switch.n-switch--active .n-switch__rail {
+  border-color: rgba(145, 232, 102, 0.42);
+  box-shadow: inset 0 1px 3px rgba(18, 64, 35, 0.22), 0 0 0 3px rgba(145, 232, 102, 0.07);
+}
+
+body .n-switch .n-switch__button {
+  box-shadow: 0 2px 7px rgba(0, 0, 0, 0.36);
+}
+
+body .n-slider .n-slider-rail__fill {
+  background: linear-gradient(90deg, var(--dendro), var(--jade)) !important;
+  box-shadow: 0 0 10px rgba(85, 217, 178, 0.16);
+}
+
+body .n-slider .n-slider-handle {
+  border: 2px solid var(--dendro-bright);
+  box-shadow: 0 0 0 4px rgba(145, 232, 102, 0.1), 0 3px 8px rgba(0, 0, 0, 0.3);
+  transition: transform var(--motion-fast) var(--ease-out), box-shadow var(--motion-fast);
+}
+
+body .n-slider .n-slider-handle:hover,
+body .n-slider .n-slider-handle-wrapper:focus .n-slider-handle,
+body .n-slider .n-slider-handle-wrapper:focus-visible .n-slider-handle {
+  transform: scale(1.12);
+  box-shadow: 0 0 0 5px rgba(145, 232, 102, 0.14), 0 4px 12px rgba(0, 0, 0, 0.34);
+}
+
+body .n-tabs .n-tabs-nav-scroll-content {
+  border-bottom-color: var(--line-soft);
+}
+
+body .n-tabs .n-tabs-tab {
+  transition: color var(--motion-fast), background-color var(--motion-fast);
+}
+
+body .n-tabs .n-tabs-tab:hover {
+  color: var(--moon);
+}
+
+body .n-tabs .n-tabs-bar {
+  height: 2px;
+  border-radius: 0;
+  background: linear-gradient(90deg, var(--dendro), var(--jade)) !important;
+  box-shadow: 0 0 8px rgba(145, 232, 102, 0.26);
+}
+
+body .n-radio-group {
+  padding: 2px;
+  border: 1px solid var(--line-soft);
+  border-radius: 8px;
+  background: rgba(5, 14, 10, 0.34);
+}
+
+body .n-radio-button {
+  border-radius: 5px;
+  transition: background-color var(--motion-fast), color var(--motion-fast), box-shadow var(--motion-fast), transform var(--motion-fast);
+}
+
+body .n-radio-button:not(.n-radio-button--disabled):active {
+  transform: translateY(1px);
+}
+
+body .n-radio-button.n-radio-button--checked {
+  background: rgba(145, 232, 102, 0.15);
+  box-shadow: inset 0 0 0 1px rgba(145, 232, 102, 0.24), 0 3px 10px rgba(0, 0, 0, 0.18);
+  color: var(--dendro-bright);
+  font-weight: 700;
+}
+
 body .n-modal,
 body .n-dialog {
-  backdrop-filter: blur(20px);
-  -webkit-backdrop-filter: blur(20px);
-  border: 1px solid var(--glass-border, rgba(143, 229, 96, 0.18));
-  border-radius: var(--glass-radius, 16px);
-  box-shadow:
-    inset 0 1px 0 rgba(255, 255, 255, 0.08),
-    0 12px 48px rgba(0, 0, 0, 0.5),
-    0 0 32px rgba(143, 229, 96, 0.06);
+  backdrop-filter: blur(24px) saturate(1.08);
+  -webkit-backdrop-filter: blur(24px) saturate(1.08);
+  border: 1px solid var(--line);
+  border-radius: var(--glass-radius);
+  box-shadow: var(--glass-highlight), var(--shadow-lg);
 }
+
 body .n-modal-mask {
+  background: rgba(2, 8, 5, 0.66);
   backdrop-filter: blur(5px);
   -webkit-backdrop-filter: blur(5px);
 }
+
+body .n-card-header,
+body .n-dialog__title {
+  border-bottom: 1px solid var(--line-soft);
+}
+
 body .n-popconfirm .n-popconfirm__panel,
 body .n-popover:not(.n-popover--raw),
 body .n-dropdown-menu,
 body .n-base-select-menu {
-  border: 1px solid var(--glass-border, rgba(143, 229, 96, 0.18));
-  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.45), 0 0 20px rgba(143, 229, 96, 0.05);
+  border: 1px solid var(--line);
+  border-radius: var(--glass-radius);
+  box-shadow: var(--shadow-lg);
 }
-/* 下拉选项 hover/active 草光 */
+
+body .n-base-select-option,
+body .n-dropdown-option-body {
+  border-radius: 5px;
+}
+
 body .n-base-select-option:hover,
 body .n-dropdown-option:hover {
-  background-color: rgba(143, 229, 96, 0.1);
+  background-color: rgba(145, 232, 102, 0.09);
 }
+
 body .n-base-select-option.n-base-select-option--selected {
-  color: var(--dendro-bright, #b8ff85);
+  color: var(--dendro-bright);
 }
 
-/* ---------- 消息提示：玻璃浮签 ---------- */
 body .n-message {
-  backdrop-filter: blur(16px);
-  -webkit-backdrop-filter: blur(16px);
-  border: 1px solid var(--glass-border, rgba(143, 229, 96, 0.18));
-  border-radius: 12px;
-  box-shadow: 0 6px 24px rgba(0, 0, 0, 0.42);
+  border: 1px solid var(--line);
+  border-radius: var(--glass-radius);
+  background: rgba(11, 25, 18, 0.94);
+  box-shadow: var(--shadow-md);
+  backdrop-filter: blur(18px);
+  -webkit-backdrop-filter: blur(18px);
 }
 
-/* ---------- 加载与空态 ---------- */
 body .n-spin .n-spin-body svg {
-  filter: drop-shadow(0 0 6px rgba(143, 229, 96, 0.5));
-}
-body .n-empty .n-empty__icon {
-  opacity: 0.75;
-  filter: saturate(0.85) drop-shadow(0 0 8px rgba(143, 229, 96, 0.15));
-}
-body .n-empty .n-empty__description {
-  color: var(--moon-dim, rgba(242, 247, 238, 0.7));
+  filter: drop-shadow(0 0 5px rgba(145, 232, 102, 0.36));
 }
 
-/* ---------- 表格行 hover ---------- */
-body .n-data-table .n-data-table-tr:hover .n-data-table-td {
-  background-color: rgba(143, 229, 96, 0.06) !important;
+body .n-empty .n-empty__icon {
+  color: var(--moon-faint);
+  opacity: 0.72;
 }
+
+body .n-empty .n-empty__description {
+  color: var(--moon-dim);
+}
+
+body .n-data-table {
+  border-radius: var(--glass-radius);
+  overflow: hidden;
+}
+
+body .n-data-table .n-data-table-th {
+  color: var(--moon-dim);
+  font-size: 12px;
+  font-weight: 700;
+}
+
+body .n-data-table .n-data-table-tr:hover .n-data-table-td {
+  background-color: rgba(145, 232, 102, 0.055) !important;
+}
+
 body .n-data-table .n-data-table-td,
 body .n-data-table .n-data-table-th {
-  transition: background-color 0.25s;
+  transition: background-color var(--motion-fast);
 }
 
-/* ---------- 复选框：选中辉光 ---------- */
 body .n-checkbox.n-checkbox--checked .n-checkbox-box {
-  box-shadow: 0 0 10px rgba(143, 229, 96, 0.35);
+  box-shadow: 0 0 0 3px rgba(145, 232, 102, 0.1);
 }
 
-/* ---------- 全局视图标题：嫩芽亮光（保留 emoji 彩色） ---------- */
-body .view-title {
-  color: var(--dendro-bright, #b8ff85);
-  text-shadow: 0 0 18px rgba(143, 229, 96, 0.22);
-  letter-spacing: 0.5px;
+body .n-progress-graph-line-fill {
+  background: linear-gradient(90deg, var(--dendro), var(--jade)) !important;
 }
 
-/* ---------- 仪表盘大数字：渐变曦光 ---------- */
+body .view-title,
+body .view-header h2 {
+  color: var(--moon);
+  font-weight: 700;
+  letter-spacing: 0;
+  text-shadow: 0 1px 16px rgba(0, 0, 0, 0.4);
+  background-image: linear-gradient(90deg, var(--dendro), var(--jade));
+  background-position: left bottom;
+  background-repeat: no-repeat;
+  background-size: 36px 2px;
+  padding-bottom: 9px;
+}
+
 body .stat-num {
-  background: var(--gradient-dendro, linear-gradient(135deg, #b8ff85, #8fe560 45%, #4fd6a5));
-  -webkit-background-clip: text;
-  background-clip: text;
-  -webkit-text-fill-color: transparent;
-  color: transparent;
-  filter: drop-shadow(0 0 12px rgba(143, 229, 96, 0.28));
+  color: var(--moon);
+  filter: none;
+  -webkit-text-fill-color: currentColor;
 }
 
-/* ---------- 玻璃面板内的可交互卡片：hover 微浮 ---------- */
 body .stat-card,
 body .m-item,
 body .greeting-card,
-body .chart-box {
-  transition:
-    transform 0.25s var(--ease-spring, cubic-bezier(0.22, 1.4, 0.36, 1)),
-    border-color 0.3s,
-    box-shadow 0.3s;
+body .chart-box,
+body .provider-row,
+body .probe-card {
+  transition: transform var(--motion-normal) var(--ease-out), border-color var(--motion-normal), background-color var(--motion-normal), box-shadow var(--motion-normal);
 }
+
 body .stat-card:hover,
-body .greeting-card:hover {
+body .greeting-card:hover,
+body .probe-card:hover {
   transform: translateY(-2px);
-  box-shadow:
-    inset 0 1px 0 rgba(255, 255, 255, 0.08),
-    0 0 24px rgba(143, 229, 96, 0.16),
-    0 4px 16px rgba(0, 0, 0, 0.35);
-}
-body .m-item:hover {
-  background: rgba(24, 46, 32, 0.55);
-  transform: translateY(-1px);
+  border-color: rgba(145, 232, 102, 0.24);
+  box-shadow: var(--glass-highlight), 0 12px 28px rgba(0, 0, 0, 0.25);
 }
 
-/* ---------- 减弱动态偏好：交互动画降级 ---------- */
-@media (prefers-reduced-motion: reduce) {
-  body .n-button,
-  body .n-tag,
-  body .n-tabs .n-tabs-tab,
-  body .stat-card,
-  body .m-item,
-  body .greeting-card,
-  body .chart-box {
-    transition-duration: 0.01s;
-  }
-  body .n-button:not(:disabled):not(.n-button--disabled-type):hover,
-  body .stat-card:hover,
-  body .m-item:hover,
-  body .greeting-card:hover {
-    transform: none;
-  }
+body .m-item:hover,
+body .provider-row:hover {
+  border-color: rgba(145, 232, 102, 0.2);
+  background: rgba(25, 46, 35, 0.62);
 }
 
-/* ---------- 线稿图标对齐辅助：emoji → SumeruIcon 替换后的行内排版 ---------- */
+body table:not(.n-data-table-table) {
+  border-spacing: 0;
+}
+
+body table:not(.n-data-table-table) thead {
+  background: rgba(7, 17, 12, 0.34);
+}
+
+body table:not(.n-data-table-table) th {
+  color: var(--moon-dim);
+  font-size: 12px;
+  font-weight: 700;
+}
+
+body table:not(.n-data-table-table) tbody tr {
+  transition: background-color var(--motion-fast);
+}
+
+body table:not(.n-data-table-table) tbody tr:hover {
+  background: rgba(145, 232, 102, 0.045);
+}
+
 .inline-ic {
   display: inline-flex;
   align-items: center;
   gap: 4px;
   vertical-align: middle;
 }
-.inline-ic svg { color: inherit; }
+
+.inline-ic svg,
+h2.view-title-icon svg {
+  color: inherit;
+}
 
 h2.view-title-icon {
   display: inline-flex;
   align-items: center;
   gap: 8px;
 }
-h2.view-title-icon svg { color: var(--dendro, #8fe560); }
 
-/* n-button 内的 SumeruIcon 与文字基线对齐 */
+/* Explicit page layout primitives. Views opt in to avoid broad class-name collisions. */
+.page-header {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+  margin-bottom: 16px;
+}
+
+.page-actions,
+.action-row {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.table-scroll {
+  width: 100%;
+  overflow-x: auto;
+  overscroll-behavior-inline: contain;
+  scrollbar-gutter: stable;
+}
+
+.table-scroll > table {
+  min-width: 640px;
+}
+
+.content-empty {
+  display: grid;
+  min-height: 132px;
+  place-items: center;
+  padding: 24px;
+  color: var(--moon-dim);
+  font-size: 13px;
+  text-align: center;
+}
+
+.truncate {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.break-anywhere {
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+
+body .tilt-wrap,
+body .tilt3d,
+body [class*='tilt-'] {
+  min-width: 0;
+}
+
+@media (max-width: 768px) {
+  .page-header {
+    align-items: flex-start;
+    flex-direction: column;
+    gap: 10px;
+  }
+
+  .page-actions,
+  .action-row {
+    width: 100%;
+    justify-content: flex-start;
+  }
+
+  .page-actions > .n-button,
+  .action-row > .n-button {
+    flex: 1 1 auto;
+  }
+}
+
 .n-button .n-button__content svg,
 .dbtn .l-body svg {
   vertical-align: middle;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  body .n-button,
+  body .n-slider .n-slider-handle,
+  body .stat-card,
+  body .m-item,
+  body .greeting-card,
+  body .chart-box,
+  body .provider-row,
+  body .probe-card {
+    transition-duration: 0.01s;
+  }
+
+  body .n-button:not(:disabled):not(.n-button--disabled-type):hover,
+  body .stat-card:hover,
+  body .m-item:hover,
+  body .greeting-card:hover,
+  body .provider-row:hover,
+  body .probe-card:hover {
+    transform: none;
+  }
 }

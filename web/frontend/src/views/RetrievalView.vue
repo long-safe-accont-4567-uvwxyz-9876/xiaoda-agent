@@ -6,6 +6,7 @@ import {
 } from 'naive-ui'
 import { get, put, post } from '../api'
 import { t } from '../i18n'
+import ViewTitleIcon from '../components/fx/ViewTitleIcon.vue'
 
 const message = useMessage()
 const loading = ref(false)
@@ -18,7 +19,16 @@ const defaults = ref<Record<string, boolean | number>>({})
 const testQuery = ref('')
 const testTopK = ref(5)
 const testExpect = ref('')
-const testResults = ref<any[]>([])
+interface RetrievalTestItem {
+  id?: string | null
+  summary: string
+  score: number
+  importance: number
+  emotion_label: string
+  source: string
+  matched?: boolean
+}
+const testResults = ref<RetrievalTestItem[]>([])
 const testCount = ref(0)
 const testMetrics = ref<Record<string, any> | null>(null)
 const testError = ref('')
@@ -81,7 +91,7 @@ onMounted(async () => {
 async function loadConfig() {
   loading.value = true
   try {
-    const data = await get<any>('/retrieval/config')
+    const data = await get<Record<string, boolean | number> & { _defaults?: Record<string, boolean | number> }>('/retrieval/config')
     Object.keys(data).forEach(k => {
       if (k !== '_defaults') config[k] = data[k]
     })
@@ -96,11 +106,11 @@ async function loadConfig() {
 async function saveConfig() {
   saving.value = true
   try {
-    const updates: Record<string, any> = {}
+    const updates: Record<string, boolean | number> = {}
     for (const k of Object.keys(defaults.value)) {
       if (config[k] !== undefined) updates[k] = config[k]
     }
-    const data = await put('/retrieval/config', { updates })
+    const data = await put<{ current: Record<string, boolean | number> }>('/retrieval/config', { updates })
     Object.keys(data.current || {}).forEach(k => {
       if (k !== '_defaults') config[k] = data.current[k]
     })
@@ -114,7 +124,7 @@ async function saveConfig() {
 
 async function resetConfig() {
   try {
-    const data = await post('/retrieval/config/reset', {})
+    const data = await post<{ current: Record<string, boolean | number>; reset_keys: string[] }>('/retrieval/config/reset', {})
     Object.keys(data.current || {}).forEach(k => {
       if (k !== '_defaults') config[k] = data.current[k]
     })
@@ -134,7 +144,13 @@ async function runTest() {
   testResults.value = []
   testMetrics.value = null
   try {
-    const data = await post('/retrieval/test', {
+    const data = await post<{
+      query: string
+      results: RetrievalTestItem[]
+      count: number
+      metrics?: Record<string, number> | null
+      error?: string
+    }>('/retrieval/test', {
       query: testQuery.value,
       top_k: testTopK.value,
       expect_keywords: splitKeywords(testExpect.value),
@@ -166,7 +182,12 @@ async function runEval() {
   }
   evaluating.value = true
   try {
-    const data = await post('/retrieval/evaluate', { cases, top_k: testTopK.value })
+    const data = await post<{
+      top_k: number
+      cases: Array<Record<string, unknown>>
+      cases_total?: number
+      aggregate?: { recall_macro: number; precision_macro: number; f1_macro: number; mrr_macro: number; hit_rate: number }
+    }>('/retrieval/evaluate', { cases, top_k: testTopK.value })
     evalReport.value = data
   } catch (e: any) {
     message.error(e.message)
@@ -234,9 +255,9 @@ function isDefault(key: string): boolean {
 
 <template>
   <div class="retrieval-view">
-    <div class="view-header">
-      <h2 class="view-title">{{ t('retrieval.title') }}</h2>
-      <div class="header-actions">
+    <div class="page-header">
+      <h2 class="view-title view-title-icon"><ViewTitleIcon name="retrieval" /> {{ t('retrieval.title') }}</h2>
+      <div class="page-actions">
         <n-button tertiary @click="exportConfig">{{ t('retrieval.exportConfig') }}</n-button>
         <n-button :disabled="!isModified" type="primary" :loading="saving" @click="saveConfig">
           {{ t('retrieval.save') }}
@@ -299,7 +320,7 @@ function isDefault(key: string): boolean {
                 @update:value="(v: number | null) => { if (v !== null) config[item.key] = v }"
                 :min="item.min" :max="item.max"
                 size="small"
-                style="width: 100%"
+                class="number-input"
               />
               <p class="number-desc">{{ item.desc }}</p>
             </div>
@@ -315,17 +336,17 @@ function isDefault(key: string): boolean {
               <n-input
                 v-model:value="testQuery"
                 :placeholder="t('retrieval.testPlaceholder')"
-                style="flex: 1"
+                class="test-query"
                 @keyup.enter="runTest"
               />
               <n-input-number
                 v-model:value="testTopK"
                 :min="1" :max="20"
                 size="small"
-                style="width: 100px"
+                class="test-top-k"
                 placeholder="Top-K"
               />
-              <n-button type="primary" :loading="testing" @click="runTest">{{ t('retrieval.testBtn') }}</n-button>
+              <n-button class="test-run-button" type="primary" :loading="testing" @click="runTest">{{ t('retrieval.testBtn') }}</n-button>
             </div>
             <n-input
               v-model:value="testExpect"
@@ -478,11 +499,8 @@ function isDefault(key: string): boolean {
   padding: 0 0 24px;
 }
 
-.view-header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  margin-bottom: 16px;
+.page-header .view-title {
+  min-width: 0;
 }
 
 .view-title {
@@ -490,18 +508,14 @@ function isDefault(key: string): boolean {
   margin: 0;
 }
 
-.header-actions {
-  display: flex;
-  gap: 8px;
-}
-
 .config-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+  grid-template-columns: repeat(auto-fill, minmax(min(100%, 280px), 1fr));
   gap: 12px;
 }
 
 .config-card {
+  min-width: 0;
   padding: 14px 16px;
 }
 
@@ -575,11 +589,12 @@ function isDefault(key: string): boolean {
 
 .number-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
+  grid-template-columns: repeat(auto-fill, minmax(min(100%, 240px), 1fr));
   gap: 12px;
 }
 
 .number-card {
+  min-width: 0;
   padding: 12px 14px;
 }
 
@@ -594,6 +609,10 @@ function isDefault(key: string): boolean {
   font-size: 13.5px;
   font-weight: 600;
   color: var(--moon);
+}
+
+.number-input {
+  width: 100%;
 }
 
 .number-desc {
@@ -614,9 +633,26 @@ function isDefault(key: string): boolean {
 }
 
 .test-input-row {
-  display: flex;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 100px max-content;
   gap: 10px;
   align-items: center;
+}
+
+.test-query {
+  min-width: 0;
+  grid-column: 1 / -1;
+}
+
+.test-top-k {
+  width: 100px;
+  grid-column: 2;
+  justify-self: end;
+}
+
+.test-run-button {
+  min-width: max-content;
+  grid-column: 3;
 }
 
 .test-error {
@@ -635,42 +671,64 @@ function isDefault(key: string): boolean {
 }
 
 .result-item {
-  padding: 10px 12px;
-  border-radius: 8px;
-  background: rgba(10, 20, 14, 0.6);
-  border: 1px solid var(--glass-border);
-  margin-bottom: 8px;
+  min-width: 0;
+  padding: 11px 2px;
+  border-bottom: 1px solid var(--glass-border);
+}
+
+.result-item:last-child {
+  border-bottom: 0;
 }
 
 .result-header {
   display: flex;
+  min-width: 0;
   align-items: center;
-  gap: 8px;
+  flex-wrap: wrap;
+  gap: 6px 8px;
   margin-bottom: 6px;
   font-size: 12px;
 }
 
+.result-header :deep(.n-tag) {
+  max-width: 100%;
+}
+
+.result-header :deep(.n-tag__content) {
+  min-width: 0;
+  overflow-wrap: anywhere;
+  white-space: normal;
+}
+
 .result-rank {
+  flex-shrink: 0;
   color: var(--dendro);
   font-weight: 700;
   font-family: 'JetBrains Mono', monospace;
 }
 
 .result-score {
+  min-width: 0;
   color: var(--moon);
   font-family: 'JetBrains Mono', monospace;
+  overflow-wrap: anywhere;
 }
 
 .result-importance {
+  min-width: 0;
   color: var(--moon-dim);
   font-family: 'JetBrains Mono', monospace;
+  overflow-wrap: anywhere;
 }
 
 .result-summary {
+  min-width: 0;
   font-size: 13px;
   color: var(--moon);
   margin: 0;
   line-height: 1.6;
+  overflow-wrap: anywhere;
+  word-break: break-word;
 }
 
 .test-empty {
@@ -686,19 +744,19 @@ function isDefault(key: string): boolean {
 
 .metrics-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
+  grid-template-columns: repeat(auto-fill, minmax(min(100%, 150px), 1fr));
   gap: 8px;
   margin-top: 14px;
 }
 
 .metric-chip {
   display: flex;
+  min-width: 0;
   flex-direction: column;
-  gap: 2px;
+  gap: 3px;
   padding: 8px 10px;
-  border-radius: 8px;
-  background: rgba(10, 20, 14, 0.6);
-  border: 1px solid var(--glass-border);
+  border-left: 2px solid rgba(145, 232, 102, 0.25);
+  background: rgba(255, 255, 255, 0.018);
 }
 
 .metric-label {
@@ -707,14 +765,19 @@ function isDefault(key: string): boolean {
 }
 
 .metric-value {
+  min-width: 0;
   font-size: 14px;
   font-weight: 700;
   color: var(--dendro);
   font-family: 'JetBrains Mono', monospace;
+  line-height: 1.35;
+  overflow-wrap: anywhere;
+  word-break: break-word;
 }
 
 .result-matched {
-  border-color: rgba(102, 187, 106, 0.45);
+  border-left: 2px solid rgba(102, 187, 106, 0.45);
+  padding-left: 10px;
 }
 
 .eval-section {
@@ -732,42 +795,119 @@ function isDefault(key: string): boolean {
 }
 
 .eval-run-row {
+  display: flex;
   margin-top: 10px;
 }
 
 .eval-case {
-  padding: 8px 12px;
-  border-radius: 8px;
-  background: rgba(10, 20, 14, 0.6);
-  border: 1px solid var(--glass-border);
-  margin-bottom: 6px;
+  min-width: 0;
+  padding: 10px 2px;
+  border-bottom: 1px solid var(--glass-border);
+}
+
+.eval-case:last-child {
+  border-bottom: 0;
 }
 
 .eval-case-failed {
-  border-color: rgba(218, 82, 82, 0.45);
+  padding-left: 10px;
+  border-left: 2px solid rgba(218, 82, 82, 0.45);
 }
 
 .eval-case-header {
   display: flex;
+  min-width: 0;
   align-items: center;
   gap: 8px;
   flex-wrap: wrap;
 }
 
+.eval-case-header :deep(.n-tag) {
+  max-width: 100%;
+}
+
+.eval-case-header :deep(.n-tag__content) {
+  min-width: 0;
+  overflow-wrap: anywhere;
+  white-space: normal;
+}
+
 .eval-case-query {
-  font-size: 13px;
+  min-width: min(100%, 180px);
   color: var(--moon);
+  font-size: 13px;
   font-weight: 600;
-  flex: 1;
-  min-width: 120px;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  flex: 1 1 220px;
+  overflow-wrap: anywhere;
+  word-break: break-word;
 }
 
 .eval-case-latency {
+  max-width: 100%;
   font-size: 12px;
   color: var(--moon-dim);
   font-family: 'JetBrains Mono', monospace;
+  overflow-wrap: anywhere;
+}
+
+@media (max-width: 768px) {
+  .retrieval-view :deep(.n-tabs-nav-scroll-content) {
+    min-width: max-content;
+  }
+
+  .page-actions > :deep(.n-button),
+  .page-actions > :deep(.n-popconfirm) {
+    flex: 1 1 140px;
+  }
+
+  .page-actions > :deep(.n-popconfirm) .n-button {
+    width: 100%;
+  }
+
+  .test-section {
+    padding: 16px;
+  }
+}
+
+@media (max-width: 520px) {
+  .page-actions {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 6px;
+  }
+
+  .page-actions > :deep(.n-button),
+  .page-actions > :deep(.n-popconfirm) {
+    min-width: 0;
+    width: 100%;
+    flex-basis: auto;
+  }
+
+  .page-actions :deep(.n-button) {
+    width: 100%;
+    padding-inline: 6px;
+  }
+
+  .test-input-row {
+    grid-template-columns: minmax(0, 1fr) max-content;
+  }
+
+  .test-top-k {
+    width: 100px;
+    min-width: 0;
+    grid-column: 1;
+    justify-self: start;
+  }
+
+  .test-run-button {
+    grid-column: 2;
+    align-self: stretch;
+  }
+
+  .eval-header {
+    align-items: flex-start;
+    flex-direction: column;
+    gap: 8px;
+  }
 }
 </style>

@@ -86,99 +86,108 @@ if (!auth.isLoggedIn) {
 
 <style scoped>
 .app-layout {
-  display: flex;
-  height: 100dvh;
-  width: 100vw;
-  overflow: hidden;
   position: relative;
+  display: flex;
+  width: 100vw;
+  height: 100dvh;
+  overflow: hidden;
+  isolation: isolate;
+  background: var(--forest-deep);
+}
+
+.app-layout::after {
+  content: '';
+  position: fixed;
+  inset: 0;
+  z-index: 0;
+  background-image:
+    linear-gradient(rgba(145, 232, 102, 0.018) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(145, 232, 102, 0.018) 1px, transparent 1px);
+  background-size: 32px 32px;
+  mask-image: linear-gradient(to bottom, rgba(0, 0, 0, 0.46), transparent 72%);
+  pointer-events: none;
 }
 
 .mobile-overlay {
   position: fixed;
   inset: 0;
-  background: rgba(0, 0, 0, 0.45);
-  z-index: var(--z-overlay, 70);
   display: none;
+  z-index: var(--z-overlay);
+  background: rgba(2, 8, 5, 0.68);
+  backdrop-filter: blur(4px);
+  -webkit-backdrop-filter: blur(4px);
 }
 
 .main-area {
-  flex: 1;
-  display: flex;
-  flex-direction: column;
-  overflow: hidden;
-  min-width: 0;
   position: relative;
   z-index: 1;
+  display: flex;
+  flex: 1;
+  min-width: 0;
+  flex-direction: column;
+  overflow: hidden;
 }
 
 .content {
-  flex: 1;
-  overflow: auto;
-  padding: 16px;
   position: relative;
   z-index: 2;
+  flex: 1;
+  overflow: auto;
+  padding: 22px clamp(16px, 2.2vw, 32px) 32px;
+  scroll-padding-top: 20px;
   contain: layout paint;
 }
 
+.content > :deep(*) {
+  width: min(100%, var(--content-max-width));
+  margin-inline: auto;
+}
+
 @media (max-width: 768px) {
-  .content { padding: 8px; }
-  .mobile-overlay { display: block; }
+  .content {
+    padding: 12px 10px 20px;
+  }
+
+  .mobile-overlay {
+    display: block;
+  }
 }
 </style>
 
 <style>
-/* 页面间 3D 叶片翻转转场 · v2（须全局：transition 类挂在子组件根元素上） */
+/* Fast page transition with no overlapping route surfaces. */
 .leaf-flip-enter-active {
-  transition:
-    transform 0.42s var(--ease-spring, cubic-bezier(0.22, 1.4, 0.36, 1)),
-    opacity 0.28s var(--ease-smooth),
-    filter 0.36s var(--ease-smooth);
-  transform-style: preserve-3d;
-  will-change: transform, opacity, filter;
+  transition: opacity 0.14s var(--ease-smooth), transform 0.14s var(--ease-out);
 }
+
 .leaf-flip-leave-active {
-  transition:
-    transform 0.2s cubic-bezier(0.5, 0, 0.75, 0),
-    opacity 0.18s var(--ease-smooth),
-    filter 0.18s var(--ease-smooth);
-  transform-style: preserve-3d;
-  will-change: transform, opacity, filter;
+  transition: opacity 0.1s var(--ease-smooth), transform 0.1s var(--ease-out);
+  pointer-events: none;
 }
+
 .leaf-flip-enter-from {
   opacity: 0;
-  transform: perspective(1200px) rotateY(8deg) translateX(30px) scale(0.982);
-  filter: blur(6px);
+  transform: translateY(5px);
 }
+
 .leaf-flip-leave-to {
   opacity: 0;
-  transform: perspective(1200px) rotateY(-6deg) translateX(-24px) scale(0.99);
-  filter: blur(3px);
+  transform: translateY(-3px);
 }
 
-/* 级联入场：新页面的直接子元素依次浮现（新叶抽枝） */
-.leaf-flip-enter-active > * {
-  animation: leaf-item-in 0.5s var(--ease-spring, cubic-bezier(0.22, 1.4, 0.36, 1)) backwards;
-}
-.leaf-flip-enter-active > *:nth-child(1) { animation-delay: 0.04s; }
-.leaf-flip-enter-active > *:nth-child(2) { animation-delay: 0.1s; }
-.leaf-flip-enter-active > *:nth-child(3) { animation-delay: 0.16s; }
-.leaf-flip-enter-active > *:nth-child(4) { animation-delay: 0.22s; }
-.leaf-flip-enter-active > *:nth-child(5) { animation-delay: 0.28s; }
-.leaf-flip-enter-active > *:nth-child(n+6) { animation-delay: 0.34s; }
-@keyframes leaf-item-in {
-  from { opacity: 0; transform: translateY(14px) scale(0.99); }
-  to   { opacity: 1; transform: translateY(0) scale(1); }
-}
-
-/* 内容区滚动丝滑 */
 @media (prefers-reduced-motion: no-preference) {
   .content { scroll-behavior: smooth; }
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .leaf-flip-enter-from, .leaf-flip-leave-to { transform: none; filter: none; }
-  .leaf-flip-enter-active > * { animation: none; }
+  .leaf-flip-enter-active,
+  .leaf-flip-leave-active {
+    transition: none;
+  }
+
+  .leaf-flip-enter-from,
+  .leaf-flip-leave-to {
+    transform: none;
+  }
 }
-body.low-gpu .leaf-flip-enter-from,
-body.low-gpu .leaf-flip-leave-to { filter: none; }
 </style>

@@ -121,62 +121,77 @@ function onLeave() {
 
 <style scoped>
 .sidebar {
+  position: relative;
+  z-index: var(--z-sidebar);
   width: var(--sidebar-width);
   height: 100dvh;
-  background: rgba(15, 31, 23, 0.7);
-  backdrop-filter: blur(10px);
-  border-right: 1px solid var(--glass-border);
-  transition: width 0.3s cubic-bezier(0.4, 0, 0.2, 1);
   overflow: hidden;
   flex-shrink: 0;
-  z-index: 10;
+  border-right: 1px solid var(--line);
+  background: linear-gradient(180deg, rgba(9, 21, 15, 0.94), rgba(7, 17, 12, 0.88));
+  box-shadow: 10px 0 34px rgba(0, 0, 0, 0.18);
+  backdrop-filter: blur(18px) saturate(1.08);
+  -webkit-backdrop-filter: blur(18px) saturate(1.08);
+  transition: width var(--motion-normal) var(--ease-out), box-shadow var(--motion-normal);
+}
+
+.sidebar::after {
+  content: '';
+  position: absolute;
+  inset: 0 0 0 auto;
+  width: 1px;
+  background: linear-gradient(180deg, transparent 4%, rgba(145, 232, 102, 0.24) 28%, rgba(85, 217, 178, 0.13) 70%, transparent 96%);
+  pointer-events: none;
 }
 
 .sidebar.expanded {
   width: var(--sidebar-expanded);
-  animation: door-open 0.3s ease-out;
+  box-shadow: 18px 0 48px rgba(0, 0, 0, 0.26);
 }
 
-@keyframes door-open {
-  from { transform: perspective(800px) rotateY(4deg); }
-  to { transform: perspective(800px) rotateY(0); }
-}
-
-/* 触屏（粗指针）不应触发 hover 展开；仅精细指针设备允许 */
 @media (hover: hover) and (pointer: fine) {
-  .sidebar { transition: width 0.3s cubic-bezier(0.4, 0, 0.2, 1); }
+  .sidebar { transition: width var(--motion-normal) var(--ease-out), box-shadow var(--motion-normal); }
 }
 
 .mobile-close {
   position: absolute;
-  top: 12px;
+  top: 14px;
   right: 12px;
+  display: grid;
   width: 32px;
   height: 32px;
-  border: 1px solid var(--glass-border);
-  border-radius: 8px;
-  background: rgba(15, 31, 23, 0.6);
-  color: var(--moon);
+  place-items: center;
+  border: 1px solid var(--line);
+  border-radius: var(--control-radius);
+  background: rgba(16, 34, 25, 0.72);
+  color: var(--moon-dim);
   cursor: pointer;
-  font-size: 15px;
+  font-size: 14px;
+  transition: color var(--motion-fast), background-color var(--motion-fast), border-color var(--motion-fast);
+}
+
+.mobile-close:hover {
+  border-color: var(--line-strong);
+  background: rgba(28, 50, 38, 0.82);
+  color: var(--moon);
 }
 
 .sidebar-inner {
-  display: flex;
-  flex-direction: column;
-  height: 100%;
-  padding: 12px 0;
   position: relative;
+  display: flex;
+  height: 100%;
+  flex-direction: column;
+  padding: 12px 0;
 }
 
 .sidebar-logo {
   display: flex;
+  min-height: 54px;
   align-items: center;
-  gap: 10px;
-  padding: 8px 16px 20px;
-  border-bottom: 1px solid var(--glass-border);
-  margin-bottom: 12px;
-  min-height: 52px;
+  gap: 11px;
+  margin: 0 9px 10px;
+  padding: 7px 8px 14px;
+  border-bottom: 1px solid var(--line-soft);
 }
 
 .logo-icon { font-size: 24px; flex-shrink: 0; }
@@ -194,69 +209,88 @@ function onLeave() {
 
 .nav-items {
   display: flex;
+  min-height: 0;
+  flex: 1;
   flex-direction: column;
-  gap: 2px;
-  padding: 0 8px;
+  gap: 3px;
+  padding: 2px 9px;
   overflow-y: auto;
+  overscroll-behavior: contain;
   -webkit-overflow-scrolling: touch;
 }
 
 .nav-item {
+  position: relative;
   display: flex;
+  min-height: 40px;
   align-items: center;
-  gap: 12px;
-  padding: 9px 12px;
-  border-radius: 10px;
+  gap: 11px;
+  padding: 8px 10px;
+  border: 1px solid transparent;
+  border-radius: var(--control-radius);
   color: var(--moon-dim);
   text-decoration: none;
-  transition: background 0.25s, color 0.25s, transform 0.25s var(--ease-spring, var(--ease-out)), box-shadow 0.25s;
   white-space: nowrap;
-  position: relative;
+  transition: background-color var(--motion-fast), border-color var(--motion-fast), color var(--motion-fast), transform var(--motion-fast) var(--ease-out);
 }
 
 .nav-item:hover {
-  background: rgba(127, 214, 80, 0.1);
+  border-color: var(--line-soft);
+  background: rgba(145, 232, 102, 0.065);
   color: var(--moon);
-  transform: translateX(3px);
+  transform: translateX(2px);
+}
+
+.nav-item:focus-visible {
+  outline: 2px solid var(--dendro-bright);
+  outline-offset: -1px;
 }
 
 .nav-item:active {
-  transform: translateX(3px) scale(0.97);
-  transition-duration: 0.08s;
+  transform: translateX(1px) scale(0.985);
+  transition-duration: 70ms;
 }
 
 .nav-item:hover .nav-icon {
-  transform: rotate(-8deg) scale(1.12);
+  color: var(--dendro-bright);
 }
 
 .nav-icon {
-  transition: transform 0.25s var(--ease-spring, var(--ease-out));
+  color: currentColor;
+  transition: color var(--motion-fast);
 }
 
 .nav-item.router-link-exact-active {
-  background: linear-gradient(90deg, rgba(127, 214, 80, 0.22), rgba(127, 214, 80, 0.06));
-  color: var(--dendro);
-  box-shadow: inset 0 0 16px rgba(127, 214, 80, 0.06), 0 0 12px rgba(127, 214, 80, 0.08);
+  border-color: rgba(145, 232, 102, 0.18);
+  background: linear-gradient(90deg, rgba(145, 232, 102, 0.14), rgba(85, 217, 178, 0.045));
+  color: var(--dendro-bright);
 }
 
 .nav-item.router-link-exact-active .nav-glow {
   position: absolute;
-  left: 0; top: 20%; bottom: 20%;
-  width: 3px;
-  border-radius: 2px;
-  background: linear-gradient(180deg, var(--dendro-bright, #b8ff85), var(--jade, #4fd6a5));
-  box-shadow: 0 0 10px var(--dendro);
+  top: 8px;
+  bottom: 8px;
+  left: -1px;
+  width: 2px;
+  border-radius: 0 2px 2px 0;
+  background: linear-gradient(180deg, var(--dendro-bright), var(--jade));
+  box-shadow: 0 0 9px rgba(145, 232, 102, 0.52);
 }
 
 .nav-icon {
-  flex-shrink: 0;
-  width: 28px;
   display: flex;
+  width: 28px;
+  flex-shrink: 0;
   align-items: center;
   justify-content: center;
 }
 
-.nav-label { font-size: 14px; }
+.nav-label {
+  overflow: hidden;
+  font-size: 13px;
+  font-weight: 500;
+  text-overflow: ellipsis;
+}
 
 .sidebar-foot {
   margin-top: auto;
@@ -327,18 +361,22 @@ function onLeave() {
 @media (max-width: 768px) {
   .sidebar {
     position: fixed;
-    left: 0;
     top: 0;
-    width: var(--sidebar-mobile-width, min(82vw, 320px));
+    left: 0;
+    z-index: var(--z-sidebar);
+    width: var(--sidebar-mobile-width);
+    border-right-color: rgba(145, 232, 102, 0.22);
     transform: translateX(-105%);
-    transition: transform 0.25s var(--ease-out);
-    /* 移动端侧栏在 overlay 之上：overlay z-index=70 遮住侧栏会导致点击导航项时
-       事件打到 overlay 而非 router-link，表现为"能点但不导航"。 */
-    z-index: 80;
+    transition: transform var(--motion-normal) var(--ease-out);
   }
+
   .sidebar.mobile-open {
+    width: var(--sidebar-mobile-width);
     transform: translateX(0);
-    width: var(--sidebar-mobile-width, min(82vw, 320px));
+  }
+
+  .nav-item {
+    min-height: 44px;
   }
 }
 

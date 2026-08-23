@@ -1,8 +1,12 @@
 <script setup lang="ts">
 import { ref, onMounted, onBeforeUnmount, nextTick } from 'vue'
-import SumeruIcon from '../components/fx/SumeruIcon.vue'
+import ViewTitleIcon from '../components/fx/ViewTitleIcon.vue'
 import { useMessage, NButton } from 'naive-ui'
 import { get, put } from '../api'
+import type {
+  AuditLogRow, MetricsSnapshot, PermissionModeInfo, SystemConfig,
+  TodaySummary, UsageSummary,
+} from '../api/types'
 import Tilt3D from '../components/fx/Tilt3D.vue'
 import * as echarts from 'echarts/core'
 import { LineChart, BarChart } from 'echarts/charts'
@@ -21,24 +25,41 @@ const audit = ref<any[]>([])
 const permissionMode = ref('')
 const costChartEl = ref<HTMLElement | null>(null)
 const toolChartEl = ref<HTMLElement | null>(null)
+const costChartEmpty = ref(true)
+const toolChartEmpty = ref(true)
 let timer: ReturnType<typeof setInterval> | null = null
 let costChart: echarts.ECharts | null = null
 let toolChart: echarts.ECharts | null = null
+let chartResizeObserver: ResizeObserver | null = null
 
 onMounted(async () => {
+  observeChartSizes()
   await loadMonitorConfig()
   await loadAll()
 })
 
 onBeforeUnmount(() => {
   stopPolling()
+  chartResizeObserver?.disconnect(); chartResizeObserver = null
   costChart?.dispose(); costChart = null
   toolChart?.dispose(); toolChart = null
 })
 
+function observeChartSizes() {
+  if (typeof ResizeObserver === 'undefined') return
+  chartResizeObserver = new ResizeObserver((entries) => {
+    for (const entry of entries) {
+      if (entry.target === costChartEl.value) costChart?.resize()
+      if (entry.target === toolChartEl.value) toolChart?.resize()
+    }
+  })
+  if (costChartEl.value) chartResizeObserver.observe(costChartEl.value)
+  if (toolChartEl.value) chartResizeObserver.observe(toolChartEl.value)
+}
+
 async function loadMonitorConfig() {
   try {
-    const cfg = await get('/system/config')
+    const cfg = await get<SystemConfig>('/system/config')
     monitorEnabled.value = !!cfg?.dashboard?.system_monitor_enabled
   } catch { /* */ }
 }
@@ -73,10 +94,10 @@ async function disableMonitor() {
 async function loadAll() {
   try {
     const [today, usage, auditRows, perm] = await Promise.all([
-      get('/insight/today'),
-      get('/models/usage?days=7'),
-      get<any[]>('/system/audit?limit=10'),
-      get('/system/permission-mode'),
+      get<TodaySummary>('/insight/today'),
+      get<UsageSummary>('/models/usage?days=7'),
+      get<AuditLogRow[]>('/system/audit?limit=10'),
+      get<PermissionModeInfo>('/system/permission-mode'),
     ])
     stats.value.messages = today.stats.conversations
     stats.value.toolCalls = today.stats.tool_calls
@@ -84,8 +105,8 @@ async function loadAll() {
     permissionMode.value = perm.mode
     const todayStr = new Date().toLocaleDateString('sv-SE')
     stats.value.cost = usage.series
-      .filter((s: any) => s.day === todayStr)
-      .reduce((sum: number, s: any) => sum + (s.cost_usd || 0), 0)
+      .filter(s => s.day === todayStr)
+      .reduce((sum, s) => sum + (s.cost_usd || 0), 0)
     audit.value = auditRows
     await nextTick()
     renderCostChart(usage.series)
@@ -108,6 +129,7 @@ function renderCostChart(series: any[]) {
   const days = [...new Set(series.map(s => s.day))].sort()
   const data = days.map(d => series.filter(s => s.day === d)
     .reduce((sum, s) => sum + (s.cost_usd || 0), 0))
+  costChartEmpty.value = days.length === 0
   if (!costChart) costChart = echarts.init(costChartEl.value)
   costChart.setOption({
     tooltip: { trigger: 'axis' },
@@ -122,7 +144,7 @@ function renderCostChart(series: any[]) {
 async function renderToolChart() {
   if (!toolChartEl.value) return
   try {
-    const snap = await get('/system/metrics')
+    const snap = await get<MetricsSnapshot>('/system/metrics')
     const counters = snap.counters || snap
     const toolCounts: Array<[string, number]> = []
     for (const [k, v] of Object.entries<any>(counters)) {
@@ -131,6 +153,7 @@ async function renderToolChart() {
     }
     toolCounts.sort((a, b) => b[1] - a[1])
     const top = toolCounts.slice(0, 10).reverse()
+    toolChartEmpty.value = top.length === 0
     if (!toolChart) toolChart = echarts.init(toolChartEl.value)
     toolChart.setOption({
       tooltip: {},
@@ -177,7 +200,7 @@ function diskLabel(d: any): string {
 
 <template>
   <div class="dashboard-view">
-    <h2 class="view-title view-title-icon"><SumeruIcon name="chart" :size="20" variant="duo" tone="view" interactive /> {{ t('dashboardView.title') }}</h2>
+    <h2 class="view-title view-title-icon"><ViewTitleIcon name="dashboard" /> {{ t('dashboardView.title') }}</h2>
 
     <div v-if="permissionMode === 'bypass'" class="bypass-warning">
       {{ t('dashboardView.bypassWarning') }}
@@ -200,19 +223,25 @@ function diskLabel(d: any): string {
 
     <div class="chart-row">
       <div class="glass-panel chart-box">
-        <h4>{{ t('dashboardView.cost7d') }}</h4>
-        <div ref="costChartEl" class="chart"></div>
+        <h3>{{ t('dashboardView.cost7d') }}</h3>
+        <div class="chart-stage">
+          <div ref="costChartEl" class="chart"></div>
+          <div v-if="costChartEmpty" class="chart-empty">{{ t('dashboardView.empty') }}</div>
+        </div>
       </div>
       <div class="glass-panel chart-box">
-        <h4>{{ t('dashboardView.toolTop10') }}</h4>
-        <div ref="toolChartEl" class="chart"></div>
+        <h3>{{ t('dashboardView.toolTop10') }}</h3>
+        <div class="chart-stage">
+          <div ref="toolChartEl" class="chart"></div>
+          <div v-if="toolChartEmpty" class="chart-empty">{{ t('dashboardView.empty') }}</div>
+        </div>
       </div>
     </div>
 
     <div class="chart-row">
       <div class="glass-panel chart-box monitor">
         <div class="section-header">
-          <h4>{{ platformLabel[system.platform] || system.platform || t('dashboardView.system') }} {{ t('dashboardView.systemMonitor') }} <span v-if="monitorEnabled" class="hint">{{ t('dashboardView.polling') }}</span></h4>
+          <h3>{{ platformLabel[system.platform] || system.platform || t('dashboardView.system') }} {{ t('dashboardView.systemMonitor') }} <span v-if="monitorEnabled" class="hint">{{ t('dashboardView.polling') }}</span></h3>
           <NButton v-if="!monitorEnabled" size="small" type="primary" @click="enableMonitor">{{ t('dashboardView.enableMonitor') }}</NButton>
           <NButton v-else size="small" @click="disableMonitor">{{ t('dashboardView.disableMonitor') }}</NButton>
         </div>
@@ -290,7 +319,7 @@ function diskLabel(d: any): string {
         </div>
       </div>
       <div class="glass-panel chart-box">
-        <h4>{{ t('dashboardView.recentAudit') }}</h4>
+        <h3>{{ t('dashboardView.recentAudit') }}</h3>
         <div class="audit-list">
           <div v-for="a in audit" :key="a.id" class="audit-row">
             <span class="a-time mono">{{ new Date(a.timestamp * 1000).toLocaleTimeString('zh-CN') }}</span>
@@ -305,6 +334,7 @@ function diskLabel(d: any): string {
 </template>
 
 <style scoped>
+.dashboard-view { min-width: 0; max-width: 100%; }
 .view-title { font-family: 'Noto Serif SC', serif; margin-bottom: 14px; }
 
 .bypass-warning {
@@ -337,14 +367,24 @@ function diskLabel(d: any): string {
 }
 .stat-label { font-size: 12px; color: var(--moon-dim); }
 
-.chart-row { display: flex; gap: 14px; flex-wrap: wrap; margin-bottom: 14px; }
-.chart-box { flex: 1; min-width: 300px; padding: 14px 16px; }
-.chart-box h4 { font-size: 13px; color: var(--dendro); margin-bottom: 10px; }
+.chart-row { display: flex; gap: 14px; flex-wrap: wrap; margin-bottom: 14px; min-width: 0; }
+.chart-box { flex: 1 1 300px; min-width: 0; padding: 14px 16px; }
+.chart-box h3 { font-size: 13px; color: var(--dendro); margin: 0 0 10px; }
 .hint { font-size: 11px; color: var(--moon-dim); font-weight: 400; }
-.chart { height: 220px; }
+.chart-stage { position: relative; min-width: 0; }
+.chart { width: 100%; height: 220px; min-width: 0; }
+.chart-empty {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  color: var(--moon-dim);
+  font-size: 12px;
+  pointer-events: none;
+}
 
-.section-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px; }
-.section-header h4 { margin-bottom: 0; }
+.section-header { display: flex; justify-content: space-between; align-items: center; gap: 10px; margin-bottom: 10px; }
+.section-header h3 { margin-bottom: 0; min-width: 0; overflow-wrap: anywhere; }
 .monitor-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
 .m-item-wide { grid-column: 1 / -1; }
 .monitor-disabled-hint { color: var(--moon-dim); font-size: 12px; padding: 24px 10px; text-align: center; }
@@ -352,9 +392,10 @@ function diskLabel(d: any): string {
   display: flex; flex-direction: column; gap: 2px;
   padding: 8px 10px; border-radius: 8px;
   background: rgba(15, 31, 23, 0.4);
+  min-width: 0;
 }
 .m-label { font-size: 11px; color: var(--moon-dim); }
-.m-value { font-size: 14px; }
+.m-value { font-size: 14px; min-width: 0; overflow-wrap: anywhere; }
 .m-sub { font-size: 11px; color: var(--moon-dim); }
 .m-value.hot { color: var(--alert); }
 .m-value.warm { color: #e8a838; }
@@ -372,11 +413,11 @@ function diskLabel(d: any): string {
 }
 .m-bar-fill.warn { background: #e8a838; }
 
-.disk-list { display: flex; flex-direction: column; gap: 6px; margin-top: 4px; }
-.disk-row { display: flex; align-items: center; gap: 8px; }
-.disk-name { font-size: 12px; min-width: 50px; color: var(--wisdom); }
-.disk-row .m-bar { flex: 1; margin: 0; }
-.disk-info { font-size: 11px; color: var(--moon-dim); white-space: nowrap; }
+.disk-list { display: flex; flex-direction: column; gap: 6px; margin-top: 4px; min-width: 0; }
+.disk-row { display: grid; grid-template-columns: minmax(50px, auto) minmax(80px, 1fr) auto; align-items: center; gap: 8px; min-width: 0; }
+.disk-name { font-size: 12px; min-width: 0; color: var(--wisdom); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.disk-row .m-bar { min-width: 0; margin: 0; }
+.disk-info { font-size: 11px; color: var(--moon-dim); min-width: 0; overflow-wrap: anywhere; text-align: right; }
 
 .temp-list { display: flex; flex-wrap: wrap; gap: 4px 12px; margin-top: 4px; }
 .temp-row { display: flex; align-items: center; gap: 4px; }
@@ -385,12 +426,48 @@ function diskLabel(d: any): string {
 
 .audit-list { display: flex; flex-direction: column; gap: 4px; max-height: 240px; overflow-y: auto; }
 .audit-row {
-  display: flex; gap: 8px; font-size: 12px;
-  padding: 3px 0; border-bottom: 1px solid rgba(127, 214, 80, 0.05);
+  display: flex; flex-wrap: wrap; gap: 4px 8px; font-size: 12px;
+  padding: 5px 0; border-bottom: 1px solid rgba(127, 214, 80, 0.05);
+  min-width: 0;
 }
 .a-time { color: var(--moon-dim); flex-shrink: 0; font-size: 11px; }
-.a-type { color: var(--wisdom); flex-shrink: 0; }
-.a-detail { color: var(--moon-dim); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.a-type { color: var(--wisdom); min-width: 0; overflow-wrap: anywhere; }
+.a-detail {
+  flex: 1 1 160px;
+  min-width: 0;
+  color: var(--moon-dim);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
 
 .empty-hint { color: var(--moon-dim); font-size: 12px; }
+
+@media (max-width: 720px) {
+  .stat-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .chart-row { display: grid; grid-template-columns: minmax(0, 1fr); }
+  .chart-box { width: 100%; }
+  .monitor-grid { grid-template-columns: minmax(0, 1fr); }
+  .m-item-wide { grid-column: auto; }
+  .disk-row {
+    grid-template-columns: minmax(0, 1fr) auto;
+    gap: 5px 8px;
+  }
+  .disk-name { overflow: visible; text-overflow: clip; white-space: normal; overflow-wrap: anywhere; }
+  .disk-row .m-bar { grid-column: 1 / -1; grid-row: 2; }
+  .disk-info { grid-column: 1 / -1; grid-row: 3; text-align: left; }
+  .audit-row { align-items: baseline; }
+  .a-detail { flex-basis: 100%; white-space: normal; overflow-wrap: anywhere; }
+}
+
+@media (max-width: 390px) {
+  .chart-box { padding: 12px; }
+  .section-header { align-items: flex-start; flex-wrap: wrap; }
+  .section-header :deep(.n-button) { margin-left: auto; }
+  .stat-num { font-size: 24px; overflow-wrap: anywhere; }
+}
+
+@media (max-width: 340px) {
+  .stat-grid { grid-template-columns: minmax(0, 1fr); }
+}
 </style>

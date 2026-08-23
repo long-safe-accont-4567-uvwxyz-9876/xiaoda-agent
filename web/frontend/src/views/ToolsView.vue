@@ -8,6 +8,7 @@ import {
 import { get, put, post, del } from '../api'
 import { t, tf } from '../i18n'
 import Tilt3D from '../components/fx/Tilt3D.vue'
+import ViewTitleIcon from '../components/fx/ViewTitleIcon.vue'
 
 const message = useMessage()
 const tools = ref<any[]>([])
@@ -304,7 +305,7 @@ async function testSkill(item: any) {
 <template>
   <div class="tools-view">
     <div class="view-header">
-      <h2>🛠 {{ t('toolsView.title') }}</h2>
+      <h2 class="view-title view-title-icon"><ViewTitleIcon name="tools" /> {{ t('toolsView.title') }}</h2>
       <span class="count">{{ t('toolsView.total') }} {{ tools.length }} {{ t('toolsView.toolsUnit') }}</span>
       <span v-if="search || categoryFilter || sourceFilter" class="count">
         （{{ t('toolsView.filterLabel') }}: {{ filtered.length }}）
