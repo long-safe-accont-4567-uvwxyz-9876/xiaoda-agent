@@ -86,6 +86,10 @@ pywebview>=5.0
 # ── 可选: Streamlit Web UI (旧版) ──
 streamlit>=1.28.0
 
+# ── Windows ConPTY（虚空终端真 PTY：resize/全屏 TUI 支持；仅 win32 有轮子，
+#    Linux/macOS 安装会报错，CI/生产按平台装）──
+pywinpty>=2.0.10; sys_platform == "win32"
+
 # ── v0.6.0 认知架构 ──
 networkx>=3.2
 

@@ -326,6 +326,21 @@ _TERM_FLUSH_INTERVAL_S = 0.016
 _TERM_FLUSH_MAX_CHARS = 65536
 
 
+def _try_import_winpty():
+    """ConPTY 可用性探测（仅 win32 有轮子）：返回 PtyProcess 类或 None。
+
+    Windows 会话优先 ConPTY（真终端语义：resize/TUI 全支持），
+    未安装 pywinpty 时回退 subprocess 管道（无 TTY，兼容旧行为）。"""
+    if os.name != "nt":
+        return None
+    try:
+        from winpty import PtyProcess  # noqa: PLC0415 —— 平台可选依赖懒加载
+        return PtyProcess
+    except (ImportError, OSError):
+        logger.debug("ws.winpty_unavailable: 回退管道模式")
+        return None
+
+
 # ── 媒体路径 → URL ───────────────────────────────────────────────
 
 
@@ -1001,22 +1016,49 @@ async def _handle_terminal_start(conn_id: str, msg: dict, term_sid: str) -> None
                 "type": "terminal_error", "term_sid": term_sid,
                 "error": str(e)[:200]})
     else:
-        # ── Windows: subprocess + 管道 ──
+        # ── Windows: ConPTY 优先（真终端语义），缺 pywinpty 回退管道 ──
         shell_map_win = {
-            "cmd": ["cmd.exe"],
-            "powershell": ["powershell.exe", "-NoLogo"],
-            "pwsh": ["pwsh.exe", "-NoLogo"],
-            "python": ["python.exe"],
-            "node": ["node.exe"],
-            "wsl": ["wsl.exe"],
-            "bash": ["bash.exe"],
+            "cmd": "cmd.exe",
+            "powershell": "powershell.exe",
+            "pwsh": "pwsh.exe",
+            "python": "python.exe",
+            "node": "node.exe",
+            "wsl": "wsl.exe",
+            "bash": "bash.exe",
         }
-        cmd = shell_map_win.get(shell_type, ["cmd.exe"])
+        exe = shell_map_win.get(shell_type, "cmd.exe")
         loop = asyncio.get_running_loop()
+        PtyProcess = _try_import_winpty()
 
+        if PtyProcess is not None:
+            # ConPTY：真 PTY——resize/TUI(opencode 等)全支持
+            try:
+                pty_proc = PtyProcess.spawn(
+                    exe, cwd=str(Path.home()), dimensions=(rows, cols),
+                    env=list(f"{k}={v}" for k, v in env.items()))
+                with _pty_sessions_lock:
+                    _pty_sessions[term_sid] = {
+                        "pid": pty_proc.pid, "winpty": pty_proc,
+                        "conn_id": conn_id, "shell": shell_type,
+                        "alive": True, "loop": loop,
+                        "is_windows": True, "conpty": True,
+                    }
+                logger.info("ws.terminal.start term_sid={} shell={} pid={} mode=conpty",
+                            term_sid, shell_type, pty_proc.pid)
+                await manager.send_to(conn_id, {
+                    "type": "terminal_started", "term_sid": term_sid,
+                    "shell": shell_type, "mode": "conpty"})
+                _setup_win_pty_reader(term_sid)
+                return
+            except (OSError, RuntimeError, ValueError) as e:
+                logger.warning("ws.conpty_spawn_failed term_sid={} error={} → 回退管道",
+                               term_sid, str(e)[:150])
+
+        # 管道回退：无 TTY 语义（resize no-op、全屏 TUI 不可用）
         try:
             proc = _subprocess.Popen(
-                cmd,
+                [exe] if not exe.endswith("powershell.exe") and not exe.endswith("pwsh.exe")
+                else [exe, "-NoLogo"],
                 stdin=_subprocess.PIPE,
                 stdout=_subprocess.PIPE,
                 stderr=_subprocess.STDOUT,
@@ -1030,9 +1072,10 @@ async def _handle_terminal_start(conn_id: str, msg: dict, term_sid: str) -> None
                 _pty_sessions[term_sid] = {
                     "pid": proc.pid, "proc": proc, "conn_id": conn_id,
                     "shell": shell_type, "alive": True, "loop": loop,
-                    "is_windows": True,
+                    "is_windows": True, "conpty": False,
                 }
-            logger.info("ws.terminal.start term_sid={} shell={} pid={}", term_sid, shell_type, proc.pid)
+            logger.info("ws.terminal.start term_sid={} shell={} pid={} mode=pipe",
+                        term_sid, shell_type, proc.pid)
             await manager.send_to(conn_id, {
                 "type": "terminal_started", "term_sid": term_sid, "shell": shell_type})
             _setup_win_pipe_reader(term_sid)
@@ -1125,6 +1168,39 @@ def _cleanup_term_out_buf(term_sid: str) -> None:
         entry["timer"].cancel()
 
 
+def _setup_win_pty_reader(term_sid: str) -> None:
+    """Windows ConPTY：后台线程读 PtyProcess 输出，推回事件循环（合帧）。"""
+    with _pty_sessions_lock:
+        session = _pty_sessions.get(term_sid)
+    if not session:
+        return
+    pty_proc = session["winpty"]
+    conn_id = session["conn_id"]
+    loop: asyncio.AbstractEventLoop = session["loop"]
+
+    def _reader_thread() -> None:
+        try:
+            while pty_proc.isalive():
+                # pywinpty read 在无数据时短暂阻塞，返回空串继续轮询
+                data = pty_proc.read(8192)
+                if not data:
+                    if not pty_proc.isalive():
+                        break
+                    time.sleep(0.01)
+                    continue
+                loop.call_soon_threadsafe(
+                    _queue_term_output, term_sid, conn_id, data)
+        except (OSError, RuntimeError, EOFError):
+            logger.debug("ws.conpty_reader_error term_sid={}", term_sid,
+                         exc_info=True)
+        finally:
+            loop.call_soon_threadsafe(_cleanup_pty, term_sid)
+
+    import threading
+    t = threading.Thread(target=_reader_thread, daemon=True)
+    t.start()
+
+
 def _setup_win_pipe_reader(term_sid: str) -> None:
     """Windows: 在后台线程中读取 subprocess stdout 管道。"""
     with _pty_sessions_lock:
@@ -1181,20 +1257,29 @@ def _cleanup_pty(term_sid: str) -> None:
     is_win = session.get("is_windows", False)
 
     if is_win:
-        # ── Windows: 关闭 subprocess ──
-        proc = session.get("proc")
-        rc = -1
-        if proc:
+        # ── Windows: ConPTY 优先，其次 subprocess 管道 ──
+        wp = session.get("winpty") if session.get("conpty") else None
+        if wp is not None:
+            rc = -1
             try:
-                proc.terminate()
-                rc = proc.wait(timeout=3)
-            except (OSError, subprocess.TimeoutExpired):
-                logger.debug("ws.process_terminate_error", exc_info=True)
+                wp.terminate(force=True)
+            except (OSError, RuntimeError):
+                logger.debug("ws.conpty_terminate_error", exc_info=True)
+            # ConPTY 无 wait 返回码语义，统一 -1（前端只显示退出提示）
+        else:
+            proc = session.get("proc")
+            rc = -1
+            if proc:
                 try:
-                    proc.kill()
-                except (OSError, PermissionError):
-                    logger.debug("ws.process_kill_error", exc_info=True)
-                rc = -1
+                    proc.terminate()
+                    rc = proc.wait(timeout=3)
+                except (OSError, subprocess.TimeoutExpired):
+                    logger.debug("ws.process_terminate_error", exc_info=True)
+                    try:
+                        proc.kill()
+                    except (OSError, PermissionError):
+                        logger.debug("ws.process_kill_error", exc_info=True)
+                    rc = -1
     else:
         # ── Unix: 关闭 PTY fd + 等待子进程 ──
         fd = session["fd"]
@@ -1241,7 +1326,11 @@ def _handle_terminal_input(conn_id: str, msg: dict) -> None:
         fd = session.get("fd")
     try:
         if is_windows:
-            if proc and proc.stdin:
+            if session.get("conpty"):
+                wp = session.get("winpty")
+                if wp is not None:
+                    wp.write(data)
+            elif proc and proc.stdin:
                 proc.stdin.write(data.encode("utf-8", errors="replace"))
                 proc.stdin.flush()
         else:
@@ -1263,7 +1352,15 @@ def _handle_terminal_resize(conn_id: str, msg: dict) -> None:
             logger.warning("ws.terminal_resize.denied conn_id={} owner={}", conn_id, session.get("conn_id"))
             return
         if session.get("is_windows"):
-            return  # Windows subprocess 不支持 resize
+            # ConPTY 会话支持 resize；管道回退无 TTY 概念，no-op
+            wp = session.get("winpty")
+            if session.get("conpty") and wp is not None:
+                try:
+                    wp.resize(rows, cols)
+                except (OSError, RuntimeError, ValueError):
+                    logger.debug("ws.conpty_resize_failed term_sid={}", term_sid,
+                                 exc_info=True)
+            return
         fd = session.get("fd")
     try:
         winsize = struct.pack("HHHH", rows, cols, 0, 0)

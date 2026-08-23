@@ -182,3 +182,131 @@ async def test_win_pipe_thread_path_coalesces(clean_buffers):
             hub._pty_sessions.pop("w1", None)
         hub.manager.send_to = orig_send
 
+
+# ── ConPTY 接入（Windows 真终端；Linux 上以 fake PtyProcess 模拟） ──
+
+
+class _FakePtyProc:
+    """模拟 pywinpty.PtyProcess 的最小接口。"""
+
+    def __init__(self):
+        self.pid = 4242
+        self.alive = True
+        self.written: list[str] = []
+        self.resized: list[tuple[int, int]] = []
+        self.terminated = False
+
+    def isalive(self):
+        return self.alive
+
+    def read(self, n):
+        if not self.alive:
+            return ""
+        self.alive = False  # 读一次即退出，驱动 reader 线程收尾
+        return "conpty output"
+
+    def write(self, data):
+        self.written.append(data)
+
+    def resize(self, rows, cols):
+        self.resized.append((rows, cols))
+
+    def terminate(self, force=False):
+        self.terminated = True
+        self.alive = False
+
+
+@pytest.mark.asyncio
+async def test_winpty_probe_returns_none_on_linux(monkeypatch):
+    """非 win32 平台探测恒 None（不会误走 ConPTY 分支）。"""
+    import web.ws_hub as hub_mod
+    monkeypatch.setattr(hub_mod.os, "name", "posix")
+    assert hub._try_import_winpty() is None
+
+
+@pytest.mark.asyncio
+async def test_winpty_probe_handles_import_error(monkeypatch):
+    """win32 但未安装 pywinpty → None（回退管道）。"""
+    import web.ws_hub as hub_mod
+
+    class _FakeOS:
+        name = "nt"
+
+    monkeypatch.setattr(hub_mod.os, "name", "nt")
+    real_import = __builtins__.__import__ if hasattr(__builtins__, "__import__") else __import__
+
+    def _fake_import(name, *a, **kw):
+        if name == "winpty":
+            raise ImportError("No module named 'winpty'")
+        return real_import(name, *a, **kw)
+
+    monkeypatch.setattr("builtins.__import__", _fake_import)
+    assert hub._try_import_winpty() is None
+
+
+@pytest.mark.asyncio
+async def test_conpty_session_lifecycle(clean_buffers):
+    """ConPTY 会话端到端（fake）：注册 → reader 输出经合帧 → 写入/resize/终止。"""
+    sent: list[dict] = []
+    orig_send = hub.manager.send_to
+
+    async def _capture(conn_id, event):
+        sent.append(event)
+
+    hub.manager.send_to = _capture
+    loop = asyncio.get_running_loop()
+    fake = _FakePtyProc()
+    with hub._pty_sessions_lock:
+        hub._pty_sessions["cp1"] = {
+            "pid": fake.pid, "winpty": fake, "conn_id": "cc",
+            "shell": "powershell", "alive": True, "loop": loop,
+            "is_windows": True, "conpty": True,
+        }
+    try:
+        # resize 走 conpty 分支（会话还活着时先验）
+        hub._handle_terminal_resize("cc", {
+            "term_sid": "cp1", "rows": 30, "cols": 120})
+        assert fake.resized == [(30, 120)]
+
+        # reader 线程跑起来（read 后进程退出 → 线程收尾 → cleanup 清会话）
+        hub._setup_win_pty_reader("cp1")
+        await asyncio.sleep(0.15)
+        frames = [e for e in sent if e["type"] == "terminal_output"]
+        assert any("conpty output" in f["data"] for f in frames)  # 经合帧到达
+        with hub._pty_sessions_lock:
+            assert "cp1" not in hub._pty_sessions  # 退出后自动清理
+    finally:
+        with hub._pty_sessions_lock:
+            hub._pty_sessions.pop("cp1", None)
+        hub.manager.send_to = orig_send
+
+
+@pytest.mark.asyncio
+async def test_conpty_cleanup_terminates(clean_buffers):
+    """cleanup 对 ConPTY 会话调 terminate(force=True)。"""
+    sent: list[dict] = []
+    orig_send = hub.manager.send_to
+
+    async def _capture(conn_id, event):
+        sent.append(event)
+
+    hub.manager.send_to = _capture
+    loop = asyncio.get_running_loop()
+    fake = _FakePtyProc()
+    with hub._pty_sessions_lock:
+        hub._pty_sessions["cp2"] = {
+            "pid": fake.pid, "winpty": fake, "conn_id": "cc",
+            "shell": "cmd", "alive": True, "loop": loop,
+            "is_windows": True, "conpty": True,
+        }
+    try:
+        await asyncio.to_thread(hub._cleanup_pty, "cp2")
+        await asyncio.sleep(0.02)
+        assert fake.terminated is True
+        exits = [e for e in sent if e["type"] == "terminal_exit"]
+        assert len(exits) == 1
+    finally:
+        with hub._pty_sessions_lock:
+            hub._pty_sessions.pop("cp2", None)
+        hub.manager.send_to = orig_send
+
