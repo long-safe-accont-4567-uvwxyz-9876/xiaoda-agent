@@ -38,10 +38,16 @@ fi
 FRONTEND_LAST=$(git log -1 --format=%ct -- web/frontend 2>/dev/null || true)
 DIST_LAST=$(git log -1 --format=%ct -- web/dist 2>/dev/null || true)
 if [ -n "$FRONTEND_LAST" ] && [ -n "$DIST_LAST" ] && [ "$FRONTEND_LAST" -gt "$DIST_LAST" ]; then
-    echo "[pre-push] 错误：web/frontend 源码比 web/dist 新——改了前端但未重新构建提交产物。" >&2
-    echo "  修复：cd web/frontend && npm run build && git add web/dist && git commit" >&2
-    echo "  （完整重建校验：scripts/check_dist_freshness.sh）" >&2
-    exit 1
+    # 时间戳只是"嫌疑"判据——内容级零 diff 时（如提交拆分导致 src 提交晚于
+    # 内容相同的 dist 提交）回退到权威内容校验，避免误报拦截（2026-08-23 修复：
+    # 分主题提交批次被时间戳误拦，check_dist_freshness.sh 实际同步）。
+    echo "[pre-push] 源码提交晚于 dist，运行完整内容校验..." >&2
+    if bash "$PWD/scripts/check_dist_freshness.sh"; then
+        echo "[pre-push] 内容校验通过（dist 与源码实际同步），继续" >&2
+    else
+        echo "[pre-push] 错误：web/dist 确实落后于源码——请 cd web/frontend && npm run build && git add web/dist && git commit" >&2
+        exit 1
+    fi
 fi
 
 # ── 宽口径 except 棘轮（毫秒级）：存量 1136 冻结，增量拦截（技术债专项 #2）
