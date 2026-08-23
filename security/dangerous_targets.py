@@ -131,7 +131,9 @@ FATAL_SHELL_RE: tuple[re.Pattern[str], ...] = tuple(
 #   语义不变，仅从子串收紧为整词
 BLOCKED_SHELL_WORDS: frozenset[str] = frozenset({
     # 磁盘 / 文件系统破坏
-    "dd", "mkfs", "fdisk", "cfdisk", "parted", "format",
+    #   sfdisk 必须单列：整词 lookbehind 使 "fdisk" 匹配不到 "sfdisk"
+    #   前缀形态（2026-08-23 对抗审查 P1 回归：旧子串可拦、整词化后放行）
+    "dd", "mkfs", "fdisk", "sfdisk", "cfdisk", "parted", "format",
     "shred", "wipe", "wipefs",
     # 危险权限修改（任意 chown/chgrp 一律拦，与旧版一致）
     "chown", "chgrp",
@@ -156,8 +158,11 @@ BLOCKED_SHELL_PHRASES: tuple[str, ...] = (
 
 # rm 组合旗标家族：-rf/-fr/-Rf/-rfx 等（递归+强制任意排列）
 _RM_FLAG_PATTERN = r"\brm\s+(?:-{1,2}[a-zA-Z]*r[a-zA-Z]*f[a-zA-Z]*|-[a-zA-Z]*f[a-zA-Z]*r)\b"
-# chmod 宽松权限（允许夹带短选项）：777 / 000
-_CHMOD_LOOSE_PATTERN = r"\bchmod\s+(?:-{1,2}[a-zA-Z]+\s+)?(?:777|000)\b"
+# chmod 宽松权限（允许夹带短选项）：777/000 及其数字环绕形态
+#   \d*(777|000)\d* 覆盖 0777/7770/0000/7777 等——旧子串版靠 "chmod 777" ⊂
+#   "chmod 7770" 顺带命中，整词化后 7770 反而放行（对抗审查 P2 回归）；
+#   7777 等含 777 前缀的更险模式同网拦下。>07777 的非法 mode 一并拦截无害。
+_CHMOD_LOOSE_PATTERN = r"\bchmod\s+(?:-{1,2}[a-zA-Z]+\s+)?\d*(?:777|000)\d*\b"
 
 EXTRA_BLOCKED_PATTERNS: tuple[str, ...] = (_RM_FLAG_PATTERN, _CHMOD_LOOSE_PATTERN)
 
