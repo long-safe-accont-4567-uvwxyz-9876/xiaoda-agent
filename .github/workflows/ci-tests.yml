@@ -59,7 +59,6 @@ jobs:
             -m "not slow and not e2e_real" \
             --timeout=60 \
             -q 2>&1 | tail -50
-        continue-on-error: true
 
       - name: Run critical tests (strict)
         run: |
@@ -173,6 +172,8 @@ jobs:
 
       - name: Run Ruff check
         run: |
+          # E9/F63/F7/F82 = 语法错误与崩溃级问题。pyproject 已声明 E/F/W/I 全集，
+          # 但存量 E402/F822 尚未清偿，收敛前先用崩溃子集把门（2026-08-23 复审记录）。
           ruff check . --select=E9,F63,F7,F82 --output-format=github
 
       - name: Python syntax check

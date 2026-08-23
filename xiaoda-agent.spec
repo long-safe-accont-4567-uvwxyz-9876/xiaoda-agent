@@ -152,7 +152,6 @@ hiddenimports = [
     'uvicorn.lifespan.on',
 
     # Web framework
-    'sse_starlette',
     'starlette',
     'anyio',
 
@@ -362,7 +361,7 @@ hiddenimports = [
     'agent_core.shared_blackboard',
     'agent_core.structured_blackboard',
     'agent_core.sub_agent_manager',
-    'agent_core.tool_executor',
+    'agent_core.tool_executor_mixin',
     'agent_core.user_base',
     'agent_core.user_cli',
     'agent_core.user_qq',

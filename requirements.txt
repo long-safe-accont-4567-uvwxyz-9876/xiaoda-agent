@@ -4,7 +4,6 @@ starlette>=0.40.0
 uvicorn[standard]>=0.32.0
 websockets>=13.0
 python-multipart>=0.0.12
-sse-starlette>=2.1.0
 structlog>=24.0.0
 
 # ── HTTP 客户端 ──
@@ -20,8 +19,6 @@ qrcode>=7.4.0
 # 但 numpy 3.x 尚未验证 ABI 兼容，锁上界防止未来漂移导致本地 embed 静默失效。
 numpy>=1.26.0,<3
 
-# ── CLI 美化 ──
-rich>=13.9.0
 
 # ── CLI 交互补全（/ 弹出下拉 + 多步菜单选择）──
 prompt-toolkit>=3.0.0
@@ -66,9 +63,9 @@ tokenizers>=0.19.0
 # ── QQ Bot ──
 qq-botpy>=1.2.1
 
-# ── 搜索（可选，需 TAVILY_API_KEY）──
-# tavily-python>=0.5.0
-# primp>=0.7.0
+# ── 搜索（可选，需 TAVILY_API_KEY；web_tools_v2/web_browse_tools 懒加载守卫导入）──
+tavily-python>=0.5.0
+primp>=0.7.0
 
 # ── HTML 解析: 搜索工具（知乎/网页提取）依赖 lxml，无 try-except 保护 ──
 lxml>=5.0.0
@@ -83,8 +80,9 @@ html2text>=2025.4.15
 # ── 桌面模式（Windows pywebview 原生窗口）──
 pywebview>=5.0
 
-# ── 可选: Streamlit Web UI (旧版) ──
-streamlit>=1.28.0
+# ── 可选: Streamlit Web UI (旧版入口 web/app.py 专用；主 WebUI 是 FastAPI+Vue，
+# 不装 streamlit 时该旧入口不可用，其余功能不受影响) ──
+# streamlit>=1.28.0
 
 # ── Windows ConPTY（虚空终端真 PTY：resize/全屏 TUI 支持；仅 win32 有轮子，
 #    Linux/macOS 安装会报错，CI/生产按平台装）──
@@ -93,8 +91,6 @@ pywinpty>=2.0.10; sys_platform == "win32"
 # ── v0.6.0 认知架构 ──
 networkx>=3.2
 
-# ── JSON5 配置文件解析 ──
-json5>=0.9.0
 
 # ── 可选: 硬件/视觉（按需安装，代码内 try-except 延迟 import）──
 # opencv-python-headless>=4.8.0   # 图像识别（utils/vision_service.py）

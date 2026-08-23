@@ -519,11 +519,10 @@ def test_local_run_package_starts_with_installer_shebang():
 def test_release_waits_for_test_job():
     workflow = read_project_file(".github/workflows/build-release.yml")
     test_section = workflow[workflow.index("  test:"):workflow.index("  release:")]
-    # 全集测试跑 continue-on-error（对齐 CI Tests 策略：收集级噪音不阻塞），
-    # 但其后必须紧跟无 continue-on-error 的 strict critical 子集把关。
-    strict_idx = test_section.index("Run critical tests (strict)")
-    assert test_section.index("continue-on-error: true") < strict_idx
-    assert "continue-on-error: true" not in test_section[strict_idx:]
+    # 2026-08-23 门禁收紧：全集测试步骤不再 continue-on-error——任何失败
+    # 直接使 test job 失败，release 不触发（critical strict 子集保留作二道闸）。
+    assert "continue-on-error: true" not in test_section
+    assert "Run critical tests (strict)" in test_section
     # release 仍显式依赖 test job（job 内 strict 步骤失败 ⇒ test job 失败 ⇒ release 不触发）
     assert "needs: [build, test]" in workflow
 

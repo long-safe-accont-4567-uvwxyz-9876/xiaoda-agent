@@ -9,9 +9,9 @@ on:
   workflow_dispatch:
     inputs:
       version:
-        description: 'Release version (e.g. 0.2.0)'
+        description: 'Release version (must match pyproject.toml, e.g. 0.2.0)'
         required: true
-        default: '0.5.32'
+        default: '0.5.76'
 
 jobs:
   build:
@@ -751,8 +751,8 @@ jobs:
         with:
           node-version: '20'
       # test_frontend_local_ai_contracts 等测试需要 esbuild 打包前端模块，
-      # test job 不构建前端但需要 node_modules。CI Tests workflow 不跑这些测试
-      # （continue-on-error + critical 子集），Build & Release test job 跑全集需要。
+      # test job 不构建前端但需要 node_modules。CI Tests workflow 跑全集严格门禁，
+      # Build & Release test job 同样跑全集。
       - name: Install frontend deps for tests
         working-directory: web/frontend
         run: npm install
@@ -776,7 +776,6 @@ jobs:
           cp -r config/workspace ~/.ai-agent/workspace/
           cp -r config/agents/*.json ~/.ai-agent/config/agents/ 2>/dev/null || true
       - run: python -m pytest tests/ -q --timeout=60 -k "not e2e_real_scenario" --deselect tests/test_a4_rag_root_fix.py::TestIntentClassifyDefault::test_intent_llm_classify_default_false 2>&1 | tail -50
-        continue-on-error: true
       - name: Run critical tests (strict)
         run: |
           python -m pytest \
