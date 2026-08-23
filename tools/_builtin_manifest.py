@@ -12,8 +12,8 @@ from __future__ import annotations
 
 from typing import Any
 
-from tool_engine.tool_registry import ToolPermission
 from config import get_agent_display_name
+from tool_engine.tool_registry import ToolPermission
 
 _NAHIDA_DN = get_agent_display_name('xiaoda')
 _KELI_DN = get_agent_display_name('xiaoli')
@@ -163,7 +163,8 @@ BUILTIN_TOOLS: list[dict[str, Any]] = [
     {
         "name": "web_search",
         "description": (
-            "搜索互联网获取信息。查新闻/时事/最新动态时，请在 query 里带上'最新'或年份等时效词，"
+            "搜索互联网获取信息。一次只搜一个意图——多个互相独立的问题请改用 web_search_batch 并行搜索。"
+            "查新闻/时事/最新动态时，请在 query 里带上'最新'或年份等时效词，"
             "会自动切换到新闻引擎（带发布日期和AI综合摘要）。"
             "搜索结果只有标题和摘要——回答前若需要细节，请挑 1-2 条最相关的链接用 web_browse 打开读全文，"
             "不要只凭摘要编造内容。一次搜索没找到，可换不同关键词再搜（中文查不到试英文）。"
@@ -182,6 +183,33 @@ BUILTIN_TOOLS: list[dict[str, Any]] = [
         "max_frequency": 30,
         "module_path": "tools.web_tools_v2",
         "func_name": "web_search",
+    },
+    {
+        "name": "web_search_batch",
+        "description": (
+            "并行搜索多个互相独立的查询意图（2-5 个）。适合用户一句话里含多个独立问题的场景，"
+            "例如'对比 A 和 B 的价格，再查下 C 的最新动态'——拆成 2-3 条各含单一意图的 query 一次并行，"
+            "比连续多次调用 web_search 更快。每条 query 遵循一次一个意图；结果按查询分组返回。"
+            "单一问题不要用本工具，直接 web_search。"
+        ),
+        "schema": {
+            "type": "object",
+            "properties": {
+                "queries": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "minItems": 2,
+                    "maxItems": 5,
+                    "description": "2-5 条互相独立的搜索关键词，每条只表达一个意图",
+                }
+            },
+            "required": ["queries"],
+        },
+        "permission": ToolPermission.READ_ONLY,
+        "category": "web",
+        "max_frequency": 10,
+        "module_path": "tools.web_tools_v2",
+        "func_name": "web_search_batch",
     },
     {
         "name": "get_weather",

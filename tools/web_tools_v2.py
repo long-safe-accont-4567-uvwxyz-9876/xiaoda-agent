@@ -1,12 +1,15 @@
-import os
 import asyncio
+import os
 import time
 from collections import OrderedDict
 from typing import Any
+
 import httpx
 from loguru import logger
-from tool_engine.tool_registry import register_tool, ToolPermission, ToolResult
+
 from security.ssrf_guard import validate_url as _ssrf_validate_url
+from tool_engine.tool_registry import ToolPermission, ToolResult, register_tool
+from tools.anysearch_client import AnySearchAuthError, anysearch_available, anysearch_search_sync
 
 # 搜索结果缓存：5分钟TTL + LRU 上限
 _search_cache: "OrderedDict[str, tuple[float, Any]]" = OrderedDict()
@@ -50,8 +53,9 @@ def _tavily_available() -> bool:
 
 def _bing_search_sync(query: str, max_results: int = 8) -> list[dict]:
     """同步抓取 Bing 搜索结果，解析标题、链接和摘要。"""
-    from lxml import html as lxml_html
     from urllib.parse import quote_plus
+
+    from lxml import html as lxml_html
 
     client = _get_primp_client()
     url = f"https://cn.bing.com/search?q={quote_plus(query)}&count={max_results}&setlang=zh-Hans"
@@ -176,7 +180,9 @@ async def _do_search(query: str, max_results: int = 8,
                      use_tavily: bool = True) -> tuple[list[dict], str, str]:
     """引擎降级策略，返回 (results, engine, ai_answer)。
 
-    优先级：
+    优先级（依据 AnySearch 手册的分层路由思想：意图识别→路由→融合）：
+    0. AnySearch 统一搜索（默认关；ANYSEARCH_API_KEY/ANYSEARCH_ENABLED 开启，
+       服务端做意图识别与实时路由，含新鲜度意图）——熔断器防不可达拖慢
     1. 时效性查询 → Tavily 新闻（带日期+AI摘要）
     2. Tavily basic（质量高、带AI摘要，对中文专有名词/游戏术语匹配准确）
     3. Bing 抓取（免费兜底）
@@ -187,6 +193,18 @@ async def _do_search(query: str, max_results: int = 8,
     """
     time_sensitive = _is_time_sensitive(query)
     logger.info("web_search.do_search query={} fresh={}", query[:40], time_sensitive)
+
+    # 0. AnySearch（开启时）：401/403 按手册不降级匿名，直接换下一引擎
+    if anysearch_available():
+        try:
+            results, answer = await asyncio.to_thread(
+                anysearch_search_sync, query, max_results)
+            if results:
+                return _dedup_results(results), "AnySearch", answer
+        except AnySearchAuthError as e:
+            logger.warning("anysearch.auth_failed error={}", str(e)[:150])
+        except (RuntimeError, OSError, ValueError, ConnectionError) as e:
+            logger.warning("anysearch.failed error={}", str(e)[:150])
 
     # 1. 时效性查询 → Tavily 新闻优先（带日期+AI摘要）
     if time_sensitive and use_tavily and _tavily_available():
@@ -242,29 +260,8 @@ def _clean_query(query: str) -> str:
     return q.strip() if q.strip() else query.strip()
 
 
-@register_tool(
-    name="web_search",
-    description=(
-        "搜索互联网获取信息。查新闻/时事/最新动态时，请在 query 里带上'最新'或年份等时效词，"
-        "会自动切换到新闻引擎（带发布日期和AI综合摘要）。"
-        "搜索结果只有标题和摘要——回答前若需要细节，请挑 1-2 条最相关的链接用 web_browse 打开读全文，"
-        "不要只凭摘要编造内容。一次搜索没找到，可换不同关键词再搜（中文查不到试英文）。"
-        "注意：天气查询用 get_weather，不要用搜索。"
-    ),
-    schema={
-        "type": "object",
-        "properties": {
-            "query": {"type": "string",
-                      "description": "搜索关键词。查时事请带时效词，如'2026世界杯 夺冠热门 最新'"}
-        },
-        "required": ["query"],
-    },
-    permission=ToolPermission.READ_ONLY,
-    category="web",
-    max_frequency=30,
-)
-async def web_search(query: str) -> ToolResult:
-    """搜索互联网信息，自动选择新闻或常规引擎，结果带 5 分钟缓存。"""
+async def _search_core(query: str) -> ToolResult:
+    """单查询搜索核心（含 5 分钟 LRU 缓存），web_search 与 web_search_batch 共用。"""
     try:
         query = str(query) if query is not None else ""
         if not query.strip():
@@ -303,6 +300,83 @@ async def web_search(query: str) -> ToolResult:
 
 
 @register_tool(
+    name="web_search",
+    description=(
+        "搜索互联网获取信息。一次只搜一个意图——多个互相独立的问题请改用 web_search_batch 并行搜索。"
+        "查新闻/时事/最新动态时，请在 query 里带上'最新'或年份等时效词，"
+        "会自动切换到新闻引擎（带发布日期和AI综合摘要）。"
+        "搜索结果只有标题和摘要——回答前若需要细节，请挑 1-2 条最相关的链接用 web_browse 打开读全文，"
+        "不要只凭摘要编造内容。一次搜索没找到，可换不同关键词再搜（中文查不到试英文）。"
+        "注意：天气查询用 get_weather，不要用搜索。"
+    ),
+    schema={
+        "type": "object",
+        "properties": {
+            "query": {"type": "string",
+                      "description": "搜索关键词。查时事请带时效词，如'2026世界杯 夺冠热门 最新'"}
+        },
+        "required": ["query"],
+    },
+    permission=ToolPermission.READ_ONLY,
+    category="web",
+    max_frequency=30,
+)
+async def web_search(query: str) -> ToolResult:
+    """搜索互联网信息，自动选择新闻或常规引擎，结果带 5 分钟缓存。"""
+    return await _search_core(query)
+
+
+@register_tool(
+    name="web_search_batch",
+    description=(
+        "并行搜索多个互相独立的查询意图（2-5 个）。适合用户一句话里含多个独立问题的场景，"
+        "例如'对比 A 和 B 的价格，再查下 C 的最新动态'——拆成 2-3 条各含单一意图的 query 一次并行，"
+        "比连续多次调用 web_search 更快。每条 query 遵循一次一个意图；结果按查询分组返回。"
+        "单一问题不要用本工具，直接 web_search。"
+    ),
+    schema={
+        "type": "object",
+        "properties": {
+            "queries": {
+                "type": "array",
+                "items": {"type": "string"},
+                "minItems": 2,
+                "maxItems": 5,
+                "description": "2-5 条互相独立的搜索关键词，每条只表达一个意图",
+            }
+        },
+        "required": ["queries"],
+    },
+    permission=ToolPermission.READ_ONLY,
+    category="web",
+    max_frequency=10,
+)
+async def web_search_batch(queries) -> ToolResult:
+    """并行执行 2-5 条独立查询（引擎链与缓存与 web_search 一致），分组返回。"""
+    if not isinstance(queries, list) or not all(isinstance(q, str) for q in queries):
+        return ToolResult.fail("queries 必须是字符串数组")
+    cleaned = [q.strip() for q in queries if q.strip()]
+    if len(cleaned) < 2:
+        return ToolResult.fail("至少需要 2 条独立查询；单一问题请直接用 web_search")
+    if len(cleaned) > 5:
+        return ToolResult.fail("一次最多并行 5 条查询，请拆分多次调用")
+
+    results = await asyncio.gather(*(_search_core(q) for q in cleaned))
+    sections = [f"并行搜索 {len(cleaned)} 个意图", "=" * 40]
+    ok_count = 0
+    for q, r in zip(cleaned, results):
+        sections.append(f"\n{'─' * 40}\n【查询】{q}")
+        if r.success:
+            ok_count += 1
+            sections.append(r.data if isinstance(r.data, str) else str(r.data))
+        else:
+            sections.append(f"（失败）{r.error}")
+    if ok_count == 0:
+        return ToolResult.fail("全部查询无结果。建议：换更具体或更宽泛的关键词重试，中文无果可尝试英文")
+    return ToolResult.ok("\n".join(sections))
+
+
+@register_tool(
     name="get_weather",
     description="获取指定城市的实时天气信息，包括温度、天气状况、风力、湿度等。当用户询问天气、气温、温度、是否下雨/下雪/晴天时，必须调用此工具获取准确数据，不要凭记忆回答。",
     schema={
@@ -324,8 +398,8 @@ async def get_weather(city: str) -> ToolResult:
 
         def _fetch_weather() -> Any:
             """同步请求 wttr.in 获取天气信息。"""
-            import urllib.request
             import urllib.parse
+            import urllib.request
             url = f"https://wttr.in/{urllib.parse.quote(city)}?format=3&lang=zh"
             # SSRF 防护：5步法校验 (city 为用户输入, 防注入内网地址)
             ok, reason = _ssrf_validate_url(url)
