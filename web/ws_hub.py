@@ -318,6 +318,13 @@ def local_ai_event(resource: str, record: Any) -> dict[str, Any]:
 _pty_sessions: dict[str, dict] = {}
 _pty_sessions_lock = threading.Lock()
 
+# 终端输出合帧缓冲: term_sid -> {"buf": str, "timer": asyncio.TimerHandle|None}
+# PTY 大输出会被内核拆成大量小块(实测 288KB/2188 次 read)，逐条发 JSON 帧
+# 会把前端 xterm 渲染冲垮——按 ~16ms/帧合并后发送。
+_term_out_buf: dict[str, dict] = {}
+_TERM_FLUSH_INTERVAL_S = 0.016
+_TERM_FLUSH_MAX_CHARS = 65536
+
 
 # ── 媒体路径 → URL ───────────────────────────────────────────────
 
@@ -1061,9 +1068,8 @@ def _setup_pty_reader(term_sid: str) -> None:
 
         text = data.decode("utf-8", errors="replace")
 
-        # 将输出推送到前端（用户实时看到）
-        loop.call_soon(asyncio.ensure_future, manager.send_to(conn_id, {
-            "type": "terminal_output", "term_sid": term_sid, "data": text}))
+        # 输出推送到前端：合帧节流（~16ms 一帧合并多次 read，防前端渲染冲垮）
+        _queue_term_output(term_sid, conn_id, text)
 
         # 送入标记符检测器（内部按行缓冲）
         try:
@@ -1073,6 +1079,50 @@ def _setup_pty_reader(term_sid: str) -> None:
             logger.debug("ws.feed_output_error", exc_info=True)
 
     loop.add_reader(fd, _on_pty_readable)
+
+
+def _queue_term_output(term_sid: str, conn_id: str, text: str) -> None:
+    """终端输出合帧：缓冲当前块并调度 ~16ms 后的冲刷（在事件循环线程执行）。
+
+    超过单帧上限立即冲刷，避免单条巨帧占内存。"""
+    loop: asyncio.AbstractEventLoop | None = None
+    with _pty_sessions_lock:
+        session = _pty_sessions.get(term_sid)
+        if session is not None:
+            loop = session.get("loop")
+    if loop is None:
+        return
+
+    def _flush(term_sid: str = term_sid) -> None:
+        entry = _term_out_buf.pop(term_sid, None)
+        if not entry or not entry["buf"]:
+            return
+        sid_ = entry["conn_id"]
+        asyncio.ensure_future(manager.send_to(sid_, {
+            "type": "terminal_output", "term_sid": term_sid,
+            "data": entry["buf"]}))
+
+    with _pty_sessions_lock:
+        entry = _term_out_buf.get(term_sid)
+        if entry is None:
+            entry = {"buf": "", "conn_id": conn_id, "timer": None}
+            _term_out_buf[term_sid] = entry
+    entry["buf"] += text
+    if len(entry["buf"]) >= _TERM_FLUSH_MAX_CHARS:
+        # 已满：取消定时器立即发（保持顺序——仍在循环线程串行执行）
+        if entry["timer"] is not None:
+            entry["timer"].cancel()
+        _flush()
+        return
+    if entry["timer"] is None and loop is not None:
+        entry["timer"] = loop.call_later(_TERM_FLUSH_INTERVAL_S, _flush)
+
+
+def _cleanup_term_out_buf(term_sid: str) -> None:
+    """会话清理时丢弃残留缓冲与未触发的定时器。"""
+    entry = _term_out_buf.pop(term_sid, None)
+    if entry and entry.get("timer") is not None:
+        entry["timer"].cancel()
 
 
 def _setup_win_pipe_reader(term_sid: str) -> None:
@@ -1093,8 +1143,7 @@ def _setup_win_pipe_reader(term_sid: str) -> None:
                 if not data:
                     break
                 text = data.decode("utf-8", errors="replace")
-                loop.call_soon_threadsafe(asyncio.ensure_future, manager.send_to(conn_id, {
-                    "type": "terminal_output", "term_sid": term_sid, "data": text}))
+                loop.call_soon_threadsafe(_queue_term_output, term_sid, conn_id, text)
 
                 # 送入标记符检测器（内部按行缓冲）
                 try:
@@ -1114,6 +1163,14 @@ def _setup_win_pipe_reader(term_sid: str) -> None:
 
 def _cleanup_pty(term_sid: str) -> None:
     """清理终端会话（在 reader 回调中调用，不能 await）。"""
+    # 先冲刷残留输出再清缓冲，保证退出前的最后几行不丢
+    entry = _term_out_buf.pop(term_sid, None)
+    if entry and entry["buf"]:
+        if entry.get("timer") is not None:
+            entry["timer"].cancel()
+        asyncio.ensure_future(manager.send_to(entry["conn_id"], {
+            "type": "terminal_output", "term_sid": term_sid,
+            "data": entry["buf"]}))
     with _pty_sessions_lock:
         session = _pty_sessions.pop(term_sid, None)
     if not session:
