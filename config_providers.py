@@ -77,7 +77,13 @@ def get_provider_catalog():
 
         user_path = get_config_dir() / "provider_metadata.json"
         bundled_path = Path(__file__).resolve().parent / "config" / "provider_metadata.json"
-        _PROVIDER_CATALOG_CACHE = ProviderCatalog.from_paths(user_path, bundled_path)
+        try:
+            _PROVIDER_CATALOG_CACHE = ProviderCatalog.from_paths(user_path, bundled_path)
+        except (OSError, ValueError) as e:
+            # 兜底：元数据 JSON 全部缺失/损坏时降级为空 catalog，不让启动路径炸掉
+            # （消费方 get()/list()/resolve 均按 KeyError/空集处理，见 get_provider_label 等）
+            logger.error("config.provider_catalog_unavailable error={} using_empty_catalog", str(e))
+            _PROVIDER_CATALOG_CACHE = ProviderCatalog()
         for source_path, error in _PROVIDER_CATALOG_CACHE.load_errors:
             logger.warning("config.provider_catalog_load_failed source={} error={}", source_path, error)
     return _PROVIDER_CATALOG_CACHE
@@ -112,6 +118,36 @@ def get_default_model_for_provider(provider: str) -> str:
         return get_provider_catalog().get(provider_lower).default_model
     except KeyError:
         return ""
+
+
+def get_provider_env_prefix(provider: str) -> str:
+    """返回 provider id 对应的环境变量前缀（"llama.cpp" → "LLAMA_CPP"）。
+
+    catalog 的 id 允许含 "."，但环境变量惯例用下划线——setup 向导 /
+    server 启动注册派生 *_BASE_URL 键名时统一走这里。
+    """
+    return provider.strip().upper().replace(".", "_")
+
+
+def get_provider_label(provider: str) -> str:
+    """返回指定 provider 的展示名（provider_metadata.json 的 label 字段）。
+
+    label 走 ProviderDefinition.metadata 扩展通道（与 ProviderService._record
+    读取的键一致）。未知 provider / 元数据 JSON 缺失（空 catalog）时兜底返回
+    provider id 本身，保证 setup 向导等消费方拿到的永远是可展示字符串。
+
+    Args:
+        provider: provider 名称（如 "mimo", "siliconflow"）
+
+    Returns:
+        展示名；catalog 里没有 label 字段或 provider 未知时返回规范化 id
+    """
+    provider_lower = provider.strip().lower()
+    try:
+        definition = get_provider_catalog().get(provider_lower)
+    except KeyError:
+        return provider_lower
+    return str(definition.metadata.get("label", "") or "").strip() or provider_lower
 
 
 def get_base_url_for_provider(provider: str) -> str:

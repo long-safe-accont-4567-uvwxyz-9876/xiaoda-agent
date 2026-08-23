@@ -162,6 +162,8 @@ from config_providers import (  # noqa: F401,E402
     get_default_provider,
     get_provider_catalog,
     get_provider_config,
+    get_provider_env_prefix,
+    get_provider_label,
 )
 
 # ── 默认 Provider ──

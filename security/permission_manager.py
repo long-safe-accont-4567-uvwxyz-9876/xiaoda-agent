@@ -6,13 +6,16 @@
 from __future__ import annotations
 
 import os
-import re
 import threading
 from collections import deque
 from dataclasses import asdict, dataclass
 from enum import Enum
 
 from loguru import logger
+
+# 敏感工具名与致命 shell 命令模式的单一事实源（原 _SENSITIVE_TOOLS /
+# _GOAT_DANGEROUS_SHELL_PATTERNS 已迁入，禁止在此手抄副本）
+from security.dangerous_targets import FATAL_SHELL_RE, SENSITIVE_TOOLS
 
 
 class PermissionMode(Enum):
@@ -56,64 +59,9 @@ AUTO_APPROVE_MODES = frozenset({
 })
 
 
-# 敏感操作工具列表（strict 模式下需要确认）
-_SENSITIVE_TOOLS = {
-    "shell_command", "execute_code", "python_executor",
-    "write_file", "edit_file", "create_file",
-    "agnes_image", "agnes_video",
-    "profile_set", "profile_forget",
-}
-
 # ── 防傻机制：即使用梭哈模式也会拦截的危险操作 ──────────────
-# 匹配 shell 命令中的致命操作（不区分大小写）
-_GOAT_DANGEROUS_SHELL_PATTERNS = [
-    # ── Linux/macOS ──
-    # 根目录删除
-    r'rm\s+(-[a-zA-Z]*\s+)*(--recursive\s+)?(/|/\*|\.\s+)',
-    r'rm\s+(-[a-zA-Z]*f[a-zA-Z]*r|rfa?|rf)\s+(/|/\*)',
-    r'rm\s+-[a-zA-Z]*\s*/\s*$',
-    # 磁盘格式化 / 覆写
-    r'mkfs\.',
-    r'dd\s+if=.*of=/dev/',
-    r'>\s*/dev/sd[a-z]',
-    # 叉子炸弹
-    r':\(\)\{.*\|.*&\}',
-    r'fork\s*bomb',
-    # 关键系统文件破坏
-    r'chmod\s+(-[a-zA-Z]*\s+)?(000|777)\s+/',
-    r'chown\s+.*\s+/',
-    # init / systemd 杀进程
-    r'kill\s+-9\s+1\b',
-    r'killall\s+(init|systemd|sshd)',
-    r'pkill\s+-(9|SIGKILL)\s+(init|systemd|sshd)',
-    # 网络破坏
-    r'iptables\s+-F',
-    r'ip\s+link\s+set\s+.*down',
-
-    # ── Windows ──
-    # 磁盘格式化
-    r'format\s+[a-zA-Z]:',
-    # 递归删除根目录/系统目录
-    r'(del|erase)\s+/[sS]\s+/[qQ]\s+[a-zA-Z]:\\?\s*$',
-    r'(rd|smdir)\s+/[sS]\s+/[qQ]\s+[a-zA-Z]:\\?\s*$',
-    # 危险系统命令
-    r'rd\s+/[sS]\s+/[qQ]\s+(C:\\|C:\\Windows)',
-    r'del\s+/[fF]\s+/[sS]\s+/[qQ]\s+C:\\',
-    # 关键进程强杀
-    r'taskkill\s+/[fF]\s+/[iI][mM]\s+(csrss|smss|wininit|services)\s*\.exe',
-    # 启动配置破坏
-    r'bcdedit\s+(/delete|/set)',
-    # 磁盘分区操作
-    r'diskpart',
-    # 关机/重启（强制无延迟）
-    r'shutdown\s+(/[sSrR]|/g)\s+.*(/[tT]\s*0)',
-    # 注册表破坏
-    r'reg\s+(delete|import)\s+HKLM\\SYSTEM',
-]
-
-_GOAT_DANGEROUS_SHELL_RE = [
-    re.compile(p, re.IGNORECASE) for p in _GOAT_DANGEROUS_SHELL_PATTERNS
-]
+# 模式本体在 security/dangerous_targets.py::FATAL_SHELL_PATTERNS（原
+# _GOAT_DANGEROUS_SHELL_PATTERNS 原样迁入，内容零改动）。
 
 # 高危安全威胁类型（即使用梭哈模式也记录并返回 warn）
 _GOAT_WARN_THREAT_KEYWORDS = [
@@ -261,7 +209,7 @@ class PermissionManager:
         Returns:
             (is_dangerous, reason) — is_dangerous=True 时应拒绝执行
         """
-        for pattern in _GOAT_DANGEROUS_SHELL_RE:
+        for pattern in FATAL_SHELL_RE:
             if pattern.search(command):
                 reason = f"防傻拦截：检测到致命操作 [{pattern.pattern}]，即使用梭哈模式也不允许执行"
                 logger.critical("permission_manager.goat_dangerous_blocked",
@@ -288,7 +236,7 @@ class PermissionManager:
                 perm = tool.get("permission", ToolPermission.READ_ONLY)
                 if perm != ToolPermission.READ_ONLY:
                     return False, f"{self._mode.value} 模式是只读的，不允许执行 {tool_name}"
-            elif tool_name in _SENSITIVE_TOOLS:
+            elif tool_name in SENSITIVE_TOOLS:
                 # 未注册的敏感工具（如工具注册失败）也必须拒绝，与 INTERACTIVE/CUSTOM 模式一致
                 return False, f"{self._mode.value} 模式是只读的，不允许执行 {tool_name}"
 
@@ -310,7 +258,7 @@ class PermissionManager:
             return self._check_read_only_or_confirm(tool_name, "自定义模式")
 
         # STRICT 模式：敏感工具需要确认
-        if self._mode == PermissionMode.STRICT and tool_name in _SENSITIVE_TOOLS:
+        if self._mode == PermissionMode.STRICT and tool_name in SENSITIVE_TOOLS:
             return False, f"严格模式下 {tool_name} 需要确认"
 
         # ── 新增模式：INTERACTIVE 交互式确认 ──
@@ -330,8 +278,8 @@ class PermissionManager:
             # READ_WRITE/EXECUTE 工具需要确认
             perm_label = perm.value if hasattr(perm, "value") else str(perm)
             return False, f"{mode_label}下 {tool_name}（{perm_label}）需要用户确认"
-        # 未知工具回退到 _SENSITIVE_TOOLS
-        if tool_name in _SENSITIVE_TOOLS:
+        # 未知工具回退到 SENSITIVE_TOOLS
+        if tool_name in SENSITIVE_TOOLS:
             return False, f"{mode_label}下 {tool_name} 需要确认"
         return True, ""
 
@@ -496,7 +444,7 @@ class PermissionManager:
         # 高权限模式：黑名单始终生效，其余命令直接放行（无需确认）
         if self._mode in AUTO_APPROVE_MODES:
             for sub in sub_cmds:
-                for pattern in _GOAT_DANGEROUS_SHELL_RE:
+                for pattern in FATAL_SHELL_RE:
                     if pattern.search(sub):
                         reason = f"危险命令被拦截：{pattern.pattern}"
                         logger.critical("permission_manager.workspace_dangerous_blocked",
@@ -506,8 +454,8 @@ class PermissionManager:
 
         needs_conf_flag = False
         for sub in sub_cmds:
-            # 1. 黑名单始终生效（复用 _GOAT_DANGEROUS_SHELL_RE，不论 PermissionMode）
-            for pattern in _GOAT_DANGEROUS_SHELL_RE:
+            # 1. 黑名单始终生效（复用 FATAL_SHELL_RE，不论 PermissionMode）
+            for pattern in FATAL_SHELL_RE:
                 if pattern.search(sub):
                     reason = f"危险命令被拦截：{pattern.pattern}"
                     logger.critical("permission_manager.workspace_dangerous_blocked",

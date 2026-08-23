@@ -25,3 +25,4 @@ tests/test_manifest_consistency.py
 # ── 热点模块守卫（2026-08-23 技术债审查补充：此前 ws_hub/bootstrap 不在门禁内）──
 tests/test_terminal_output_coalescing.py
 tests/test_bootstrap_degraded_isolation.py
+tests/test_dangerous_targets_consistency.py

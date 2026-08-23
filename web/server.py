@@ -35,54 +35,78 @@ async def _apply_model_overrides(core: Any, provider_service: Any | None = None)
     _restore_chat_model(cfg, core)
 
 
-def _register_env_providers(cfg: Any, env_values: Any, os_module: Any) -> None:
-    """从 .env 注册已知免费模型平台 provider。"""
-    from config import get_provider_catalog
+# 本地 URL 型 provider：无 Key 接口，由 *_BASE_URL 环境变量显式驱动注册
+# （是否"URL 驱动"是本模块的注册策略，非 catalog 字段）
+_URL_KEYED_LOCAL_PROVIDERS = frozenset({"ollama", "llama.cpp"})
 
-    modelscope_credential = get_provider_catalog().resolve_environment_alias(
-        "modelscope",
-        env_values,
-    )
-    modelscope_env = modelscope_credential[0] if modelscope_credential else "MODELSCOPE_ACCESS_TOKEN"
-    _KNOWN_ENV_PROVIDERS = {
-        "SILICONFLOW_API_KEY": ("siliconflow", "openai", "https://api.siliconflow.cn/v1", "SiliconFlow 硅基流动"),
-        "OPENROUTER_API_KEY": ("openrouter", "openai", "https://openrouter.ai/api/v1", "OpenRouter"),
-        modelscope_env: (
-            "modelscope", "openai",
-            "https://api-inference.modelscope.cn/v1", "ModelScope 魔搭"
-        ),
-        "AGNES_API_KEY": (
-            "agnes", "openai",
-            # CodeRabbit 一致性修复：用已解析的 env_values（.env）而非进程级 os.getenv，
-            # 与 _register_env_providers 的 env_values 来源一致；env_values 未设时回退默认值
-            (env_values.get("AGNES_BASE_URL") or "https://apihub.agnes-ai.cn/v1").strip(), "Agnes AI"
-        ),
-        # P0 修复（硬编码/ollama 默认启用根因）：
-        # 原实现 _default_url = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434/v1")
-        # 总是返回非空值（env 未设也回退到 localhost:11434），导致 ollama 永远被注册，
-        # 即使用户没配置也会尝试连接 → 持续报错（日志中 custom_provider.registered id=ollama）。
-        # 修复：ollama 的 _default_url 设为空串，仅当 env_values（.env）显式配置时才注册。
-        # 其他 provider 的 _default_url 是 SaaS 云端固定端点（非用户自定义），保留默认值正确。
-        "OLLAMA_BASE_URL": (
-            "ollama", "openai",
-            "", "Ollama 本地大模型"
-        ),
-        "LLAMA_CPP_BASE_URL": (
-            "llama.cpp", "openai",
-            "", "llama.cpp 本地接口"
-        ),
-    }
-    known_env_keys = list(_KNOWN_ENV_PROVIDERS.keys())
-    for env_key, (pid, fmt, _default_url, label) in _KNOWN_ENV_PROVIDERS.items():
-        if env_key in ("OLLAMA_BASE_URL", "LLAMA_CPP_BASE_URL"):
-            # 本地无 key 接口：仅当 .env 显式配置 base_url 时才注册（_default_url 为空串）
+# 展示/注册顺序（本模块的排序策略；字段值一律以 catalog 为单一事实源）
+_ENV_PROVIDER_ORDER = ("siliconflow", "openrouter", "modelscope", "agnes", "ollama", "llama.cpp")
+
+
+def _derive_known_env_providers(env_values: Any) -> list[dict[str, Any]]:
+    """从 provider catalog 派生「.env 已知免费平台」注册表。
+
+    单一事实源：id/base_url/label/env 别名全部来自 config.get_provider_catalog()，
+    本函数只叠加注册顺序与 url_keyed 策略。catalog 加载失败（元数据 JSON 缺失，
+    降级为空 catalog）时返回空列表，调用方跳过注册但不炸。
+    """
+    from config import get_provider_catalog
+    from config_providers import get_provider_env_prefix, get_provider_label
+    from llm_gateway.contracts import ProviderProtocol
+
+    catalog = get_provider_catalog()
+    derived: list[dict[str, Any]] = []
+    for pid in _ENV_PROVIDER_ORDER:
+        try:
+            definition = catalog.get(pid)
+        except KeyError:
+            continue
+        aliases = definition.auth.environment_aliases
+        env_prefix = get_provider_env_prefix(pid)
+        if pid in _URL_KEYED_LOCAL_PROVIDERS:
+            env_key = f"{env_prefix}_BASE_URL"
+        else:
+            try:
+                resolved = catalog.resolve_environment_alias(pid, env_values)
+            except KeyError:
+                resolved = None
+            env_key = resolved[0] if resolved else (aliases[0] if aliases else "")
+        if not env_key:
+            continue
+        default_url = (
+            env_values.get(f"{env_prefix}_BASE_URL") or definition.endpoint.base_url or ""
+        ).strip().rstrip("/")
+        derived.append({
+            "env_key": env_key,
+            "id": pid,
+            # ollama 协议本地端点同样走 OpenAI 兼容客户端（与 ProviderService._record 规则一致）
+            "format": "anthropic" if definition.protocol is ProviderProtocol.ANTHROPIC else "openai",
+            "default_url": default_url,
+            "label": get_provider_label(pid),
+            "url_keyed": pid in _URL_KEYED_LOCAL_PROVIDERS,
+        })
+    return derived
+
+
+def _register_env_providers(cfg: Any, env_values: Any, os_module: Any) -> None:
+    """从 .env 注册已知免费模型平台 provider（元数据单一来源：provider catalog）。"""
+    known_env_providers = _derive_known_env_providers(env_values)
+    if not known_env_providers:
+        logger.warning("webui.env_providers_derive_empty reason=provider_catalog_unavailable")
+    for order, entry in enumerate(known_env_providers):
+        env_key = entry["env_key"]
+        pid = entry["id"]
+        label = entry["label"]
+        fmt = entry["format"]
+        if entry["url_keyed"]:
+            # 本地无 key 接口：仅当 .env 显式配置 base_url 时才注册
             api_key = pid
             base_url = env_values.get(env_key, "").strip()
             if not base_url:
                 continue
         else:
             api_key = env_values.get(env_key, "").strip()
-            base_url = _default_url
+            base_url = entry["default_url"]
             if not api_key:
                 continue
         existing = cfg.get("models.providers", {}) or {}
@@ -90,7 +114,7 @@ def _register_env_providers(cfg: Any, env_values: Any, os_module: Any) -> None:
             cfg.set(f"models.providers.{pid}", {
                 "label": label, "format": fmt, "base_url": base_url,
                 "default_model": "", "enabled": True,
-                "order": known_env_keys.index(env_key),
+                "order": order,
             })
         _ensure_provider_key_file(pid, api_key, os_module)
 
@@ -703,16 +727,21 @@ async def _prewarm_connections() -> None:
     import httpx as _httpx
     # 预热 agnes
     try:
-        _agnes_url = _os.getenv("AGNES_BASE_URL", "https://apihub.agnes-ai.cn/v1")
-        from transports.agnes_transport import _get_agnes_http_client
-        _c = _get_agnes_http_client()
-        await _c.head(_agnes_url, timeout=_httpx.Timeout(10.0))
-        logger.info("agnes.prewarm_done")
+        from config_providers import get_base_url_for_provider as _agnes_base_url
+        _agnes_url = _agnes_base_url("agnes")  # env 优先，catalog 兜底
+        if _agnes_url:
+            from transports.agnes_transport import _get_agnes_http_client
+            _c = _get_agnes_http_client()
+            await _c.head(_agnes_url, timeout=_httpx.Timeout(10.0))
+            logger.info("agnes.prewarm_done")
+        else:
+            logger.debug("agnes.prewarm_skipped reason=no_base_url")
     except (ImportError, OSError, RuntimeError, TimeoutError) as _e:
         logger.debug("agnes.prewarm_failed: {}", _e)
-    # 预热 embed (siliconflow)
+    # 预热 embed (siliconflow)：EMBEDDING_BASE_URL > SILICONFLOW_BASE_URL > catalog
     try:
-        _embed_url = _os.getenv("EMBEDDING_BASE_URL", _os.getenv("SILICONFLOW_BASE_URL", "https://api.siliconflow.cn/v1"))
+        from config_providers import get_base_url_for_provider as _sf_base_url
+        _embed_url = _os.getenv("EMBEDDING_BASE_URL", "") or _sf_base_url("siliconflow")
         from utils.http_pool import get_shared_client as _get_sc
         _c2 = _get_sc()
         await _c2.head(_embed_url, timeout=_httpx.Timeout(10.0))

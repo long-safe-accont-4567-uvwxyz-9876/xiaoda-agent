@@ -9,7 +9,6 @@ test_single_key 用法不受影响。
 """
 from __future__ import annotations
 
-import os
 from types import SimpleNamespace
 
 import httpx
@@ -18,6 +17,16 @@ from loguru import logger
 
 # 探针超时（随块搬移，原 setup.py 模块常量）
 _TIMEOUT = 10.0
+
+
+def _probe_base_url(provider: str) -> str:
+    """探针用的 provider base_url（单一事实源：provider catalog，env 可覆盖）。
+
+    catalog 加载失败（元数据 JSON 缺失）时返回空串——调用方拿到的 URL 不完整、
+    探针必然失败并给出可读消息，但不会抛异常炸掉 /setup/test-key 端点。
+    """
+    return get_base_url_for_provider(provider).rstrip("/")
+
 
 async def _test_get_with_bearer(key_value: str, url: str, name: str,
                                  success_msg: str | None = None) -> tuple[bool, str]:
@@ -113,7 +122,7 @@ async def _test_siliconflow(key_value: str) -> tuple[bool, str]:
     try:
         async with httpx.AsyncClient(timeout=_TIMEOUT) as client:
             resp = await client.post(
-                "https://api.siliconflow.cn/v1/embeddings",
+                f"{_probe_base_url('siliconflow')}/embeddings",
                 headers={"Authorization": f"Bearer {key_value}"},
                 json={"model": "BAAI/bge-large-zh-v1.5", "input": "test"},
             )
@@ -134,20 +143,20 @@ async def _test_siliconflow(key_value: str) -> tuple[bool, str]:
 async def _test_openrouter(key_value: str) -> tuple[bool, str]:
     """测试 OpenRouter API Key。"""
     return await _test_get_with_bearer(
-        key_value, "https://openrouter.ai/api/v1/models", "OpenRouter")
+        key_value, f"{_probe_base_url('openrouter')}/models", "OpenRouter")
 
 
 async def _test_deepseek(key_value: str) -> tuple[bool, str]:
     """测试 DeepSeek API Key。"""
     return await _test_get_with_bearer(
-        key_value, "https://api.deepseek.com/v1/models", "DeepSeek")
+        key_value, f"{_probe_base_url('deepseek')}/models", "DeepSeek")
 
 
 async def _test_agnes(key_value: str) -> tuple[bool, str]:
     """测试 Agnes AI API Key。"""
-    _agnes_url = os.getenv("AGNES_BASE_URL", "https://apihub.agnes-ai.cn/v1")
+    # _probe_base_url 内部 env 优先（AGNES_BASE_URL），catalog 兜底默认端点
     return await _test_get_with_bearer(
-        key_value, f"{_agnes_url.rstrip('/')}/models", "Agnes AI")
+        key_value, f"{_probe_base_url('agnes')}/models", "Agnes AI")
 
 
 async def _test_wolframalpha(key_value: str) -> tuple[bool, str]:
@@ -187,7 +196,7 @@ async def _test_wolframalpha(key_value: str) -> tuple[bool, str]:
 async def _test_modelscope(key_value: str) -> tuple[bool, str]:
     """测试 ModelScope Access Token（推理 API）。"""
     return await _test_get_with_bearer(
-        key_value, "https://api-inference.modelscope.cn/v1/models",
+        key_value, f"{_probe_base_url('modelscope')}/models",
         "ModelScope Access Token")
 
 

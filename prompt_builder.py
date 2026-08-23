@@ -701,11 +701,117 @@ def _annotate_user_profile(content: str, address_term: str) -> str:
     return content
 
 
+# ════════════════════════════════════════════════════════════════════════════
+# 统一 section 装配引擎（单一事实源）
+# ════════════════════════════════════════════════════════════════════════════
+# 背景：此前三处装配点（_build_stable_prompt / _load_cached_modules /
+# _build_workspace_sections）各自复制了一份「读文件 → 清洗 → 收集」循环，
+# 且清洗规则互有出入（USER/MEMORY/HEARTBEAT 的占位符处理不一致）。
+# 现收敛为：数据驱动的有序装配表 + 单一引擎循环 + 统一的加载/清洗原语。
+#
+# 缓存契约（关键约束）：
+#   - _normalize_module 与 address_term 无关，结果可安全进入 mtime 缓存；
+#   - _finalize_module 每请求执行占位符定稿，绝不写入 mtime 缓存
+#     （同一进程可能服务多个不同称呼的用户）。
+#
+# 各路径的 section 顺序差异是既有产品行为，由下方有序装配表分别声明；
+# 内容加载与清洗逻辑则全部经由本节的原语走同一份代码。
+# （主路径 Stable Prefix 序见上方 _STABLE_PREFIX_ORDER；场景层由 _BUCKET_ORDERINGS 动态排序。）
+_MD_MODULES: tuple = ("AGENTS.md", "SOUL.md", "IDENTITY.md", "TOOLS.md",
+                      "USER.md", "MEMORY.md", "HEARTBEAT.md")
+
+# 遗留增量路径（PROMPT_CACHING_ENABLED）：稳定段 / 动态段各自固定序
+_ORDER_INCREMENTAL_STABLE: tuple = ("AGENTS.md", "SOUL.md", "IDENTITY.md", "TOOLS.md")
+_ORDER_INCREMENTAL_DYNAMIC: tuple = ("USER.md", "MEMORY.md", "HEARTBEAT.md")
+
+# 遗留兜底路径（增量构建异常时）：全模块固定序
+_ORDER_LEGACY_FALLBACK: tuple = ("AGENTS.md", "SOUL.md", "IDENTITY.md", "USER.md",
+                                 "TOOLS.md", "MEMORY.md", "HEARTBEAT.md")
+
+
+def _resolve_main_display_name() -> str:
+    """主体 agent 的 display_name（{agent_name} 占位符替换用），失败回退 xiaoda。
+
+    此前三处装配点各有一份相同的 try/except 副本，现收敛于此。
+    """
+    try:
+        from config import get_agent_display_name
+        return get_agent_display_name("xiaoda") or "xiaoda"
+    except (ImportError, AttributeError, ValueError):
+        return "xiaoda"
+    except Exception:
+        logger.exception("prompt_builder.agent_display_name_unexpected")
+        return "xiaoda"
+
+
+def _normalize_module(name: str, content: str) -> str:
+    """模块归一化（缓存安全）：与 address_term 无关的内容级清洗。
+
+    目前仅 USER.md 需要称呼/姓名语义标注；_annotate_user_profile 的标注文本
+    为常量、不依赖称呼词，故归一化结果可安全进入 mtime 缓存。
+    """
+    if name == "USER.md":
+        return _annotate_user_profile(content, "")
+    return content
+
+
+def _finalize_module(name: str, content: str, address_term: str, agent_dn: str) -> str:
+    """模块定稿（每请求）：替换 {address_term}/{agent_name}/{name} 占位符。
+
+    所有 MD 模块统一走此出口 —— 不再区分「带/不带 display_name」两种变体，
+    消除遗留路径把占位符字面量发给 LLM 的隐患。
+    """
+    return _replace_placeholders(content, address_term, agent_dn)
+
+
+def _iter_module_sections(order: tuple, *, loader):
+    """装配引擎：按有序表逐个产出 (模块名, 归一化内容)，跳过缺失/空模块。
+
+    _normalize_module 在此统一应用 —— 三处装配点的清洗逻辑由此收敛为一份；
+    loader 只负责原始读取（如共享的 load_workspace_file 或带缓存的内部读取器），
+    保证 USER.md 语义标注等清洗在所有路径下恰好执行一次、不会叠加。
+    """
+    for name in order:
+        content = loader(name)
+        if content:
+            yield name, _normalize_module(name, content)
+
+
+def _assemble_module_list(order: tuple, address_term: str, agent_dn: str, *,
+                          loader=None) -> list[str]:
+    """按有序装配表产出定稿 section 列表（loader 缺省用 load_workspace_file）。"""
+    if loader is None:
+        loader = load_workspace_file
+    return [
+        _finalize_module(name, content, address_term, agent_dn)
+        for name, content in _iter_module_sections(order, loader=loader)
+    ]
+
+
+def _compose_skills_segment(skills: list[dict]) -> str:
+    """skills → "[已安装的 Skills]" 组成段；无有效技能返回空串。"""
+    if not skills:
+        return ""
+    skill_texts = "\n\n".join(
+        f"### Skill: {s['name']}\n{s['content']}" for s in skills if s["content"])
+    return "[已安装的 Skills]\n\n" + skill_texts if skill_texts else ""
+
+
+def _get_hardware_segment() -> str:
+    """硬件上下文组成段（运行时动态探测，各装配点共用）。"""
+    from config import DATA_DIR
+    from core.capability_detector import detect_capabilities
+    return detect_capabilities().to_prompt_segment(data_dir=str(DATA_DIR))
+
+
 def _build_stable_prompt(address_term: str) -> str:
     """构建系统提示「稳定段」：SOUL.md/AGENTS.md/IDENTITY.md/TOOLS.md/skills/硬件信息。
 
     这些内容不随请求变化，只随 address_term 变化，因此用模块级 dict 缓存。
     缓存通过 workspace 文件 mtime 失效：编辑任意稳定段文件后，下次调用重新构建。
+
+    section 装配统一走 _assemble_module_list / _compose_skills_segment /
+    _get_hardware_segment（顺序见 _ORDER_INCREMENTAL_STABLE）。
     """
     global _stable_prompt_cache_mtimes
     with _cache_lock:
@@ -718,50 +824,19 @@ def _build_stable_prompt(address_term: str) -> str:
         if cache_key in _stable_prompt_cache:
             return _stable_prompt_cache[cache_key]
 
-    sections = []
+    _agent_dn = _resolve_main_display_name()
 
-    # 获取主体 agent 的 display_name 用于 {agent_name} 占位符替换
-    try:
-        from config import get_agent_display_name
-        _agent_dn = get_agent_display_name("xiaoda") or "xiaoda"
-    except (ImportError, AttributeError, ValueError):
-        _agent_dn = "xiaoda"
-    except Exception:
-        logger.exception("prompt_builder.agent_display_name_unexpected")
-        _agent_dn = "xiaoda"
+    sections = _assemble_module_list(
+        _ORDER_INCREMENTAL_STABLE, address_term, _agent_dn,
+        loader=load_workspace_file,
+    )
 
-    agents_rules = load_workspace_file("AGENTS.md")
-    if agents_rules:
-        agents_rules = _replace_placeholders(agents_rules, address_term, _agent_dn)
-        sections.append(agents_rules)
+    skills_segment = _compose_skills_segment(load_skills())
+    if skills_segment:
+        sections.append(skills_segment)
 
-    soul = load_workspace_file("SOUL.md")
-    if soul:
-        soul = _replace_placeholders(soul, address_term, _agent_dn)
-        sections.append(soul)
-
-    identity = load_workspace_file("IDENTITY.md")
-    if identity:
-        identity = _replace_placeholders(identity, address_term, _agent_dn)
-        sections.append(identity)
-
-    tools_rules = load_workspace_file("TOOLS.md")
-    if tools_rules:
-        tools_rules = _replace_placeholders(tools_rules, address_term, _agent_dn)
-        sections.append(tools_rules)
-
-    skills = load_skills()
-    if skills:
-        skill_texts = "\n\n".join(
-            f"### Skill: {s['name']}\n{s['content']}" for s in skills if s["content"])
-        if skill_texts:
-            sections.append("[已安装的 Skills]\n\n" + skill_texts)
-
-    # 硬件上下文（稳定，不随请求变化）—— F3: 运行时动态探测替代硬编码
-    from config import DATA_DIR
-    from core.capability_detector import detect_capabilities
-    hw_context = detect_capabilities().to_prompt_segment(data_dir=str(DATA_DIR))
-    sections.append(hw_context)
+    # 硬件上下文（稳定，不随请求变化）
+    sections.append(_get_hardware_segment())
 
     result = "\n\n---\n\n".join(sections)
     with _cache_lock:
@@ -773,6 +848,10 @@ def _load_cached_modules(address_term: str) -> dict[str, str]:
     """加载各模块内容（按 mtime 缓存），返回 {模块名: 内容}。
 
     包含 9 个模块: AGENTS/SOUL/IDENTITY/TOOLS/USER/MEMORY/HEARTBEAT + skills + hardware
+
+    返回的是【归一化后】内容（USER.md 已加语义标注，见 _normalize_module）；
+    占位符定稿延迟到组装期执行 —— _replace_placeholders 依赖请求级
+    address_term/agent_dn，结果不可进入 mtime 缓存（多称呼用户共存）。
     """
     global _module_cache_mtimes
     with _cache_lock:
@@ -781,7 +860,7 @@ def _load_cached_modules(address_term: str) -> dict[str, str]:
             _module_cache.clear()
             _module_cache_mtimes = current_mtimes.copy()
 
-    from config import WORKSPACE_DIR, DATA_DIR
+    from config import WORKSPACE_DIR
 
     def _load(name: str) -> str:
         with _cache_lock:
@@ -799,26 +878,19 @@ def _load_cached_modules(address_term: str) -> dict[str, str]:
         return content
 
     modules: dict[str, str] = {}
+    for name, content in _iter_module_sections(_MD_MODULES, loader=_load):
+        modules[name] = content
 
-    for name in ("AGENTS.md", "SOUL.md", "IDENTITY.md", "TOOLS.md",
-                 "USER.md", "MEMORY.md", "HEARTBEAT.md"):
-        content = _load(name)
-        if content:
-            if name == "USER.md":
-                content = _annotate_user_profile(content, address_term)
-            modules[name] = content
-
-    skills = load_skills()
-    if skills:
-        skill_texts = "\n\n".join(
-            f"### Skill: {s['name']}\n{s['content']}" for s in skills if s["content"])
-        if skill_texts:
-            modules["skills"] = "[已安装的 Skills]\n\n" + skill_texts
+    skills_segment = _compose_skills_segment(load_skills())
+    if skills_segment:
+        modules["skills"] = skills_segment
 
     with _cache_lock:
         if "hardware" not in _module_cache:
+            from config import DATA_DIR
             from core.capability_detector import detect_capabilities
-            _module_cache["hardware"] = detect_capabilities().to_prompt_segment(data_dir=str(DATA_DIR))
+            _module_cache["hardware"] = detect_capabilities().to_prompt_segment(
+                data_dir=str(DATA_DIR))
         hw = _module_cache.get("hardware", "")
     if hw:
         modules["hardware"] = hw
@@ -1039,23 +1111,11 @@ def _build_dynamic_prompt(extra_context: str = "", address_term: str = "爸爸")
     """构建系统提示「动态段」：USER.md/MEMORY.md/HEARTBEAT.md/extra_context。
 
     每次请求可能变化，不缓存。
+    section 装配统一走 _assemble_module_list（顺序见 _ORDER_INCREMENTAL_DYNAMIC）。
     """
-    sections = []
-
-    user = load_workspace_file("USER.md")
-    if user:
-        user = _annotate_user_profile(user, address_term)
-        sections.append(user)
-
-    memory = load_workspace_file("MEMORY.md")
-    if memory:
-        sections.append(memory)
-
-    heartbeat = load_workspace_file("HEARTBEAT.md")
-    if heartbeat:
-        sections.append(heartbeat)
-
-    result = "\n\n---\n\n".join(sections)
+    _agent_dn = _resolve_main_display_name()
+    result = "\n\n---\n\n".join(
+        _assemble_module_list(_ORDER_INCREMENTAL_DYNAMIC, address_term, _agent_dn))
 
     if extra_context:
         if result:
@@ -1456,58 +1516,21 @@ def build_system_prompt(extra_context: str = "", address_term: str = "爸爸",
 
 
 def _build_workspace_sections(address_term: str) -> list[str]:
-    """加载 workspace 配置文件并组装 sections 列表（不含硬件信息段）。"""
-    sections = []
+    """加载 workspace 配置文件并组装 sections 列表（不含硬件信息段）。
 
-    try:
-        from config import get_agent_display_name
-        _agent_dn = get_agent_display_name("xiaoda") or "xiaoda"
-    except (ImportError, AttributeError, ValueError):
-        _agent_dn = "xiaoda"
-    except Exception:
-        logger.exception("prompt_builder.agent_display_name_unexpected_3")
-        _agent_dn = "xiaoda"
+    section 装配统一走 _assemble_module_list（顺序见 _ORDER_LEGACY_FALLBACK，
+    与主路径的 IDENTITY 前置分层顺序不同 —— 既有产品行为，保留差异）；
+    表情包指令块仅存在于本遗留路径：主路径的表情包由 main_path 运行时
+    预选机制负责（_prepare_sticker_and_tools 注入上下文 system message +
+    ensure_emotion_tag 自动补情绪标签），不依赖静态指令块。
+    """
+    _agent_dn = _resolve_main_display_name()
 
-    agents_rules = load_workspace_file("AGENTS.md")
-    if agents_rules:
-        agents_rules = _replace_placeholders(agents_rules, address_term, _agent_dn)
-        sections.append(agents_rules)
+    sections = _assemble_module_list(_ORDER_LEGACY_FALLBACK, address_term, _agent_dn)
 
-    soul = load_workspace_file("SOUL.md")
-    if soul:
-        soul = _replace_placeholders(soul, address_term, _agent_dn)
-        sections.append(soul)
-
-    identity = load_workspace_file("IDENTITY.md")
-    if identity:
-        identity = _replace_placeholders(identity, address_term, _agent_dn)
-        sections.append(identity)
-
-    user = load_workspace_file("USER.md")
-    if user:
-        user = _annotate_user_profile(user, address_term)
-        sections.append(user)
-
-    tools_rules = load_workspace_file("TOOLS.md")
-    if tools_rules:
-        tools_rules = _replace_placeholders(tools_rules, address_term)
-        sections.append(tools_rules)
-
-    memory = load_workspace_file("MEMORY.md")
-    if memory:
-        sections.append(memory)
-
-    heartbeat = load_workspace_file("HEARTBEAT.md")
-    if heartbeat:
-        heartbeat = _replace_placeholders(heartbeat, address_term)
-        sections.append(heartbeat)
-
-    skills = load_skills()
-    if skills:
-        skill_texts = "\n\n".join(
-            f"### Skill: {s['name']}\n{s['content']}" for s in skills if s["content"])
-        if skill_texts:
-            sections.append("[已安装的 Skills]\n\n" + skill_texts)
+    skills_segment = _compose_skills_segment(load_skills())
+    if skills_segment:
+        sections.append(skills_segment)
 
     sections.append(_STICKER_INSTRUCTIONS)
     return sections

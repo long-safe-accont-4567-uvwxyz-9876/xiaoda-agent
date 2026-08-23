@@ -562,12 +562,18 @@ def _reset_credential_pool(updates: Any) -> None:
     """重置凭证池中所有 DEAD 凭证，并替换为新 Key。"""
     try:
         from utils.credential_pool import get_credential_pool, Credential
+        from config_providers import get_provider_env_prefix
+
         pool = get_credential_pool()
+        # base_url 单一来源：provider catalog（agnes 特例：池内凭证不带 base_url，
+        # 默认端点由 agnes_transport 自管，故保留空串——与原实现一致）
         _PROVIDER_KEY_MAP = {
-            "SILICONFLOW_API_KEY": ("siliconflow", "https://api.siliconflow.cn/v1"),
-            "OPENROUTER_API_KEY": ("openrouter", "https://openrouter.ai/api/v1"),
-            "MIMO_API_KEY": ("mimo", get_base_url_for_provider("mimo")),
-            "DEEPSEEK_API_KEY": ("deepseek", "https://api.deepseek.com/v1"),
+            **{
+                f"{get_provider_env_prefix(pid)}_API_KEY": (
+                    pid, get_base_url_for_provider(pid).rstrip("/")
+                )
+                for pid in ("mimo", "siliconflow", "openrouter", "deepseek")
+            },
             "AGNES_API_KEY": ("agnes", ""),
         }
         for env_key, (provider, base_url) in _PROVIDER_KEY_MAP.items():
@@ -709,43 +715,56 @@ async def _reinit_and_maybe_restart_qq(qq_changed: bool) -> None:
         _reinit_tasks[:] = [t for t in _reinit_tasks if not t.done()]
 
 
-# 已知 Provider 映射 — 有 API Key 即自动注册
-_KNOWN_PROVIDERS = {
-    "MIMO_API_KEY": {
-        "id": "mimo", "label": "小米 MiMo", "format": "openai",
-        "base_url": get_base_url_for_provider("mimo"), "builtin": True,
-    },
-    "SILICONFLOW_API_KEY": {
-        "id": "siliconflow", "label": "SiliconFlow 硅基流动", "format": "openai",
-        "base_url": "https://api.siliconflow.cn/v1",
-    },
-    "DEEPSEEK_API_KEY": {
-        "id": "deepseek", "label": "DeepSeek", "format": "openai",
-        "base_url": "https://api.deepseek.com/v1",
-    },
-    "OPENROUTER_API_KEY": {
-        "id": "openrouter", "label": "OpenRouter", "format": "openai",
-        "base_url": "https://openrouter.ai/api/v1",
-    },
-    "MODELSCOPE_API_KEY": {
-        "id": "modelscope", "label": "ModelScope 魔搭", "format": "openai",
-        "base_url": "https://api-inference.modelscope.cn/v1",
-    },
-    "AGNES_API_KEY": {
-        "id": "agnes", "label": "Agnes AI", "format": "openai",
-        # CodeRabbit 一致性修复：与 setup.py:346 / config.py:543 / server.py:58 一致，
-        # 用 AGNES_BASE_URL env 作为单一来源，私有化部署时 env 覆盖默认值
-        "base_url": os.getenv("AGNES_BASE_URL", "https://apihub.agnes-ai.cn/v1"),
-    },
-    "OLLAMA_BASE_URL": {
-        "id": "ollama", "label": "Ollama 本地大模型", "format": "openai",
-        "base_url": "http://localhost:11434/v1",
-    },
-    "LLAMA_CPP_BASE_URL": {
-        "id": "llama.cpp", "label": "llama.cpp 本地接口", "format": "openai",
-        "base_url": "http://localhost:8080/v1",
-    },
-}
+# 已知 Provider 映射（有 API Key 即自动注册）— 字段单一来源：provider catalog。
+# 本模块只叠加展示顺序与「本地 URL 型 provider 走 *_BASE_URL」的注册策略。
+_SETUP_PROVIDER_ORDER = (
+    "mimo", "siliconflow", "deepseek", "openrouter",
+    "modelscope", "agnes", "ollama", "llama.cpp",
+)
+_URL_KEYED_LOCAL_PROVIDERS = frozenset({"ollama", "llama.cpp"})
+
+
+def _derive_known_providers() -> dict[str, dict[str, Any]]:
+    """从 provider catalog 派生「有 Key 即自动注册」表。
+
+    id/base_url/label/env 别名全部来自 config.get_provider_catalog()；
+    env 键选择规则：优先 {ID}_API_KEY 别名（向导表单字段名契约），否则首个别名。
+    catalog 加载失败（元数据 JSON 缺失，降级为空 catalog）时返回空表，不炸。
+    """
+    from config import get_provider_catalog
+    from config_providers import get_provider_env_prefix, get_provider_label
+    from llm_gateway.contracts import ProviderProtocol
+
+    catalog = get_provider_catalog()
+    derived: dict[str, dict[str, Any]] = {}
+    for pid in _SETUP_PROVIDER_ORDER:
+        try:
+            definition = catalog.get(pid)
+        except KeyError:
+            continue
+        aliases = definition.auth.environment_aliases
+        env_prefix = get_provider_env_prefix(pid)
+        if pid in _URL_KEYED_LOCAL_PROVIDERS:
+            env_key = f"{env_prefix}_BASE_URL"
+        else:
+            env_key = next(
+                (alias for alias in aliases if alias == f"{env_prefix}_API_KEY"),
+                aliases[0] if aliases else "",
+            )
+        if not env_key:
+            continue
+        derived[env_key] = {
+            "id": pid,
+            "label": get_provider_label(pid),
+            # ollama 协议本地端点同样走 OpenAI 兼容客户端（与 ProviderService._record 规则一致）
+            "format": "anthropic" if definition.protocol is ProviderProtocol.ANTHROPIC else "openai",
+            "base_url": get_base_url_for_provider(pid).rstrip("/"),
+            "builtin": definition.builtin,
+        }
+    return derived
+
+
+_KNOWN_PROVIDERS = _derive_known_providers()
 
 
 async def _auto_register_providers(updates: dict) -> list[Any]:
