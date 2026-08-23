@@ -66,6 +66,9 @@ from model_router_config import (  # noqa: F401,E402
 
 # ── Phase 2 拆分：ModelRouteRegistry 抽为 model_router_registry（逐字节搬移） ──
 from model_router_registry import ModelRouteRegistry as ModelRouteRegistry  # noqa: F401,E402
+# FALLBACK_ROUTE 数据已下沉 model_router_registry（llm_gateway 契约要求网关不得反向
+# import 门面）；此处同名 re-export 维持旧 import 路径（tests/web 路由仍从这取）。
+from model_router_registry import FALLBACK_ROUTE  # noqa: F401,E402
 from transports import AgnesTransport, MiMoTransport, ProviderTransport
 
 # 根因修复：agnes API connect=5s 过短导致 APIConnectionError，统一从 agnes_transport 引入共享 httpx 配置
@@ -76,14 +79,17 @@ from utils.error_classifier import ErrorClassifier
 from utils.metrics import metrics
 from utils.prompt_caching import apply_cache_control
 
+# 长对话路由的 max_tokens 上限（128K）：chat 与 chat_agnes 共用，改值两处同步。
+CHAT_MAX_TOKENS = 131072
+
 ROUTE_TABLE = {
     # chat 主路由：128K 上限，支撑长时间连贯对话，搭配滑动窗口+摘要压缩避免退化
     # 不再锁死 8192，避免长会话频繁截断历史导致记忆断裂
-    "chat": {"model": _CFG_MODEL_NAME, "max_tokens": 131072, "client": _CFG_DEFAULT_PROVIDER, "thinking": {"type": "disabled"}},
+    "chat": {"model": _CFG_MODEL_NAME, "max_tokens": CHAT_MAX_TOKENS, "client": _CFG_DEFAULT_PROVIDER, "thinking": {"type": "disabled"}},
     "emotion_analysis": {"model": _CFG_FLASH_MODEL or _CFG_MODEL_NAME, "max_tokens": 1024, "client": _CFG_DEFAULT_PROVIDER, "thinking": {"type": "disabled"}},
     "tool_result_wrap": {"model": _CFG_FLASH_MODEL or _CFG_MODEL_NAME, "max_tokens": 2048, "client": _CFG_DEFAULT_PROVIDER, "thinking": {"type": "disabled"}},
     "memory_encoding": {"model": _CFG_FLASH_MODEL or _CFG_MODEL_NAME, "max_tokens": DEFAULT_MAX_TOKENS, "client": _CFG_DEFAULT_PROVIDER, "thinking": {"type": "disabled"}},
-    "chat_agnes": {"model": AGNES_TEXT_MODEL, "max_tokens": 131072, "client": "agnes", "thinking": {"type": "disabled"},
+    "chat_agnes": {"model": AGNES_TEXT_MODEL, "max_tokens": CHAT_MAX_TOKENS, "client": "agnes", "thinking": {"type": "disabled"},
                    "presence_penalty": 0.3, "frequency_penalty": 0.0},
 }
 
@@ -106,11 +112,6 @@ RETRYABLE_ERRORS = {'rate_limit', 'connection_error'}
 # per-provider LLM 调用并发上限：agnes 支持最多 3 并发，统一各 provider 上限为 3，
 # 取代原先 asyncio.Lock 的串行（1 并发）。凭证轮换/客户端刷新仍走 _get_credential_lock 串行。
 MAX_PROVIDER_CONCURRENCY = 3
-# chat_pro/chat_flash 已合并进 chat（同一 provider 同一 model，无区分意义）
-# 降级链：chat 失败 → chat_agnes（agnes provider 作为独立兜底）
-FALLBACK_ROUTE = {
-    "chat": "chat_agnes",
-}
 
 
 def list_discovered_model_ids() -> list[str]:

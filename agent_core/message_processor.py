@@ -293,7 +293,7 @@ class MessageProcessorMixin(StreamingMixin, ChatTargetMixin, VisionMixin, Person
         _stage_t2 = time.time()
         result = await self._run_main_process_path(
             ctx, user_input, clean_input, user_id, source, user_openid, session_id,
-            status_callback, image_data, is_master, force_voice, chat_targets, trace)
+            status_callback, image_data, is_master, force_voice, trace)
         _stage_main_ms = int((time.time() - _stage_t2) * 1000)
         if _stage_main_ms > 5000:
             _pre_ms = int((_stage_t2 - _stage_t1) * 1000)

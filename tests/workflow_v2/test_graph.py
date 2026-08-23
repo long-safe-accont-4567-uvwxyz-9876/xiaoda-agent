@@ -66,3 +66,27 @@ def test_content_hash_mixed_conditional_edges():
     h2 = compute_content_hash(list(reversed(nodes)), list(reversed(edges)), {})
     assert len(h1) == 64
     assert h1 == h2
+
+
+def test_validate_graph_rejects_unimplemented_node_types():
+    """六种未实现节点类型必须在编译期拒绝（此前运行时才报 UNSUPPORTED_NODE）。"""
+    nodes = [
+        _n("start", NodeType.START),
+        NodeSpec(id="wait", type=NodeType.DELAY, name="w"),
+        _n("end", NodeType.END),
+    ]
+    edges = [EdgeSpec(source="start", target="wait"),
+             EdgeSpec(source="wait", target="end")]
+    with pytest.raises(GraphError) as ei:
+        validate_graph(nodes, edges)
+    assert "unsupported node type" in str(ei.value)
+    assert "delay" in ei.value.details["unsupported_types"]
+    assert ei.value.details["nodes"] == ["wait"]
+
+
+def test_validate_graph_accepts_all_supported_types():
+    from workflow_v2.graph import SUPPORTED_NODE_TYPES
+    # 未实现集合与审计清单一致，防止有人悄悄扩 executor 却漏更新语义
+    implemented = {t.value for t in NodeType} - {
+        "condition", "parallel", "join", "workflow", "input", "delay"}
+    assert {t.value for t in SUPPORTED_NODE_TYPES} == implemented

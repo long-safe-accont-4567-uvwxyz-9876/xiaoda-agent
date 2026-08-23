@@ -27,6 +27,46 @@ if TYPE_CHECKING:
     from agent_core import AgentCore
 
 
+class StartupHealth:
+    """启动步骤结果聚合器：失败照旧即时 warning，末尾输出一行汇总健康报告。
+
+    背景（技术债 P1-4）：各子步骤独立容错本身合理，但失败模式全是散落
+    warning 日志，无聚合视图——出问题时要在日志里翻半天才知道哪些子系统
+    降级了。本类只做记录与汇总，不改变任何容错行为。
+    """
+
+    def __init__(self) -> None:
+        self._steps: dict[str, str] = {}   # name -> "ok" 或错误摘要
+
+    def reset(self) -> None:
+        self._steps.clear()
+
+    def record_ok(self, name: str) -> None:
+        self._steps[name] = "ok"
+
+    def record_fail(self, name: str, err: str) -> None:
+        self._steps[name] = (err or "failed")[:160]
+
+    @property
+    def failed(self) -> dict[str, str]:
+        return {k: v for k, v in self._steps.items() if v != "ok"}
+
+    def summary(self) -> str:
+        total = len(self._steps)
+        bad = self.failed
+        if not bad:
+            return f"startup.health all_ok total={total}"
+        detail = "; ".join(f"{k}={v}" for k, v in bad.items())
+        return f"startup.health degraded={len(bad)}/{total} failed=[{detail}]"
+
+
+# 硅基流动免费模型端点：KG 提取（v1/v2）/ QueryTransformer / Instinct / 错误规则
+# 管线等辅助 LLM 共用。原先 5 组调用点各自内联 base_url+model 字面量，换模型要改
+# 8 处——收敛为常量（对齐 model_router_config 用 provider 元数据消灭硬编码的思路）。
+SILICONFLOW_BASE_URL = "https://api.siliconflow.cn/v1"
+SILICONFLOW_FREE_MODEL = "THUDM/GLM-4-9B-0414"
+
+
 def _embedding_service_for_mode(
     mode: str,
     model_dir: str,
@@ -74,6 +114,24 @@ class AgentCoreBootstrapper:
 
     def __init__(self, core: AgentCore) -> None:
         self.core = core
+        self.health = StartupHealth()
+
+    async def _run_optional_step(self, name: str, step: Any, *args: Any) -> None:
+        """执行可选初始化步骤：失败 warning + 计入健康报告。
+
+        日志事件规范化：原先 9 个独立事件名（reinit_xiaoli_failed /
+        reinit_tts_failed / ...，且 reinit 前缀在首次启动时本来就是误称）
+        统一为 agent_core.step_failed step={name}——单事件名+结构化字段
+        更易检索。容错行为不变：失败不阻止后续步骤。
+        """
+        try:
+            result = step(*args)
+            if asyncio.iscoroutine(result):
+                await result
+            self.health.record_ok(name)
+        except Exception as e:
+            logger.warning("agent_core.step_failed step={} error={}", name, str(e))
+            self.health.record_fail(name, str(e))
 
     async def bootstrap(self, reinit: bool = False) -> None:
         """执行完整的初始化流程。缺少 API Key 时降级启动，仅提供 WebUI 设置页面。
@@ -81,8 +139,9 @@ class AgentCoreBootstrapper:
         Args:
             reinit: 为 True 时跳过已初始化的基础设施和认知系统，
                     仅执行降级模式中未完成的步骤（xiaoli/tts/sub_agents 等）。
-                    各步骤独立容错，单个步骤失败不会阻止核心聊天功能。
+                    各步骤独立容错，单个步骤失败不会阻止核心聊天。
         """
+        self.health.reset()
         from config import MIMO_API_KEY as _mimo_key
         from utils.encrypted_credential import reveal_credential
         _mimo_key = reveal_credential(_mimo_key)
@@ -96,13 +155,18 @@ class AgentCoreBootstrapper:
                 try:
                     await self._init_infrastructure()
                     _ensure_workspace_template()
+                    self.health.record_ok("infrastructure")
                 except Exception as e:
                     logger.warning("agent_core.degraded_init_infrastructure_error error={}", str(e))
+                    self.health.record_fail("infrastructure", str(e))
                 try:
                     await self._init_cognitive()
+                    self.health.record_ok("cognitive")
                 except Exception as e:
                     logger.warning("agent_core.degraded_init_cognitive_error error={}", str(e))
+                    self.health.record_fail("cognitive", str(e))
             # _initialized 保持 False → process() 返回降级回复
+            logger.warning(self.health.summary())
             return
 
         if reinit:
@@ -116,87 +180,66 @@ class AgentCoreBootstrapper:
         await self._bootstrap_optional_components()
 
         self.core._initialized = True
+        self.core.startup_health = self.health
         logger.info("agent_core.initialized" + (" (reinit)" if reinit else ""))
+        if self.health.failed:
+            logger.warning(self.health.summary())
+        else:
+            logger.info(self.health.summary())
 
     async def _bootstrap_optional_components(self) -> None:
         """初始化可选组件（各自独立容错，失败不阻止核心聊天）。"""
+        h = self.health
         # J-Space 架构优化初始化（非阻塞，失败不影响主流程）
         try:
             from core.j_space_bootstrap import init_j_space
             init_j_space()
+            h.record_ok("j_space")
         except Exception as e:
             logger.warning(f"j_space.bootstrap_failed (non-blocking): {e}")
+            h.record_fail("j_space", str(e))
 
         # 共享黑板后台清理任务（避免过期条目堆积，惰性清理之外的周期兜底）
         try:
             if self.core._shared_blackboard is not None:
                 self.core._shared_blackboard_cleanup_task = await self.core._shared_blackboard.start_cleanup_task()
                 logger.info("blackboard.cleanup_task_started")
+            h.record_ok("blackboard_cleanup")
         except Exception as e:
             logger.warning("agent_core.blackboard_cleanup_start_failed error={}", str(e))
+            h.record_fail("blackboard_cleanup", str(e))
 
         # 以下步骤各自独立容错：单个可选功能失败不应阻止核心聊天
-        # xiaoli 子代理（可选）
-        try:
-            await self.core.xiaoli.init()
-        except Exception as e:
-            logger.warning("agent_core.reinit_xiaoli_failed error={}", str(e))
+        await self._run_optional_step("xiaoli", self.core.xiaoli.init)
+        await self._run_optional_step("voice_refs", self._ensure_voice_refs)
+        await self._run_optional_step("stickers", self._ensure_stickers)
 
-        # 参考音频和表情包（可选，仅复制文件）
-        try:
-            self._ensure_voice_refs()
-        except Exception as e:
-            logger.warning("agent_core.reinit_voice_refs_failed error={}", str(e))
-        try:
-            self._ensure_stickers()
-        except Exception as e:
-            logger.warning("agent_core.reinit_stickers_failed error={}", str(e))
-
-        # TTS 引擎（可选）
-        try:
+        # TTS 引擎（可选）+ 注册全局单例供 synthesize_voice 工具访问
+        async def _init_tts() -> None:
             await self.core.tts.init()
-            # 注册全局 TTS 引擎单例，供 synthesize_voice 工具访问
             from emotion.tts_engine import set_global_tts_engine
             set_global_tts_engine(self.core.tts)
-        except Exception as e:
-            logger.warning("agent_core.reinit_tts_failed error={}", str(e))
+        await self._run_optional_step("tts", _init_tts)
 
-        # 子代理注册（可选，失败不影响主 Agent 聊天）
-        try:
-            await self._register_sub_agents()
-        except Exception as e:
-            logger.warning("agent_core.reinit_sub_agents_failed error={}", str(e))
-
-        # 任务图（可选，复杂任务路由需要）
-        try:
-            await self._build_task_graph()
-        except Exception as e:
-            logger.warning("agent_core.reinit_task_graph_failed error={}", str(e))
-
-        # 交互层（可选，包含斜杠命令、画像等）
-        try:
-            await self._init_interaction()
-        except Exception as e:
-            logger.warning("agent_core.reinit_interaction_failed error={}", str(e))
-
-        # MCP 服务器（可选）
-        try:
-            await self._init_mcp()
-        except Exception as e:
-            logger.warning("agent_core.reinit_mcp_failed error={}", str(e))
+        # 子代理注册 / 任务图 / 交互层 / MCP / 插件（均可选）
+        await self._run_optional_step("sub_agents", self._register_sub_agents)
+        await self._run_optional_step("task_graph", self._build_task_graph)
+        await self._run_optional_step("interaction", self._init_interaction)
+        await self._run_optional_step("mcp", self._init_mcp)
 
         # 刷新 ToolCallRepair 的工具名快照（delegate_task 等动态注册的工具在 __init__ 之后才出现）
-        try:
+        def _refresh_tool_repair() -> None:
             from tool_engine.tool_registry import to_openai_tools
             self.core.tool_repair._allowed_tools = set(t["function"]["name"] for t in to_openai_tools())
+        try:
+            _refresh_tool_repair()
+            h.record_ok("tool_repair_refresh")
         except Exception as e:
             logger.debug("agent_core.reinit_tool_repair_refresh_failed error={}", str(e))
+            h.record_fail("tool_repair_refresh", str(e))
 
         # 自动加载并启用插件（discover 已在 web/server.py 中完成）
-        try:
-            await self._auto_enable_plugins()
-        except Exception as e:
-            logger.warning("agent_core.reinit_plugins_failed error={}", str(e))
+        await self._run_optional_step("plugins", self._auto_enable_plugins)
 
     # ── 基础设施 ──────────────────────────────────────────
 
@@ -351,7 +394,7 @@ class AgentCoreBootstrapper:
         # 内自动降级本地模型（见 vector_store.embed_fallback_to_local）。
         embed_api_key = (os.getenv("EMBED_API_KEY", "")
                          or os.getenv("SILICONFLOW_API_KEY", ""))
-        embed_base_url = os.getenv("EMBED_BASE_URL", "https://api.siliconflow.cn/v1")
+        embed_base_url = os.getenv("EMBED_BASE_URL", SILICONFLOW_BASE_URL)
         # 默认 remote：检索（embedding）走 SiliconFlow 远程 API（模型不再随包内置，
         # 见 docs/repo_hygiene_notes.md）。EMBED_MODE=local 仍可强制本地推理。
         # WebUI 本地部署页持久化的引擎模式优先（webui_overrides.json local_deploy.mode）
@@ -487,8 +530,8 @@ class AgentCoreBootstrapper:
         elif sf_key:
             core.knowledge_graph.set_free_model_client(
                 api_key=sf_key,
-                base_url="https://api.siliconflow.cn/v1",
-                model="THUDM/GLM-4-9B-0414",
+                base_url=SILICONFLOW_BASE_URL,
+                model=SILICONFLOW_FREE_MODEL,
             )
         core.memory.set_knowledge_graph(core.knowledge_graph)
 
@@ -511,8 +554,8 @@ class AgentCoreBootstrapper:
                 elif sf_key:
                     kg_v2.set_free_model_client(
                         api_key=sf_key,
-                        base_url="https://api.siliconflow.cn/v1",
-                        model="THUDM/GLM-4-9B-0414",
+                        base_url=SILICONFLOW_BASE_URL,
+                        model=SILICONFLOW_FREE_MODEL,
                     )
                 core.knowledge_graph.set_kg_v2(kg_v2)
                 kg_search_engine = KGSearchEngine(
@@ -607,11 +650,11 @@ class AgentCoreBootstrapper:
         if not qt_api_key:
             logger.info("query_transformer.disabled_no_api_key")
             return None
-        logger.info("query_transformer.enabled", model="THUDM/GLM-4-9B-0414 (free)")
+        logger.info("query_transformer.enabled", model=f"{SILICONFLOW_FREE_MODEL} (free)")
         return QueryTransformer(
             router=router,
             api_key=qt_api_key,
-            base_url="https://api.siliconflow.cn/v1",
+            base_url=SILICONFLOW_BASE_URL,
             backend=backend,
         )
 
@@ -632,8 +675,8 @@ class AgentCoreBootstrapper:
             # Instinct 提取改用硅基流动免费模型（非思考模型，避免 Z1 思考碎片）
             core.instinct_manager.set_free_model_client(
                 api_key=sf_key,
-                base_url="https://api.siliconflow.cn/v1",
-                model="THUDM/GLM-4-9B-0414",
+                base_url=SILICONFLOW_BASE_URL,
+                model=SILICONFLOW_FREE_MODEL,
             )
         # 加载 Instinct 提示到上下文
         instinct_prompt = await core.instinct_manager.build_instinct_prompt()
@@ -656,8 +699,8 @@ class AgentCoreBootstrapper:
             elif sf_key:
                 pipeline.set_free_model_client(
                     api_key=sf_key,
-                    base_url="https://api.siliconflow.cn/v1",
-                    model="THUDM/GLM-4-9B-0414",
+                    base_url=SILICONFLOW_BASE_URL,
+                    model=SILICONFLOW_FREE_MODEL,
                 )
             # 构造与后端配置均成功，原子提交到 core 并注入 handler
             core.error_pipeline = pipeline
@@ -1118,13 +1161,14 @@ class AgentCoreBootstrapper:
     async def _auto_enable_plugins(self) -> None:
         """自动加载并启用已发现的插件。
 
-        PluginManager.discover() 在 web/server.py 中已完成，
-        此处对所有已发现的插件执行 load + enable，
-        使插件注册的工具对 LLM 可见。
+        PluginManager.discover() 在 web/server.py lifespan 中完成后会注册到
+        plugins.manager 的中立注册点；此处经 get_active_plugin_manager() 获取
+        并对所有已发现的插件执行 load + enable，使插件注册的工具对 LLM 可见。
         """
-        from web.server import app
-        plugin_mgr = getattr(app.state, "plugin_manager", None)
+        from plugins.manager import get_active_plugin_manager
+        plugin_mgr = get_active_plugin_manager()
         if not plugin_mgr:
+            logger.warning("plugins.no_active_manager hint=web层lifespan未运行或降级模式")
             return
 
         to_enable = list(plugin_mgr.plugins.keys())

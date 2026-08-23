@@ -67,7 +67,7 @@ def test_clean_reply_full_calls_strip_reasoning():
     _clean_reply_full 定义在 ToolExecutorMixin，通过 AgentCore（多继承组合）
     调用。此处直接创建 ToolExecutorMixin 实例进行测试。
     """
-    from agent_core.tool_executor import ToolExecutorMixin
+    from agent_core.tool_executor_mixin import ToolExecutorMixin
 
     # 创建最小化的 ToolExecutorMixin 实例
     processor = ToolExecutorMixin.__new__(ToolExecutorMixin)

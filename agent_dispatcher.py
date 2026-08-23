@@ -31,6 +31,21 @@ _AGENT_TO_TASK_TYPE = {
     "xiaoda": "memory",        # 记忆检索/主Agent
 }
 
+# 任务分类关键词规则表：classify_task 的回退分类与 classify_multi 共用，
+# 原先两处各抄一份已出现漂移（classify_task 侧 memory 行"上周"重复）。
+# 表序即优先级（classify_task 返回首个命中），不要重排。
+_KEYWORD_TASK_RULES: list[tuple[list[str], str]] = [
+    (["前端", "frontend", "vue", "react", "css", "html", "ui 设计"], "frontend"),
+    (["后端", "backend", "api", "数据库", "python 服务", "fastapi"], "backend"),
+    (["调试", "debug", "报错", "错误", "异常", "stack trace", "bug"], "debug"),
+    (["安全", "security", "漏洞", "加密", "权限", "认证"], "security"),
+    (["测试", "test", "pytest", "单测", "覆盖率"], "test"),
+    (["搜索", "查询", "查找", "search", "browse", "网页"], "info_search"),
+    (["回忆", "记得", "记忆", "recall", "remember", "记得吗", "上次", "昨天", "前几天", "上周"], "memory"),
+    (["硬件", "gpio", "i2c", "传感器", "摄像头", "hardware"], "hardware"),
+    (["难过", "开心", "生气", "焦虑", "陪伴", "聊天", "求安慰"], "emotional"),
+]
+
 
 class AgentDispatcher:
     """管理多个子 Agent 的注册、调度与降级调用。"""
@@ -197,18 +212,9 @@ class AgentDispatcher:
 
         参考 Trae SOLO 模式：任务→代理 1:1 绑定
 
-        :param task_type: 任务类型
-            - "frontend" → 小狼（xiaolang，编程/系统）
-            - "backend" → 小狼（xiaolang）
-            - "debug" → 小狼（xiaolang）
-            - "security" → 小狼（xiaolang，系统管理）
-            - "test" → 小狼（xiaolang）
-            - "info_search" → 小涟（xiaolian，信息助手）
-            - "memory" → 小妲（xiaoda，记忆检索）
-            - "hardware" → 小狼（xiaolang）
-            - "emotional" → 小莉（xiaoli，萌系陪伴）
-            - "research" → 小可（xiaoke，学术研究）
-            - "general" → 默认（xiaoli）
+        :param task_type: 任务类型（task→代理的实际映射见 config/agent_routing.json
+            与 _load_routing_config 的内置默认：frontend/backend/debug/test→xiaoke，
+            security/hardware→xiaolang，info_search→xiaolian，emotional→xiaoli）
         :param input_text: 用户输入文本
         :returns: 子代理名称（target）
         """
@@ -317,24 +323,9 @@ class AgentDispatcher:
 
         # 回退：本地关键词分类（RouterEngine 无明确路由信号时）
         text_lower = user_input.lower()
-
-        # 关键词分类
-        rules = [
-            (["前端", "frontend", "vue", "react", "css", "html", "ui 设计"], "frontend"),
-            (["后端", "backend", "api", "数据库", "python 服务", "fastapi"], "backend"),
-            (["调试", "debug", "报错", "错误", "异常", "stack trace", "bug"], "debug"),
-            (["安全", "security", "漏洞", "加密", "权限", "认证"], "security"),
-            (["测试", "test", "pytest", "单测", "覆盖率"], "test"),
-            (["搜索", "查询", "查找", "search", "browse", "网页"], "info_search"),
-            (["回忆", "记得", "记忆", "recall", "remember", "记得吗", "上次", "昨天", "前几天", "上周", "上周"], "memory"),
-            (["硬件", "gpio", "i2c", "传感器", "摄像头", "hardware"], "hardware"),
-            (["难过", "开心", "生气", "焦虑", "陪伴", "聊天", "求安慰"], "emotional"),
-        ]
-
-        for keywords, task_type in rules:
-            for kw in keywords:
-                if kw in text_lower:
-                    return task_type
+        for keywords, task_type in _KEYWORD_TASK_RULES:
+            if any(kw in text_lower for kw in keywords):
+                return task_type
 
         return "general"
 
@@ -345,23 +336,10 @@ class AgentDispatcher:
         单领域时返回单个元素的列表。
         """
         text_lower = user_input.lower()
-        rules = [
-            (["前端", "frontend", "vue", "react", "css", "html", "ui 设计"], "frontend"),
-            (["后端", "backend", "api", "数据库", "python 服务", "fastapi"], "backend"),
-            (["调试", "debug", "报错", "错误", "异常", "stack trace", "bug"], "debug"),
-            (["安全", "security", "漏洞", "加密", "权限", "认证"], "security"),
-            (["测试", "test", "pytest", "单测", "覆盖率"], "test"),
-            (["搜索", "查询", "查找", "search", "browse", "网页"], "info_search"),
-            (["回忆", "记得", "记忆", "recall", "remember", "记得吗", "上次", "昨天", "前几天", "上周"], "memory"),
-            (["硬件", "gpio", "i2c", "传感器", "摄像头", "hardware"], "hardware"),
-            (["难过", "开心", "生气", "焦虑", "陪伴", "聊天", "求安慰"], "emotional"),
-        ]
         found: set[str] = set()
-        for keywords, task_type in rules:
-            for kw in keywords:
-                if kw in text_lower:
-                    found.add(task_type)
-                    break
+        for keywords, task_type in _KEYWORD_TASK_RULES:
+            if any(kw in text_lower for kw in keywords):
+                found.add(task_type)
         return sorted(found) if found else ["general"]
 
     def route_multi(self, task_types: list[str]) -> dict:

@@ -3,7 +3,7 @@ from unittest.mock import AsyncMock
 
 import pytest
 
-from agent_core.tool_executor import ToolExecutorMixin
+from agent_core.tool_executor_mixin import ToolExecutorMixin
 from hooks import HookResult
 from tool_engine.tool_registry import ToolResult
 

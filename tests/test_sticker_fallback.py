@@ -14,7 +14,7 @@ if str(PROJECT_ROOT) not in sys.path:
 
 def _make_stub(sticker_dir: Path):
     """创建带 sticker_manager 的 ToolExecutorMixin stub"""
-    from agent_core.tool_executor import ToolExecutorMixin
+    from agent_core.tool_executor_mixin import ToolExecutorMixin
     from emotion.sticker_manager import StickerManager
     stub = ToolExecutorMixin.__new__(ToolExecutorMixin)
     stub.sticker_manager = StickerManager(sticker_dir)
@@ -29,7 +29,7 @@ def test_sticker_by_emotion_name_shy(tmp_path):
     (tmp_path / "neutral" / "neutral_平静.jpg").write_bytes(b"x")
     stub = _make_stub(tmp_path)
     reply = "测试 [sticker:shy]"
-    with patch("agent_core.tool_executor.get_degradation_strategy") as m_ds:
+    with patch("agent_core.tool_executor_mixin.get_degradation_strategy") as m_ds:
         m_ds.return_value.is_feature_available.return_value = True
         clean, path = stub.get_sticker_info(reply)
     assert path is not None
@@ -45,7 +45,7 @@ def test_sticker_crying_maps_to_sad(tmp_path):
     (tmp_path / "neutral" / "neutral_平静.jpg").write_bytes(b"x")
     stub = _make_stub(tmp_path)
     reply = "呜呜 [sticker:crying]"
-    with patch("agent_core.tool_executor.get_degradation_strategy") as m_ds:
+    with patch("agent_core.tool_executor_mixin.get_degradation_strategy") as m_ds:
         m_ds.return_value.is_feature_available.return_value = True
         clean, path = stub.get_sticker_info(reply)
     assert path is not None
@@ -60,7 +60,7 @@ def test_sticker_surprised_maps_to_surprised(tmp_path):
     (tmp_path / "neutral" / "neutral_平静.jpg").write_bytes(b"x")
     stub = _make_stub(tmp_path)
     reply = "哇 [sticker:surprised]"
-    with patch("agent_core.tool_executor.get_degradation_strategy") as m_ds:
+    with patch("agent_core.tool_executor_mixin.get_degradation_strategy") as m_ds:
         m_ds.return_value.is_feature_available.return_value = True
         clean, path = stub.get_sticker_info(reply)
     assert path is not None
@@ -73,7 +73,7 @@ def test_sticker_nonexistent_falls_back_to_neutral(tmp_path):
     (tmp_path / "neutral" / "neutral_平静.jpg").write_bytes(b"x")
     stub = _make_stub(tmp_path)
     reply = "不存在的标签 [sticker:xyz_fake]"
-    with patch("agent_core.tool_executor.get_degradation_strategy") as m_ds:
+    with patch("agent_core.tool_executor_mixin.get_degradation_strategy") as m_ds:
         m_ds.return_value.is_feature_available.return_value = True
         clean, path = stub.get_sticker_info(reply)
     assert path is not None  # neutral 兜底
@@ -86,7 +86,7 @@ def test_sticker_exact_filename_still_works(tmp_path):
     (tmp_path / "happy" / "happy_开心.jpg").write_bytes(b"x")
     stub = _make_stub(tmp_path)
     reply = "好开心 [sticker:happy_开心.jpg]"
-    with patch("agent_core.tool_executor.get_degradation_strategy") as m_ds:
+    with patch("agent_core.tool_executor_mixin.get_degradation_strategy") as m_ds:
         m_ds.return_value.is_feature_available.return_value = True
         clean, path = stub.get_sticker_info(reply)
     assert path is not None

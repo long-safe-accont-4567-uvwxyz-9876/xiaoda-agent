@@ -273,6 +273,25 @@ class WeChatBotAdapter(ChannelAdapterBase):
             user_openid[:8] if user_openid else "unknown",
         )
 
+    # -- 连接状态公开口径（ChannelAdapterBase 契约；外部禁止直读私有字段） --
+
+    @property
+    def is_connected(self) -> bool:
+        return bool(self._connected)
+
+    @property
+    def is_session_expired(self) -> bool:
+        return bool(self._expired)
+
+    @property
+    def has_init_failed(self) -> bool:
+        return bool(self._init_failed)
+
+    @property
+    def is_polling(self) -> bool:
+        t = self._poll_task
+        return t is not None and not t.done()
+
     # ------------------------------------------------------------------
     # 消息去重与游标持久化
     # ------------------------------------------------------------------
@@ -843,110 +862,41 @@ class WeChatBotAdapter(ChannelAdapterBase):
                 )
 
     # ------------------------------------------------------------------
-    # A2：per-user session 管理（对齐 qq_bot_adapter._get_or_create_c2c_session）
+    # A2：per-user session 管理（实现下沉 ChannelAdapterBase，QQ/微信共用）
     # ------------------------------------------------------------------
 
     def _prune_user_session_cache(self) -> None:
-        """清理用户 session 缓存中的过期与超限条目（QQ _prune_c2c_session_cache 轻量版）。
-
-        1. 删除超过 TTL 的过期条目（避免永久驻留）
-        2. 超过 MAX_SIZE 时按 FIFO（最早 ts）淘汰最旧条目（防多用户长期运行内存泄漏）
-        """
-        now = time.time()
-        expired = [
-            k for k, ts in self._user_session_cache_ts.items()
-            if now - ts > self._USER_SESSION_CACHE_TTL
-        ]
-        for k in expired:
-            self._user_session_cache.pop(k, None)
-            self._user_session_cache_ts.pop(k, None)
-        overflow = len(self._user_session_cache) - self._USER_SESSION_CACHE_MAX_SIZE
-        if overflow > 0:
-            sorted_keys = sorted(self._user_session_cache_ts.items(), key=lambda kv: kv[1])
-            for k, _ in sorted_keys[:overflow]:
-                self._user_session_cache.pop(k, None)
-                self._user_session_cache_ts.pop(k, None)
+        """清理用户 session 缓存中的过期与超限条目。"""
+        self._session_cache_prune(
+            self._user_session_cache, self._user_session_cache_ts,
+            ttl=self._USER_SESSION_CACHE_TTL, max_size=self._USER_SESSION_CACHE_MAX_SIZE)
 
     def _set_user_session_cache(self, user_id: str, sid: str) -> None:
-        """统一缓存写入 + 立即执行 size cap（对齐 QQ _set_c2c_session_cache）。"""
-        self._user_session_cache[user_id] = sid
-        self._user_session_cache_ts[user_id] = time.time()
-        self._prune_user_session_cache()
+        """统一缓存写入 + 立即执行 size cap。"""
+        self._session_cache_set(
+            self._user_session_cache, self._user_session_cache_ts,
+            user_id, sid,
+            ttl=self._USER_SESSION_CACHE_TTL, max_size=self._USER_SESSION_CACHE_MAX_SIZE)
 
     async def _get_or_create_user_session(self, from_user_id: str) -> str:
-        """获取或创建用户会话 session_id（对齐 QQ _get_or_create_c2c_session 语义）。
+        """获取或创建用户会话 session_id（统一实现在 ChannelAdapterBase）。
 
         - 内存缓存优先（TTL 1 小时 + FIFO 上限），避免每条消息都查 DB
         - 检测到 wechat_tmp_ 兜底 ID 时视为缓存失效，跳过缓存继续查 DB
           （对齐 QQ P1-7：临时 ID 不存在于 sessions 表，继续缓存会导致上下文永久丢失）
         - DB 异常/超时兜底 wechat_tmp_{from_user_id[:16]}，总 deadline 20s
         """
-        self._prune_user_session_cache()
-        cached_sid = self._user_session_cache.get(from_user_id)
-        cached_ts = self._user_session_cache_ts.get(from_user_id, 0)
-        if (cached_sid
-                and not cached_sid.startswith("wechat_tmp_")
-                and (time.time() - cached_ts < self._USER_SESSION_CACHE_TTL)):
-            return cached_sid
-
-        deadline = time.monotonic() + 20.0
-        try:
-            session = await asyncio.wait_for(
-                self._core.get_session(from_user_id),
-                timeout=max(deadline - time.monotonic(), 0.1),
-            )
-            if session:
-                sid = session["id"]
-                self._set_user_session_cache(from_user_id, sid)
-                return sid
-            # 没有活跃会话，创建新会话
-            sid = await asyncio.wait_for(
-                self._core.create_session(from_user_id),
-                timeout=max(deadline - time.monotonic(), 0.1),
-            )
-            self._set_user_session_cache(from_user_id, sid)
-            return sid
-        except (TimeoutError, sqlite3.OperationalError) as e:
-            logger.warning(
-                "wechat_bot.user_session_db_error user={} error={}, retrying",
-                from_user_id[:16], str(e)[:100],
-            )
-            # DB 锁/超时后用剩余时间重试一次（锁通常是短暂的）
-            remaining = deadline - time.monotonic()
-            if remaining <= 0:
-                logger.error("wechat_bot.user_session_deadline_exhausted user={}", from_user_id[:16])
-                return f"wechat_tmp_{from_user_id[:16]}"
-            try:
-                session = await asyncio.wait_for(
-                    self._core.get_session(from_user_id),
-                    timeout=remaining,
-                )
-                if session:
-                    sid = session["id"]
-                    self._set_user_session_cache(from_user_id, sid)
-                    return sid
-                remaining = deadline - time.monotonic()
-                if remaining <= 0:
-                    logger.error("wechat_bot.user_session_deadline_exhausted user={}", from_user_id[:16])
-                    return f"wechat_tmp_{from_user_id[:16]}"
-                sid = await asyncio.wait_for(
-                    self._core.create_session(from_user_id),
-                    timeout=remaining,
-                )
-                self._set_user_session_cache(from_user_id, sid)
-                return sid
-            except (TimeoutError, sqlite3.OperationalError) as e2:
-                logger.error(
-                    "wechat_bot.user_session_db_error_retry user={} error={}",
-                    from_user_id[:16], str(e2)[:100],
-                )
-                # 关键修复（对齐 QQ）：DB 超时/锁时返回临时 session_id，保证消息不丢失；
-                # 后续 process 仍能执行，仅持久化能力受影响
-                return f"wechat_tmp_{from_user_id[:16]}"
-        except (KeyError, OSError, RuntimeError) as e:
-            logger.error("wechat_bot.user_session_failed error={}", str(e)[:200])
-            # 同样返回临时 session_id，避免消息丢失
-            return f"wechat_tmp_{from_user_id[:16]}"
+        return await self._get_or_create_session_cached(
+            from_user_id,
+            core=self._core,
+            cache=self._user_session_cache,
+            cache_ts=self._user_session_cache_ts,
+            ttl=self._USER_SESSION_CACHE_TTL,
+            max_size=self._USER_SESSION_CACHE_MAX_SIZE,
+            tmp_prefix="wechat_tmp_",
+            log_prefix="wechat_bot",
+            event_stem="user_session",
+        )
 
     # ------------------------------------------------------------------
     # A2：status_callback 最近状态记录（微信无事件总线用户通道，仅记录不发送）

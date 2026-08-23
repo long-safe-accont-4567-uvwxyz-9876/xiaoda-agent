@@ -8,7 +8,7 @@
 from unittest.mock import MagicMock
 
 from utils.llm_cleanup import strip_qq_face_tags
-from agent_core.tool_executor import ToolExecutorMixin
+from agent_core.tool_executor_mixin import ToolExecutorMixin
 
 
 # 生产日志样本：用户消息中的 QQ 表情标签（botpy 序列化，无自闭合斜杠）

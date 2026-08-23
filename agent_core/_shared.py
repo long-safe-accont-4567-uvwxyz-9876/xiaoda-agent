@@ -18,6 +18,20 @@ from typing import Any
 # ── 模块级常量 ─────────────────────────────────────────────────
 DEGRADED_REPLY = "嗯……人家现在有点不太舒服，等会儿再聊好不好？"
 
+# 子代理不可用/调度失败的降级文案（display_name 前缀由调用方拼接）。
+# 原先散落 task_orchestrator / sub_agent / sub_agent_manager 的 10+ 处内联变体
+# （"等会儿再来吧！💤" / "等会儿再试吧💤"）统一至此，防文案漂移。
+TIRED_MSG = "现在有点累了...等会儿再来吧！💤"
+
+# ── 截止时间层级（值均有事故史，调整前先读对应根因注释）──────────
+# 从外到内：QQ C2C 上游 180s（外部约束）→ 全局 deadline 170s（预留 10s
+# 网络/序列化）→ 子代理单任务 wait_for 180s → 并行整体墙钟 200s。
+# 注意：子代理单任务(180)名义上大于全局 deadline(170)，实际由外层先兜底；
+# 180 是历史值，保留以兼容不经 process() 的独立调用场景。
+GLOBAL_DEADLINE_SECONDS = 170            # core.process() 总兜底（core.py）
+SUB_AGENT_DISPATCH_TIMEOUT_S = 180.0     # 子代理单任务 wait_for（sub_agent_manager）
+PARALLEL_WALL_TIMEOUT_S = 200.0          # 并行调度整体墙钟 = 180 + 余量
+
 # 按 finish_reason 分类的兜底文案（替代统一 DEGRADED_REPLY，让用户看到更明确的提示）
 # 当 LLM 返回空内容时，根据 finish_reason 选择对应兜底文案
 EMPTY_REPLY_REASON_MESSAGES: dict[str, str] = {

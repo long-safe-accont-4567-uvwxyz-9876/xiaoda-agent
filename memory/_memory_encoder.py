@@ -335,15 +335,8 @@ class MemoryEncoder:
         # 冷启动路由: 新记忆写入后失效计数缓存, 下次检索立即感知档位变化
         self._mm.invalidate_memory_count_cache()
 
-        if self._mm._query_cache:
-            # P1-6: invalidate 改 fire-and-forget（原 await 会与持锁的 get/put
-            # 竞争：get/put 在 await embed（最长 1.5s）时持锁，写路径被拖慢。
-            # 缓存失效不依赖写入结果，无需阻塞写入流程）
-            _spawn(self._mm._query_cache.invalidate())
-
-        # G13: 失效扩散激活 recall 缓存（concept_nodes 已写入，避免返回旧结果）
-        if getattr(self._mm, 'spreading_engine', None) and self._mm.spreading_engine:
-            self._mm.spreading_engine.clear_cache()
+        # G13+P1-6: 失效读缓存总线（查询缓存 fire-and-forget + 扩散激活 recall 缓存）
+        self._mm.invalidate_read_caches()
 
         # 同步文件写入移到线程池（USB 盘 I/O 可能慢）
         await asyncio.to_thread(self._mm._save_state_json, summary, importance, emotion)
@@ -489,12 +482,8 @@ class MemoryEncoder:
                 logger.info("memory.distilled_new",
                            raw_id=raw_id, knowledge_id=knowledge_id)
             # 蒸馏完成后失效查询缓存：新提炼知识需被后续检索感知
-            if self._mm._query_cache:
-                # P1-6: fire-and-forget（避免与持锁的 get/put 竞争阻塞写路径）
-                _spawn(self._mm._query_cache.invalidate())
-            # G13: 失效扩散激活 recall 缓存
-            if getattr(self._mm, 'spreading_engine', None) and self._mm.spreading_engine:
-                self._mm.spreading_engine.clear_cache()
+            # G13+P1-6: 失效读缓存总线
+            self._mm.invalidate_read_caches()
         except Exception as e:
             logger.warning("memory.distill_to_knowledge_failed",
                           raw_id=raw_id, retry=_retry, error=str(e))
@@ -529,13 +518,8 @@ class MemoryEncoder:
                         logger.debug("memory.fallback_vec_upsert_failed", error=str(e))
             else:
                 await self._mm.memory.update_distill_status(raw_id, "distill_failed")
-            # summary 更新后失效查询缓存，避免返回旧内容
-            if self._mm._query_cache:
-                # P1-6: fire-and-forget（避免与持锁的 get/put 竞争阻塞写路径）
-                _spawn(self._mm._query_cache.invalidate())
-            # G13: 失效扩散激活 recall 缓存
-            if getattr(self._mm, 'spreading_engine', None) and self._mm.spreading_engine:
-                self._mm.spreading_engine.clear_cache()
+            # summary 更新后失效读缓存总线（查询缓存 + 扩散激活），避免返回旧内容
+            self._mm.invalidate_read_caches()
         except Exception as e:
             logger.error("degradation_triggered memory.fallback_save_failed raw_id={} error={}",
                          raw_id, str(e))
@@ -801,10 +785,9 @@ class MemoryEncoder:
 
             await self._write_enrichment_child_chunks(mem_id, data, update_summary, new_summary)
 
-            # enrichment 更新了 summary/entities/子chunk，失效查询缓存
-            if self._mm._query_cache:
-                # P1-6: fire-and-forget（避免与持锁的 get/put 竞争阻塞写路径）
-                _spawn(self._mm._query_cache.invalidate())
+            # enrichment 更新了 summary/entities/子chunk（未动 concept_nodes），
+            # 仅失效查询缓存
+            self._mm.invalidate_query_cache()
 
         except Exception as e:
             logger.debug("memory.enrich_failed",

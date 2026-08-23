@@ -404,6 +404,10 @@ async def _start_services(app: Any, core: Any) -> None:
     plugin_manager._tool_registry = _tool_registry_mod
     plugin_manager.discover()
     app.state.plugin_manager = plugin_manager
+    # 同步注册到中立注册点：core/bootstrap 经 plugins.manager 获取，
+    # 不反向 import web.server（依赖倒置，技术债 P1-3）
+    from plugins.manager import set_active_plugin_manager
+    set_active_plugin_manager(plugin_manager)
 
     queue = MediaTaskQueue(core, manager.broadcast)
     queue.start()
@@ -587,15 +591,13 @@ async def _ensure_wechat_bot_task(app: FastAPI) -> None:
         # start() 内部会吞掉 ILinkClient 初始化/轮询失败并返回正常，
         # 也可能因凭证文件为空 token 而"看似成功"。若未就绪仍挂到
         # app.state.wechat_bot，会把一个无效适配器误报为已恢复连接。
-        connected = getattr(adapter, "_connected", False)
-        poller = getattr(adapter, "_poll_task", None)
-        if connected and poller is not None and not poller.done():
+        if adapter.is_connected and adapter.is_polling:
             app.state.wechat_bot = adapter
             logger.info("webui.wechat_bot_auto_started")
         else:
             logger.warning(
                 "webui.wechat_bot_auto_start_not_ready connected={} has_poller={}",
-                connected, poller is not None,
+                adapter.is_connected, adapter.is_polling,
             )
     except (RuntimeError, OSError, ConnectionError, ImportError) as e:
         logger.warning(
@@ -633,6 +635,8 @@ async def lifespan(app: FastAPI) -> AsyncIterator[Any]:
         logger.info("webui.degraded_mode")
         # 初始化空的 plugin/media/scheduler 避免后续 AttributeError
         app.state.plugin_manager = None
+        from plugins.manager import set_active_plugin_manager
+        set_active_plugin_manager(None)
         app.state.media_queue = None
         app.state.greeting_scheduler = None
         app.state.qq_task = None

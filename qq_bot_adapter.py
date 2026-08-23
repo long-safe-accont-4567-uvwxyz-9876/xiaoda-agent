@@ -292,28 +292,11 @@ class AIQQBot(ChannelAdapterBase, botpy.Client):
             locks.pop(key, None)
 
     def _prune_c2c_session_cache(self) -> None:
-        """P1-1: 清理 C2C session 缓存中的过期与超限条目。
-
-        1. 删除超过 TTL 的过期条目（避免永久驻留）
-        2. 超过 MAX_SIZE 时按 FIFO（最早 ts）淘汰最旧条目（防多用户长期运行内存泄漏）
-        """
-        now = time.time()
-        # 1. 清理过期条目
-        expired = [
-            k for k, ts in self._c2c_session_cache_ts.items()
-            if now - ts > self._c2c_session_cache_ttl
-        ]
-        for k in expired:
-            self._c2c_session_cache.pop(k, None)
-            self._c2c_session_cache_ts.pop(k, None)
-        # 2. FIFO 淘汰超限条目
-        overflow = len(self._c2c_session_cache) - self._C2C_SESSION_CACHE_MAX_SIZE
-        if overflow > 0:
-            # 按 ts 升序排序，删除最早的 overflow 个
-            sorted_keys = sorted(self._c2c_session_cache_ts.items(), key=lambda kv: kv[1])
-            for k, _ in sorted_keys[:overflow]:
-                self._c2c_session_cache.pop(k, None)
-                self._c2c_session_cache_ts.pop(k, None)
+        """P1-1: 清理 C2C session 缓存中的过期与超限条目（实现在基类）。"""
+        self._session_cache_prune(
+            self._c2c_session_cache, self._c2c_session_cache_ts,
+            ttl=self._c2c_session_cache_ttl,
+            max_size=self._C2C_SESSION_CACHE_MAX_SIZE)
 
     def _invalidate_c2c_session(self, user_openid: str) -> None:
         """P1-2: 主动失效指定用户的 session_id 缓存。
@@ -325,15 +308,12 @@ class AIQQBot(ChannelAdapterBase, botpy.Client):
         self._c2c_session_cache_ts.pop(user_openid, None)
 
     def _set_c2c_session_cache(self, user_openid: str, sid: str) -> None:
-        """CodeRabbit F8: 统一缓存写入 + 立即执行 size cap。
-
-        替代分散的 `cache[k]=v; ts[k]=time.time()` 模式，确保写入后
-        立即淘汰 overflow，不依赖下次 _get_or_create 的 pre-lookup prune。
-        """
-        self._c2c_session_cache[user_openid] = sid
-        self._c2c_session_cache_ts[user_openid] = time.time()
-        # 写入后立即 cap，保证不变量 len(cache) <= MAX_SIZE 始终成立
-        self._prune_c2c_session_cache()
+        """CodeRabbit F8: 统一缓存写入 + 立即执行 size cap（实现在基类）。"""
+        self._session_cache_set(
+            self._c2c_session_cache, self._c2c_session_cache_ts,
+            user_openid, sid,
+            ttl=self._c2c_session_cache_ttl,
+            max_size=self._C2C_SESSION_CACHE_MAX_SIZE)
 
     @staticmethod
     def _get_config_service() -> Any:
@@ -631,77 +611,19 @@ class AIQQBot(ChannelAdapterBase, botpy.Client):
               导致 get_active_session 超时 5 秒触发 c2c_session_timeout（212 次错误）。
         修复：首次成功后缓存 session_id 1 小时，避免重复查询；
               仅在缓存失效或会话不存在时才查 DB。
+        统一实现在 ChannelAdapterBase._get_or_create_session_cached（微信侧同源）。
         """
-        # P1-1: 入口先清理过期与超限条目，避免长期运行内存泄漏
-        self._prune_c2c_session_cache()
-        # 1. 先查内存缓存
-        cached_sid = self._c2c_session_cache.get(user_openid)
-        cached_ts = self._c2c_session_cache_ts.get(user_openid, 0)
-        # P1-7 修复：检测 cached_sid 以 "qq_tmp_" 开头时视为缓存失效，跳过缓存继续查 DB。
-        # 根因：DB 超时/异常时返回 qq_tmp_{openid[:16]} 兜底 session_id，该 ID 不存在于
-        # sessions 表，后续 background_tasks 的 UPDATE 零行生效不报错，所有消息都写到
-        # 不存在的 session，上下文永久丢失。检测到 qq_tmp_ 时跳过缓存让下次能恢复真实 session。
-        if (cached_sid
-                and not cached_sid.startswith("qq_tmp_")
-                and (time.time() - cached_ts < self._c2c_session_cache_ttl)):
-            return cached_sid
-
-        # 2. 缓存未命中，查 DB
-        # 总截止时间 20s（略大于 busy_timeout 15s），所有尝试共享此额度，
-        # 避免重试时重置超时导致总延迟达 40s（CodeRabbit finding）
-        deadline = time.monotonic() + 20.0
-        try:
-            session = await asyncio.wait_for(
-                self.agent.get_session(user_openid),
-                timeout=max(deadline - time.monotonic(), 0.1),
-            )
-            if session:
-                sid = session["id"]
-                self._set_c2c_session_cache(user_openid, sid)
-                return sid
-            # 没有活跃会话，创建新会话
-            sid = await asyncio.wait_for(
-                self.agent.create_session(user_openid),
-                timeout=max(deadline - time.monotonic(), 0.1),
-            )
-            self._set_c2c_session_cache(user_openid, sid)
-            return sid
-        except (TimeoutError, sqlite3.OperationalError) as e:
-            logger.warning("qq_bot.c2c_session_db_error openid={} error={}, retrying", user_openid, str(e)[:100])
-            # DB 锁/超时后用剩余时间重试一次（锁通常是短暂的）
-            remaining = deadline - time.monotonic()
-            if remaining <= 0:
-                logger.error("qq_bot.c2c_session_deadline_exhausted openid={}", user_openid)
-                return f"qq_tmp_{user_openid[:16]}"
-            try:
-                session = await asyncio.wait_for(
-                    self.agent.get_session(user_openid),
-                    timeout=remaining,
-                )
-                if session:
-                    sid = session["id"]
-                    self._set_c2c_session_cache(user_openid, sid)
-                    return sid
-                remaining = deadline - time.monotonic()
-                if remaining <= 0:
-                    logger.error("qq_bot.c2c_session_deadline_exhausted openid={}", user_openid)
-                    return f"qq_tmp_{user_openid[:16]}"
-                sid = await asyncio.wait_for(
-                    self.agent.create_session(user_openid),
-                    timeout=remaining,
-                )
-                self._set_c2c_session_cache(user_openid, sid)
-                return sid
-            except (TimeoutError, sqlite3.OperationalError) as e2:
-                logger.error("qq_bot.c2c_session_db_error_retry openid={} error={}", user_openid, str(e2)[:100])
-                # 关键修复：DB 超时/锁时返回临时 session_id，保证消息不丢失
-                # 后续 agent.process 仍能执行，仅持久化能力受影响
-                fallback_sid = f"qq_tmp_{user_openid[:16]}"
-                return fallback_sid
-        except (KeyError, OSError, RuntimeError) as e:
-            logger.error(f"qq_bot.c2c_session_failed: {e}")
-            # 同样返回临时 session_id，避免消息丢失
-            return f"qq_tmp_{user_openid[:16]}"
+        return await self._get_or_create_session_cached(
+            user_openid,
+            core=self.agent,
+            cache=self._c2c_session_cache,
+            cache_ts=self._c2c_session_cache_ts,
+            ttl=self._c2c_session_cache_ttl,
+            max_size=self._C2C_SESSION_CACHE_MAX_SIZE,
+            tmp_prefix="qq_tmp_",
+            log_prefix="qq_bot",
+            event_stem="c2c_session",
+        )
 
     async def _handle_c2c_quick_commands(self, content: str, message: C2CMessage,
                                           user_openid: str, user_id: str) -> bool:
@@ -1156,6 +1078,34 @@ class AIQQBot(ChannelAdapterBase, botpy.Client):
             return "".join(segments[index + 1:])
         return "".join(segments[index:])
 
+    async def _send_remaining_segments(self, remaining: str, *, send_piece, log_key: str) -> tuple:
+        """失败恢复统一内核：剩余文本按字节上限（7800）重切后逐片发送。
+
+        P0 治本 / P1-6 / Q4 系列修复的唯一实现（原先在流式配额、流式异常、
+        sticker 兜底、C2C 长回复四处逐字复制——任何一处漏改都会重新引入
+        "大量文本重复发送/静默丢失"P0）：
+          - 合并后按字节上限重切，避免单条超限被 QQ API 拒绝；
+          - 任一片失败（异常，或群聊被动配额拒绝返回 False）即停止，后续片放弃；
+        返回 (成功片数, 总片数)。调用方按需判断部分成功。
+        sticker 图文合并（msg_type=7）与群聊单条合并因传输语义不同，不走本内核。
+        """
+        pieces = self._split_text_by_bytes(remaining, 7800)
+        sent = 0
+        for piece in pieces:
+            try:
+                ok = await send_piece(piece)
+            except (OSError, RuntimeError) as e:
+                # OSError 已涵盖 TimeoutError/ConnectionError 子类
+                logger.error(log_key + ".merge_send_failed",
+                             error=str(e), remaining_len=len(piece))
+                break
+            if ok is False:
+                logger.error(log_key + ".merge_quota_exhausted",
+                             remaining_len=len(piece))
+                break
+            sent += 1
+        return sent, len(pieces)
+
     async def _send_stream_segment(self, message: Any, text: str, *,
                                    passive: bool, is_group: bool, log_key: str) -> bool:
         """发送单个流式分片。True=发送成功，False=群聊被动配额耗尽被静默拒绝。
@@ -1263,22 +1213,13 @@ class AIQQBot(ChannelAdapterBase, botpy.Client):
                                    at_segment=i, sent_segments=sent_count,
                                    total_segments=num_segments)
                     remaining = "".join(segments[i:])
-                    # P1-6 修复：合并后按字节上限再分割逐片发送，避免单条超 8000 字节被 QQ API 拒绝
-                    # Q4 修复：群聊 recovery 也重切——原合并为单条可能超限，统一按字节重切
-                    recovery_pieces = self._split_text_by_bytes(remaining, 7800)
-                    for piece in recovery_pieces:
-                        try:
-                            ok2 = await self._send_stream_segment(message, piece, passive=False, is_group=is_group, log_key="qq_bot.stream")
-                            if ok2:
-                                sent_count += 1
-                            else:
-                                logger.error("qq_bot.stream_quota_merge_failed_too",
-                                             remaining_len=len(piece))
-                                break
-                        except (TimeoutError, OSError, RuntimeError) as e2:
-                            logger.error("qq_bot.stream_quota_merge_exception",
-                                         error=str(e2), remaining_len=len(piece))
-                            break
+                    merged_sent, _ = await self._send_remaining_segments(
+                        remaining,
+                        send_piece=lambda p: self._send_stream_segment(
+                            message, p, passive=False, is_group=is_group,
+                            log_key="qq_bot.stream"),
+                        log_key="qq_bot.stream")
+                    sent_count += merged_sent
                     if sent_count > 0:
                         logger.info("qq_bot.stream_quota_recovered_with_merge",
                                     merged_from=num_segments - i, sent=sent_count,
@@ -1294,21 +1235,16 @@ class AIQQBot(ChannelAdapterBase, botpy.Client):
                 #   - OSError/RuntimeError：连接错误，当前段可能没发出 → 重发含当前段（segments[i:]），
                 #     避免丢失。重复只在超时场景发生，连接错误场景不会重复。
                 remaining = self._remaining_segments_after_error(segments, i, e)
-                # P1-6 修复：合并后按字节上限再分割逐片发送，避免单条超 8000 字节被 QQ API 拒绝
-                # Q4 修复：群聊 recovery 也重切——原合并为单条可能超限，统一按字节重切
-                recovery_pieces = self._split_text_by_bytes(remaining, 7800)
-                recovery_sent = 0
-                for piece in recovery_pieces:
-                    try:
-                        await self._send_stream_segment(message, piece, passive=False, is_group=is_group, log_key="qq_bot.stream")
-                        recovery_sent += 1
-                    except (TimeoutError, OSError, RuntimeError) as e2:
-                        logger.error("qq_bot.stream_final_failed", error=str(e2))
-                        break
-                if recovery_sent > 0:
+                merged_sent, _ = await self._send_remaining_segments(
+                    remaining,
+                    send_piece=lambda p: self._send_stream_segment(
+                        message, p, passive=False, is_group=is_group,
+                        log_key="qq_bot.stream"),
+                    log_key="qq_bot.stream")
+                if merged_sent > 0:
                     recovery_ms = (time.monotonic() - stream_start) * 1000
                     logger.info("qq_bot.stream_recovery_done",
-                                sent=sent_count + recovery_sent, ms=round(recovery_ms, 1))
+                                sent=sent_count + merged_sent, ms=round(recovery_ms, 1))
                 return
 
         total_ms = (time.monotonic() - stream_start) * 1000
@@ -1420,12 +1356,12 @@ class AIQQBot(ChannelAdapterBase, botpy.Client):
                 except (OSError, RuntimeError, ConnectionError) as e2:
                     logger.error("qq_bot.stream_sticker_recovery_failed", error=str(e2))
                     # 兜底：放弃 sticker，仅发送合并文本
-                    try:
-                        for piece in self._split_text_by_bytes(remaining, 7800):
-                            await self._send_stream_segment(message, piece, passive=True, is_group=is_group, log_key="qq_bot.stream_sticker")
-                    except (TimeoutError, OSError, RuntimeError) as e3:
-                        logger.error("qq_bot.stream_sticker_recovery_final_failed",
-                                     error=str(e3))
+                    await self._send_remaining_segments(
+                        remaining,
+                        send_piece=lambda p: self._send_stream_segment(
+                            message, p, passive=True, is_group=is_group,
+                            log_key="qq_bot.stream_sticker"),
+                        log_key="qq_bot.stream_sticker")
                 return
 
         # 最后一片与表情包合并发送（msg_type=7 支持图文混排）
@@ -1527,16 +1463,19 @@ class AIQQBot(ChannelAdapterBase, botpy.Client):
                         #   TimeoutError 跳过当前段（可能已发，避免重复）；
                         #   其他异常重发含当前段（可能没发，避免丢失）。
                         remaining = self._remaining_segments_after_error(parts, i, e)
-                        try:
-                            for piece in self._split_text_by_bytes(remaining, 7800):
-                                await message.reply(content=piece, msg_seq=_next_msg_seq())
+                        merged_sent, merged_total = await self._send_remaining_segments(
+                            remaining,
+                            send_piece=lambda p: message.reply(
+                                content=p, msg_seq=_next_msg_seq()),
+                            log_key="qq_bot.long_reply")
+                        if merged_sent == merged_total:
                             logger.info("qq_bot.long_reply_merge_recovered",
                                         merged_from=len(parts) - i)
                             merge_done = True
                             final_text = ""  # 已全部发完，仅保留 sticker
-                        except (OSError, RuntimeError, ConnectionError) as e2:
+                        else:
                             logger.error("qq_bot.long_reply_merge_failed",
-                                         error=str(e2), remaining_len=len(remaining))
+                                         remaining_len=len(remaining))
                             # 最终兜底：在最后一片加错误提示
                             final_text = parts[-1] + "\n（内容过长部分发送失败）"
                         break  # 无论合并成功或失败，都退出循环

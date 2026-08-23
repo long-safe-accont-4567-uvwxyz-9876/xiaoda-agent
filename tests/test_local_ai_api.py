@@ -454,8 +454,9 @@ def test_remove_model_cleans_disk_directory(
 
 def test_spawn_reports_background_task_failure(
     services: SimpleNamespace,
-    caplog,
 ) -> None:
+    from loguru import logger
+
     from web.routers.local_ai import LocalAIServices
 
     ai = LocalAIServices(
@@ -468,6 +469,15 @@ def test_spawn_reports_background_task_failure(
         storage_policy=services.storage_policy,
     )
 
+    logs_seen: list[str] = []
+
+    def log_sink(message: object) -> None:
+        text = str(message)
+        if "background task failed" in text or "boom" in text:
+            logs_seen.append(text)
+
+    handler_id = logger.add(log_sink, level="ERROR")
+
     async def failing() -> None:
         raise RuntimeError("boom")
 
@@ -477,8 +487,10 @@ def test_spawn_reports_background_task_failure(
         assert not ai.background_tasks
 
     asyncio.run(run())
-    assert "background task failed" in caplog.text
-    assert "boom" in caplog.text
+    logger.remove(handler_id)
+    # local_ai 路由已统一 loguru（stdlib caplog 捕获不到），用原生 sink 断言
+    assert any("background task failed" in m for m in logs_seen)
+    assert any("boom" in m for m in logs_seen)
 
 
 def test_request_id_idempotency_is_scoped_by_resource(

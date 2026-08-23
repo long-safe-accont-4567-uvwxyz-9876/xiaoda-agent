@@ -115,7 +115,7 @@ BUILTIN_TOOLS: list[dict[str, Any]] = [
     },
     {
         "name": "python_executor",
-        "description": "执行 Python 代码并返回结果。输入要执行的 Python 代码字符串。可用于计算、数据处理、文件操作等。支持 import 标准库和已安装的第三方库。",
+        "description": "执行 Python 代码并返回结果。输入要执行的 Python 代码字符串。可用于计算、数据处理、文件操作等。仅支持 import 白名单内的标准库模块（json、re、datetime、collections、itertools、math）。",
         "schema": {
             "type": "object",
             "properties": {
@@ -229,7 +229,7 @@ BUILTIN_TOOLS: list[dict[str, Any]] = [
     # ── tools.document_tools ─────────────────────────────────────────
     {
         "name": "document_reader",
-        "description": "读取文档内容。支持 PDF、DOCX、PPTX、XLSX 格式。输入文件路径。",
+        "description": "读取文档内容。支持 PDF、DOCX、PPTX、XLSX、TXT、MD 格式。输入文件路径。",
         "schema": {
             "type": "object",
             "properties": {
@@ -399,7 +399,7 @@ BUILTIN_TOOLS: list[dict[str, Any]] = [
             "required": ["prompt"],
         },
         "permission": ToolPermission.READ_ONLY,
-        "category": "creative",
+        "category": "general",
         "module_path": "tools.agnes_tools",
         "func_name": "agnes_image_generate",
     },
@@ -416,7 +416,7 @@ BUILTIN_TOOLS: list[dict[str, Any]] = [
             "required": ["prompt"],
         },
         "permission": ToolPermission.READ_ONLY,
-        "category": "creative",
+        "category": "general",
         "module_path": "tools.agnes_tools",
         "func_name": "agnes_video_generate",
     },
@@ -508,12 +508,12 @@ BUILTIN_TOOLS: list[dict[str, Any]] = [
     },
     {
         "name": "recall",
-        "description": "检索相关记忆。当用户问到之前聊过的内容、自身配置（如模型版本、系统设置）、用户偏好等不确定的信息时，必须先用此工具查询，不要凭印象编造",
+        "description": "检索相关记忆。触发场景（命中任一即必须先调用本工具，禁止凭印象编造或直接回答'不记得'）：1) 用户要求回忆/想起/记得某事，如'回忆一下'、'你还记得吗'、'上次我们'、'昨天/上周/之前'发生的事；2) 用户询问某个时间范围/时段发生的事，如'7点到8点之间'、'今天早上'、'上周五'、'7月17日'；3) 用户问之前聊过的内容、自身配置（模型版本/系统设置）、用户偏好等不确定信息；4) 用户发'？'或短句追问上一次未答全的话题（视为追问上一轮的回忆请求）。query 参数必须保留用户原始时间表述（如'7月17日 7点到8点'），禁止改写成'早上'等模糊词。",
         "schema": {
             "type": "object",
             "properties": {
-                "query": {"type": "string", "description": "检索关键词"},
-                "top_k": {"type": "integer", "description": "返回数量", "default": 5},
+                "query": {"type": "string", "description": "检索关键词，须保留用户原始时间表述（如'7月17日 7点到8点'），不要自行改写为模糊词"},
+                "top_k": {"type": "integer", "description": "返回数量", "default": 8},
             },
             "required": ["query"],
         },
@@ -536,6 +536,7 @@ BUILTIN_TOOLS: list[dict[str, Any]] = [
         "permission": ToolPermission.READ_WRITE,
         "category": "memory",
         "max_frequency": 3,
+        "requires_confirmation": True,
         "module_path": "tools.memory_tool",
         "func_name": "forget",
     },
@@ -659,6 +660,7 @@ BUILTIN_TOOLS: list[dict[str, Any]] = [
         "permission": ToolPermission.READ_WRITE,
         "category": "schedule",
         "max_frequency": 10,
+        "requires_confirmation": True,
         "module_path": "tools.schedule_tool",
         "func_name": "update_reminder",
     },
@@ -844,6 +846,7 @@ BUILTIN_TOOLS: list[dict[str, Any]] = [
         "permission": ToolPermission.EXECUTE,
         "category": "web",
         "max_frequency": 5,
+        "requires_confirmation": True,
         "module_path": "tools.mail_tools",
         "func_name": "mail_send",
     },
@@ -870,6 +873,7 @@ BUILTIN_TOOLS: list[dict[str, Any]] = [
         "permission": ToolPermission.EXECUTE,
         "category": "web",
         "max_frequency": 5,
+        "requires_confirmation": True,
         "module_path": "tools.mail_tools",
         "func_name": "mail_reply",
     },
@@ -899,6 +903,7 @@ BUILTIN_TOOLS: list[dict[str, Any]] = [
         "permission": ToolPermission.EXECUTE,
         "category": "web",
         "max_frequency": 5,
+        "requires_confirmation": True,
         "module_path": "tools.mail_tools",
         "func_name": "mail_forward",
     },
@@ -919,6 +924,7 @@ BUILTIN_TOOLS: list[dict[str, Any]] = [
         "permission": ToolPermission.EXECUTE,
         "category": "web",
         "max_frequency": 5,
+        "requires_confirmation": True,
         "module_path": "tools.mail_tools",
         "func_name": "mail_trash",
     },
@@ -941,5 +947,21 @@ BUILTIN_TOOLS: list[dict[str, Any]] = [
         "max_frequency": 10,
         "module_path": "tools.mail_tools",
         "func_name": "mail_download_attachment",
+    },
+    # ── memory.context_compressor ────────────────────────────────────
+    {
+        "name": "retrieve_context",
+        "description": "检索之前被压缩的上下文原始数据。当需要查看被压缩的工具输出或对话历史时使用。",
+        "schema": {
+            "type": "object",
+            "properties": {
+                "key": {"type": "string", "description": "压缩标记中的 key 值"},
+            },
+            "required": ["key"],
+        },
+        "permission": ToolPermission.READ_ONLY,
+        "max_frequency": 30,
+        "module_path": "memory.context_compressor",
+        "func_name": "retrieve_context",
     },
 ]

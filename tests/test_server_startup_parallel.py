@@ -110,7 +110,10 @@ def _patch_start_services_dependencies(monkeypatch) -> None:
     _install_fake_module(monkeypatch, "web.greeting_scheduler", {
         "GreetingScheduler": _FakeGreetingScheduler,
     })
-    _install_fake_module(monkeypatch, "plugins.manager", {"PluginManager": _FakePluginManager})
+    _install_fake_module(monkeypatch, "plugins.manager", {
+        "PluginManager": _FakePluginManager,
+        "set_active_plugin_manager": lambda pm: None,  # server._start_services 插件接线
+    })
     # tool_engine.tool_registry（_start_services 内部 import；tool_engine/__init__.py
     # 会 from-import register_builtin_tools_lazy 并调用，需提供该符号）
     _install_fake_module(monkeypatch, "tool_engine.tool_registry", {

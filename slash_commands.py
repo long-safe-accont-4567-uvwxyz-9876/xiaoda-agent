@@ -270,8 +270,6 @@ class SlashCommandHandler:
                                provider, model_id, str(e))
                 return f"切换 {model_id} 失败：{str(e)[:100]}"
             self._router.set_model_preference(f"{provider}/{model_id}")
-            if self._agent and hasattr(self._agent, 'klee'):
-                self._agent.klee.set_preferred_provider(provider)
             return f"已切换到 {model_id}（{provider}）"
 
         # 无参数：显示当前模型 + 所有可用模型（对齐 button 弹窗）

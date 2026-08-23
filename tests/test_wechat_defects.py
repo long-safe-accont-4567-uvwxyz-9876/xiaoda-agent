@@ -161,6 +161,14 @@ class _ActiveBotStub:
     def is_closed(self):
         return self._closed
 
+    @property
+    def is_connected(self):
+        return bool(self._connected)
+
+    @property
+    def is_session_expired(self):
+        return bool(self._expired)
+
 
 def test_wechat_test_uses_live_state_when_active_instance(monkeypatch):
     """M2: 有活跃实例时，/wechat/test 读实时状态，不新建 ILinkClient、

@@ -3,8 +3,6 @@
 验证 Terminal#804-918 中 CRITICAL 和 HIGH 级别 BUG 的修复。
 """
 import inspect
-import os
-import time
 
 import pytest
 
@@ -22,12 +20,6 @@ class TestC1EpisodicMemoriesDDL:
         from db import ddl_schema
         source = inspect.getsource(ddl_schema)
         assert "version INTEGER DEFAULT 1" in source, "episodic_memories DDL应包含version列"
-
-    def test_schema_sql_has_content_hash(self):
-        schema_path = os.path.join(os.path.dirname(__file__), "..", "db", "schema.sql")
-        with open(schema_path, encoding="utf-8") as f:
-            content = f.read()
-        assert "content_hash" in content, "schema.sql应包含content_hash"
 
 
 class TestC2KnowledgeRelationsCreated:
@@ -49,23 +41,6 @@ class TestC4DreamImportanceNotHardcoded:
         # 应使用 row.get("importance", ...) 而非硬编码 0.5
         assert 'importance=row.get("importance"' in source or "importance=row.get('importance'" in source, \
             "应使用row.get('importance')而非硬编码0.5"
-
-
-class TestH1BoostCapped:
-    """H-1: FluidMemory boost 有上限"""
-
-    def test_max_boost_constant_exists(self):
-        from memory.fluid_memory import FluidMemory
-        # FluidMemory v0.6 使用稳定性模型替代 boost 上限
-        assert hasattr(FluidMemory, "STABILITY_BASE_DAYS"), "FluidMemory应有STABILITY_BASE_DAYS常量"
-
-    def test_high_access_doesnt_exceed_new_memory(self):
-        from memory.fluid_memory import FluidMemory
-        fm = FluidMemory()
-        now = time.time()
-        new_score = fm.score(similarity=1.0, created_at=now, access_count=0)
-        old_score = fm.score(similarity=0.3, created_at=now - 365*86400, access_count=1000)
-        assert new_score > old_score, "新记忆应比高频访问的旧记忆分数高"
 
 
 class TestH2CreatedAtNotLastAccess:

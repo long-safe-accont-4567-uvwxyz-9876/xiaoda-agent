@@ -15,6 +15,16 @@ from typing import Any
 
 from loguru import logger
 
+# 降级链表（task → fallback task）。原住 model_router.py 门面，技术债批下沉：
+# llm_gateway/fallback_chain.py 的兼容契约禁止 import model_router（防循环依赖），
+# 但降级策略数据此前仍留在门面模块，迫使网关层函数内反向 import、契约名存实亡。
+# 本模块不依赖任何上层模块，是路由数据的规范住所；门面与网关均从这里取值。
+FALLBACK_ROUTE: dict[str, str] = {
+    # chat_pro/chat_flash 已合并进 chat（同一 provider 同一 model，无区分意义）
+    # 降级链：chat 失败 → chat_agnes（agnes provider 作为独立兜底）
+    "chat": "chat_agnes",
+}
+
 
 class ModelRouteRegistry:
     """路由表注册中心：ROUTE_TABLE 的唯一读写入口。

@@ -226,9 +226,7 @@ class RetrievalEngine(EntityKgBoostMixin, MemoryMetadataMixin):
                         await self._mm.concept_graph.lazy_migrate(unmigrated, limit=50)
                         # G13: lazy_migrate 写入新 concept_nodes，失效 recall 缓存
                         # 避免命中陈旧 (query, top_k) 缓存而遗漏新迁移节点（TTL 最长 5 分钟）
-                        _engine = getattr(self._mm, 'spreading_engine', None)
-                        if _engine:
-                            _engine.clear_cache()
+                        self._mm.invalidate_spread_cache()
             except Exception as e:
                 logger.debug("memory.lazy_migrate_failed", error=str(e))
 

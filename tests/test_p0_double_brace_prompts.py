@@ -147,41 +147,5 @@ def test_contradiction_prompt_replace_works():
     assert not _has_double_braces(prompt), f"replace 后仍残留双花括号: {prompt[:200]}"
 
 
-# ---------- P0-3: LLM_JUDGE_RUBRIC ----------
-
-def test_llm_judge_rubric_no_double_braces():
-    """LLM_JUDGE_RUBRIC 中不应有 {{}} 转义。"""
-    from memory.matrix_governance import LLM_JUDGE_RUBRIC
-
-    offenders = _has_double_braces(LLM_JUDGE_RUBRIC)
-    assert not offenders, f"LLM_JUDGE_RUBRIC 仍含双花括号: {offenders}"
-
-
-def test_llm_judge_rubric_has_valid_json_instruction():
-    """LLM_JUDGE_RUBRIC 应输出合法的 JSON 评分指令。"""
-    from memory.matrix_governance import LLM_JUDGE_RUBRIC
-
-    # 应包含 {"score": ...} 而不是 {{...}}
-    assert '"score"' in LLM_JUDGE_RUBRIC
-    assert '{"score"' in LLM_JUDGE_RUBRIC, "缺少合法 JSON 评分示例"
-
-
-def test_llm_judge_rubric_replace_works():
-    """模拟实际调用: 替换占位符后 prompt 应合法。"""
-    from memory.matrix_governance import LLM_JUDGE_RUBRIC
-
-    prompt = (
-        LLM_JUDGE_RUBRIC
-        .replace("{user_input}", "你好")
-        .replace("{reference_answer}", "(无参考答案)")
-        .replace("{response}", "你好呀，今天天气不错")
-    )
-
-    assert "{user_input}" not in prompt
-    assert "{reference_answer}" not in prompt
-    assert "{response}" not in prompt
-    assert not _has_double_braces(prompt), f"replace 后仍残留双花括号: {prompt[:200]}"
-
-
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])

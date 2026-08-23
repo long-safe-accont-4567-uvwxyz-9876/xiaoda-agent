@@ -68,6 +68,8 @@ class PluginManager:
         self._mcp = mcp_manager
         self._agent_core = agent_core
 
+
+
     @property
     def plugins(self) -> dict[str, PluginRecord]:
         return self._plugins
@@ -402,3 +404,18 @@ class PluginManager:
             atomic_write(config_path, _payload, encoding="utf-8")
         else:
             config_path.write_text(_payload, encoding="utf-8")
+# ── 活动实例注册点（依赖倒置）────────────────────────────────
+# PluginManager 由 web 层 lifespan 创建；core/bootstrap 需要启用插件但不得
+# 反向 import web.server（跨层倒挂，技术债 P1-3）。双方都只依赖本模块的
+# set/get：web 创建后 set，bootstrap 经 get 获取。未注册（如纯 CLI、测试）
+# 返回 None，调用方自行降级。
+_active_plugin_manager: "PluginManager | None" = None
+
+
+def set_active_plugin_manager(pm: "PluginManager | None") -> None:
+    global _active_plugin_manager
+    _active_plugin_manager = pm
+
+
+def get_active_plugin_manager() -> "PluginManager | None":
+    return _active_plugin_manager

@@ -95,8 +95,8 @@ async def get_status(request: Request) -> Any:
         if (
             bot is not None
             and not bot.is_closed()
-            and getattr(bot, "_connected", False)
-            and not getattr(bot, "_expired", False)
+            and bot.is_connected
+            and not bot.is_session_expired
         ):
             wechat_connected = True
     except (ImportError, AttributeError, OSError, RuntimeError) as exc:

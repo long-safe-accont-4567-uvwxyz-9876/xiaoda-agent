@@ -291,5 +291,6 @@ def test_history_and_frontend_restore_request_snapshots():
     chat = source("web/frontend/src/stores/chat.ts")
     assert "request_context_json" in router
     assert "request_context: dict | None = None" in schemas
-    assert "request: h.request_context || undefined" in chat
+    # 2026-08-23 随 api/types.ts 类型层收紧：restore 处补了 as 断言，语义不变
+    assert "h.request_context" in chat and "|| undefined" in chat
     assert "structuredClone(message.request)" in chat

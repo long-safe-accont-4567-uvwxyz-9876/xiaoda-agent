@@ -32,8 +32,17 @@ def test_model_router_inherits_mixin():
 
 
 def test_mixin_does_not_import_model_router():
+    import inspect
+    import re
+
     import llm_gateway.fallback_chain as mod
     assert "model_router" not in getattr(mod, "__dict__", {})
+    # 源码级扫描：函数内延迟 import 同样违规（技术债 P0-3：曾出现函数内
+    # from model_router import FALLBACK_ROUTE，__dict__ 检查无法发现）。
+    # model_router_registry 不在禁令内（数据已下沉至此）。
+    source = inspect.getsource(mod)
+    violations = re.findall(r"^\s*(?:from|import)\s+model_router\b.*$", source, re.M)
+    assert violations == [], f"fallback_chain 违规 import 门面模块: {violations}"
 
 
 @pytest.mark.asyncio

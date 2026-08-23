@@ -30,7 +30,6 @@ async def test_main_llm_owner_flag_comes_from_resolved_principal():
         image_data=None,
         is_master=True,
         force_voice=False,
-        chat_targets=[],
         trace={},
     )
 

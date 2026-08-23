@@ -21,6 +21,7 @@ from agent_context import AgentContext
 # 共享常量与数据类型 — 从 _shared 导入并 re-export, 保持向后兼容
 from agent_core._shared import (
     DEGRADED_REPLY,
+    GLOBAL_DEADLINE_SECONDS,
     ProcessResult,
     RequestContext,
     UserIdentity,
@@ -66,7 +67,7 @@ if TYPE_CHECKING:
 # 因此可以安全导入 Mixin (不再有循环导入风险).
 from agent_core.message_processor import MessageProcessorMixin
 from agent_core.sub_agent_manager import SubAgentManagerMixin
-from agent_core.tool_executor import ToolExecutorMixin
+from agent_core.tool_executor_mixin import ToolExecutorMixin
 from core.background_tasks import BackgroundTaskManager
 from core.bootstrap import AgentCoreBootstrapper
 from core.chat_processor import ChatProcessor
@@ -435,19 +436,19 @@ class AgentCore(MessageProcessorMixin, ToolExecutorMixin, SubAgentManagerMixin):
         # 全局截止时间保护：保证每个请求必返回回复，不允许超时。
         # 上游 QQ C2C 有 180s 超时，这里用 170s 兜底，预留 10s 给网络/序列化。
         # 即使内部任何阶段挂起（记忆检索/LLM/工具/验收循环），到点强制返回降级回复。
-        _GLOBAL_DEADLINE_SECONDS = 170
+        # 层级全貌见 _shared.py「截止时间层级」区。
         try:
             try:
                 return await asyncio.wait_for(
                     self._process_impl_locked(ctx, user_input, user_id, source, user_openid, session_id,
                                        status_callback, image_data, is_master,
                                        system_context=system_context),
-                    timeout=_GLOBAL_DEADLINE_SECONDS,
+                    timeout=GLOBAL_DEADLINE_SECONDS,
                 )
             except asyncio.TimeoutError:
                 logger.error("agent.global_deadline_exceeded",
                              user_id=user_id, source=source,
-                             deadline=_GLOBAL_DEADLINE_SECONDS,
+                             deadline=GLOBAL_DEADLINE_SECONDS,
                              msg_preview=user_input[:80])
                 # 兜底：返回有意义的降级回复，而非空字符串或异常
                 return ProcessResult(

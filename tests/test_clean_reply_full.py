@@ -5,7 +5,7 @@
 """
 from unittest.mock import MagicMock
 
-from agent_core.tool_executor import ToolExecutorMixin
+from agent_core.tool_executor_mixin import ToolExecutorMixin
 
 
 class _Stub(ToolExecutorMixin):

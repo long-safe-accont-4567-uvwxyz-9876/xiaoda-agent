@@ -33,8 +33,10 @@
 from __future__ import annotations
 
 import contextlib
+import asyncio
 import json
 import os
+import sqlite3
 import time
 from pathlib import Path
 from typing import Any
@@ -237,9 +239,146 @@ def _cap_stream_segments(segments: list[str], is_group: bool,
 
 
 class ChannelAdapterBase:
-    """IM 通道适配器共享基类（消息去重语义层 + 流式分片委托）。"""
+    """IM 通道适配器共享基类（消息去重语义层 + 流式分片委托）。
+
+    连接状态公开口径：外部代码（web/server、web/routers）一律通过
+    is_connected / is_session_expired / has_init_failed / is_polling
+    只读属性探测适配器状态，禁止直接 getattr 私有字段。
+    """
 
     _MSG_ID_TTL = 3600
+
+    @property
+    def is_connected(self) -> bool:
+        """通道网络层是否已连接。子类按各自连接模型覆写。"""
+        return False
+
+    @property
+    def is_session_expired(self) -> bool:
+        """会话凭证是否已确认过期（需重新登录/扫码）。默认否。"""
+        return False
+
+    @property
+    def has_init_failed(self) -> bool:
+        """AgentCore 等关键依赖初始化是否失败（故障可见性）。默认否。"""
+        return False
+
+    @property
+    def is_polling(self) -> bool:
+        """后台轮询任务是否存在且未结束。默认否。"""
+        return False
+
+    # ------------------------------------------------------------------
+    # per-user session 缓存三件套（QQ/微信共用实现，原两侧各复制一份，
+    # 同一 bug 需人肉双修——P1-7/P0 系列修复已发生漂移先例）
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _session_cache_prune(cache: dict, cache_ts: dict, *, ttl: float, max_size: int) -> None:
+        """清理 session 缓存：1) 删除超过 TTL 的过期条目；2) 超过 max_size 按 FIFO 淘汰最旧。
+
+        防多用户长期运行内存泄漏（原 P1-1，两侧各一份副本）。
+        """
+        now = time.time()
+        expired = [k for k, ts in cache_ts.items() if now - ts > ttl]
+        for k in expired:
+            cache.pop(k, None)
+            cache_ts.pop(k, None)
+        overflow = len(cache) - max_size
+        if overflow > 0:
+            sorted_keys = sorted(cache_ts.items(), key=lambda kv: kv[1])
+            for k, _ in sorted_keys[:overflow]:
+                cache.pop(k, None)
+                cache_ts.pop(k, None)
+
+    @classmethod
+    def _session_cache_set(cls, cache: dict, cache_ts: dict, user_key: str, sid: str, *,
+                           ttl: float, max_size: int) -> None:
+        """统一缓存写入 + 立即执行 size cap（CodeRabbit F8，两侧各一份副本）。
+
+        写入后立即淘汰 overflow，保证不变量 len(cache) <= max_size 始终成立。
+        """
+        cache[user_key] = sid
+        cache_ts[user_key] = time.time()
+        cls._session_cache_prune(cache, cache_ts, ttl=ttl, max_size=max_size)
+
+    async def _get_or_create_session_cached(
+        self,
+        user_key: str,
+        *,
+        core: Any,
+        cache: dict,
+        cache_ts: dict,
+        ttl: float,
+        max_size: int,
+        tmp_prefix: str,
+        log_prefix: str,
+        event_stem: str,
+    ) -> str:
+        """获取或创建会话 session_id 的统一实现（原 QQ _get_or_create_c2c_session
+        与微信 _get_or_create_user_session 的合并体，语义逐行对齐）。
+
+        - 内存缓存优先（TTL + FIFO 上限），避免每条消息都查 DB；
+          根因：单连接 SQLite + WAL 下并发写阻塞读，get_session 超时 5s 触发雪崩。
+        - P1-7：检测到 {tmp_prefix} 兜底 ID 时视为缓存失效跳过缓存——该 ID 不存在于
+          sessions 表，继续缓存会导致上下文永久丢失。
+        - 总 deadline 20s 共享给所有尝试（略大于 busy_timeout 15s），避免重试重置
+          超时导致总延迟翻倍；DB 超时/锁时返回临时 session_id 保证消息不丢失，
+          后续 process 仍能执行，仅持久化能力受影响。
+        """
+        self._session_cache_prune(cache, cache_ts, ttl=ttl, max_size=max_size)
+        cached_sid = cache.get(user_key)
+        cached_ts = cache_ts.get(user_key, 0)
+        if (cached_sid
+                and not cached_sid.startswith(tmp_prefix)
+                and (time.time() - cached_ts < ttl)):
+            return cached_sid
+
+        deadline = time.monotonic() + 20.0
+
+        async def _lookup() -> str:
+            session = await asyncio.wait_for(
+                core.get_session(user_key),
+                timeout=max(deadline - time.monotonic(), 0.1),
+            )
+            if session:
+                sid = session["id"]
+                self._session_cache_set(cache, cache_ts, user_key, sid,
+                                        ttl=ttl, max_size=max_size)
+                return sid
+            sid = await asyncio.wait_for(
+                core.create_session(user_key),
+                timeout=max(deadline - time.monotonic(), 0.1),
+            )
+            self._session_cache_set(cache, cache_ts, user_key, sid,
+                                    ttl=ttl, max_size=max_size)
+            return sid
+
+        try:
+            return await _lookup()
+        except (TimeoutError, sqlite3.OperationalError) as e:
+            logger.warning(log_prefix + "." + event_stem + "_db_error key={} error={}, retrying",
+                           user_key[:16], str(e)[:100])
+            # DB 锁/超时后用剩余时间重试一次（锁通常是短暂的）
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                logger.error(log_prefix + "." + event_stem + "_deadline_exhausted key={}",
+                             user_key[:16])
+                return f"{tmp_prefix}{user_key[:16]}"
+            try:
+                return await _lookup()
+            except (TimeoutError, sqlite3.OperationalError) as e2:
+                logger.error(log_prefix + "." + event_stem + "_db_error_retry key={} error={}",
+                             user_key[:16], str(e2)[:100])
+                # 关键修复：DB 超时/锁时返回临时 session_id，保证消息不丢失；
+                # 后续 process 仍能执行，仅持久化能力受影响
+                return f"{tmp_prefix}{user_key[:16]}"
+            except (KeyError, OSError, RuntimeError) as e3:
+                logger.error(log_prefix + "." + event_stem + "_failed error={}", str(e3)[:200])
+                return f"{tmp_prefix}{user_key[:16]}"
+        except (KeyError, OSError, RuntimeError) as e:
+            logger.error(log_prefix + "." + event_stem + "_failed error={}", str(e)[:200])
+            return f"{tmp_prefix}{user_key[:16]}"
 
     def _init_dedup_state(self) -> None:
         """初始化消息去重缓存（由子类 __init__ 调用）。

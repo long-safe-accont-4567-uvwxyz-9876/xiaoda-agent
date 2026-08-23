@@ -137,8 +137,7 @@ class MemoryMaintenance:
                         undistilled_before=count,
                         summary_len=len(summary))
             # G13: 失效扩散激活 recall 缓存
-            if getattr(self._mm, 'spreading_engine', None) and self._mm.spreading_engine:
-                self._mm.spreading_engine.clear_cache()
+            self._mm.invalidate_spread_cache()
             return len(candidates)
         except Exception as e:
             logger.warning("memory.distill_failed", error=str(e))

@@ -263,7 +263,7 @@ async def test_connection(request: Request) -> Any:
     Envelope ok=False 包装，避免三种错误表达并存。
 
     M2：存在活跃运行中的 adapter 实例时，直接读其实时状态
-    （_connected/_expired），绝不新建 ILinkClient / 发 getupdates——
+    （is_connected/is_session_expired），绝不新建 ILinkClient / 发 getupdates——
     否则并发的空游标探测会窃取活跃 poller 的积压消息并竞争游标文件。
     仅当没有活跃实例（服务重启后）时，才回退到独立 verify_token 探测。
     """
@@ -274,12 +274,12 @@ async def test_connection(request: Request) -> Any:
     except Exception:
         active = None
     if active is not None and not active.is_closed():
-        if getattr(active, "_expired", False):
+        if active.is_session_expired:
             logger.info("wechat.test.active_instance_expired")
             return Envelope(
                 data={"success": False, "error": "会话已过期，请重新扫码登录"},
             )
-        if bool(getattr(active, "_connected", False)):
+        if bool(active.is_connected):
             logger.info("wechat.test.active_instance_connected")
             return Envelope(data={"success": True})
         logger.info("wechat.test.active_instance_not_connected")
@@ -449,7 +449,7 @@ async def get_wechat_status() -> Any:
 
     供前端在未登录时也能探测微信 Bot 是否在线。
     返回 { connected: bool, expired: bool, init_failed: bool }：
-      - connected=True：bot 活跃且真实连接（_connected），或凭证存在可启动
+      - connected=True：bot 活跃且真实连接（is_connected），或凭证存在可启动
       - expired=True：bot 存在但会话已确认过期（需重新扫码）
       - init_failed=True：AgentCore 初始化失败（故障可见）
 
@@ -465,11 +465,11 @@ async def get_wechat_status() -> Any:
         import wechat_bot_adapter
         bot = wechat_bot_adapter.get_active_bot()
         if bot is not None and not bot.is_closed():
-            if getattr(bot, "_expired", False):
+            if bot.is_session_expired:
                 expired = True
             else:
-                connected = bool(getattr(bot, "_connected", False))
-            init_failed = bool(getattr(bot, "_init_failed", False))
+                connected = bool(bot.is_connected)
+            init_failed = bool(bot.has_init_failed)
     except Exception:
         logger.warning("wechat.status.active_bot_probe_failed", exc_info=True)
     # 无活跃实例（轮询未启动或服务重启后）：凭证存在即视为已登录（可一键启动），

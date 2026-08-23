@@ -6,7 +6,8 @@ Agnes → 自定义 provider 的多级降级链，含 timeout 跳链 / 禁止跨
 方法体自 model_router.py 逐字节搬移，仅缩进调整。
 
 兼容契约（tests/test_fallback_chain_mixin.py）：
-    - 本模块不得 import model_router（防循环依赖）
+    - 本模块不得 import model_router（防循环依赖）；降级策略数据
+      FALLBACK_ROUTE 已下沉 model_router_registry，与本契约一致
     - ModelRouter(FallbackChainMixin) 继承保持 self 语义；Phase 0 铺路的
       公开别名 fallback_chat 委托关系不变
 """
@@ -16,6 +17,7 @@ from loguru import logger
 
 from config import DEFAULT_PROVIDER as _CFG_DEFAULT_PROVIDER
 from core.app_exception import LLMError
+from model_router_registry import FALLBACK_ROUTE
 
 
 class FallbackChainMixin:
@@ -68,8 +70,7 @@ class FallbackChainMixin:
         except Exception:
             logger.warning("router.fallback_error_classify_failed", exc_info=True)
 
-        # 1. 降级到更便宜的模型
-        from model_router import FALLBACK_ROUTE
+        # 1. 降级到更便宜的模型（FALLBACK_ROUTE 自 model_router_registry，数据下沉后无反向依赖）
         fallback_type = FALLBACK_ROUTE.get(task_type)
         # P0 修复：content_filter 触发时跳过同 provider 的 fallback 目标
         # 根因：同 provider 的 fallback 目标会再次触发 content_filter

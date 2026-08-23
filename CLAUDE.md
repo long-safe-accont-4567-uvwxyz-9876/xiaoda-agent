@@ -18,10 +18,10 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 .venv/bin/python -m py_compile <file.py>
 
 # 测试（无 pytest 配置，测试是独立脚本，直接运行）
-.venv/bin/python tests/e2e_test.py
+.venv/bin/python tests/manual/e2e_test.py
 
 # pre-push 门禁（每个 clone 一次性启用。仓库在 Gitee，.github/workflows 不会执行，
-# 本地门禁是唯一自动化防线）：push 前 18 文件 critical 子集约 20s + 前端构建物
+# 本地门禁是唯一自动化防线）：push 前 19 文件 critical 子集约 20s + 前端构建物
 # 新鲜度时间戳检查（改了 web/frontend 必须重新 build 并提交 web/dist，否则拦截）；
 # PUSH_FULL_TESTS=1 git push 跑全集约 5 分钟，全绿后追加 scripts/check_dist_freshness.sh
 # 完整重建校验（约 +1 分钟）；--no-verify 紧急跳过
@@ -29,6 +29,7 @@ git config core.hooksPath scripts/git-hooks
 
 # 生产服务：nahida-web 单进程承载 WebUI + QQ Bot + WS（共享 AgentCore，需 sudo）
 sudo systemctl restart nahida-web && journalctl -u nahida-web -f
+# 启动后看一行健康汇总（哪些子系统降级了）：journalctl -u nahida-web | grep startup.health
 
 # 前端构建（产物输出到 web/dist/，由 FastAPI 静态托管）
 cd web/frontend && npm run build
@@ -62,7 +63,7 @@ sqlite3 /mnt/usb2/nahida-data/db/agent.db ".tables"
 ### 多 Agent 委托（本节描述当前实现，旧文档提到的 call_klee 已删除）
 
 - 统一工具 `delegate_task(agent, task)`，在 `core/bootstrap.py::_register_delegate_tool()` **启动时动态注册**——描述里嵌入各子代理的 `route_description`，agent 参数带 enum 约束
-- 执行端 `AgentCore.delegate_to_agent()` → `dispatcher.dispatch()`；可莉走 `delegate_to_klee()` 专用上下文
+- 执行端 `AgentCore.delegate_to_agent()` → `dispatcher.dispatch()`；旧 `delegate_to_klee()` 专用路径已随 call_klee 一并删除，xiaoli 统一走 delegate_task/dispatcher
 - 子代理不能再委托（`DELEGATE_BLOCKED_TOOLS` in agent_dispatcher.py + xiaoli_agent.py 的 `EXCLUDED_TOOLS`）
 - 路由护栏：`agent_core.py` 检测到表情包意图（"表情包/贴纸"等关键词）时，当轮从工具列表硬移除 `delegate_task`——表情包由主体流程自动附带，委托出去会丢失
 - 用户在 WebUI 顶栏直接切换子代理时，`web/ws_hub.py::process_and_serialize` 走 `core._dispatch_single_sub_agent()`（与 QQ 通道同款完整流程，带表情包/情绪/落库）。**不要**改回裸 `dispatcher.dispatch()`，那会丢掉所有媒体能力

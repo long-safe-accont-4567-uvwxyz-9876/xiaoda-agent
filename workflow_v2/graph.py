@@ -13,7 +13,28 @@ class GraphError(Exception):
         self.details = details or {}
 
 
+# 执行器（executor.py dispatch）已实现的节点类型。六种未实现类型
+# （CONDITION/PARALLEL/JOIN/WORKFLOW/INPUT/DELAY）此前只在运行时报
+# UNSUPPORTED_NODE——手写 JSON 直塞定义后要跑到该节点才失败。把拒绝
+# 提前到 validate_graph（migrate/publish 等全部写路径的编译期闸口）。
+SUPPORTED_NODE_TYPES = frozenset({
+    NodeType.START, NodeType.END, NodeType.TRANSFORM,
+    NodeType.TOOL, NodeType.MCP, NodeType.MODEL, NodeType.SKILL,
+    NodeType.APPROVAL, NodeType.REVIEW, NodeType.LEGACY_PROMPT,
+    NodeType.AGENT,
+})
+
+
 def validate_graph(nodes: list[NodeSpec], edges: list[EdgeSpec]) -> None:
+    unsupported = sorted({n.type for n in nodes
+                          if n.type not in SUPPORTED_NODE_TYPES})
+    if unsupported:
+        offenders = [n.id for n in nodes if n.type not in SUPPORTED_NODE_TYPES]
+        raise GraphError(
+            "unsupported node type (not implemented in executor)",
+            {"unsupported_types": [t.value for t in unsupported],
+             "nodes": offenders})
+
     ids = [n.id for n in nodes]
     id_set = set(ids)
     if len(ids) != len(id_set):

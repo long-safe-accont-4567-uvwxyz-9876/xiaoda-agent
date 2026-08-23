@@ -7,7 +7,7 @@ httpx 下载需 mock，避免真实网络。
 import asyncio
 from unittest.mock import AsyncMock, MagicMock, patch
 
-from agent_core.tool_executor import ToolExecutorMixin
+from agent_core.tool_executor_mixin import ToolExecutorMixin
 
 
 class _DummyMixin(ToolExecutorMixin):
@@ -38,7 +38,7 @@ def _fake_httpx_get(content: bytes):
 def test_extracts_markdown_image_and_strips(tmp_path):
     m = _DummyMixin()
     reply = _make_reply_with_md_image()
-    with patch("agent_core.tool_executor.FILE_DIR", tmp_path), \
+    with patch("agent_core.tool_executor_mixin.FILE_DIR", tmp_path), \
          patch("httpx.AsyncClient", return_value=_fake_httpx_get(b"PNGDATA")):
         paths, cleaned = asyncio.run(m._extract_fabricated_images_from_reply(reply))
     assert len(paths) == 1
@@ -53,7 +53,7 @@ def test_extracts_markdown_image_and_strips(tmp_path):
 def test_extracts_bare_pollinations_url(tmp_path):
     m = _DummyMixin()
     reply = "图在这里 https://image.pollinations.ai/prompt/dog 给你"
-    with patch("agent_core.tool_executor.FILE_DIR", tmp_path), \
+    with patch("agent_core.tool_executor_mixin.FILE_DIR", tmp_path), \
          patch("httpx.AsyncClient", return_value=_fake_httpx_get(b"IMG")):
         paths, cleaned = asyncio.run(m._extract_fabricated_images_from_reply(reply))
     assert len(paths) == 1
@@ -67,7 +67,7 @@ def test_multiple_images(tmp_path):
         "![a](https://image.pollinations.ai/prompt/cat) "
         "![b](https://image.pollinations.ai/prompt/dog)"
     )
-    with patch("agent_core.tool_executor.FILE_DIR", tmp_path), \
+    with patch("agent_core.tool_executor_mixin.FILE_DIR", tmp_path), \
          patch("httpx.AsyncClient", return_value=_fake_httpx_get(b"IMG")):
         paths, cleaned = asyncio.run(m._extract_fabricated_images_from_reply(reply))
     assert len(paths) == 2
@@ -79,7 +79,7 @@ def test_download_failure_does_not_raise(tmp_path):
     reply = "![a](https://image.pollinations.ai/prompt/cat)"
     client = _fake_httpx_get(b"")
     client.get = AsyncMock(side_effect=Exception("network down"))
-    with patch("agent_core.tool_executor.FILE_DIR", tmp_path), \
+    with patch("agent_core.tool_executor_mixin.FILE_DIR", tmp_path), \
          patch("httpx.AsyncClient", return_value=client):
         paths, cleaned = asyncio.run(m._extract_fabricated_images_from_reply(reply))
     # 下载失败：image_paths 不追加，但 markdown 仍剥离，不抛异常
@@ -91,7 +91,7 @@ def test_download_failure_does_not_raise(tmp_path):
 def test_normal_link_not_extracted(tmp_path):
     m = _DummyMixin()
     reply = "看这个 https://example.com/info 挺好的"
-    with patch("agent_core.tool_executor.FILE_DIR", tmp_path), \
+    with patch("agent_core.tool_executor_mixin.FILE_DIR", tmp_path), \
          patch("httpx.AsyncClient", return_value=_fake_httpx_get(b"")):
         paths, cleaned = asyncio.run(m._extract_fabricated_images_from_reply(reply))
     assert paths == []

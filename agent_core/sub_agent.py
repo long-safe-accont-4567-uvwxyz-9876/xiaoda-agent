@@ -20,6 +20,7 @@ from typing import Any, Protocol, runtime_checkable
 from loguru import logger
 
 from config import get_agent_display_name
+from agent_core._shared import TIRED_MSG
 from core.message import AgentMessage
 from emotion.emoji_config import get_status_msg
 from emotion.tts_engine import TTSEngine
@@ -306,7 +307,7 @@ class SubAgent:
                 logger.info("sub_agent.auto_recovered", name=self.config.name)
 
         if not self.available:
-            return f"{self.config.display_name}现在有点累了...等会儿再来吧！💤"
+            return f"{self.config.display_name}{TIRED_MSG}"
 
         # 单次任务开始时重置记忆提交计数
         self._memory_submit_count = 0
@@ -376,7 +377,7 @@ class SubAgent:
 
         if response is not None:
             return response
-        return f"{self.config.display_name}现在有点累了...等会儿再来吧！💤"
+        return f"{self.config.display_name}{TIRED_MSG}"
 
     async def _handle_tool_result(self, tool_name: str, result: ToolResult) -> str:
         result_text = ""
@@ -526,7 +527,7 @@ class SubAgent:
         # 达到最大轮次：让 LLM 基于已有工具结果做总结回复
         remaining = total_deadline - asyncio.get_running_loop().time()
         if remaining < 5:
-            return f"{self.config.display_name}现在有点累了...等会儿再来吧！💤"
+            return f"{self.config.display_name}{TIRED_MSG}"
         return await self._summarize_after_tools(working, api_timeout, remaining)
 
     def _inject_dsml_if_needed(self, working: list[dict], tools: list[dict] | None,
@@ -873,7 +874,7 @@ class SubAgent:
                         formatted += f"\n...（共{len(lines)}行）"
                     return formatted
                 return raw_content
-            return f"{self.config.display_name}现在有点累了...等会儿再来吧！💤"
+            return f"{self.config.display_name}{TIRED_MSG}"
     async def submit_memory(self, key_points: list[str], importance: int = 3) -> str:
         """子代理向主记忆提交关键信息（受控写入）"""
         # 频率限制：单次任务最多 3 次

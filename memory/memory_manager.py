@@ -174,6 +174,36 @@ class MemoryManager:
     def invalidate_memory_count_cache(self) -> None:
         self._retrieval.invalidate_memory_count_cache()
 
+    # ── 读路径缓存失效总线（写路径统一入口，禁止各自背诵失效清单）─────
+    # 背景：原 _memory_encoder 三处复制 `query_cache.invalidate() +
+    # spreading_engine.clear_cache()` 对，新增缓存/新写路径漏掉任何一处
+    # 即陈旧读取 bug（G13/P1-6 系列修复均源于此）。新增读缓存时在
+    # invalidate_read_caches 追加，不要在调用方散布。
+
+    def invalidate_query_cache(self) -> None:
+        """失效查询语义缓存。P1-6：fire-and-forget——invalidate 会与持锁的
+        get/put 竞争（get/put 在 await embed 时最长持锁 1.5s），await 会拖慢
+        写路径；缓存失效不依赖写入结果，无需阻塞。"""
+        if self._query_cache:
+            from core.background_tasks import _spawn
+            _spawn(self._query_cache.invalidate())
+
+    def invalidate_spread_cache(self) -> None:
+        """G13：失效扩散激活 recall 缓存。concept_nodes/边变更后必须调用，
+        否则命中陈旧 (query, top_k) 缓存遗漏新节点（TTL 最长 5 分钟）。"""
+        engine = getattr(self, 'spreading_engine', None)
+        if engine:
+            engine.clear_cache()
+
+    def invalidate_read_caches(self) -> None:
+        """记忆写入后的完整失效总线：查询缓存 + 扩散激活缓存。
+
+        写路径（encode/distill/summary 更新等）一律调用本方法；
+        仅影响单一缓存的路径可单独调上面两个窄口径方法。
+        """
+        self.invalidate_query_cache()
+        self.invalidate_spread_cache()
+
     async def get_memory_tier(self) -> str:
         return await self._retrieval.get_memory_tier()
 

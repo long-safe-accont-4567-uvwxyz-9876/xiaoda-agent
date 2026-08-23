@@ -9,7 +9,7 @@ QQ 发链接不发真图，且泄漏模型名/生图元数据。
 import asyncio
 from unittest.mock import AsyncMock, MagicMock, patch
 
-from agent_core.tool_executor import ToolExecutorMixin
+from agent_core.tool_executor_mixin import ToolExecutorMixin
 from utils.llm_cleanup import strip_image_gen_leak
 
 
@@ -57,7 +57,7 @@ def _fake_httpx_get(content: bytes):
 
 def test_1966_reply_cleaned_and_image_extracted(tmp_path):
     m = _Stub()
-    with patch("agent_core.tool_executor.FILE_DIR", tmp_path), \
+    with patch("agent_core.tool_executor_mixin.FILE_DIR", tmp_path), \
          patch("httpx.AsyncClient", return_value=_fake_httpx_get(b"PNGDATA")):
         paths, cleaned = asyncio.run(m._extract_fabricated_images_from_reply(REPLY_1966))
         final_reply = m._clean_reply_full(cleaned, style="xiaoda", strip_emotion=False)
@@ -82,7 +82,7 @@ def test_1966_reply_cleaned_and_image_extracted(tmp_path):
 def test_1965_nested_paren_url_extracted_and_status_stripped(tmp_path):
     """id 1965: pollinations URL 含嵌套括号 (duck)，必须完整提取；状态行+模型名+元数据清掉。"""
     m = _Stub()
-    with patch("agent_core.tool_executor.FILE_DIR", tmp_path), \
+    with patch("agent_core.tool_executor_mixin.FILE_DIR", tmp_path), \
          patch("httpx.AsyncClient", return_value=_fake_httpx_get(b"PNGDATA")):
         paths, cleaned = asyncio.run(m._extract_fabricated_images_from_reply(REPLY_1965))
         final_reply = m._clean_reply_full(cleaned, style="xiaoda", strip_emotion=False)

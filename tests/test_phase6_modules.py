@@ -4,7 +4,6 @@
 - S3: utils/async_compat.py
 - S9: security/anomaly_detector.py
 - S10: security/human_approval.py
-- P4: core/tiered_cache.py
 - P5: core/parallel_dag.py
 - Q3: core/slo_tracker.py
 - Q5: core/sla_exporter.py
@@ -15,7 +14,6 @@
 - Dr3: core/recovery_orchestrator.py
 - H1: memory/episodic_limiter.py
 - H2: core/config_reloader.py
-- H3: db/idempotent_migrator.py
 """
 import asyncio
 import os
@@ -66,67 +64,6 @@ async def test_async_compat_exponential_backoff():
     d1 = await async_sleep_range(1, base_delay=0.01, max_delay=1.0)
     d2 = await async_sleep_range(3, base_delay=0.01, max_delay=1.0)
     assert d2 > d1
-
-
-# ============================================================
-# P4: tiered_cache
-# ============================================================
-
-@pytest.mark.asyncio
-async def test_tiered_cache_l1_hit():
-    import gc
-    from core.tiered_cache import TieredCache
-    with tempfile.TemporaryDirectory() as td:
-        cache = TieredCache(
-            cache_dir=Path(td) / "L2",
-            db_path=Path(td) / "L3.db",
-            l1_size=10, l1_ttl=10,
-        )
-        await cache.get("k1", loader=lambda: "v1", ttl=10)
-        # 第二次应该命中 L1
-        v = await cache.get("k1", loader=lambda: "should_not_load")
-        assert v == "v1"
-        del cache
-        gc.collect()
-
-
-@pytest.mark.asyncio
-async def test_tiered_cache_l2_backfill():
-    import gc
-    from core.tiered_cache import TieredCache, L1MemoryCache
-    with tempfile.TemporaryDirectory() as td:
-        cache = TieredCache(
-            cache_dir=Path(td) / "L2",
-            db_path=Path(td) / "L3.db",
-            l1_size=1, l1_ttl=10,
-        )
-        # 第一次: 全部加载, 写入所有层
-        await cache.get("k1", loader=lambda: "v1", ttl=10)
-        # 清空 L1 模拟 L1 miss
-        cache._l1 = L1MemoryCache(maxsize=1, default_ttl=10)
-        # 第二次: 应该从 L2 命中并回填 L1
-        v = await cache.get("k1", loader=lambda: "should_not_load")
-        assert v == "v1"
-        del cache
-        gc.collect()
-
-
-@pytest.mark.asyncio
-async def test_tiered_cache_invalidate():
-    import gc
-    from core.tiered_cache import TieredCache
-    with tempfile.TemporaryDirectory() as td:
-        cache = TieredCache(
-            cache_dir=Path(td) / "L2",
-            db_path=Path(td) / "L3.db",
-        )
-        await cache.get("k1", loader=lambda: "v1")
-        cache.invalidate("k")
-        # 失效后重新加载
-        v = await cache.get("k1", loader=lambda: "v2")
-        assert v == "v2"
-        del cache
-        gc.collect()
 
 
 # ============================================================
@@ -529,54 +466,6 @@ def test_config_reloader_callback():
             f.flush()
         r.reload()
         assert len(notified) >= 1
-    finally:
-        os.unlink(path)
-
-
-# ============================================================
-# H3: idempotent_migrator
-# ============================================================
-
-@pytest.mark.asyncio
-async def test_migrator_idempotent_column_add():
-    import aiosqlite
-    from db.idempotent_migrator import IdempotentMigrator
-    with tempfile.NamedTemporaryFile(suffix=".db", delete=False) as f:
-        path = f.name
-    try:
-        async with aiosqlite.connect(path) as conn:
-            await conn.execute("CREATE TABLE test (id INTEGER)")
-            await conn.commit()
-            m = IdempotentMigrator(conn)
-            # 第一次添加
-            ok1 = await m.add_column_if_not_exists("test", "col1", "TEXT", "''")
-            assert ok1 is True
-            # 第二次添加 (幂等, 应该跳过)
-            ok2 = await m.add_column_if_not_exists("test", "col1", "TEXT", "''")
-            assert ok2 is False
-    finally:
-        os.unlink(path)
-
-
-@pytest.mark.asyncio
-async def test_migrator_apply_idempotent():
-    import aiosqlite
-    from db.idempotent_migrator import IdempotentMigrator
-    with tempfile.NamedTemporaryFile(suffix=".db", delete=False) as f:
-        path = f.name
-    try:
-        async with aiosqlite.connect(path) as conn:
-            await conn.execute("CREATE TABLE t (id INTEGER)")
-            await conn.commit()
-            m = IdempotentMigrator(conn)
-            stmts = [
-                "CREATE INDEX IF NOT EXISTS idx_t ON t(id)",
-                ("ALTER TABLE t ADD COLUMN x TEXT", "column", "t", "x"),
-            ]
-            ok1 = await m.apply("v1", stmts, "test migration")
-            assert ok1 is True
-            ok2 = await m.apply("v1", stmts, "test migration")
-            assert ok2 is False  # 已应用
     finally:
         os.unlink(path)
 

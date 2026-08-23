@@ -213,6 +213,15 @@ class WorkflowV2Service:
         if warnings:
             logger.info("workflow.v1_migrate_warnings wf_id={} count={}",
                         wf_id, len(warnings))
+        # 编译期拒绝（同 migrate 路径）：未实现节点类型/坏图不入库，
+        # 否则要跑到该节点才报 UNSUPPORTED_NODE（2026-08-23 复审项）
+        from workflow_v2.graph import GraphError, validate_graph
+        try:
+            validate_graph(rev.nodes, rev.edges)
+        except GraphError as e:
+            logger.warning("workflow.snapshot_invalid_graph wf_id={} error={}",
+                           wf_id, e)
+            return None
         definition = await self._definition_row(wf_id)
         if definition is None:
             await self.repo.upsert_definition(

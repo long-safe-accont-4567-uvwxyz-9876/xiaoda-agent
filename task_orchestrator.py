@@ -668,7 +668,7 @@ class ParallelAgentNode:
                 timeout=180,
             )
             if reply is None:
-                reply = f"{display_name}现在有点累了...等会儿再来吧！💤"
+                reply = f"{display_name}{TIRED_MSG}"
                 if self._belief_router:
                     await self._belief_router.update_belief(target, False)
             else:
@@ -788,7 +788,7 @@ class AgentNode:
                 timeout=180,
             )
             if reply is None:
-                reply = f"{display_name}现在有点累了...等会儿再来吧！💤"
+                reply = f"{display_name}{TIRED_MSG}"
                 if self._belief_router:
                     await self._belief_router.update_belief(target, False)
             else:

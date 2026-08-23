@@ -41,7 +41,7 @@ class MainPathMixin:
 
     async def _run_main_process_path(self, ctx: Any, user_input: Any, clean_input: Any, user_id: Any, source: Any,
                                       user_openid: Any, session_id: Any, status_callback: Any, image_data: Any,
-                                      is_master: Any, force_voice: Any, chat_targets: Any, trace: Any) -> Any:
+                                      is_master: Any, force_voice: Any, trace: Any) -> Any:
         """主处理路径：完整记忆检索 + LLM 调用 + 后处理。"""
         _pipeline_t0 = time.time()
         _proc_id = f"{user_id[:12]}@{int(_pipeline_t0 * 1000) % 100000}"
@@ -50,7 +50,7 @@ class MainPathMixin:
         _mp_t0 = time.time()
         logger.info("pipeline.memory.start proc_id={} user_id={}", _proc_id, user_id[:20])
         emotion, emotion_label = await self._setup_main_emotion_and_memory(
-            user_input, clean_input, chat_targets, is_master, ctx)
+            user_input, is_master, ctx)
         _mp_memory_ms = int((time.time() - _mp_t0) * 1000)
         logger.info("pipeline.memory.done proc_id={} elapsed_ms={} emotion={}",
                     _proc_id, _mp_memory_ms, emotion_label)
@@ -106,20 +106,10 @@ class MainPathMixin:
                     int((time.time() - _pipeline_t0) * 1000))
         return _result
 
-    async def _setup_main_emotion_and_memory(self, user_input: Any, clean_input: Any,
-                                               chat_targets: Any, is_master: Any,
+    async def _setup_main_emotion_and_memory(self, user_input: Any,
+                                               is_master: Any,
                                                ctx: Any) -> tuple:
-        """主路径阶段1：Klee 委托 + 情绪检测 + 记忆检索。返回 (emotion, emotion_label)。"""
-        # IP-safe: 动态读取 xiaoli 的 display_name，避免硬编码原名
-        from config import get_agent_display_name
-        _xiaoli_dn = get_agent_display_name("xiaoli")
-        _xiaoli_names = {"可莉", "小莉", _xiaoli_dn, "xiaoli"}
-        if any(n in user_input for n in _xiaoli_names) and "xiaoda" in chat_targets:
-            klee_reply = await self.delegate_to_klee(clean_input, factual=True)
-            self.context.klee_context = klee_reply
-        else:
-            self.context.klee_context = None
-
+        """主路径阶段1：情绪检测 + 记忆检索。返回 (emotion, emotion_label)。"""
         emotion = detect_emotion(user_input)
         # emotion_llm 后台 fire-and-forget（不阻塞主流程，结果异步更新 mental_state）
         try:

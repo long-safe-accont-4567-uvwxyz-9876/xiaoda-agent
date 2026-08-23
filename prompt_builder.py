@@ -3,8 +3,11 @@
 从 config.py 拆分而来，负责构建 system prompt（含安全化版本）以及
 工作区文件的读取与模板初始化。
 
-为避免循环导入（config.py 末尾会 `from prompt_builder import *`），
-本模块对 config 常量（WORKSPACE_DIR、DATA_DIR 等）采用函数内部延迟导入。
+config 的循环导入已于 2026-08-22 用 PEP 562 模块级 __getattr__ 打破
+（config 仅在属性被实际访问时才懒转发到本模块）。本模块仍保持对 config
+常量的函数内部延迟导入，理由已从"防循环"变为"控制 import 期副作用"
+（config import 时会 load_dotenv 并解析外挂盘路径，见 CLAUDE.md 陷阱 8），
+按需取用可让纯工具场景（脚本/单测）绕开环境初始化。
 """
 import os
 import time
@@ -35,14 +38,14 @@ def _guard_injected_text(text: str) -> str:
 # ── 安全：Canary Token 泄露检测（注入侧与扫描侧共享同一全局单例） ──
 # 旧版 utils.canary_guard.CanaryManager 已停用（无任何生产调用点，注入/检查/清理均未接线）。
 # `_canary_manager` 名称保留以兼容 config.py 的延迟重导出，实际指向 security.canary 的全局单例；
-# 注入（本模块）与扫描（agent_core/tool_executor.py）使用同一实例，链路才真正连通。
+# 注入（本模块）与扫描（agent_core/tool_executor_mixin.py）使用同一实例，链路才真正连通。
 _canary_manager = get_canary_detector()
 
 
 def _inject_canary(prompt: str) -> str:
     """在 system prompt 末尾注入活跃 Canary Token（泄露检测蜜罐）。
 
-    使用 security.canary 全局单例：与 agent_core/tool_executor.py 的扫描点
+    使用 security.canary 全局单例：与 agent_core/tool_executor_mixin.py 的扫描点
     共享同一 token 集合，确保注入侧与扫描侧互通。
     """
     if not prompt:
@@ -283,10 +286,6 @@ _BUCKET_LRU_LEVEL: dict[str, str] = {
 #     * debug:       HEARTBEAT.md=9 (自检规则) + MEMORY.md=6 (事件记录)
 #     * emotional:   USER.md=7 (用户偏好, 个性化情感)
 #     * learning:    USER.md=6 (个性化教学)
-#
-# 复杂度对齐 (观测/优化工具, memory/prompt_complexity.py):
-#   - 用于发现排序异常 (倒挂/集中/不匹配), 供人工审查参考
-#   - 不自动改矩阵: 功能性设计优先, 复杂度对齐作为辅助观测
 import re as _re
 _MODULE_SCENE_PRIORITY: dict[str, dict[str, int]] = {
     # Scene-Aware Middle 模块 (场景感知重排)
