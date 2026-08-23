@@ -14,11 +14,11 @@ from __future__ import annotations
 import asyncio
 import json
 import os
-import random
 import sqlite3
 import threading
 import time
 import weakref
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Optional
 
@@ -35,6 +35,8 @@ from ilink_client import ILinkClient, SessionExpiredError, ILinkRetError
 
 from channel_adapter_base import (
     ChannelAdapterBase,
+    CoreProcessRequest,
+    TTLCache,
     clear_json_credentials,
     load_json_credentials,
     save_json_credentials,
@@ -177,6 +179,13 @@ _START_LOCKS: "weakref.WeakKeyDictionary[asyncio.AbstractEventLoop, asyncio.Lock
     weakref.WeakKeyDictionary()
 )
 _START_LOCKS_GUARD = threading.Lock()
+
+
+@dataclass
+class WxProcessRequest(CoreProcessRequest):
+    """微信管道请求：附加回复所需的 context_token（iLink 协议路由必需）。"""
+
+    context_token: str = ""
 
 
 def _get_start_lock() -> "asyncio.Lock":
@@ -387,24 +396,16 @@ class WeChatBotAdapter(ChannelAdapterBase):
     def _remember_ctx(self, user_id: str, token: str) -> None:
         """记录 per-user 上下文 token（m2：带 TTL + 上限清理，避免无界增长）。
 
-        镜像 _user_locks 的清理策略：写入前先剔除过期项，再按硬上限淘汰最旧项。
+        清理策略统一委托 :meth:`TTLCache.prune_pairs`（原手搓「先剔过期 → 写入 →
+        逐个淘汰最旧」三段式的等价收敛：写入后一次性执行过期剔除 + 最旧淘汰，
+        终态一致），消除与 QQ 会话缓存清理逻辑的漂移温床。
         """
         if not user_id or not token:
             return
-        now = time.time()
-        # 剔除过期项
-        expired = [k for k, ts in self._ctx_by_user_ts.items() if now - ts > self._CTX_TTL]
-        for k in expired:
-            self._ctx_by_user.pop(k, None)
-            self._ctx_by_user_ts.pop(k, None)
-        # 写入/刷新目标项
         self._ctx_by_user[user_id] = token
-        self._ctx_by_user_ts[user_id] = now
-        # 硬上限：仍超量时按时间戳淘汰最旧项
-        while len(self._ctx_by_user) > self._CTX_MAX:
-            oldest = min(self._ctx_by_user_ts, key=self._ctx_by_user_ts.get)
-            self._ctx_by_user.pop(oldest, None)
-            self._ctx_by_user_ts.pop(oldest, None)
+        self._ctx_by_user_ts[user_id] = time.time()
+        TTLCache.prune_pairs(self._ctx_by_user, self._ctx_by_user_ts,
+                             ttl=self._CTX_TTL, max_size=self._CTX_MAX)
 
     # ------------------------------------------------------------------
     # 生命周期
@@ -816,21 +817,20 @@ class WeChatBotAdapter(ChannelAdapterBase):
             await self._process_message_locked(msg, from_user_id)
 
     def _user_lock(self, user_id: str) -> asyncio.Lock:
-        """获取（并按需创建）指定用户的串行锁，附带 TTL 清理。"""
+        """获取（并按需创建）指定用户的串行锁，附带 TTL 清理。
+
+        清理委托 :meth:`TTLCache.prune_pairs`（原手搓循环等价替换）；
+        保留 len>128 门控，避免每条消息都全表扫描。
+        """
         now = time.time()
-        # 定期清理过期锁，避免长期运行内存线性增长
-        if len(self._user_locks) > 128:
-            expired = [
-                k for k, ts in self._user_locks_ts.items() if now - ts > self._USER_LOCK_TTL
-            ]
-            for k in expired:
-                self._user_locks.pop(k, None)
-                self._user_locks_ts.pop(k, None)
         lock = self._user_locks.get(user_id)
         if lock is None:
             lock = asyncio.Lock()
             self._user_locks[user_id] = lock
         self._user_locks_ts[user_id] = now
+        if len(self._user_locks) > 128:
+            TTLCache.prune_pairs(self._user_locks, self._user_locks_ts,
+                                 ttl=self._USER_LOCK_TTL, max_size=None)
         return lock
 
     async def _process_message_locked(self, msg: dict, from_user_id: str) -> None:
@@ -922,20 +922,89 @@ class WeChatBotAdapter(ChannelAdapterBase):
 
     def _prune_last_status_cache(self) -> None:
         """清理过期状态条目（TTL 1 小时），避免长期运行内存线性增长。"""
-        now = time.time()
-        expired = [
-            k for k, ts in self._last_status_by_user_ts.items()
-            if now - ts > self._USER_STATUS_TTL
-        ]
-        for k in expired:
-            self._last_status_by_user.pop(k, None)
-            self._last_status_by_user_ts.pop(k, None)
+        TTLCache.prune_pairs(self._last_status_by_user, self._last_status_by_user_ts,
+                             ttl=self._USER_STATUS_TTL, max_size=None)
 
     def _remember_last_status(self, user_id: str, status: str) -> None:
         """记录用户最近一次中间状态并清理过期条目。"""
         self._last_status_by_user[user_id] = status
         self._last_status_by_user_ts[user_id] = time.time()
         self._prune_last_status_cache()
+
+    # ------------------------------------------------------------------
+    # B2：ChannelAdapterBase._process_with_core 骨架的微信侧钩子
+    # （ACK/session/status_callback/兜底文案与 QQ 语义不同，全部经钩子消化）
+    # ------------------------------------------------------------------
+
+    #: 微信原实现对 process 阶段捕获所有异常（宽于 QQ 的四类窄集）
+    CORE_ERROR_TYPES: tuple[type[BaseException], ...] = (Exception,)
+
+    def _get_core(self) -> Any:
+        return self._core
+
+    async def _send_ack(self, req: WxProcessRequest) -> None:
+        """处理前立即发送"收到啦，正在想"（对齐 QQ 行为）；失败容忍继续处理。"""
+        try:
+            from emotion.emoji_config import get_ack_message
+            ack_text = get_ack_message("xiaoda")
+            logger.info(
+                "wechat_bot.sending_ack to_user={} ack_text={}",
+                req.user_openid[:16], ack_text[:40],
+            )
+            ack_sent = await self.send_message(
+                ack_text,
+                to_user_id=req.user_openid,
+                context_token=req.context_token,
+            )
+            logger.info(
+                "wechat_bot.ack_sent to_user={} sent={}",
+                req.user_openid[:16], ack_sent,
+            )
+        except Exception as e:
+            logger.warning("wechat_bot.ack_send_failed error={}", str(e)[:200])
+
+    async def _resolve_session(self, req: WxProcessRequest) -> str | None:
+        """先取/建 per-user session（内存缓存优先，DB 异常兜底临时 ID）。"""
+        session_id = await self._get_or_create_user_session(req.user_openid)
+        logger.debug(
+            "wechat_bot.session_ready user={} session_id={}",
+            req.user_openid[:16], session_id[:32],
+        )
+        return session_id
+
+    def _make_status_callback(self, req: WxProcessRequest) -> Any:
+        """微信无事件总线用户通道：仅记 DEBUG 日志 + 维护 per-user 最近状态。"""
+        from_user_id = req.user_openid
+
+        async def status_notify(msg: str) -> None:
+            logger.debug(
+                "wechat_bot.status_notify user={} status={}",
+                from_user_id[:16], str(msg)[:200],
+            )
+            self._remember_last_status(from_user_id, str(msg))
+
+        return status_notify
+
+    async def _on_core_timeout(self, req: WxProcessRequest) -> None:
+        logger.warning("wechat_bot.process_timeout user_id={}", req.user_id)
+        await self.send_message(
+            "处理超时，请稍后再试",
+            to_user_id=req.user_openid,
+            context_token=req.context_token,
+        )
+
+    async def _on_core_error(self, req: WxProcessRequest, exc: BaseException) -> None:
+        logger.error(
+            "wechat_bot.process_error user_id={} error={}",
+            req.user_id,
+            str(exc)[:200],
+            exc_info=True,
+        )
+        await self.send_message(
+            "出了点小问题，等会儿再聊好不好？",
+            to_user_id=req.user_openid,
+            context_token=req.context_token,
+        )
 
     async def _handle_text_message(
         self, text: str, from_user_id: str, context_token: str
@@ -971,78 +1040,21 @@ class WeChatBotAdapter(ChannelAdapterBase):
         user_id = f"wechat_{from_user_id}" if from_user_id else "wechat_unknown"
         logger.info("wechat_bot.text_msg user_id={} text={}", user_id, text[:80])
 
-        # ACK：处理前立即发送"收到啦，正在想"（对齐 QQ 行为）
-        try:
-            from emotion.emoji_config import get_ack_message
-            ack_text = get_ack_message("xiaoda")
-            logger.info(
-                "wechat_bot.sending_ack to_user={} ack_text={}",
-                from_user_id[:16], ack_text[:40],
-            )
-            ack_sent = await self.send_message(
-                ack_text,
-                to_user_id=from_user_id,
-                context_token=context_token,
-            )
-            logger.info(
-                "wechat_bot.ack_sent to_user={} sent={}",
-                from_user_id[:16], ack_sent,
-            )
-        except Exception as e:
-            logger.warning("wechat_bot.ack_send_failed error={}", str(e)[:200])
-
         logger.info(
             "wechat_bot.calling_core_process user_id={} text_len={}",
             user_id, len(text),
         )
-        # A2：对齐 QQ C2C——先取/建 per-user session（内存缓存优先，DB 异常兜底临时 ID）
-        session_id = await self._get_or_create_user_session(from_user_id)
-        logger.debug(
-            "wechat_bot.session_ready user={} session_id={}",
-            from_user_id[:16], session_id[:32],
+        # B2：ACK → session → status_callback → wait_for(process,120) → 超时/异常兜底
+        # 统一走 ChannelAdapterBase._process_with_core 骨架（原逐段复制的管道沉淀层）。
+        req = WxProcessRequest(
+            text=text,
+            user_id=user_id,
+            source="wechat_c2c",
+            user_openid=from_user_id,
+            context_token=context_token,
         )
-
-        # A2：status_callback（签名与 QQ status_notify 一致）。
-        # 微信无事件总线用户通道：仅记 DEBUG 日志 + 维护 per-user 最近状态，不做协议发送。
-        async def status_notify(msg: str) -> None:
-            logger.debug(
-                "wechat_bot.status_notify user={} status={}",
-                from_user_id[:16], str(msg)[:200],
-            )
-            self._remember_last_status(from_user_id, str(msg))
-
-        try:
-            result = await asyncio.wait_for(
-                self._core.process(
-                    text,
-                    user_id=user_id,
-                    source="wechat_c2c",
-                    user_openid=from_user_id,
-                    session_id=session_id,
-                    status_callback=status_notify,
-                ),
-                timeout=120,
-            )
-        except asyncio.TimeoutError:
-            logger.warning("wechat_bot.process_timeout user_id={}", user_id)
-            await self.send_message(
-                "处理超时，请稍后再试",
-                to_user_id=from_user_id,
-                context_token=context_token,
-            )
-            return
-        except Exception as e:
-            logger.error(
-                "wechat_bot.process_error user_id={} error={}",
-                user_id,
-                str(e)[:200],
-                exc_info=True,
-            )
-            await self.send_message(
-                "出了点小问题，等会儿再聊好不好？",
-                to_user_id=from_user_id,
-                context_token=context_token,
-            )
+        result = await self._process_with_core(req)
+        if result is None:
             return
 
         reply = getattr(result, "reply", "") or ""
@@ -1076,65 +1088,21 @@ class WeChatBotAdapter(ChannelAdapterBase):
                 user_id, text_sent,
             )
         else:
-            num_segments = len(segments)
             logger.info(
                 "wechat_bot.stream_start user_id={} reply_len={} segments={}",
-                user_id, len(reply), num_segments,
+                user_id, len(reply), len(segments),
             )
-            for i, seg in enumerate(segments):
-                if i > 0:
-                    # 段间 800-1200ms 停顿模拟打字节奏（对齐 QQ）
-                    await asyncio.sleep(random.uniform(0.8, 1.2))
-                try:
-                    seg_ok = await self.send_message(
-                        seg,
-                        to_user_id=from_user_id,
-                        context_token=context_token,
-                    )
-                except Exception as e:
-                    # send_message 内部已兜底全部异常并返回 False，此处仅防御
-                    logger.warning(
-                        "wechat_bot.stream_segment_exception index={} total={} error={}",
-                        i, num_segments, str(e)[:200],
-                    )
-                    seg_ok = False
-                if seg_ok:
-                    logger.debug(
-                        "wechat_bot.stream_segment index={} total={} sent=True size={}",
-                        i, num_segments, len(seg),
-                    )
-                else:
-                    # 某段失败：合并剩余段（含当前段——send_message 返回 False 表示
-                    # 服务端 ret != 0，当前段未被接受，对齐 QQ 连接错误路径）为单条
-                    # 重发一次，沿用 send_message 的 context_token 缓存重试能力。
-                    logger.warning(
-                        "wechat_bot.stream_segment_failed index={} total={} merging_remaining",
-                        i, num_segments,
-                    )
-                    remaining = "".join(segments[i:])
-                    try:
-                        merged_ok = await self.send_message(
-                            remaining,
-                            to_user_id=from_user_id,
-                            context_token=context_token,
-                        )
-                    except Exception as e:
-                        logger.warning(
-                            "wechat_bot.stream_merged_exception size={} error={}",
-                            len(remaining), str(e)[:200],
-                        )
-                        merged_ok = False
-                    if merged_ok:
-                        logger.info(
-                            "wechat_bot.stream_merged_resend_ok merged_from={} size={}",
-                            num_segments - i, len(remaining),
-                        )
-                    else:
-                        logger.warning(
-                            "wechat_bot.stream_merged_resend_failed size={}",
-                            len(remaining),
-                        )
-                    break
+
+            async def _wx_send(content: str) -> bool:
+                return await self.send_message(
+                    content,
+                    to_user_id=from_user_id,
+                    context_token=context_token,
+                )
+
+            # B2：段间打字节奏（0.8–1.2s）+ 某段失败合并剩余段单条重发一次，
+            # 统一走基类 _send_segments_paced（与 QQ 同一行为契约的唯一实现）。
+            await self._send_segments_paced(segments, _wx_send, log_prefix="wechat_bot")
         # 再发表情包（纯图，独立消息）：失败不回退文本，避免重复发送
         if sticker_path and Path(sticker_path).exists():
             logger.info(

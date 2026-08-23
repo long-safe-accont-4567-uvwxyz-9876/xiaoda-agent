@@ -1,6 +1,6 @@
 # xiaoda-agent 文档索引
 
-> 本文档统一索引项目所有文档，按角色分类。最后更新: 2026-07-19
+> 本文档统一索引项目所有文档，按角色分类。最后更新: 2026-08-23
 >
 > 链接路径均相对于本文件（`docs/INDEX.md`）。标注"（内部使用）"的文档主要面向项目维护者与 AI 协作工具，普通使用者无需阅读。
 
@@ -17,6 +17,7 @@
 - [API 文档](API.md) - Web API 接口规范
 - [CLAUDE 开发指南](../CLAUDE.md)（内部使用） - 开发命令、架构说明、配置体系
 - [改进计划](IMPROVEMENT_PLAN.md) - 项目改进路线图
+- [情感陪伴升级方案](research/external-specs/astrbot-tdbm-companion-upgrade.md) - 基于 AstrBot / TencentDB-Agent-Memory 的对照研究与 P0-P2 优化路线（2026-08-23）
 - [WebUI 设计](WEBUI_DESIGN.md) - Web 前端设计文档
 - [场景感知重设计](SCENE_AWARE_REDESIGN.md) - 场景感知系统重设计
 

@@ -1,4 +1,5 @@
 from typing import Any
+import asyncio
 from loguru import logger
 
 from db.database import DatabaseManager
@@ -252,8 +253,57 @@ class MemoryManager:
         children: list[dict],
         importance: float,
     ) -> bool:
-        return await self._retrieval._insert_indexed_children(
-            parent_id, children, importance)
+        """写入侧：父chunk落库 + 子chunk向量索引（原子性保护）。
+
+        2026-08 自 retrieval 引擎归还本模块：生产调用链为
+        _memory_encoder → MemoryManager._insert_indexed_children，
+        写入逻辑与检索无关，归属写入方。（自 memory/_retrieval_engine.py
+        纯移动而来，仅 self._mm → self；日志文案/异常类型零变化。）
+        """
+        child_ids = []
+        error: BaseException | None = None
+        child_records = [
+            {
+                **child,
+                "importance": importance * child["weight"],
+            }
+            for child in children
+        ]
+
+        async def _insert_batch() -> list[int]:
+            transaction = getattr(getattr(self, "db", None), "write_transaction", None)
+            if transaction is None:
+                return await self.memory.insert_child_chunks(parent_id, child_records)
+            async with transaction():
+                return await self.memory.insert_child_chunks(
+                    parent_id,
+                    child_records,
+                    auto_commit=False,
+                )
+
+        insert_task = asyncio.create_task(_insert_batch())
+        try:
+            child_ids = await asyncio.shield(insert_task)
+            child_items = [
+                (child_id, child["embed_content"])
+                for child_id, child in zip(child_ids, children, strict=True)
+            ]
+            if await self.vec.batch_upsert_children(child_items):
+                return True
+        except BaseException as caught:
+            error = caught
+            if isinstance(caught, asyncio.CancelledError):
+                try:
+                    child_ids = await asyncio.shield(insert_task)
+                except (ImportError, OSError, RuntimeError, ValueError):
+                    child_ids = []
+                except Exception:
+                    logger.exception(".memory._retrieval_engine._insert_batch_unexpected")
+                    child_ids = []
+        await asyncio.shield(self.memory.delete_child_chunks(child_ids))
+        if isinstance(error, asyncio.CancelledError):
+            raise error
+        return False
 
     async def _hybrid_rerank(self, query: str, fused: list[tuple[str, float]],
                               all_items: dict[str, dict], k: int) -> list[dict] | None:

@@ -17,9 +17,12 @@ from channel_adapter_base import (
     STREAM_C2C_MAX_SEGMENTS,
     STREAM_GROUP_MAX_SEGMENTS,
     ChannelAdapterBase,
+    CoreProcessRequest,
     parse_env_csv,
     upsert_env_file_line,
 )
+
+from dataclasses import dataclass
 
 from dotenv import load_dotenv
 # P0 修复（Windows 安装包 QQ 离线 bug 根因）：
@@ -252,6 +255,25 @@ class AttachmentResult(NamedTuple):
     """附件处理结果（原 2 元组改为命名结构）。"""
     image_data: list
     attachment_info: str
+
+
+@dataclass
+class QQPipelineRequest(CoreProcessRequest):
+    """QQ 管道请求：在骨架请求上补充消息对象与 C2C/群聊差异字段。
+
+    C2C 与群聊的全部行为差异以 ``is_group`` 为单一事实源派生：
+    发送器（_bus_reply_fn）、ACK 容错、EventBus notify_started、错误日志
+    exc_info、是否传 session_id——禁止在钩子之外散落通道判别。
+    """
+
+    message: Any = None       # botpy 消息对象（C2CMessage / GroupMessage）
+    is_group: bool = False    # False=C2C，True=群聊
+    is_master: bool = True
+
+    @property
+    def channel_key(self) -> str:
+        """/whoami 与日志事件名片段："c2c" / "group"。"""
+        return "group" if self.is_group else "c2c"
 
 
 class AIQQBot(ChannelAdapterBase, botpy.Client):
@@ -557,7 +579,7 @@ class AIQQBot(ChannelAdapterBase, botpy.Client):
         if msg_id and self._is_duplicate_msg(msg_id):
             return
 
-        if await self._handle_c2c_quick_commands(content, message, user_openid, user_id):
+        if await self._handle_quick_commands(content, message, user_openid, user_id):
             return
 
         # 并发处理消息（per-user 锁保证同一用户串行，不同用户并发）
@@ -568,7 +590,11 @@ class AIQQBot(ChannelAdapterBase, botpy.Client):
             try:
                 async with self._c2c_locks[user_openid]:
                     session_id = await self._get_or_create_c2c_session(user_openid)
-                    await self._process_c2c_reply(message, user_input, user_id, user_openid, session_id, is_master, image_data)
+                    await self._run_message_pipeline(
+                        message, is_group=False,
+                        user_input=user_input, user_id=user_id, openid=user_openid,
+                        is_master=is_master, image_data=image_data,
+                        session_id=session_id)
             finally:
                 self._cleanup_message_lock(self._c2c_locks, user_openid)
 
@@ -644,80 +670,178 @@ class AIQQBot(ChannelAdapterBase, botpy.Client):
             event_stem="c2c_session",
         )
 
-    async def _handle_c2c_quick_commands(self, content: str, message: C2CMessage,
-                                          user_openid: str, user_id: str) -> bool:
-        """处理快速指令（/whoami、HITL 审批回复）。返回 True 表示已处理，跳过正常流程。"""
-        # /whoami 指令：回复发送者的 openid（用于主人在 Setup 中填写）
+    async def _handle_quick_commands(self, content: str, message: Any,
+                                     openid: str, user_id: str) -> bool:
+        """处理 C2C/群聊共用的快捷指令（原两侧各一份的合并体）。
+
+        - /whoami 指令：回复发送者的 openid（用于主人在 Setup 中填写）
+        - HITL: 若用户有待审批请求，先尝试匹配回复（"确认"/"取消"），
+          匹配则跳过正常处理
+        返回 True 表示已处理，跳过正常流程。
+        """
         if content.strip() in ("/whoami", "/whoami "):
-            await message.reply(content=f"你的 OpenID 是：\n{user_openid}\n\n在 Setup 配置页面的「主人 QQ OpenID」填入此值即可绑定主人身份。", msg_seq=_next_msg_seq())
+            await message.reply(
+                content=f"你的 OpenID 是：\n{openid}\n\n在 Setup 配置页面的「主人 QQ OpenID」填入此值即可绑定主人身份。",
+                msg_seq=_next_msg_seq())
             return True
-        # HITL: 若用户有待审批请求，先尝试匹配回复（"确认"/"取消"），匹配则跳过正常处理
         if self.hitl_enabled:
-            approval_user = user_openid or user_id
+            approval_user = openid or user_id
             if await self.im_approval.handle_user_reply(approval_user, content):
                 return True
         return False
 
+    # ------------------------------------------------------------------
+    # C2C / 群聊共享回复管道（模板方法 + 骨架钩子）
+    # 原 _process_c2c_reply 与 _run_group_agent/_send_group_ack 两侧平行实现
+    # 的沉淀层；差异经 QQPipelineRequest.is_group 收敛，文案逐字节保持不变。
+    # ------------------------------------------------------------------
+
+    async def _run_message_pipeline(self, message: Any, *, is_group: bool,
+                                    user_input: str, user_id: str, openid: str,
+                                    is_master: bool, image_data: Any,
+                                    session_id: str | None = None) -> None:
+        """C2C/群聊统一回复管道（模板方法）。
+
+        覆盖原两侧逐字复制的区段：ACK → 绑定 EventBus 用户 →
+        wait_for(agent.process, 120s) → 高危审批（HITL）→ sticker/媒体回复 →
+        超时与异常兜底。通道差异经 req.is_group 派生的钩子消化；
+        调用方（on_c2c_message_create / _handle_group_at_message）保留各自的
+        解析/去重/锁时序，保证消息去重键与 HITL 触发条件不变。
+        """
+        req = QQPipelineRequest(
+            text=user_input,
+            user_id=user_id,
+            source="qq_group" if is_group else "qq_c2c",
+            user_openid=openid,
+            session_id=session_id,
+            extra_kwargs={
+                "image_data": image_data if image_data else None,
+                "is_master": is_master,
+            },
+            message=message,
+            is_group=is_group,
+            is_master=is_master,
+        )
+        await self._process_with_core(req)
+
     async def _process_c2c_reply(self, message: C2CMessage, user_input: str, user_id: str,
                                   user_openid: str, session_id: str, is_master: bool,
                                   image_data: list) -> None:
-        """发送 ACK、调用 agent 处理消息并回复，处理超时与异常。"""
+        """兼容入口（旧签名保留供测试/外部调用）：转调统一管道模板。"""
+        await self._run_message_pipeline(
+            message, is_group=False,
+            user_input=user_input, user_id=user_id, openid=user_openid,
+            is_master=is_master, image_data=image_data, session_id=session_id)
+
+    # -- ChannelAdapterBase._process_with_core 骨架的 QQ 侧钩子 --
+
+    def _get_core(self) -> Any:
+        return self.agent
+
+    async def _send_ack(self, req: QQPipelineRequest) -> None:
+        """处理前 ACK。C2C 失败上抛走骨架错误兜底（原行为）；
+        群聊容忍失败只记 debug——群聊被动回复配额 5 次/5 分钟，ACK 失败不应
+        再消耗兜底配额（原 _send_group_ack 行为）。"""
+        if not req.is_group:
+            await req.message.reply(content=get_ack_message('xiaoda'), msg_seq=_next_msg_seq())
+            return
         try:
-            await message.reply(content=get_ack_message('xiaoda'), msg_seq=_next_msg_seq())
+            await req.message.reply(content=get_ack_message('xiaoda'), msg_seq=_next_msg_seq())
+        except (OSError, RuntimeError, ConnectionError) as e:
+            logger.debug("qq_bot.ack_send_failed", error=str(e))
 
-            async def status_notify(msg) -> None:
-                # 所有中间状态消息（工具状态、进度提示等）不发送到 QQ
-                # 实际回复通过 _send_reply_with_sticker / _send_streaming_reply 发送
-                return
+    def _make_status_callback(self, req: QQPipelineRequest) -> Any:
+        async def status_notify(msg) -> None:
+            # 所有中间状态消息（工具状态、进度提示等）不发送到 QQ
+            # 实际回复通过 _send_reply_with_sticker / _send_streaming_reply 发送
+            return
+        return status_notify
 
-            # 绑定 QQUser 到 EventBus
+    def _bus_reply_fn(self, req: QQPipelineRequest):
+        """EventBus 中间通知的发送器：C2C 走主动消息 API（None 校验），群聊走被动 reply。"""
+        if not req.is_group:
+            openid = req.user_openid
+
             async def _qq_reply(content: str, msg_seq: int = 0) -> None:
                 response = await self.api.post_c2c_message(
-                    openid=user_openid,
+                    openid=openid,
                     content=content,
                     msg_type=0,
                     msg_seq=msg_seq,
                 )
                 if response is None:
                     raise RuntimeError("C2C状态消息接口返回None")
-            qq_user = QQUser(reply_fn=_qq_reply, msg_seq_fn=_next_msg_seq)
-            token = event_bus.bind_user(qq_user)
-            try:
-                result = await asyncio.wait_for(
-                    self.agent.process(user_input, user_id=user_id, source="qq_c2c",
-                                      user_openid=user_openid, session_id=session_id,
-                                      status_callback=status_notify,
-                                      image_data=image_data if image_data else None,
-                                      is_master=is_master),
-                    timeout=120,  # 降低兜底超时，避免长时间堵塞用户消息队列
-                )
-            finally:
-                event_bus.unbind_user(token)
-            # HITL: 高危操作两段式确认（检测 __HIGH_RISK_OP__ 标记）
-            result = await self._check_high_risk_approval(
-                result, message, user_openid or user_id, is_master)
-            if result.reply:
-                await self._send_reply_with_sticker(message, result)
-        except TimeoutError:
-            logger.warning("qq_bot.c2c_timeout user=%s", user_id)
-            # 记录失败状态，供下次消息恢复上下文
-            if hasattr(self.agent, 'context') and self.agent.context:
-                self.agent.context.record_failure("处理超时", user_input)
-            try:
-                await message.reply(content=f"{get_agent_display_name('xiaoda')}想得太入神了……能再说一次吗？🌱", msg_seq=_next_msg_seq())
-            except (OSError, RuntimeError, ConnectionError) as _e:
-                logger.debug("qq_bot.c2c_timeout_reply_failed", error=str(_e))
-        except (TimeoutError, RuntimeError, OSError, ValueError) as e:
-            logger.error(f"qq_bot.c2c_error: {e}")
-            # P1-2: 仅在 agent 处理失败（非 QQ 网络短暂错误）时失效 session 缓存
-            # RuntimeError/OSError 可能是 QQ 网络短暂错误（ACK/回复发送失败），不应清除健康缓存
-            # ValueError 通常表示数据格式问题（如 session 无效），需要重新查 DB
-            if user_openid and isinstance(e, ValueError):
-                self._invalidate_c2c_session(user_openid)
-            try:
-                await message.reply(content="嗯……出了点小问题，等会儿再聊好不好？", msg_seq=_next_msg_seq())
-            except (OSError, RuntimeError, ConnectionError) as e:
-                logger.error(f"qq_bot.c2c_fallback_reply_failed: {e}")
+            return _qq_reply
+
+        message = req.message
+
+        async def _group_reply(content: str, msg_seq: int = 0) -> None:
+            await message.reply(content=content, msg_seq=msg_seq)
+        return _group_reply
+
+    def _bind_bus_user(self, req: QQPipelineRequest) -> Any:
+        # Q1 修复：群聊被动回复配额 5 次/5 分钟，ACK+4 片回复已占满 5 次，
+        # SUB_STARTED 通知会击穿配额触发 40034105 → 群聊禁用开始通知（notify_started=False）。
+        qq_user = QQUser(reply_fn=self._bus_reply_fn(req), msg_seq_fn=_next_msg_seq,
+                         notify_started=not req.is_group)
+        return event_bus.bind_user(qq_user)
+
+    def _unbind_bus_user(self, token: Any) -> None:
+        if token is not None:
+            event_bus.unbind_user(token)
+
+    async def _post_process_result(self, req: QQPipelineRequest, result: ProcessResult) -> ProcessResult:
+        """高危操作两段式确认 + sticker 回复（须在骨架保护区内执行，
+        异常才能落入错误兜底文案——与原 try 块包裹范围一致）。"""
+        # HITL: 高危操作两段式确认（检测 __HIGH_RISK_OP__ 标记）
+        result = await self._check_high_risk_approval(
+            result, req.message, req.user_openid or req.user_id, req.is_master)
+        if result.reply:
+            await self._send_reply_with_sticker(req.message, result)
+        return result
+
+    async def _pipeline_timeout_fallback(self, channel_key: str, message: Any,
+                                         user_id: str, user_input: str) -> None:
+        """超时兜底（C2C/群聊共用）：记录失败状态 + 发送超时文案（原文案逐字节保留）。"""
+        logger.warning(f"qq_bot.{channel_key}_timeout user=%s", user_id)
+        # 记录失败状态，供下次消息恢复上下文
+        if hasattr(self.agent, 'context') and self.agent.context:
+            self.agent.context.record_failure("处理超时", user_input)
+        try:
+            await message.reply(
+                content=f"{get_agent_display_name('xiaoda')}想得太入神了……能再说一次吗？🌱",
+                msg_seq=_next_msg_seq(),
+            )
+        except (OSError, RuntimeError, ConnectionError) as _e:
+            logger.debug(f"qq_bot.{channel_key}_timeout_reply_failed", error=str(_e))
+
+    async def _pipeline_error_fallback(self, channel_key: str, message: Any, exc: BaseException,
+                                       *, exc_info: bool = False, openid: str = "",
+                                       invalidate_session: bool = False) -> None:
+        """异常兜底（C2C/群聊共用）：日志 + 可选会话失效 + 发送错误文案（原文案逐字节保留）。"""
+        logger.error(f"qq_bot.{channel_key}_error: {exc}", exc_info=exc_info)
+        # P1-2: 仅在 agent 处理失败（非 QQ 网络短暂错误）时失效 session 缓存
+        # RuntimeError/OSError 可能是 QQ 网络短暂错误（ACK/回复发送失败），不应清除健康缓存
+        # ValueError 通常表示数据格式问题（如 session 无效），需要重新查 DB
+        if invalidate_session and openid and isinstance(exc, ValueError):
+            self._invalidate_c2c_session(openid)
+        try:
+            await message.reply(content="嗯……出了点小问题，等会儿再聊好不好？", msg_seq=_next_msg_seq())
+        except (OSError, RuntimeError, ConnectionError) as e:
+            logger.error(f"qq_bot.{channel_key}_fallback_reply_failed: {e}")
+
+    async def _on_core_timeout(self, req: QQPipelineRequest) -> None:
+        key = req.channel_key
+        await self._pipeline_timeout_fallback(key, req.message, req.user_id, req.text)
+
+    async def _on_core_error(self, req: QQPipelineRequest, exc: BaseException) -> None:
+        await self._pipeline_error_fallback(
+            req.channel_key, req.message, exc,
+            exc_info=req.is_group,
+            openid=req.user_openid,
+            # 仅 C2C 有会话缓存可失效（原实现群聊分支无此逻辑）
+            invalidate_session=not req.is_group,
+        )
 
     async def _extract_group_message_input(self, message: GroupMessage) -> tuple[str, Any, Any, str, str]:
         """提取群消息输入：返回 (content, image_data, attachment_info, member_openid, user_id)。"""
@@ -728,61 +852,17 @@ class AIQQBot(ChannelAdapterBase, botpy.Client):
         user_id = f"qq_{member_openid}" if member_openid else "qq_unknown"
         return content, image_data, attachment_info, member_openid, user_id
 
-    async def _handle_group_whoami(self, message: Any, content: str, member_openid: str) -> bool:
-        """/whoami 指令：回复发送者 openid；命中返回 True。"""
-        if content.strip() in ("/whoami", "/whoami "):
-            await message.reply(
-                content=f"你的 OpenID 是：\n{member_openid}\n\n在 Setup 配置页面的「主人 QQ OpenID」填入此值即可绑定主人身份。",
-                msg_seq=_next_msg_seq(),
-            )
-            return True
-        return False
+    def _identify_group_master(self, member_openid: str) -> bool:
+        """识别群消息发送者是否为主人（C2C 判定回调的群聊变体）。
 
-    async def _handle_group_hitl(self, content: str, member_openid: str, user_id: str) -> bool:
-        """HITL 待审批回复匹配（"确认"/"取消"）；命中返回 True。"""
-        if not self.hitl_enabled:
-            return False
-        approval_user = member_openid or user_id
-        return await self.im_approval.handle_user_reply(approval_user, content)
-
-    async def _send_group_ack(self, message: Any) -> None:
-        """立即发送 ACK（群聊被动回复配额 1 次）。失败只记 debug。"""
-        try:
-            await message.reply(content=get_ack_message('xiaoda'), msg_seq=_next_msg_seq())
-        except (OSError, RuntimeError, ConnectionError) as e:
-            logger.debug("qq_bot.ack_send_failed", error=str(e))
-
-    async def _run_group_agent(self, message: Any, user_input: str, user_id: str,
-                               member_openid: str, image_data: Any, is_master: bool) -> Any:
-        """绑定 QQUser、调用 agent.process、解绑、高危审批，返回 result。"""
-        async def status_notify(msg: str) -> None:
-            pass
-
-        async def _group_reply(content: str, msg_seq: int = 0) -> None:
-            await message.reply(content=content, msg_seq=msg_seq)
-
-        # Q1 修复：群聊被动回复配额 5 次/5 分钟，ACK+4 片回复已占满 5 次，
-        # SUB_STARTED 通知会击穿配额触发 40034105 → 群聊禁用开始通知。
-        qq_user = QQUser(
-            reply_fn=_group_reply,
-            msg_seq_fn=_next_msg_seq,
-            notify_started=False,
-        )
-        token = event_bus.bind_user(qq_user)
-        try:
-            result = await asyncio.wait_for(
-                self.agent.process(user_input, user_id=user_id, source="qq_group",
-                                  user_openid=member_openid,
-                                  status_callback=status_notify,
-                                  image_data=image_data if image_data else None,
-                                  is_master=is_master),
-                timeout=120,  # 降低兜底超时，避免长时间堵塞用户消息队列
-            )
-        finally:
-            event_bus.unbind_user(token)
-        # HITL: 高危操作两段式确认（检测 __HIGH_RISK_OP__ 标记）
-        return await self._check_high_risk_approval(
-            result, message, member_openid or user_id, is_master)
+        对比 member_openid 与 MASTER_QQ_OPENID（逗号分隔多值）；
+        on_group_add_robot 已自动绑定拉群者的 member_openid。
+        """
+        master_ids = _parse_master_ids()
+        is_master = bool(master_ids) and member_openid in master_ids
+        if is_master:
+            logger.info("qq_bot.master_identified", member_openid=member_openid)
+        return is_master
 
     async def _handle_group_at_message(self, message: GroupMessage, group_lock_key: str) -> None:
         # Q5 修复：user_id/user_input 定义于 try 块内，_process_message_attachments
@@ -801,50 +881,26 @@ class AIQQBot(ChannelAdapterBase, botpy.Client):
                 user_input = _build_user_input(content, attachment_info)
                 logger.info("qq_bot.group_message", user_id=user_id, openid=member_openid, content=user_input[:80])
 
-                # 主人识别：对比 member_openid 与 MASTER_QQ_OPENID（逗号分隔多值）
-                # on_group_add_robot 已自动绑定拉群者的 member_openid
-                master_ids = _parse_master_ids()
-                is_master = bool(master_ids) and member_openid in master_ids
-                if is_master:
-                    logger.info("qq_bot.master_identified", member_openid=member_openid)
-                else:
+                is_master = self._identify_group_master(member_openid)
+                if not is_master:
                     logger.info("qq_bot.non_master_message", user_id=user_id, openid=member_openid, content=user_input[:80])
 
                 if self.nudge_engine:
                     self.nudge_engine.poke()
 
-                if await self._handle_group_whoami(message, content, member_openid):
+                if await self._handle_quick_commands(content, message, member_openid, user_id):
                     return
 
-                if await self._handle_group_hitl(content, member_openid, user_id):
-                    return
-
-                await self._send_group_ack(message)
-
-                result = await self._run_group_agent(
-                    message, user_input, user_id, member_openid, image_data, is_master)
-                if result.reply:
-                    await self._send_reply_with_sticker(message, result)
+                await self._run_message_pipeline(
+                    message, is_group=True,
+                    user_input=user_input, user_id=user_id, openid=member_openid,
+                    is_master=is_master, image_data=image_data)
         except TimeoutError:
-            logger.warning("qq_bot.group_timeout user=%s", user_id)
-            if hasattr(self.agent, 'context') and self.agent.context:
-                self.agent.context.record_failure("处理超时", user_input)
-            try:
-                await message.reply(
-                    content=f"{get_agent_display_name('xiaoda')}想得太入神了……能再说一次吗？🌱",
-                    msg_seq=_next_msg_seq(),
-                )
-            except (OSError, RuntimeError, ConnectionError) as _e:
-                logger.debug("qq_bot.group_timeout_reply_failed", error=str(_e))
+            # 解析/鉴权阶段的超时兜底（process 阶段由骨架 _on_core_timeout 兜底，
+            # 两者共用同一实现避免文案漂移）
+            await self._pipeline_timeout_fallback("group", message, user_id, user_input)
         except (RuntimeError, OSError, ValueError) as e:
-            logger.error(f"qq_bot.group_error: {e}", exc_info=True)
-            try:
-                await message.reply(
-                    content="嗯……出了点小问题，等会儿再聊好不好？",
-                    msg_seq=_next_msg_seq(),
-                )
-            except (OSError, RuntimeError, ConnectionError) as e2:
-                logger.error(f"qq_bot.group_fallback_reply_failed: {e2}")
+            await self._pipeline_error_fallback("group", message, e, exc_info=True)
         finally:
             self._cleanup_message_lock(self._group_locks, group_lock_key)
 
