@@ -1,65 +1,70 @@
 # requirements.lock — 固化依赖精确版本
-# 生成日期: 2026-08-23（补 tavily/primp/watchdog/requests，与 requirements.txt 对齐）
+# 生成日期: 2026-08-23（技术债 P0-1：与 .venv 实测对齐，修复 openai 跨大版本冲突）
 # 用法: pip install -r requirements.lock
-# 环境: Python 3.11
+# 环境: Python 3.11 / 板端 Orange Pi ARM64 实测版本
+# 约束: 每个包的 == 版本必须满足 requirements.txt 的范围约束（pre-push 校验）
 
 # ── Web 服务 ──
-fastapi==0.115.12
-starlette==0.45.3
-uvicorn==0.34.2
-websockets==13.1
-python-multipart==0.0.20
-structlog==24.4.0
+fastapi==0.136.3
+starlette==1.3.0
+uvicorn==0.49.0
+websockets==16.0
+python-multipart==0.0.32
+structlog==26.1.0
 
 # ── HTTP 客户端 ──
 httpx[http2]==0.28.1
 h2==4.3.0
 
 # ── 图像处理 ──
-Pillow==11.2.1
+Pillow==12.2.0
+qrcode==8.2
 
 # ── 数值计算 ──
-numpy==1.26.4
+# 板端实测组合：onnxruntime 1.28.0 + numpy 2.4.6（requirements.txt 注释同源）
+numpy==2.4.6
+
+# ── CLI 交互补全 ──
+prompt-toolkit==3.0.53
+
+# ── SILK 音频编码 ──
+pilk==0.2.4
+
+# ── 系统监控 / 发行版识别 ──
+psutil==7.2.2
+distro==1.9.0
+
+# ── 可观测性: Prometheus 指标导出 (/metrics 端点) ──
+prometheus-client==0.25.0
+
+# ── 核心 ──
+python-dotenv==1.2.2
+loguru==0.7.3
+openai==2.41.0
+aiosqlite==0.22.1
+pydantic==2.13.4
+jieba==0.42.1
+rapidfuzz==3.14.5
+pyyaml==6.0.3
+cryptography==48.0.0
+certifi==2026.5.20
 
 # ── 本地 AI 推理（onnxruntime + GenAI + 向量检索）──
-# 锁定精确版本：requirements.txt 只给范围，CI 解析到新版本时与 onnxruntime-genai
-# 的 native lib ABI 不匹配，导致 frozen exe 在 Linux 加载 genai so 失败（Windows
-# 因 DLL 搜索路径宽松不受影响）。以下版本经板端 frozen 构建实测兼容。
+# 锁定精确版本：CI 解析到新版本时与 onnxruntime-genai 的 native lib ABI
+# 不匹配会导致 frozen exe 加载 genai so 失败。以下版本经板端 frozen 构建实测兼容。
 onnxruntime==1.28.0
 onnxruntime-genai==0.15.2
 onnx==1.22.0
 sqlite-vec==0.1.9
 tokenizers==0.23.1
 
-# ── CLI 美化 ──
-
-# ── SILK 音频编码 ──
-pilk==0.2.4
-
-# ── 系统监控 ──
-psutil==6.1.0
-
-# ── 可观测性: Prometheus 指标导出 (/metrics 端点) ──
-prometheus-client==0.25.0
-
-# ── 核心 ──
-python-dotenv==1.1.0
-loguru==0.7.3
-openai==1.82.0
-aiosqlite==0.22.1
-pydantic==2.13.4
-jieba==0.42.1
-pyyaml==6.0.2
-cryptography==43.0.3
-certifi==2024.12.14
-
 # ── QQ Bot ──
 qq-botpy==1.2.1
 
-# ── 搜索 ──
-duckduckgo-search==8.1.1
+# ── 搜索（可选；web_tools_v2/web_browse_tools 懒加载守卫导入）──
 tavily-python==0.7.26
 primp==1.3.1
+lxml==6.1.1
 
 # ── 配置热重载 / HTTP 客户端 ──
 watchdog==6.0.0
@@ -72,15 +77,16 @@ python-pptx==1.0.2
 openpyxl==3.1.5
 html2text==2025.4.15
 
-# ── 桌面模式 ──
+# ── 认知架构 ──
+networkx==3.6.1
+
+# ── 桌面模式（Windows pywebview 原生窗口；Linux 板端不装）──
 pywebview==5.4
 
-# ── 认知架构 ──
-networkx==3.4.2
+# 注: pywinpty 为 win32 专属（requirements.txt 带环境标记），Linux 锁文件不含。
 
 # ── 开发/测试 ──
-pytest==8.3.5
-pytest-asyncio==0.24.0
-pytest-cov==6.1.1
+pytest==9.0.3
+pytest-asyncio==1.4.0
 pytest-timeout==2.3.1
-ruff==0.11.10
+ruff==0.15.21

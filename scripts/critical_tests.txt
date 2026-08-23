@@ -1,0 +1,27 @@
+# critical_tests.txt — critical 测试子集单一事实源
+# 消费方：scripts/git-hooks/pre-push、.github/workflows/ci-tests.yml、build-release.yml
+# 规则：
+#   - 每行一个 tests/ 下的测试文件路径，# 开头为注释
+#   - 选取标准：改坏即生产事故的核心链路（路由/安全/凭证/事件总线/终端/启动）
+#   - 新增高频改动模块的守卫测试时必须同步加入本清单（pre-push 会校验文件存在）
+tests/test_smoke.py
+tests/test_agent_routing.py
+tests/test_context_compressor.py
+tests/test_risk_classifier.py
+tests/test_error_classifier.py
+tests/test_model_route_validation.py
+tests/test_prompt_integration.py
+tests/test_cognitive_memory.py
+tests/test_hopfield_layer.py
+tests/test_ssrf_guard.py
+tests/test_tool_guardrails.py
+tests/test_credential_pool.py
+tests/test_credential_vault.py
+tests/test_cancel_token.py
+tests/test_event_bus.py
+tests/test_shared_blackboard.py
+tests/test_circuit_breaker.py
+tests/test_manifest_consistency.py
+# ── 热点模块守卫（2026-08-23 技术债审查补充：此前 ws_hub/bootstrap 不在门禁内）──
+tests/test_terminal_output_coalescing.py
+tests/test_bootstrap_degraded_isolation.py

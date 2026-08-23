@@ -62,25 +62,9 @@ jobs:
 
       - name: Run critical tests (strict)
         run: |
+          # 单一事实源：scripts/critical_tests.txt（与 pre-push / build-release 共用）
           python -m pytest \
-            tests/test_smoke.py \
-            tests/test_agent_routing.py \
-            tests/test_context_compressor.py \
-            tests/test_risk_classifier.py \
-            tests/test_error_classifier.py \
-            tests/test_model_route_validation.py \
-            tests/test_prompt_integration.py \
-            tests/test_cognitive_memory.py \
-            tests/test_hopfield_layer.py \
-            tests/test_ssrf_guard.py \
-            tests/test_tool_guardrails.py \
-            tests/test_credential_pool.py \
-            tests/test_credential_vault.py \
-            tests/test_cancel_token.py \
-            tests/test_event_bus.py \
-            tests/test_shared_blackboard.py \
-            tests/test_circuit_breaker.py \
-            tests/test_manifest_consistency.py \
+            $(grep -vE '^\s*(#|$)' scripts/critical_tests.txt) \
             -v --tb=short
 
       - name: Coverage summary

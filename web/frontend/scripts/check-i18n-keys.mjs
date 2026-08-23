@@ -67,7 +67,9 @@ if (missingInEn.length === 0 && missingInZh.length === 0) {
 // 计数增长 → 退出码 1。清偿一个文件就把它从 BASELINE 删掉（计数归零同样过）。
 import { readdirSync, readFileSync, statSync } from 'node:fs'
 
-const CJK = /[\u4e00-\u9fff]/
+// g 标志必需：无 g 的 String.match() 只返回首个匹配（长度≤1），
+// 棘轮曾因此形同虚设——所有文件计数恒为 0/1，基线全写 1 永远绿灯。
+const CJK = /[\u4e00-\u9fff]/g
 function* walkVue(dir) {
   for (const name of readdirSync(dir)) {
     const p = join(dir, name)
@@ -89,22 +91,23 @@ for (const file of walkVue(join(ROOT, 'src', 'views'))) {
   if (n > 0) counts.set(rel, n)
 }
 
-// 存量债务基线（2026-08-23 冻结实测值，多为内联注释与个别遗留文案）。
+// 存量债务基线（2026-08-23 二次冻结：修复 CJK 正则缺 g 标志后按实测重建，
+// 此前非全局正则计数恒 ≤1、基线全写 1，棘轮形同虚设）。
 // 只减不增：清偿后请删除对应行；新增文件出现 CJK 即失败。
 const BASELINE = {
-  'src/views/AgentsView.vue': 1,
-  'src/views/ChatView.vue': 1,
-  'src/views/HealthView.vue': 1,
-  'src/views/InsightView.vue': 1,
-  'src/views/MailView.vue': 1,
-  'src/views/MediaView.vue': 1,
-  'src/views/ModelsView.vue': 1,
-  'src/views/PluginsView.vue': 1,
-  'src/views/ScheduleView.vue': 1,
-  'src/views/SettingsView.vue': 1,
-  'src/views/SetupWizardView.vue': 1,
-  'src/views/ToolsView.vue': 1,
-  'src/views/WorkflowView.vue': 1,
+  'src/views/AgentsView.vue': 92,
+  'src/views/ChatView.vue': 106,
+  'src/views/HealthView.vue': 24,
+  'src/views/InsightView.vue': 79,
+  'src/views/MailView.vue': 86,
+  'src/views/MediaView.vue': 21,
+  'src/views/ModelsView.vue': 223,
+  'src/views/PluginsView.vue': 27,
+  'src/views/ScheduleView.vue': 17,
+  'src/views/SettingsView.vue': 57,
+  'src/views/SetupWizardView.vue': 23,
+  'src/views/ToolsView.vue': 2,
+  'src/views/WorkflowView.vue': 208,
 }
 let bad = 0
 for (const [rel, n] of [...counts].sort()) {
