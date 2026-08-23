@@ -257,14 +257,36 @@ class DistillPortraitMixin:
         return cursor.lastrowid
 
     async def get_memory_summaries(self, limit: int = 5) -> list[dict]:
-        """获取最近的蒸馏摘要（按时间降序）"""
+        """获取最近的蒸馏摘要（按时间降序）。
+
+        enforce 对账联动：摘要无逐条溯源，一旦有已执行（executed=1）的消解动作，
+        早于该动作时间的聚合摘要可能携带已 superseded 的旧事实——读时过滤，
+        待维护蒸馏用新可见性重生成。shadow（executed=0 提案）不过滤；
+        旧库无对账表时退化为不过滤。
+        """
         try:
-            cursor = await self._read_conn().execute(
-                """SELECT id, summary_text, created_at, memory_count
-                   FROM memory_summaries
-                   ORDER BY created_at DESC LIMIT ?""",
-                (limit,),
-            )
+            cutoff: float | None = None
+            try:
+                row = await (await self._read_conn().execute(
+                    "SELECT MAX(created_at) AS latest FROM memory_reconciliation_actions "
+                    "WHERE executed=1"
+                )).fetchone()
+                if row is not None:
+                    latest = row["latest"] if not isinstance(row, (tuple, list)) else row[0]
+                    if latest is not None:
+                        cutoff = float(latest)
+            except Exception:
+                cutoff = None
+
+            query = """SELECT id, summary_text, created_at, memory_count
+                       FROM memory_summaries"""
+            params: list = []
+            if cutoff is not None:
+                query += " WHERE created_at > ?"
+                params.append(cutoff)
+            query += " ORDER BY created_at DESC LIMIT ?"
+            params.append(limit)
+            cursor = await self._read_conn().execute(query, params)
             rows = await cursor.fetchall()
             return [dict(r) for r in rows]
         except Exception as e:

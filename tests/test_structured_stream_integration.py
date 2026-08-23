@@ -50,6 +50,7 @@ class _Stream:
         self._chunks = iter(chunks)
         self._error = error
         self._raised = False
+        self.closed = False
 
     def __aiter__(self):
         return self
@@ -64,7 +65,7 @@ class _Stream:
             raise StopAsyncIteration
 
     async def close(self) -> None:
-        return None
+        self.closed = True
 
 
 class _StructuredRouter(ExecutionMixin):
@@ -144,6 +145,26 @@ async def test_legacy_chat_stream_still_yields_only_text() -> None:
         [{"role": "user", "content": "weather"}],
         tools=[{"type": "function", "function": {"name": "weather"}}],
     )] == ["visible"]
+
+
+@pytest.mark.asyncio
+async def test_structured_stream_closes_upstream_when_consumer_cancels() -> None:
+    stream = _Stream([
+        _chunk(content="first"),
+        _chunk(content="second"),
+        _chunk(finish_reason="stop"),
+    ])
+    router = _StructuredRouter([stream])
+
+    generator = router.chat_stream_events(
+        [{"role": "user", "content": "hello"}],
+    )
+    first = await generator.__anext__()
+    assert first.text_delta == "first"
+
+    await generator.aclose()
+
+    assert stream.closed is True
 
 
 @pytest.mark.asyncio

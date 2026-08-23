@@ -28,6 +28,34 @@ _AFFECT_TRIGGERS = ("情绪触发", "会让我焦虑", "会让我害怕", "感�
 _RELATION_KEYWORDS = ("我答应", "我承诺", "称呼你", "叫你", "禁忌", "不要叫我")
 _INSTRUCTION_PATTERNS = ("以后请", "请记住规则", "记住规则", "从今以后请", "以后不要", "以后必须")
 
+_CLASSIFICATION_PROMPT_TEMPLATE = """你是记忆结构化提取助手。从以下对话中提取结构化信息，返回 JSON 格式（只返回 JSON，不要任何其他内容）：
+
+对话内容：
+{text}
+
+请返回以下 JSON 格式：
+{{
+  "summary": "高质量摘要，保留关键信息，200字以内",
+  "entities": ["人物、物品、地点、技术名词等实体"],
+  "event_type": "事件类型",
+  "memory_type": "fact/event/affect/relation/instruction 五选一",
+  "importance": 0.0,
+  "metadata": {{
+    "decision": "决策或结论，没有则空字符串",
+    "topic": "主要话题",
+    "mood": "用户情绪"
+  }}
+}}"""
+
+
+def build_classification_prompt(text: str) -> str:
+    """构建与生产 _enrich_memory_async 完全一致的分类 prompt。
+
+    单一事实源：生产编码与离线 golden dataset 评估共用，防止两处 prompt 漂移
+    导致评估结果不代表线上行为。
+    """
+    return _CLASSIFICATION_PROMPT_TEMPLATE.format(text=text)
+
 
 @dataclass(frozen=True)
 class MemoryEnrichment:

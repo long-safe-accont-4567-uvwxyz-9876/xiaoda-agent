@@ -359,6 +359,20 @@ class ExecutionMixin:
                 )
                 if not should_retry:
                     break
+            except BaseException:
+                # 取消/生成器关闭不会进入 Exception 重试分支；显式关闭 provider 流，
+                # 避免连接和并发 semaphore 对应的上游资源滞留。
+                if stream is not None:
+                    with contextlib.suppress(AttributeError, OSError):
+                        await stream.close()
+                    stream = None
+                raise
+
+        # 重试耗尽也必须释放最后一次已创建的流（错误分支通常已关闭，保持幂等）。
+        if stream is not None:
+            with contextlib.suppress(AttributeError, OSError):
+                await stream.close()
+            stream = None
 
         metrics.inc(f"model_route.{task_type}.failure")
         metrics.observe(f"model_route.{task_type}.duration", time.time() - started_at)

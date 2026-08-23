@@ -20,7 +20,11 @@ from memory._memory_utils import (
     _log_task_exception,
     validate_memory_content,
 )
-from memory.enrichment import CLASSIFICATION_VERSION, parse_memory_enrichment
+from memory.enrichment import (
+    CLASSIFICATION_VERSION,
+    build_classification_prompt,
+    parse_memory_enrichment,
+)
 
 from .fsrs_model import (
     S_INIT,
@@ -920,24 +924,7 @@ class MemoryEncoder:
         if not text or len(text) < 10:
             return
 
-        prompt = f"""你是记忆结构化提取助手。从以下对话中提取结构化信息，返回 JSON 格式（只返回 JSON，不要任何其他内容）：
-
-对话内容：
-{text}
-
-请返回以下 JSON 格式：
-{{
-  "summary": "高质量摘要，保留关键信息，200字以内",
-  "entities": ["人物、物品、地点、技术名词等实体"],
-  "event_type": "事件类型",
-  "memory_type": "fact/event/affect/relation/instruction 五选一",
-  "importance": 0.0,
-  "metadata": {{
-    "decision": "决策或结论，没有则空字符串",
-    "topic": "主要话题",
-    "mood": "用户情绪"
-  }}
-}}"""
+        prompt = build_classification_prompt(text)
 
         try:
             result = await self._mm.distiller._call_free_model(
