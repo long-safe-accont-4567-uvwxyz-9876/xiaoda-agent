@@ -64,11 +64,12 @@ from model_router_config import (  # noqa: F401,E402
     translate_model_for_provider,
 )
 
-# ── Phase 2 拆分：ModelRouteRegistry 抽为 model_router_registry（逐字节搬移） ──
-from model_router_registry import ModelRouteRegistry as ModelRouteRegistry  # noqa: F401,E402
 # FALLBACK_ROUTE 数据已下沉 model_router_registry（llm_gateway 契约要求网关不得反向
 # import 门面）；此处同名 re-export 维持旧 import 路径（tests/web 路由仍从这取）。
 from model_router_registry import FALLBACK_ROUTE  # noqa: F401,E402
+
+# ── Phase 2 拆分：ModelRouteRegistry 抽为 model_router_registry（逐字节搬移） ──
+from model_router_registry import ModelRouteRegistry as ModelRouteRegistry  # noqa: F401,E402
 from transports import AgnesTransport, MiMoTransport, ProviderTransport
 
 # 根因修复：agnes API connect=5s 过短导致 APIConnectionError，统一从 agnes_transport 引入共享 httpx 配置
@@ -661,19 +662,27 @@ class ModelRouter(ExecutionMixin, CostTrackingMixin, ClientLifecycleMixin, Fallb
                 metrics.observe("router.bg_llm_yield_ms", _yield_ms)
         elif task_type == "chat":
             self._chat_idle.clear()
-            # 可观测性：主 chat 抢占——取消所有未完成的后台 LLM 任务
-            _cancelled = 0
-            for _bg_task in tuple(self._active_bg_llm_tasks):
-                if _bg_task is not _current_task and not _bg_task.done():
-                    _bg_task.cancel()
-                    _cancelled += 1
-            await asyncio.sleep(0)
-            if _cancelled > 0:
-                logger.warning("router.chat_preempt_cancelled",
-                               cancelled_bg=_cancelled,
-                               remaining_bg=len(self._active_bg_llm_tasks))
-                metrics.inc("router.chat_preempt_count")
-                metrics.observe("router.chat_preempt_cancelled_n", _cancelled)
+            # 取消安全修复：clear() 与下方主 try(:685) 之间存在 await 窗口（sleep(0)），
+            # wait_for 超时取消若恰好落在窗口内，函数不会进入主 try 的 finally，
+            # _chat_idle 将永久保持 cleared → 所有后台 LLM 任务死锁在 _chat_idle.wait()。
+            # 故此窗口内的任何异常退出路径必须先 set 回再抛出。
+            try:
+                # 可观测性：主 chat 抢占——取消所有未完成的后台 LLM 任务
+                _cancelled = 0
+                for _bg_task in tuple(self._active_bg_llm_tasks):
+                    if _bg_task is not _current_task and not _bg_task.done():
+                        _bg_task.cancel()
+                        _cancelled += 1
+                await asyncio.sleep(0)
+                if _cancelled > 0:
+                    logger.warning("router.chat_preempt_cancelled",
+                                   cancelled_bg=_cancelled,
+                                   remaining_bg=len(self._active_bg_llm_tasks))
+                    metrics.inc("router.chat_preempt_count")
+                    metrics.observe("router.chat_preempt_cancelled_n", _cancelled)
+            except BaseException:
+                self._chat_idle.set()
+                raise
 
         if _is_bg_llm and _current_task is not None:
             self._active_bg_llm_tasks.add(_current_task)

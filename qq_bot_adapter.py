@@ -165,10 +165,16 @@ def get_active_bot() -> "AIQQBot | None":
     return _ACTIVE_BOT
 
 
-async def send_proactive_message(text: str, openid: str = "") -> bool:
+async def send_proactive_message(text: str, openid: str = "",
+                                 sticker_path: Path | str | None = None) -> bool:
     """向最近私聊用户（或指定 openid）主动发一条 QQ 消息。
 
-    供 web/greeting_scheduler 等同进程模块调用；QQ client 未连接时返回 False。
+    可选携带表情包：先上传图片再与正文合并为一条图文消息（msg_type=7，与
+    主对话 _send_reply_with_sticker 同一发送语义）；上传/发送失败自动降级为
+    纯文本（msg_type=0），不中断整个主动问候/提醒投递。
+
+    供 web/greeting_scheduler、emotion/nudge_engine 等同进程模块调用；
+    QQ client 未连接时返回 False。
     """
     bot = _ACTIVE_BOT
     if bot is None or bot.is_closed():
@@ -176,6 +182,19 @@ async def send_proactive_message(text: str, openid: str = "") -> bool:
     target = openid or bot._last_c2c_openid
     if not target:
         raise RuntimeError("没有可用的 QQ 用户 openid（等用户先发一条私聊，或设置 NUDGE_USER_OPENID）")
+    _sticker = Path(sticker_path) if sticker_path else None
+    if _sticker is not None and _sticker.exists():
+        try:
+            file_info = await bot._upload_c2c_base64(target, _sticker)
+            await bot.api.post_c2c_message(
+                openid=target, msg_type=7, content=text,
+                media={"file_info": file_info}, msg_seq=_next_msg_seq())
+            logger.info("qq_bot.proactive_sent_with_sticker openid={} text={} sticker={}",
+                        target[:8], text[:40], _sticker.name)
+            return True
+        except (OSError, RuntimeError, ConnectionError, TimeoutError) as e:
+            # 表情包上传/合成失败不阻塞问候本身，降级为纯文本继续发送
+            logger.warning("qq_bot.proactive_sticker_fallback error={}", str(e)[:120])
     await bot.api.post_c2c_message(
         openid=target, content=text, msg_type=0, msg_seq=_next_msg_seq())
     logger.info("qq_bot.proactive_sent openid={} text={}", target[:8], text[:40])

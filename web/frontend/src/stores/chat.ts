@@ -225,6 +225,7 @@ export const useChatStore = defineStore('chat', () => {
       role: 'assistant',
       content: e.text as string,
       emotion: '喜悦',
+      stickerUrl: (e.sticker_url as string) || undefined,
       audioUrl: (e.audio_url as string) || undefined,
       timestamp: Date.now(),
     })

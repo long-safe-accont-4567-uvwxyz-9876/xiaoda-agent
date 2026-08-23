@@ -1,13 +1,12 @@
 """内在世界路由（R9）：情绪/画像/今日事件/记忆/知识图谱/笔记/学习/本能。"""
 from __future__ import annotations
-from typing import Any
 
 import asyncio
-import json
 import os
 import time
 import uuid
 from datetime import datetime
+from typing import Any
 from zoneinfo import ZoneInfo
 
 from utils.common import safe_float as _safe_float
@@ -26,8 +25,8 @@ def _get_local_now() -> datetime:
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from loguru import logger
 
-from web.schemas import Envelope
 from web.routers.auth import get_current_user
+from web.schemas import Envelope
 from web.ws_hub import manager
 
 router = APIRouter(tags=["insight"], dependencies=[Depends(get_current_user)])
@@ -450,6 +449,8 @@ async def update_note(note_id: int, body: dict, request: Request) -> Any:
 
 @router.delete("/insight/notebook/{note_id}", response_model=Envelope[dict])
 async def delete_note(note_id: int, request: Request) -> Any:
+    if request.headers.get("X-Confirm") != "yes":
+        raise HTTPException(400, "缺少 X-Confirm: yes 确认头")
     core = request.app.state.core
     n = await core.db.execute("DELETE FROM notebook_entries WHERE id=?", (note_id,))
     if not n:
@@ -609,6 +610,8 @@ async def update_learning(learning_id: int, body: dict, request: Request) -> Any
 
 @router.delete("/insight/learnings/{learning_id}", response_model=Envelope[dict])
 async def delete_learning(learning_id: int, request: Request) -> Any:
+    if request.headers.get("X-Confirm") != "yes":
+        raise HTTPException(400, "缺少 X-Confirm: yes 确认头")
     core = request.app.state.core
     try:
         n = await core.db.execute("DELETE FROM learnings WHERE id=?", (learning_id,))
@@ -697,6 +700,8 @@ async def update_instinct(instinct_id: int, body: dict, request: Request) -> Any
 
 @router.delete("/insight/instincts/{instinct_id}", response_model=Envelope[dict])
 async def delete_instinct(instinct_id: int, request: Request) -> Any:
+    if request.headers.get("X-Confirm") != "yes":
+        raise HTTPException(400, "缺少 X-Confirm: yes 确认头")
     core = request.app.state.core
     try:
         n = await core.db.execute("DELETE FROM instincts WHERE id=?", (instinct_id,))
@@ -769,6 +774,8 @@ async def update_entity(name: str, body: dict, request: Request) -> Any:
 
 @router.delete("/insight/knowledge/entities/{name}", response_model=Envelope[dict])
 async def delete_entity(name: str, request: Request) -> Any:
+    if request.headers.get("X-Confirm") != "yes":
+        raise HTTPException(400, "缺少 X-Confirm: yes 确认头")
     core = request.app.state.core
     kdb = core.db.knowledge
     deleted = await kdb.delete_knowledge_entity(name)
@@ -802,6 +809,8 @@ async def create_relation(body: dict, request: Request) -> Any:
 
 @router.delete("/insight/knowledge/relations/{relation_id}", response_model=Envelope[dict])
 async def delete_relation(relation_id: str, request: Request) -> Any:
+    if request.headers.get("X-Confirm") != "yes":
+        raise HTTPException(400, "缺少 X-Confirm: yes 确认头")
     core = request.app.state.core
     kdb = core.db.knowledge
     deleted = await kdb.delete_knowledge_relation(relation_id)
@@ -838,7 +847,7 @@ def _build_guidance(config: dict) -> str:
 
 @router.get("/insight/xp", response_model=Envelope[dict])
 async def get_xp(request: Request, user_id: str = Depends(get_current_user)) -> Any:
-    from core.xp_system import get_xp_system, XPLevel, XP_THRESHOLDS, _LEVEL_LABELS
+    from core.xp_system import _LEVEL_LABELS, XP_THRESHOLDS, XPLevel, get_xp_system
 
     try:
         xp_sys = get_xp_system()
@@ -887,7 +896,7 @@ async def get_xp(request: Request, user_id: str = Depends(get_current_user)) -> 
 
 @router.get("/insight/xp/levels", response_model=Envelope[dict])
 async def get_xp_levels(request: Request) -> Any:
-    from core.xp_system import XPLevel, XP_THRESHOLDS, _LEVEL_LABELS
+    from core.xp_system import _LEVEL_LABELS, XP_THRESHOLDS, XPLevel
 
     try:
         from core.xp_system import get_xp_system

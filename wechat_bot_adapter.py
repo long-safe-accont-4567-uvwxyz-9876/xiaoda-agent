@@ -118,8 +118,12 @@ def get_active_bot() -> "WeChatBotAdapter | None":
     return _ACTIVE_BOT
 
 
-async def send_proactive_message(text: str) -> bool:
+async def send_proactive_message(text: str,
+                                 sticker_path: str | Path | None = None) -> bool:
     """向最近微信私聊用户主动发一条消息（供 web/greeting_scheduler 等调用）。
+
+    可选携带表情包：与主对话一致——先发正文，再单发一张纯图表情包
+    （iLink 协议不支持图文合并；表情发送失败不回退文本、不中断投递）。
 
     微信 iLink 协议要求 context_token 才能路由消息，该 token 只能在
     bot 轮询收到用户消息时缓存。因此主动发送依赖活跃 bot 实例
@@ -143,6 +147,20 @@ async def send_proactive_message(text: str) -> bool:
     ok = await bot.send_message(text)
     if not ok:
         raise RuntimeError("微信消息发送失败（ret != 0）")
+    _sticker = Path(sticker_path) if sticker_path else None
+    if _sticker is not None and _sticker.exists():
+        sticker_ok = await bot.send_media_message(
+            "",
+            str(_sticker),
+            to_user_id=bot._last_from_user_id,
+            context_token=target_token,
+        )
+        if sticker_ok:
+            logger.info("wechat_bot.proactive_sticker_sent to={} sticker={}",
+                        bot._last_from_user_id[:16], _sticker.name)
+        else:
+            logger.warning("wechat_bot.proactive_sticker_failed to={} sticker={}",
+                           bot._last_from_user_id[:16], _sticker.name)
     logger.info("wechat_bot.proactive_sent to={} text={}", bot._last_from_user_id[:16], text[:40])
     return True
 
