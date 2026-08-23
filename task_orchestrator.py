@@ -6,6 +6,8 @@ import json
 from collections import OrderedDict
 from dataclasses import dataclass, field
 from typing import Any
+
+from agent_core._shared import TIRED_MSG  # 子智能体超时的统一话术(防 F821 崩溃)
 from collections.abc import Awaitable, Callable
 from openai import AsyncOpenAI
 

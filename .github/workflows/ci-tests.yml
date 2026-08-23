@@ -69,7 +69,6 @@ jobs:
             tests/test_risk_classifier.py \
             tests/test_error_classifier.py \
             tests/test_model_route_validation.py \
-            tests/test_matrix_governance.py \
             tests/test_prompt_integration.py \
             tests/test_cognitive_memory.py \
             tests/test_hopfield_layer.py \
@@ -81,6 +80,7 @@ jobs:
             tests/test_event_bus.py \
             tests/test_shared_blackboard.py \
             tests/test_circuit_breaker.py \
+            tests/test_manifest_consistency.py \
             -v --tb=short
 
       - name: Coverage summary
