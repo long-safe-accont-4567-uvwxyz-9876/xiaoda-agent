@@ -50,7 +50,10 @@ tools/wechat/workflows）
 
 - ~~切片 1：health.py（2 处真收窄+1 日志名）+ jspace.py（9 处可见化+
   假成功写修复）~~ ✅ `c0919853`
-- 切片 2（候选）：model_discovery(6) + agents(6) + chat(3)
+- ~~切片 2：model_discovery(6) + agents(6) + chat(3)~~ ✅ 逐点判读后
+  **15 处全部正当**（SWR 后台降级 exception 级可见 / 登录页必须容错 /
+  audit+广播 best-effort / CRUD 正确转 4xx）——启发式高估，routers 批次 A
+  实际收尾。剩余宽捕获即参考惯用法本身，随批次 B/C 范本统一。
 - 批次 B/C 策略不变：memory/bootstrap/adapters 按降级语义补结构化字段
 
 ## 已完成的定点清除
