@@ -458,8 +458,7 @@ class ToolCallHandler:
         return None
 
     async def _handle_delegation(self, result: Any) -> Any:
-        """处理工具结果中的委托请求（delegate_task → xiaoli）。
-        [KLEE_PENDING] 为已删除的 klee 时代遗留前缀，仅作兼容识别。"""
+        """处理工具结果中的委托请求（delegate_task → xiaoli）。"""
         from core.delegation import DelegationRequest
         if not (result.success and result.data):
             return result
@@ -467,10 +466,6 @@ class ToolCallHandler:
         delegation_req = None
         if isinstance(result.data, DelegationRequest):
             delegation_req = result.data
-        elif isinstance(result.data, str) and result.data.startswith("[KLEE_PENDING]"):
-            delegation_req = DelegationRequest(
-                type="xiaoli", question=result.data[len("[KLEE_PENDING]"):], delegator="xiaoda"
-            )
 
         if delegation_req and delegation_req.type == "xiaoli" and self._xiaoli_delegate:
             xiaoli_reply = await self._xiaoli_delegate(delegation_req.question)

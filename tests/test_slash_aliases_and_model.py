@@ -9,7 +9,7 @@
 from __future__ import annotations
 
 import asyncio
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import MagicMock
 
 import pytest
 
@@ -277,27 +277,6 @@ def test_get_argument_completions_model_is_dynamic():
     """/model 参数补全不再返回硬编码的 MiMo 预设（已废弃）。"""
     assert get_argument_completions("/model", "mimo") == []
     assert "mimo-pro" not in get_argument_completions("/model", "")
-
-
-# ── 动态模型发现函数 ──────────────────────────────────────
-
-def test_list_discovered_model_ids():
-    """list_discovered_model_ids 应从发现缓存枚举 provider/模型。"""
-    from model_router import list_discovered_model_ids
-    fake_cache = {"data": [
-        {"provider": "agnes", "models": [{"id": "agnes-2.0-flash"}]},
-        {"provider": "mimo", "models": [{"id": "mimo-v2.5"}, {"id": "mimo-v2.5-pro"}]},
-    ]}
-    with patch("web._discovery_cache._cache", fake_cache):
-        ids = list_discovered_model_ids()
-    assert ids == ["agnes/agnes-2.0-flash", "mimo/mimo-v2.5", "mimo/mimo-v2.5-pro"]
-
-
-def test_list_discovered_model_ids_empty_cache():
-    """发现缓存为空时返回空列表。"""
-    from model_router import list_discovered_model_ids
-    with patch("web._discovery_cache._cache", {"data": None}):
-        assert list_discovered_model_ids() == []
 
 
 def test_list_models_current_reflects_chat_model_not_preference():

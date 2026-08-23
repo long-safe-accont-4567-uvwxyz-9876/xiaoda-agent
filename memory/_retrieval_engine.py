@@ -610,16 +610,6 @@ class RetrievalEngine(EntityKgBoostMixin, MemoryMetadataMixin):
                     duration_ms=int((time.time() - _start) * 1000))
         return results
 
-    async def _hybrid_fts_search(self, query: str, k: int) -> list[dict]:
-        """FTS 检索"""
-        if not self._mm.memory:
-            return []
-        try:
-            return await self._mm.memory.search_memories_fts(query, limit=k * 2)
-        except Exception as e:
-            logger.warning("memory.fts_search_failed", error=str(e))
-            return []
-
     async def _hybrid_vec_search(self, query: str, k: int,
                                  candidate_ids: list[int] | None = None,
                                  is_raw: int | None = None,
@@ -848,23 +838,6 @@ class RetrievalEngine(EntityKgBoostMixin, MemoryMetadataMixin):
         except Exception as e:
             logger.debug("memory.candidate_ids_failed", error=str(e))
             return None
-
-    async def rerank_with_selected_local_model(
-        self,
-        query: str,
-        documents: list[str],
-        top_n: int | None = None,
-    ) -> list[dict]:
-        if self._mm._reranker_service is None:
-            from local_ai.integration.reranker import LocalModelUnavailableError
-
-            raise LocalModelUnavailableError("no local reranker model is selected")
-        return await self._mm._reranker_service.rerank(
-            query,
-            documents,
-            top_n=len(documents) if top_n is None else top_n,
-            return_documents=False,
-        )
 
     async def _insert_indexed_children(
         self,
@@ -1529,33 +1502,6 @@ class RetrievalEngine(EntityKgBoostMixin, MemoryMetadataMixin):
             logger.warning("memory.convlogs_search_failed", error=str(e))
             return []
 
-    async def _apply_reranker_to_results(self, query: str, results: list[dict],
-                                          k: int) -> list[dict]:
-        """对检索结果应用 reranker 精排（如果可用且结果数 > k）。
-
-        失败时返回原结果前 k 条（不降级到空）。
-        """
-        if not results or not self._mm._reranker or not self._mm._reranker.available:
-            return results[:k]
-        if len(results) <= k:
-            return results  # 结果数不足，无需精排
-        try:
-            docs = [r.get("summary", "") for r in results]
-            reranked = await self._mm._reranker.rerank(query=query, documents=docs, top_n=k)
-            if not reranked:  # Q0-2: reranker 失败返回空列表，降级到原顺序
-                return results[:k]
-            reordered = []
-            for item in reranked:
-                idx = item.get("index", 0)
-                if 0 <= idx < len(results):
-                    mem = results[idx]
-                    mem["rerank_score"] = item.get("relevance_score", 0.0)
-                    reordered.append(mem)
-            return reordered if reordered else results[:k]
-        except Exception as e:
-            logger.debug("memory.rerank_apply_failed", error=str(e))
-            return results[:k]
-
     async def _transform_queries(self, query: str, context: str) -> list[str]:
         """查询变换：rewrite + expand。A2 并行执行，失败降级到 [query]。
 
@@ -1780,22 +1726,6 @@ class RetrievalEngine(EntityKgBoostMixin, MemoryMetadataMixin):
         except Exception as e:
             logger.warning("memory.vec_search_failed", error=str(e))
         return results
-
-    async def _importance_fallback_search(self, k: int,
-                                           scope: Any | None = None) -> list[dict]:
-        """最终兜底：按重要性排序检索。
-
-        scope 非空时按 user_id/agent_id 过滤，防止跨用户记忆泄露。
-        """
-        if not self._mm.memory:
-            return []
-        try:
-            return await self._mm.memory.search_memories_by_importance_scoped(
-                min_importance=0.4, limit=k, scope=scope
-            )
-        except Exception as e:
-            logger.error("degradation_triggered memory.fallback_search_failed error={}", str(e))
-            return []
 
     async def _apply_fsrs_scoring(self, results: list[dict]) -> list[dict]:
         """FSRS-DSR 记忆评分（遗忘曲线 R + 状态过滤），过滤低分记忆。

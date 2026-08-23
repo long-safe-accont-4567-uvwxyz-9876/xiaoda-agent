@@ -48,53 +48,6 @@ async def add_only_db(tmp_path):
     await db.close()
 
 
-class TestHasDuplicateScoped:
-    """_has_duplicate 改为只对 is_raw=0 生效"""
-
-    async def test_has_duplicate_checks_refined_only(self, add_only_db):
-        """原始记忆（is_raw=1）不去重，提炼知识（is_raw=0）去重"""
-        db, mgr = add_only_db
-        scope = Scope()
-
-        # 插入一条提炼知识
-        await db.memory.insert_episodic_memory(
-            summary="用户喜欢Python编程语言", scope=scope, is_raw=0
-        )
-
-        # 检查重复（应返回 True，因为有 is_raw=0 的相同记忆）
-        is_dup = await mgr._has_duplicate("用户喜欢Python编程语言", scope=scope)
-        assert is_dup is True
-
-    async def test_has_duplicate_ignores_raw(self, add_only_db):
-        """is_raw=1 的原始记忆不参与去重判断"""
-        db, mgr = add_only_db
-        scope = Scope()
-
-        # 只插入原始记忆（is_raw=1）
-        await db.memory.insert_episodic_memory(
-            summary="这是一条原始记录", scope=scope, is_raw=1
-        )
-
-        # 检查重复（应返回 False，因为 is_raw=1 不参与去重）
-        is_dup = await mgr._has_duplicate("这是一条原始记录", scope=scope)
-        assert is_dup is False
-
-    async def test_has_duplicate_scope_isolated(self, add_only_db):
-        """不同 scope 的记忆不互相去重"""
-        db, mgr = add_only_db
-        scope_alice = Scope(user_id="alice", agent_id="xiaoli")
-        scope_bob = Scope(user_id="bob", agent_id="xiaoke")
-
-        # alice 的提炼知识
-        await db.memory.insert_episodic_memory(
-            summary="相同的记忆内容", scope=scope_alice, is_raw=0
-        )
-
-        # bob 检查相同内容（应返回 False，不同 scope）
-        is_dup = await mgr._has_duplicate("相同的记忆内容", scope=scope_bob)
-        assert is_dup is False
-
-
 class TestEncodeMemoryAddOnly:
     """encode_memory: ADD-only 原始记忆写入"""
 

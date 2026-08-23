@@ -280,16 +280,6 @@ def test_uncovered_modules():
         bugs.append(f"BeliefRouter: {e}")
         print(f"    BUG: {e}")
 
-    # 测试 3: TaskOrchestrator
-    print("\n[3] TaskOrchestrator 测试...")
-    try:
-        from task_orchestrator import TaskOrchestrator
-        _to = TaskOrchestrator()
-        print("    OK: TaskOrchestrator 初始化成功")
-    except Exception as e:
-        bugs.append(f"TaskOrchestrator: {e}")
-        print(f"    BUG: {e}")
-
     # 测试 4: Hooks
     print("\n[4] Hooks 测试...")
     try:
@@ -398,7 +388,7 @@ def test_module_imports():
     print("\n[1] 基础模块导入...")
     basic_modules = [
         "agent_core", "model_router", "agent_context", "agent_dispatcher",
-        "hooks", "instinct_manager", "belief_router", "task_orchestrator",
+        "hooks", "instinct_manager", "belief_router",
         "qq_bot_adapter",
     ]
     for mod_name in basic_modules:

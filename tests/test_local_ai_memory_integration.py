@@ -222,13 +222,12 @@ async def test_production_services_follow_instances_started_after_bootstrap(tmp_
         embed_mode="local",
         embedding_service=services.embedding,
     )
-    memory = MemoryManager(None, None, reranker_service=services.reranker)
 
     embedding_instance = await instances.start("embedding-a")
     reranker_instance = await instances.start("reranker-a")
 
     assert await vector_store.embed(["same"]) == [[1.0]]
-    assert await memory.rerank_with_selected_local_model("q", ["a", "b"]) == [
+    assert await services.reranker.rerank("q", ["a", "b"], top_n=2, return_documents=False) == [
         {"index": 1, "relevance_score": 3.0},
         {"index": 0, "relevance_score": 2.0},
     ]
@@ -241,7 +240,7 @@ async def test_production_services_follow_instances_started_after_bootstrap(tmp_
     with pytest.raises(LocalModelUnavailableError):
         await vector_store.embed(["new"])
     with pytest.raises(LocalModelUnavailableError):
-        await memory.rerank_with_selected_local_model("q", ["a"])
+        await services.reranker.rerank("q", ["a"], top_n=1)
 
 
 @pytest.mark.asyncio
@@ -608,9 +607,8 @@ async def test_stopping_selected_local_embedding_preserves_unavailable_selection
 async def test_selected_local_reranker_instance_is_used():
     runtime = FakeRerankerRuntime()
     service = LocalRerankerService(runtime)
-    manager = MemoryManager(None, None, reranker_service=service)
 
-    results = await manager.rerank_with_selected_local_model("q", ["a", "b"])
+    results = await service.rerank("q", ["a", "b"], top_n=2, return_documents=False)
 
     assert runtime.calls == [("q", ["a", "b"])]
     assert results == [
@@ -623,11 +621,10 @@ async def test_selected_local_reranker_instance_is_used():
 async def test_stopped_local_reranker_reports_unavailable():
     runtime = FakeRerankerRuntime()
     service = LocalRerankerService(runtime)
-    manager = MemoryManager(None, None, reranker_service=service)
     runtime.running = False
 
     with pytest.raises(LocalModelUnavailableError):
-        await manager.rerank_with_selected_local_model("q", ["a"])
+        await service.rerank("q", ["a"], top_n=1)
 
 
 @pytest.mark.asyncio

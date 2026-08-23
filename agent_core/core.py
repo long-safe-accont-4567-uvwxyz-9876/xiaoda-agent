@@ -61,7 +61,6 @@ from xiaoli_agent import XiaoliAgent
 
 if TYPE_CHECKING:
     from instinct_manager import InstinctManager
-    from task_orchestrator import TaskGraph
 
 # 各 Mixin 从 agent_core._shared 导入共享类型, 不再依赖 agent_core.core 完成初始化,
 # 因此可以安全导入 Mixin (不再有循环导入风险).
@@ -143,7 +142,6 @@ class AgentCore(MessageProcessorMixin, ToolExecutorMixin, SubAgentManagerMixin):
             delegate_callback=self._xiaoda_delegate_for_xiaoli,
             core=self,
         )
-        self._task_graph: TaskGraph | None = None
         self._agent_route_configs: dict = {}
         self._sticker_managers: dict = {}  # name → StickerManager (动态缓存)
         self._tool_call_handler = ToolCallHandler(self.tool_executor, self.tool_repair, self._clean_reply, self.context, self.router, xiaoli_delegate=self.delegate_to_xiaoli, agent_name="xiaoda", personality_file=self._get_xiaoda_personality_file(), tool_execute_callback=self._execute_tool_with_hooks)

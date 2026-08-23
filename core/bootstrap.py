@@ -222,9 +222,8 @@ class AgentCoreBootstrapper:
             set_global_tts_engine(self.core.tts)
         await self._run_optional_step("tts", _init_tts)
 
-        # 子代理注册 / 任务图 / 交互层 / MCP / 插件（均可选）
+        # 子代理注册 / 交互层 / MCP / 插件（均可选）
         await self._run_optional_step("sub_agents", self._register_sub_agents)
-        await self._run_optional_step("task_graph", self._build_task_graph)
         await self._run_optional_step("interaction", self._init_interaction)
         await self._run_optional_step("mcp", self._init_mcp)
 
@@ -986,27 +985,6 @@ class AgentCoreBootstrapper:
             },
             permission=ToolPermission.READ_ONLY,
             category="fun",
-        )
-
-    async def _build_task_graph(self) -> None:
-        from openai import AsyncOpenAI as _AOI
-        from task_orchestrator import build_task_graph
-        from model_router import _resolve_provider_key
-        from config import get_base_url_for_provider
-
-        core = self.core
-        # 统一凭证读取口径：enc:v1: 密文自动解密，避免把密文当 Key → 401
-        _key = _resolve_provider_key("MIMO_API_KEY")
-        _url = get_base_url_for_provider("mimo")
-        route_client = _AOI(
-            api_key=_key,
-            base_url=_url,
-        )
-        core._task_graph = build_task_graph(
-            dispatcher=core.dispatcher,
-            agent_configs=core._agent_route_configs,
-            route_client=route_client,
-            xiaoda_chat_callback=core._xiaoda_synthesis_chat,
         )
 
     # ── 交互层 ────────────────────────────────────────────

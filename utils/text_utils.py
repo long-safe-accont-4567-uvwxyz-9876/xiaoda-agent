@@ -822,53 +822,6 @@ def _find_char_boundary(text: str, byte_limit: int) -> int:
     return low
 
 
-def smart_truncate(text: str, max_len: int = QQ_MSG_BYTE_LIMIT) -> str:
-    """按字节上限智能截断文本, 优先在句末/换行处切分.
-
-    Args:
-        text: 原始文本
-        max_len: 字节上限, 默认 QQ_MSG_BYTE_LIMIT
-
-    Returns:
-        截断后的文本
-    """
-    encoded = text.encode('utf-8')
-    if len(encoded) <= max_len:
-        return text
-
-    safe_limit = int(max_len * 0.9)
-    target_chars = _find_char_boundary(text, safe_limit)
-
-    search_start = max(0, target_chars - 200)
-    search_end = min(len(text), target_chars + 100)
-
-    best_pos = -1
-    for pattern in BREAK_PATTERNS:
-        pos = text.rfind(pattern, search_start, search_end)
-        if pos != -1:
-            best_pos = pos + len(pattern)
-            break
-
-    if best_pos == -1 or best_pos < search_start:
-        best_pos = target_chars
-
-    truncated = text[:best_pos].rstrip()
-
-    if len(truncated.encode('utf-8')) > max_len:
-        truncated = truncated[:_find_char_boundary(truncated, safe_limit)].rstrip()
-
-    if truncated.count('```') % 2 != 0:
-        truncated += '\n```'
-
-    # P0 修复：不再追加人格化截断标记（原 TRUNCATION_MARKERS）。
-    # 工具结果截断必须返回干净文本，避免污染 LLM 上下文。
-    # 用中性省略号提示截断，不附加任何人格化话语。
-    if not truncated.endswith(('…', '...', '。', '！', '？', '```')):
-        truncated += ' […]'
-
-    return truncated
-
-
 _SEGMENT_CONTINUATIONS = [
     "（继续～）",
     "（接着说～）",

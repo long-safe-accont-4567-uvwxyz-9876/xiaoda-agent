@@ -27,7 +27,7 @@ REEXPORT_NAMES = [
     "AGNES_API_KEY", "AGNES_BASE_URL", "AGNES_TEXT_MODEL",
     "AGNES_IMAGE_MODEL", "AGNES_VIDEO_MODEL",
     "ASR_API_KEY", "ASR_BASE_URL", "ASR_MODEL", "JINA_API_KEY",
-    "AGENT_ROUTE_KEYWORDS", "AGENT_TASK_MAP",
+    "AGENT_TASK_MAP",
     "RERANKER_API_KEY", "RERANKER_BASE_URL", "RERANKER_MODEL",
     "RERANKER_ENABLED", "RERANKER_OVERSAMPLE_RATIO",
     "QUERY_TRANSFORM_ENABLED", "QUERY_EXPAND_COUNT",
@@ -171,16 +171,10 @@ def test_config_constants_does_not_import_config():
 # ── 3. 行为契约 ─────────────────────────────────────────────────
 
 def test_literal_table_structure():
-    """字面量常量表结构不变（路由关键词/任务映射/CHILD_CHUNK 结构）。"""
+    """字面量常量表结构不变（任务映射/CHILD_CHUNK 结构）。"""
     import config_constants as cc
-    assert set(cc.AGENT_ROUTE_KEYWORDS) == {
-        "xiaolian", "xiaolang", "xiaoke", "xiaoda", "parallel_trigger",
-    }
-    assert "搜索" in cc.AGENT_ROUTE_KEYWORDS["xiaolian"]
-    assert "编程" in cc.AGENT_ROUTE_KEYWORDS["xiaolang"]
-    assert "论文" in cc.AGENT_ROUTE_KEYWORDS["xiaoke"]
-    assert "天气" in cc.AGENT_ROUTE_KEYWORDS["xiaoda"]
-    assert "巡检" in cc.AGENT_ROUTE_KEYWORDS["parallel_trigger"]
+    # AGENT_ROUTE_KEYWORDS 已随 task_orchestrator 僵尸链删除（2026-08-23）
+    assert not hasattr(cc, "AGENT_ROUTE_KEYWORDS")
     assert cc.AGENT_TASK_MAP == {
         "xiaolang": "debug",
         "xiaoke": "research",

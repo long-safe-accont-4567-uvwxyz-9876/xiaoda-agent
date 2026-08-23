@@ -286,17 +286,6 @@ class TestVectorStoreChild:
         result = asyncio.run(vs.search_child([0.1, 0.2], top_k=5))
         assert result == []
 
-    def test_upsert_child_skips_when_not_initialized(self):
-        """测试未初始化时upsert_child跳过"""
-        from memory.vector_store import VectorStore
-        vs = VectorStore.__new__(VectorStore)
-        vs._initialized = False
-        vs._closed = False
-        vs._vec_conn = None
-
-        # 不应抛出异常
-        asyncio.run(vs.upsert_child(1, "测试文本"))
-
     def test_batch_upsert_children_skips_empty(self):
         """测试空列表时batch_upsert_children跳过"""
         from memory.vector_store import VectorStore
@@ -361,7 +350,7 @@ class TestVectorStoreChild:
         await first.init()
         first.embed = AsyncMock(side_effect=[[[1.0, 0.0]], [[1.0, 0.0]]])
         assert await first.upsert(1, "parent-one")
-        await first.upsert_child(1, "child-one")
+        assert await first.batch_upsert_children([(1, "child-one")])
         await first.close()
 
         conn = sqlite3.connect(db_path)

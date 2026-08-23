@@ -30,7 +30,6 @@ from config_agents import (  # noqa: F401,E402
 # 例外（2026-08-22 副作用瘦身）：DEEPSEEK/MIMO/AGNES/ASR/JINA/RERANKER 六个
 # *_API_KEY 已改为经模块 __getattr__ 懒转发（凭证解密不再发生在 import 期）。
 from config_constants import (  # noqa: F401,E402
-    AGENT_ROUTE_KEYWORDS,
     AGENT_TASK_MAP,
     AGNES_BASE_URL,
     AGNES_IMAGE_MODEL,
@@ -374,7 +373,6 @@ __all__ = [
     "AGENTS_CONFIG_DIR",
     "AGENT_CONFIG_PATH",
     "CONFIG_DIR",
-    "AGENT_ROUTE_KEYWORDS",
     "AGENT_STICKER_BASE",
     "AGENT_TASK_MAP",
     "AGNES_BASE_URL",

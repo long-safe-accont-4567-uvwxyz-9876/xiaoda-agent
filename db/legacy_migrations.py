@@ -1,4 +1,4 @@
-"""LegacyMigrationMixin — v1-v28 历史 schema 迁移函数。
+"""LegacyMigrationMixin — v1-v30 历史 schema 迁移函数。
 
 自 db/database.py 拆分（上帝文件 Phase 1）：函数体逐字节搬移，仅缩进调整。
 结构契约见 tests/test_db_migration_refactor.py；实例白盒调用
@@ -16,15 +16,14 @@ from . import db_workflow
 
 
 # ── 迁移体系导航 ─────────────────────────────────────────────
-# 本项目 DB schema 变更只有一个生产入口：LegacyMigrationMixin（本文件，v1-v28，
+# 本项目 DB schema 变更只有一个生产入口：LegacyMigrationMixin（本文件，v1-v30，
 # 挂载于 DatabaseManager.init）。幂等机制 = schema_version 跟踪 + 逐条
 # IF NOT EXISTS 守卫 + migration_state dirty 恢复；新迁移一律追加到本文件。
 #
 # 同目录另有：
-#   idempotent_migrator.py — 早期 H3 幂等迁移器，机制已被本文件完整覆盖，
-#       生产零引用，仅 tests/test_phase6_modules.py 保留行为测试，禁止新增调用。
 #   repair_migration.py   — 运维 CLI（--status/--mark-clean/--rollback），仅操作
 #       schema_version 迁移记录，不承担 schema 变更；dirty 恢复失败时手动介入。
+#   （早期 H3 幂等迁移器 idempotent_migrator.py 已删除，机制被本文件完整覆盖。）
 class LegacyMigrationMixin:
     async def _setup_migration_state(self) -> None:
         # 逐条执行 DDL，避免 executescript() 在 vfat 上的隐式 commit 问题
@@ -142,6 +141,7 @@ class LegacyMigrationMixin:
             (27, "workflow_v2_tables", self._migrate_v27),
             (28, "workflow_v2_config_table", self._migrate_v28),
             (29, "workflow_v2_review_table", self._migrate_v29),
+            (30, "drop_dead_v06_cognitive_tables", self._migrate_v30),
         ]
 
     async def _run_migrations(self) -> None:
@@ -1080,3 +1080,17 @@ class LegacyMigrationMixin:
     async def _migrate_v29(self) -> None:
         # wf_review 审批单表（M4 REVIEW 高级节点：待批/已批/已拒 + 决策记录）
         await db_workflow.create_schema(self._conn)
+
+    async def _migrate_v30(self) -> None:
+        """v30: 清除 v0.6 认知架构遗留的四张死表。
+
+        semantic_memories / memory_connections / bridge_memories / preference_patterns
+        由 v14 创建，全仓零读写（认知架构 v0.6 未落地的部分，活逻辑走
+        memory_edges/memory_preferences 等 v13 表）。DROP TABLE IF EXISTS 幂等；
+        表上索引随表自动清除。memory_revisions 不在清理范围（保留）。
+        """
+        await self._conn.execute("DROP TABLE IF EXISTS semantic_memories")
+        await self._conn.execute("DROP TABLE IF EXISTS memory_connections")
+        await self._conn.execute("DROP TABLE IF EXISTS bridge_memories")
+        await self._conn.execute("DROP TABLE IF EXISTS preference_patterns")
+        logger.info("database.migration_v30_drop_cognitive_tables_done")

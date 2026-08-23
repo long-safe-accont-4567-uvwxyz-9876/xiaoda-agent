@@ -218,20 +218,6 @@ class TestRetrieveMemoriesErrorFallback:
         assert len(results) == 1
         assert results[0]["summary"] == "vector fallback"
 
-    @pytest.mark.asyncio
-    async def test_importance_fallback_on_all_failure(self):
-        """所有检索都失败 → 重要性兜底。"""
-        mm = _make_memory_manager()
-        mm._importance_fallback_search = AsyncMock(
-            return_value=[{"id": 3, "summary": "important"}])
-
-        results = []
-        if not results:
-            results = await mm._importance_fallback_search(5)
-
-        assert len(results) == 1
-        assert results[0]["summary"] == "important"
-
 
 class TestRetrieveMemoriesEmptyResult:
     """测试 retrieve_memories 空结果处理。"""
@@ -242,13 +228,10 @@ class TestRetrieveMemoriesEmptyResult:
         mm = _make_memory_manager()
         mm.retrieve_memories_hybrid = AsyncMock(return_value=[])
         mm._vector_fallback_search = AsyncMock(return_value=[])
-        mm._importance_fallback_search = AsyncMock(return_value=[])
 
         results = await mm.retrieve_memories_hybrid("obscure query", k=5)
         if not results:
             results = await mm._vector_fallback_search("obscure query", k=5)
-        if not results:
-            results = await mm._importance_fallback_search(5)
 
         assert results == []
 

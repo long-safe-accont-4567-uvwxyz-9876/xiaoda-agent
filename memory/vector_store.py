@@ -18,7 +18,6 @@ except Exception:  # pragma: no cover
     atomic_write = None  # type: ignore[assignment]
 
 
-from utils.common import safe_int as _safe_int
 from local_ai.integration.embedding import LocalEmbeddingService, LocalEmbeddingUnavailableError
 from local_ai.integration.reranker import LocalModelUnavailableError
 from local_ai.runtimes.base import RuntimeValidationError
@@ -272,10 +271,6 @@ class VectorStore:
         # 其余协程共享结果，避免 7 路检索通道并发时重复 embed 放大延迟/限流
         self._inflight: dict[tuple[Any, str], asyncio.Future] = {}
         self._embedding_selection_key: tuple[str, int] | int | None = None
-
-        # 并发嵌入限制（避免 API 限流），可通过环境变量配置
-        _embed_concurrency = _safe_int(os.getenv("VECTOR_EMBED_CONCURRENCY", "8"), 8)
-        self._embed_semaphore = asyncio.Semaphore(_embed_concurrency)
 
         if self._embed_mode == "local":
             # 本地推理：不依赖远程 API Key / 网络，模型加载为懒加载。
@@ -1107,35 +1102,6 @@ class VectorStore:
 
         return await asyncio.to_thread(_do_upsert)
 
-    async def upsert_child(self, child_id: int, text: str) -> None:
-        """子chunk向量写入（使用独立表 memories_child_vec）。"""
-        if not self._initialized or not self._vec_conn:
-            return
-        vectors = await self.embed([text])
-        vec = vectors[0] if vectors else []
-        if not vec:
-            return
-        vec_json = json.dumps(vec)
-
-        def _do_upsert() -> None:
-            """在后台线程中执行子chunk向量的写入（upsert）操作。"""
-            with self._lock:
-                if self._closed:
-                    return
-                try:
-                    self._vec_conn.execute(
-                        "INSERT OR REPLACE INTO memories_child_vec (rowid, embedding) VALUES (?, vec_f32(?))",
-                        (child_id, vec_json),
-                    )
-                    self._vec_conn.commit()
-                    # 双写 HNSW 加速索引
-                    if self._brute is not None:
-                        self._brute.upsert("memories_child_vec", child_id, vec)
-                except Exception as e:
-                    logger.warning("vector_store.upsert_child_failed", row_id=child_id, error=str(e))
-
-        await asyncio.to_thread(_do_upsert)
-
     async def batch_upsert_children(self, items: list[tuple[int, str]]) -> bool:
         """批量子chunk向量写入。items = [(child_id, text), ...]"""
         if not self._initialized or not self._vec_conn or not items:
@@ -1214,108 +1180,6 @@ class VectorStore:
         except Exception as e:
             logger.warning("vector_store.delete_failed", row_id=row_id, error=str(e))
             return False
-
-    async def delete_child(self, child_id: int) -> None:
-        """删除子chunk向量。"""
-        if not self._initialized or not self._vec_conn:
-            return
-
-        def _do_delete() -> None:
-            """在后台线程中删除指定 child_id 的子chunk向量记录。"""
-            with self._lock:
-                if self._closed:
-                    return
-                try:
-                    self._vec_conn.execute(
-                        "DELETE FROM memories_child_vec WHERE rowid=?", (child_id,)
-                    )
-                    self._vec_conn.commit()
-                    # 双写 HNSW 加速索引
-                    if self._brute is not None:
-                        self._brute.delete("memories_child_vec", child_id)
-                except Exception as e:
-                    logger.warning("vector_store.delete_child_failed", row_id=child_id, error=str(e))
-
-        try:
-            await asyncio.to_thread(_do_delete)
-        except Exception as e:
-            logger.warning("vector_store.delete_child_failed", row_id=child_id, error=str(e))
-
-    async def batch_upsert(self, items: list[tuple[int, str]]) -> int:
-        """批量写入向量（并发嵌入 + 单事务写入）"""
-        if not self._initialized or not self._vec_conn:
-            return 0
-
-        if not items:
-            return 0
-
-        # 并发嵌入（受 Semaphore 限制，避免 API 限流）
-        async def _embed_one(row_id: int, text: str) -> tuple[int, str, list[float]]:
-            """对单条文本执行嵌入，受并发信号量限制。"""
-            async with self._embed_semaphore:
-                vectors = await self.embed([text])
-                vec = vectors[0] if vectors else []
-                return (row_id, text, vec)
-
-        embed_results = await asyncio.gather(
-            *[_embed_one(row_id, text) for row_id, text in items],
-            return_exceptions=True,
-        )
-
-        # 过滤成功的嵌入结果（日志不记录文本内容，可能含 PII）
-        valid_items: list[tuple[int, str, list[float]]] = []
-        for result in embed_results:
-            if isinstance(result, Exception):
-                logger.warning("vector.batch_embed_failed", error=str(result)[:200])
-                continue
-            row_id, text, vec = result
-            if vec:
-                valid_items.append((row_id, text, vec))
-
-        if not valid_items:
-            return 0
-
-        # 单事务批量写入（保持原有逻辑）
-        def _do_batch() -> int:
-            """在后台线程中以单事务批量写入向量记录。"""
-            with self._lock:
-                if self._closed:
-                    return 0
-                conn = self._vec_conn
-                success = 0
-                try:
-                    conn.execute("BEGIN TRANSACTION")
-                    for row_id, _text, vec in valid_items:
-                        vec_json = json.dumps(vec)
-                        try:
-                            conn.execute("DELETE FROM memories_vec WHERE rowid=?", [row_id])
-                        except Exception as e:
-                            logger.debug("vector_store batch_upsert 删除旧记录失败(rowid={}): {}", row_id, e)
-                        try:
-                            conn.execute(
-                                "INSERT INTO memories_vec(rowid, embedding) VALUES (?, vec_f32(?))",
-                                [row_id, vec_json],
-                            )
-                            success += 1
-                            # 双写 HNSW 加速索引
-                            if self._brute is not None:
-                                self._brute.upsert("memories_vec", row_id, vec)
-                        except Exception as e:
-                            logger.warning("vector_store.batch_upsert_item_failed", row_id=row_id, error=str(e))
-                    if success > 0:
-                        conn.commit()
-                    else:
-                        conn.rollback()
-                    return success
-                except Exception as e:
-                    try:
-                        conn.rollback()
-                    except Exception as re:
-                        logger.debug("vector_store.batch_upsert_rollback_error", error=str(re))
-                    logger.error("vector.batch_upsert_failed", error=str(e)[:200])
-                    return 0
-
-        return await asyncio.to_thread(_do_batch)
 
     async def search(self, query_text: str, top_k: int = 5,
                      candidate_ids: list[int] | None = None,

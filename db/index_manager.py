@@ -1,7 +1,6 @@
 """数据库复合索引管理器 (P2 性能)
 
 参考:
-- db/idempotent_migrator.py 的幂等模式
 - SQLite CREATE INDEX IF NOT EXISTS 语义
 
 特性:

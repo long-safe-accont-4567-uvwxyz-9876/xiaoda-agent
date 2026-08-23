@@ -113,7 +113,6 @@ class TestCRAGSkipsChatIntent:
         mgr.retrieve_memories_hybrid = AsyncMock(return_value=[])
         mgr._apply_fluid_scoring = AsyncMock(return_value=[])
         mgr._compute_final_scores = AsyncMock(return_value=None)
-        mgr._importance_fallback_search = AsyncMock(return_value=[])
         mgr._try_temporal_search = AsyncMock(return_value=None)
         mgr.kg = None
 

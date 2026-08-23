@@ -408,10 +408,8 @@ xiaoda-agent/
 ├── agent_dispatcher.py       # 子智能体调度器 + ToolCallExtractor
 ├── task_orchestrator.py      # TaskGraph 图编排引擎
 ├── model_router.py           # LLM API 路由 + 凭证池 + 错误分类
-├── transports/               # Provider Transport 抽象层
-│   ├── base.py               #   统一接口 + TransportResponse
-│   ├── mimo_transport.py     #   小米 MiMo 适配
-│   └── agnes_transport.py    #   Agnes AI 适配
+├── transports/                 # Agnes 共享 httpx client 基础设施
+│   └── agnes_transport.py      #   共享连接池/超时配置（原双 transport 栈已移除）
 ├── tool_engine/              # 工具引擎
 │   ├── tool_call_handler.py  #   工具调用处理（并行信号量）
 │   ├── tool_executor.py      #   工具执行器（每工具超时）

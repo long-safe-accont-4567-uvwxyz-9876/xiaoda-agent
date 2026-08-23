@@ -211,9 +211,6 @@ class MemoryManager:
                                 memories: list[dict] | None) -> int:
         return await self._retrieval.audit_retrieval(response_id, memories)
 
-    async def _has_duplicate(self, summary: str, scope: Any | None = None) -> bool:
-        return await self._retrieval._has_duplicate(summary, scope=scope)
-
     def signal_new_message(self) -> None:
         self._retrieval.signal_new_message()
 
@@ -226,9 +223,6 @@ class MemoryManager:
         return await self._retrieval.retrieve_memories_hybrid(
             query, k=k, use_reranker=use_reranker, use_kg=use_kg, scope=scope,
             include_raw=include_raw, query_vec=query_vec)
-
-    async def _hybrid_fts_search(self, query: str, k: int) -> list[dict]:
-        return await self._retrieval._hybrid_fts_search(query, k)
 
     async def _hybrid_vec_search(self, query: str, k: int,
                                  candidate_ids: list[int] | None = None,
@@ -251,15 +245,6 @@ class MemoryManager:
                                                 scope: Any | None = None) -> list[int] | None:
         return await self._retrieval._get_candidate_ids_by_selectors(
             selectors, limit=limit, scope=scope)
-
-    async def rerank_with_selected_local_model(
-        self,
-        query: str,
-        documents: list[str],
-        top_n: int | None = None,
-    ) -> list[dict]:
-        return await self._retrieval.rerank_with_selected_local_model(
-            query, documents, top_n=top_n)
 
     async def _insert_indexed_children(
         self,
@@ -304,10 +289,6 @@ class MemoryManager:
         return await self._retrieval._search_conversation_logs(
             start_ts, end_ts, scope, k, conv_user_id=conv_user_id)
 
-    async def _apply_reranker_to_results(self, query: str, results: list[dict],
-                                          k: int) -> list[dict]:
-        return await self._retrieval._apply_reranker_to_results(query, results, k)
-
     async def _transform_queries(self, query: str, context: str) -> list[str]:
         return await self._retrieval._transform_queries(query, context)
 
@@ -325,10 +306,6 @@ class MemoryManager:
     async def _vector_fallback_search(self, query: str, k: int,
                                        scope: Any | None = None) -> list[dict]:
         return await self._retrieval._vector_fallback_search(query, k, scope=scope)
-
-    async def _importance_fallback_search(self, k: int,
-                                           scope: Any | None = None) -> list[dict]:
-        return await self._retrieval._importance_fallback_search(k, scope=scope)
 
     async def _apply_fsrs_scoring(self, results: list[dict]) -> list[dict]:
         return await self._retrieval._apply_fsrs_scoring(results)

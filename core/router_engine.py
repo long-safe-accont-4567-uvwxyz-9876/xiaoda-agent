@@ -20,12 +20,12 @@ class RoutingDecision:
 
     Attributes:
         agent_names: 目标 Agent 名称列表（如 ["xiaoda"], ["xiaoli", "xiaolang"]）
-        mode: 调度模式 — single 单 Agent / parallel 并行 / task_graph 任务图
+        mode: 调度模式 — single 单 Agent / parallel 并行
         reasoning: 路由理由（可选，用于调试和审计）
     """
 
     agent_names: list[str]
-    mode: Literal["single", "parallel", "task_graph"]
+    mode: Literal["single", "parallel"]
     reasoning: str = ""
 
 

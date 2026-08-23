@@ -9,7 +9,13 @@ from datetime import datetime
 from typing import Any
 from zoneinfo import ZoneInfo
 
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
+from loguru import logger
+
 from utils.common import safe_float as _safe_float
+from web.routers.auth import get_current_user
+from web.schemas import Envelope
+from web.ws_hub import manager
 
 
 def _get_local_now() -> datetime:
@@ -21,13 +27,6 @@ def _get_local_now() -> datetime:
         tz = ZoneInfo("Asia/Shanghai")
     return datetime.now(tz)
 
-
-from fastapi import APIRouter, Depends, HTTPException, Query, Request
-from loguru import logger
-
-from web.routers.auth import get_current_user
-from web.schemas import Envelope
-from web.ws_hub import manager
 
 router = APIRouter(tags=["insight"], dependencies=[Depends(get_current_user)])
 
@@ -296,8 +295,7 @@ async def knowledge_graph(request: Request,
                 chosen = set(ranked[:GRAPH_MAX_NODES_PER_HOP])
                 # 分层保留：边必须连接「上一层已保留节点」与「本层入选邻居」。
                 # prev_kept 首层=搜索实体；一跳时未入选邻居的边因另一端不在
-                # prev_kept+chosen 而剔除；二跳只从一层入选邻居继续生长（一圈一圈清晰）
-                anchors = prev_kept | chosen
+                # prev_kept+chosen 而剔除；二跳只从当前层入选邻居继续生长（一圈一圈清晰）
                 hop_rels = [r for r in hop_rels
                             if (r["from_entity"] in prev_kept and r["to_entity"] in chosen)
                             or (r["to_entity"] in prev_kept and r["from_entity"] in chosen)]
