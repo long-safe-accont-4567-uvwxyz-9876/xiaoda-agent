@@ -8,11 +8,17 @@ import InstalledModelsTab from '../components/local-ai/InstalledModelsTab.vue'
 import ModelMarketTab from '../components/local-ai/ModelMarketTab.vue'
 import SystemModelNodesTab from '../components/local-ai/SystemModelNodesTab.vue'
 import { useLocalAiStore } from '../stores/localAi'
+import { t } from '../i18n'
 
 const store = useLocalAiStore()
 const message = useMessage()
 const activeTab = ref('deployments')
-const summary = computed(() => `${store.instances.filter(item => item.state !== 'stopped' && item.state !== 'failed').length} 个运行实例 · ${store.models.length} 个已安装模型 · ${store.devices.filter(item => item.state === 'available').length} 个可用设备 · ${store.downloads.filter(item => ['pending', 'downloading', 'paused'].includes(item.state)).length} 个下载任务`)
+const summary = computed(() => {
+  const running = store.instances.filter(item => item.state !== 'stopped' && item.state !== 'failed').length
+  const available = store.devices.filter(item => item.state === 'available').length
+  const downloading = store.downloads.filter(item => ['pending', 'downloading', 'paused'].includes(item.state)).length
+  return `${running} ${t('localDeployView.unitInstances')} · ${store.models.length} ${t('localDeployView.unitModels')} · ${available} ${t('localDeployView.unitDevices')} · ${downloading} ${t('localDeployView.unitDownloads')}`
+})
 
 async function load() {
   try { await store.load() } catch (error) { message.error(error instanceof Error ? error.message : String(error)) }
@@ -27,16 +33,16 @@ onBeforeUnmount(() => store.disconnectWebSocket())
 
 <template>
   <div class="local-deploy-view">
-    <header class="view-header"><div><h2>🖥️ 本地部署</h2><p>{{ summary }}</p></div><n-button :loading="store.loading" @click="load">刷新</n-button></header>
-    <n-alert v-if="store.error" type="error" title="本地 AI 资源加载失败">{{ store.error }}</n-alert>
+    <header class="view-header"><div><h2>🖥️ {{ t('localDeployView.title') }}</h2><p>{{ summary }}</p></div><n-button :loading="store.loading" @click="load">{{ t('refresh') }}</n-button></header>
+    <n-alert v-if="store.error" type="error" :title="t('localDeployView.loadFailed')">{{ store.error }}</n-alert>
     <n-spin :show="store.loading && !store.devices.length && !store.catalog.length">
       <n-tabs v-model:value="activeTab" type="line" animated display-directive="show" class="local-ai-tabs">
-        <n-tab-pane name="deployments" tab="部署"><DeploymentsTab /></n-tab-pane>
-        <n-tab-pane name="market" tab="模型广场"><ModelMarketTab /></n-tab-pane>
-        <n-tab-pane name="installed" tab="已安装"><InstalledModelsTab /></n-tab-pane>
-        <n-tab-pane name="devices" tab="算力设备"><ComputeDevicesTab /></n-tab-pane>
-        <n-tab-pane name="nodes" tab="功能节点"><SystemModelNodesTab /></n-tab-pane>
-        <n-tab-pane name="downloads" tab="下载任务"><DownloadTasksTab /></n-tab-pane>
+        <n-tab-pane name="deployments" :tab="t('localDeployView.tabDeploy')"><DeploymentsTab /></n-tab-pane>
+        <n-tab-pane name="market" :tab="t('localDeployView.tabMarket')"><ModelMarketTab /></n-tab-pane>
+        <n-tab-pane name="installed" :tab="t('localDeployView.tabInstalled')"><InstalledModelsTab /></n-tab-pane>
+        <n-tab-pane name="devices" :tab="t('localDeployView.tabDevicesShort')"><ComputeDevicesTab /></n-tab-pane>
+        <n-tab-pane name="nodes" :tab="t('localDeployView.tabNodes')"><SystemModelNodesTab /></n-tab-pane>
+        <n-tab-pane name="downloads" :tab="t('localDeployView.tabDownloads')"><DownloadTasksTab /></n-tab-pane>
       </n-tabs>
     </n-spin>
   </div>

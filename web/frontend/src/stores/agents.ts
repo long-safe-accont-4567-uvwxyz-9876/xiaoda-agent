@@ -1,22 +1,10 @@
 import { defineStore } from 'pinia'
 import { ref } from 'vue'
 import { get } from '../api'
+// AgentInfo 收口到 api/types（api.getAgents 同源）；此处转发导出保持既有引用兼容
+import type { AgentInfo } from '../api/types'
+export type { AgentInfo } from '../api/types'
 import { pinyin } from 'pinyin-pro'
-
-export interface AgentInfo {
-  name: string
-  display_name: string
-  display_name_en: string
-  builtin: boolean
-  is_main: boolean
-  enabled: boolean
-  provider: string
-  model: string
-  tool_count: number
-  mcp_servers: string[]
-  wallpaper?: string
-  [key: string]: any
-}
 
 // 中文转拼音（IP 安全）
 function translateToEn(zhName: string): string {

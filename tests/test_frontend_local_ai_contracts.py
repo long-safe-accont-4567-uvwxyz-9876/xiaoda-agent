@@ -738,9 +738,17 @@ def test_websocket_declares_typed_local_ai_events():
 
 
 def test_local_deploy_has_six_tabs_and_no_fixed_device_copy():
+    # 2026-08-23 i18n 收口：tab 文案改走 t('localDeployView.tab*')，
+    # 契约改为断言六个键存在，且 zh 字典值与文档口径（六个中文 tab 名）一致。
     view = source("web/frontend/src/views/LocalDeployView.vue")
-    for name in ("部署", "模型广场", "已安装", "算力设备", "功能节点", "下载任务"):
-        assert name in view
+    zh = source("web/frontend/src/i18n/zh.ts")
+    tab_keys = {
+        "tabDeploy": "部署", "tabMarket": "模型广场", "tabInstalled": "已安装",
+        "tabDevicesShort": "算力设备", "tabNodes": "功能节点", "tabDownloads": "下载任务",
+    }
+    for key, name in tab_keys.items():
+        assert f"t('localDeployView.{key}')" in view
+        assert f"{key}: '{name}'" in zh
     for component in (
         "DeploymentsTab",
         "ModelMarketTab",
@@ -767,7 +775,7 @@ def test_local_ai_tabs_consume_store_without_raw_http():
         "web/frontend/src/components/local-ai/ComputeDevicesTab.vue",
         "web/frontend/src/components/local-ai/SystemModelNodesTab.vue",
         "web/frontend/src/components/local-ai/DownloadTasksTab.vue",
-        "web/frontend/src/components/local-ai/ModelDetailDrawer.vue",
+        # ModelDetailDrawer.vue 已删除（2026-08-23 死代码清理，全项目零引用）
         "web/frontend/src/components/local-ai/StoragePickerDialog.vue",
     )
     for path in component_paths:
@@ -781,7 +789,6 @@ def test_local_ai_storage_and_installation_flows_are_explicit():
     market = source("web/frontend/src/components/local-ai/ModelMarketTab.vue")
     storage = source("web/frontend/src/components/local-ai/StoragePickerDialog.vue")
     downloads = source("web/frontend/src/components/local-ai/DownloadTasksTab.vue")
-    detail = source("web/frontend/src/components/local-ai/ModelDetailDrawer.vue")
 
     assert "StoragePickerDialog" in market
     assert "store.defaultStorage" in market
@@ -795,7 +802,6 @@ def test_local_ai_storage_and_installation_flows_are_explicit():
     assert "store.start" in downloads
     assert "watch(() => store.downloads" in downloads
     assert "completedTask.value = completed.id" in downloads
-    assert "store.download" in detail
 
 
 def test_storage_picker_resolves_directory_entries_from_current_path():

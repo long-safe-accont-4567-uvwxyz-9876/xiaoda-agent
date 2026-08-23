@@ -1,4 +1,10 @@
 import { t } from '../i18n'
+import type {
+  AgentInfo, AgentPermissions, ChatMessageItem, JSpaceInterventions,
+  KnowledgeGraphData, KnowledgeEntityRow, LearningRow, InstinctRow,
+  NoteRow, SessionInfo, SetupKeyInfo, SystemStatus,
+  WorkflowReview, WorkflowRevisionInfo, WorkflowRun, WorkflowRunSnapshot,
+} from './types'
 
 const BASE = '/api/v1'
 
@@ -135,19 +141,19 @@ export const api = {
     new_answer?: string
   }) => post<{ token: string; expires_at: number }>('/auth/change-password', body),
 
-  getStatus: () => get('/system/status'),
-  getSessions: () => get<any[]>('/sessions'),
+  getStatus: () => get<SystemStatus>('/system/status'),
+  getSessions: () => get<SessionInfo[]>('/sessions'),
   createSession: () => post<{ session_id: string }>('/sessions'),
   deleteSession: (id: string) => del(`/sessions/${id}`),
   getMessages: (sessionId: string, before = 0, limit = 50) =>
-    get<any[]>(`/sessions/${sessionId}/messages?before=${before}&limit=${limit}`),
+    get<ChatMessageItem[]>(`/sessions/${sessionId}/messages?before=${before}&limit=${limit}`),
   getCommands: () => get<Array<{ name: string; description: string; owner_only: boolean }>>('/commands'),
   testModelRoute: (route: string) => post<{ ok: boolean; error?: string }>('/health/test/llm', { route }),
 
-  getAgents: () => get<any[]>('/agents'),
-  getPermissions: (name: string) => get(`/agents/${name}/permissions`),
+  getAgents: () => get<AgentInfo[]>('/agents'),
+  getPermissions: (name: string) => get<AgentPermissions>(`/agents/${name}/permissions`),
   setAgentModel: (name: string, provider: string, model_id: string) =>
-    post<any>(`/agents/${name}/model`, { provider, model_id }),
+    post<{ name: string; model: string }>(`/agents/${name}/model`, { provider, model_id }),
 
   tts: (text: string, voice?: string, style?: string) =>
     post<{ audio_url: string; cached: boolean }>('/media/tts', { text, voice, style }),
@@ -164,7 +170,7 @@ export const api = {
     return body.data
   },
 
-  getSetupKeys: () => get<{ keys: any[] }>('/setup/keys'),
+  getSetupKeys: () => get<{ keys: SetupKeyInfo[] }>('/setup/keys'),
 
   testSetupKey: (keyName: string, keyValue: string, extra?: Record<string, string>) =>
     post<{ success: boolean; message: string }>('/setup/test-key', { key_name: keyName, key_value: keyValue, ...(extra ? { extra } : {}) }),
@@ -232,25 +238,25 @@ export const api = {
   deleteWorkflow: (id: string) => del<void>('/workflows/' + id),
   previewWorkflow: (id: string) => get<{prompt: string}>('/workflows/' + id + '/preview'),
 
-  listWorkflowRuns: (wfId: string) => get<any[]>(`/workflows/${wfId}/runs`),
-  runWorkflow: (wfId: string, input?: Record<string, unknown>) => post<any>(`/workflows/${wfId}/runs`, { input: input || {} }),
-  getWorkflowRun: (runId: string) => get<any>(`/workflow-runs/${runId}`),
-  listWorkflowRevisions: (wfId: string) => get<any[]>(`/workflows/${wfId}/revisions`),
-  createWorkflowRevision: (wfId: string) => post<any>(`/workflows/${wfId}/revisions`, {}),
-  publishWorkflow: (wfId: string) => post<any>(`/workflows/${wfId}/publish`),
+  listWorkflowRuns: (wfId: string) => get<WorkflowRun[]>(`/workflows/${wfId}/runs`),
+  runWorkflow: (wfId: string, input?: Record<string, unknown>) => post<WorkflowRun>(`/workflows/${wfId}/runs`, { input: input || {} }),
+  getWorkflowRun: (runId: string) => get<WorkflowRunSnapshot>(`/workflow-runs/${runId}`),
+  listWorkflowRevisions: (wfId: string) => get<WorkflowRevisionInfo[]>(`/workflows/${wfId}/revisions`),
+  createWorkflowRevision: (wfId: string) => post<WorkflowRevisionInfo>(`/workflows/${wfId}/revisions`, {}),
+  publishWorkflow: (wfId: string) => post<WorkflowRevisionInfo>(`/workflows/${wfId}/publish`),
   rollbackWorkflowRevision: (wfId: string, revisionId: string, etag: string) =>
-    patch<any>(`/workflows/${wfId}/current`, { revision_id: revisionId }, { 'If-Match': etag }),
-  cancelWorkflowRun: (runId: string) => post<any>(`/workflow-runs/${runId}/cancel`),
+    patch<{ revision_id: string; current_revision_id: string; etag: string }>(`/workflows/${wfId}/current`, { revision_id: revisionId }, { 'If-Match': etag }),
+  cancelWorkflowRun: (runId: string) => post<{ run_id: string; status: string }>(`/workflow-runs/${runId}/cancel`),
   getWorkflowV2Status: (wfId: string) =>
     get<{ enabled: boolean; global_enabled: boolean; whitelisted: boolean }>(`/workflows/${wfId}/v2-status`),
 
   // ── 工作流 REVIEW 审批（M4 服务端 + M5 前端卡片） ──
-  listWorkflowReviews: (runId: string) => get<any[]>(`/workflow-runs/${runId}/reviews`),
+  listWorkflowReviews: (runId: string) => get<WorkflowReview[]>(`/workflow-runs/${runId}/reviews`),
   decideWorkflowReview: (runId: string, reviewId: string,
                          decision: 'approve' | 'reject', note?: string) => {
     const body: Record<string, unknown> = { decision }
     if (note) body.note = note
-    return post<any>(`/workflow-runs/${runId}/reviews/${reviewId}/decide`, body)
+    return post<WorkflowReview>(`/workflow-runs/${runId}/reviews/${reviewId}/decide`, body)
   },
 
   // 品牌署名与免责协议
@@ -299,7 +305,7 @@ export const deleteMemory = (id: number) =>
 
 // ── 笔记管理 ──
 export const getNotes = (params?: Record<string, any>) =>
-  get<any[]>('/insight/notebook' + (params ? '?' + new URLSearchParams(params as any).toString() : ''))
+  get<NoteRow[]>('/insight/notebook' + (params ? '?' + new URLSearchParams(params as any).toString() : ''))
 
 export const createNote = (data: { content: string; kind?: string; tags?: string; importance?: number }) =>
   post<{ id: number }>('/insight/notebook', data)
@@ -347,10 +353,10 @@ export const deleteKnowledgeRelation = (id: string) =>
   del<{ deleted: string }>(`/insight/knowledge/relations/${encodeURIComponent(id)}`, true)
 
 export const listKnowledgeEntities = (limit = 200) =>
-  get<any[]>(`/insight/knowledge/entities?limit=${limit}`)
+  get<KnowledgeEntityRow[]>(`/insight/knowledge/entities?limit=${limit}`)
 
 export const listKnowledgeRelations = (limit = 200) =>
-  get<any[]>(`/insight/knowledge/relations?limit=${limit}`)
+  get<Array<{ id?: string; from: string; to: string; relation: string; [key: string]: any }>>(`/insight/knowledge/relations?limit=${limit}`)
 
 // ── XP 亲密度 ──
 export interface XpHistoryEntry {
@@ -398,7 +404,7 @@ export const updateKnowledgeRelation = (id: string, data: { relation: string }) 
 export const getKnowledgeGraph = (entity = '', depth: number | null | undefined = 1) => {
   // n-input-number 清空时 depth 为 null；后端要求整数，这里归位到默认 6
   const d = Number.isFinite(Number(depth)) && Number(depth) >= 1 ? Math.round(Number(depth)) : 1
-  return get<{ nodes: any[]; edges: any[] }>(`/insight/knowledge/graph?entity=${encodeURIComponent(entity)}&depth=${d}`)
+  return get<KnowledgeGraphData>(`/insight/knowledge/graph?entity=${encodeURIComponent(entity)}&depth=${d}`)
 }
 
 // ── J-Space API ──
@@ -447,7 +453,7 @@ export const jspaceGetSignalAggregate = (signal_type: string, strategy = 'mean_o
   get<{ value: number; signal_type: string; strategy: string }>(`/jspace/signals/aggregate?signal_type=${encodeURIComponent(signal_type)}&strategy=${strategy}`)
 export const jspaceGetDirections = () => get<{ directions: Record<string, JSpaceDirection> }>('/jspace/directions')
 export const jspaceGetInterventions = () =>
-  get<{ rules: any[]; convergence: any; history: any[] }>('/jspace/interventions')
+  get<JSpaceInterventions>('/jspace/interventions')
 export const jspaceDecompose = (text: string, use_llm = true) =>
   post<{ factors: IntentFactorResult[]; residual: number; dominant: string | null; sparsity: number }>('/jspace/decompose', { text, use_llm })
 export const jspaceGetConfig = () => get<JSpaceConfig>('/jspace/config')

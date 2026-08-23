@@ -95,10 +95,19 @@ def test_docs_explain_all_six_web_ui_tabs_and_core_actions():
 def test_docs_tabs_match_local_deploy_view():
     docs = read_project_file("docs/local-ai-platform.md")
     view = read_project_file("web/frontend/src/views/LocalDeployView.vue")
-    view_tabs = set(re.findall(r'tab="([^"]+)"', view))
-    assert view_tabs == {"部署", "模型广场", "已安装", "算力设备", "功能节点", "下载任务"}
-    for tab in view_tabs:
-        assert f"`{tab}`" in docs
+    zh = read_project_file("web/frontend/src/i18n/zh.ts")
+    # 2026-08-23 i18n 收口：view 的 tab 走 t('localDeployView.tab*')，
+    # 从 zh 字典把键解析回中文名再与文档对齐
+    key_to_name = {
+        "tabDeploy": "部署", "tabMarket": "模型广场", "tabInstalled": "已安装",
+        "tabDevicesShort": "算力设备", "tabNodes": "功能节点", "tabDownloads": "下载任务",
+    }
+    view_keys = set(re.findall(r"t\('localDeployView\.(tab[A-Za-z]+)'\)", view))
+    assert view_keys == set(key_to_name)
+    for key in view_keys:
+        name = key_to_name[key]
+        assert f"{key}: '{name}'" in zh
+        assert f"`{name}`" in docs
     assert "模型市场" not in docs
 
 

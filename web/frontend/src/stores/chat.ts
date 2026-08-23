@@ -372,7 +372,7 @@ export const useChatStore = defineStore('chat', () => {
       content: h.content,
       emotion: h.emotion || undefined,
       timestamp: h.timestamp * 1000,
-      request: h.request_context || undefined,
+      request: (h.request_context as Message['request']) || undefined,
     }))
   }
 

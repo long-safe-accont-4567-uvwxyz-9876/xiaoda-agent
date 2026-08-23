@@ -47,15 +47,78 @@ const missingInZh = en.filter((k) => !zhSet.has(k))
 
 if (missingInEn.length === 0 && missingInZh.length === 0) {
   console.log(`i18n keys OK (zh=${zh.length}, en=${en.length}, 完全一致)`)
-  process.exit(0)
+} else {
+  if (missingInEn.length) {
+    console.error(`缺 en 翻译 ${missingInEn.length} 条:`)
+    for (const k of missingInEn) console.error(`  - ${k}`)
+  }
+  if (missingInZh.length) {
+    console.error(`缺 zh 翻译 ${missingInZh.length} 条:`)
+    for (const k of missingInZh) console.error(`  - ${k}`)
+  }
+  process.exit(1)
 }
 
-if (missingInEn.length) {
-  console.error(`缺 en 翻译 ${missingInEn.length} 条:`)
-  for (const k of missingInEn) console.error(`  - ${k}`)
+// ── 硬编码中文棘轮检查 ──────────────────────────────────────────────
+// 背景（2026-08-23 技术债复审）：字典 parity 只保证 zh/en 同步，不拦
+// "代码里直接写中文不走 t()"——英文 locale 下整页漏中文（RetrievalView/
+// LocalDeployView 曾是典型）。本段统计 .vue 模板与字符串字面量中的 CJK
+// （剔除注释），与下方 BASELINE 冻结值对比：新文件出现 CJK、或存量文件
+// 计数增长 → 退出码 1。清偿一个文件就把它从 BASELINE 删掉（计数归零同样过）。
+import { readdirSync, readFileSync, statSync } from 'node:fs'
+
+const CJK = /[\u4e00-\u9fff]/
+function* walkVue(dir) {
+  for (const name of readdirSync(dir)) {
+    const p = join(dir, name)
+    if (statSync(p).isDirectory()) yield* walkVue(p)
+    else if (name.endsWith('.vue')) yield p
+  }
 }
-if (missingInZh.length) {
-  console.error(`缺 zh 翻译 ${missingInZh.length} 条:`)
-  for (const k of missingInZh) console.error(`  - ${k}`)
+/** 剥掉 HTML 注释、JS 行/块注释后，剩余文本里的 CJK 即"疑似用户可见硬编码" */
+function stripComments(src) {
+  return src
+    .replace(/<!--[\s\S]*?-->/g, '')
+    .replace(/\/\*[\s\S]*?\*\//g, '')
+    .replace(/^\s*\/\/.*$/gm, '')
 }
-process.exit(1)
+const counts = new Map()
+for (const file of walkVue(join(ROOT, 'src', 'views'))) {
+  const rel = file.slice(ROOT.length + 1).replaceAll('\\', '/')
+  const n = (stripComments(readFileSync(file, 'utf8')).match(CJK) || []).length
+  if (n > 0) counts.set(rel, n)
+}
+
+// 存量债务基线（2026-08-23 冻结实测值，多为内联注释与个别遗留文案）。
+// 只减不增：清偿后请删除对应行；新增文件出现 CJK 即失败。
+const BASELINE = {
+  'src/views/AgentsView.vue': 1,
+  'src/views/ChatView.vue': 1,
+  'src/views/HealthView.vue': 1,
+  'src/views/InsightView.vue': 1,
+  'src/views/MailView.vue': 1,
+  'src/views/MediaView.vue': 1,
+  'src/views/ModelsView.vue': 1,
+  'src/views/PluginsView.vue': 1,
+  'src/views/ScheduleView.vue': 1,
+  'src/views/SettingsView.vue': 1,
+  'src/views/SetupWizardView.vue': 1,
+  'src/views/ToolsView.vue': 1,
+  'src/views/WorkflowView.vue': 1,
+}
+let bad = 0
+for (const [rel, n] of [...counts].sort()) {
+  const base = BASELINE[rel]
+  if (base === undefined) {
+    console.error(`i18n 棘轮：新文件出现硬编码 CJK ${rel} (${n} 处)——请走 t() + zh/en 字典`)
+    bad++
+  } else if (n > base) {
+    console.error(`i18n 棘轮：${rel} 硬编码 CJK 从基线 ${base} 增至 ${n}`)
+    bad++
+  }
+}
+if (bad === 0) {
+  console.log(`i18n hardcoded-CJK ratchet OK (${counts.size} 个存量文件在基线内)`)
+} else {
+  process.exit(1)
+}
