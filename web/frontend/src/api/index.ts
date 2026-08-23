@@ -144,7 +144,7 @@ export const api = {
   getStatus: () => get<SystemStatus>('/system/status'),
   getSessions: () => get<SessionInfo[]>('/sessions'),
   createSession: () => post<{ session_id: string }>('/sessions'),
-  deleteSession: (id: string) => del(`/sessions/${id}`),
+  deleteSession: (id: string) => del(`/sessions/${id}`, true),
   getMessages: (sessionId: string, before = 0, limit = 50) =>
     get<ChatMessageItem[]>(`/sessions/${sessionId}/messages?before=${before}&limit=${limit}`),
   getCommands: () => get<Array<{ name: string; description: string; owner_only: boolean }>>('/commands'),

@@ -123,6 +123,17 @@ function onTerminalExit(e: WsEvent) {
   session.terminal.writeln(`\r\n\x1b[38;2;117;106;95m[exited with code ${(e.returncode as number) || 0}]\x1b[0m`)
 }
 
+// 重连后所有旧终端必为死会话：服务端在连接断开的 finally 里已杀掉本连接
+// 全部 PTY 且不补发 terminal_exit。不置 dead 的话 Tab 永远显示存活，
+// 用户继续输入只会进黑洞（P0 技术债审查项）。
+function onWsConnected() {
+  for (const s of sessions.value) {
+    if (!s.alive) continue
+    s.alive = false
+    s.terminal.writeln('\r\n\x1b[38;2;217;106;95m[connection lost — this terminal is no longer attached, please open a new one]\x1b[0m')
+  }
+}
+
 // ── 粘贴处理 ──
 // 直接拦截 Ctrl+V keydown，用 clipboard API 读取内容发送到 PTY
 // 这比监听 paste 事件更可靠（paste 事件可能被 xterm.js 内部拦截）
@@ -163,6 +174,7 @@ async function handlePaste() {
 onMounted(() => {
   ws.on('terminal_output', onTerminalOutput)
   ws.on('terminal_exit', onTerminalExit)
+  ws.on('ws_connected', onWsConnected)
   document.addEventListener('keydown', _onDocKeyDown)
 })
 
@@ -170,6 +182,7 @@ onBeforeUnmount(() => {
   disposed = true
   ws.off('terminal_output', onTerminalOutput)
   ws.off('terminal_exit', onTerminalExit)
+  ws.off('ws_connected', onWsConnected)
   document.removeEventListener('keydown', _onDocKeyDown)
   for (const s of sessions.value) {
     s.alive = false

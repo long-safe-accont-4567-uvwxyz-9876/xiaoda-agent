@@ -1,6 +1,5 @@
 """WebSocket 主通道（§9 协议）：流式状态、工具事件、最终回复、问候/任务/配置广播。"""
 from __future__ import annotations
-from typing import Any
 
 import asyncio
 import contextvars
@@ -15,7 +14,7 @@ import threading
 import time
 import uuid
 from pathlib import Path
-
+from typing import Any
 
 from utils.common import safe_int as _safe_int
 
@@ -34,9 +33,9 @@ else:
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect  # noqa: E402
 from loguru import logger  # noqa: E402
 
+from agent_core.user_web import WebUser  # noqa: E402
 from config import STREAM_STATUS_PUSH, STREAM_TEXT_PUSH, STREAM_TOOL_STATUS  # noqa: E402
 from core.event_bus import event_bus  # noqa: E402
-from agent_core.user_web import WebUser  # noqa: E402
 
 router = APIRouter()
 
@@ -544,6 +543,7 @@ async def process_and_serialize(core: Any, text: str, session_id: str,
         else:
             # 走与 QQ 通道相同的完整子代理流程：表情包/情绪/TTS/落库都不缺
             from loguru import logger as _logger
+
             from agent_core import RequestContext
             from utils.trace_context import new_trace_id
             # 身份解析：与 core.process() 主路径一致，确保 is_master/user_openid 语义正确
@@ -897,6 +897,7 @@ def _build_image_data(image_url_field: str, text: str) -> tuple[list | None, str
 
     if image_urls:
         from pathlib import Path as _Path
+
         from utils.text_utils import encode_image_to_base64
         image_data = []
         for url in image_urls:
@@ -974,9 +975,24 @@ async def _handle_terminal_start(conn_id: str, msg: dict, term_sid: str) -> None
       cols     — 终端列数
       rows     — 终端行数
     """
+    # P0(技术债审查)：sid 已存在时必须拒绝而非覆盖——否则第二个连接可抢占
+    # 他人会话（旧 fd/进程成孤儿、旧 reader 向劫持者连接串输出）。
+    with _pty_sessions_lock:
+        if term_sid in _pty_sessions:
+            logger.warning("ws.terminal.start.duplicate conn_id={} term_sid={}",
+                           conn_id, term_sid)
+            await manager.send_to(conn_id, {
+                "type": "terminal_error", "term_sid": term_sid,
+                "error": "term_sid already exists"})
+            return
     shell_type = (msg.get("shell") or "bash").strip().lower()
-    cols = int(msg.get("cols") or 80)
-    rows = int(msg.get("rows") or 24)
+    try:
+        cols = int(msg.get("cols") or 80)
+        rows = int(msg.get("rows") or 24)
+        if not (2 <= cols <= 500 and 2 <= rows <= 200):
+            raise ValueError
+    except (TypeError, ValueError):
+        cols, rows = 80, 24
 
     env = os.environ.copy()
     env["TERM"] = "xterm-256color"
@@ -1162,13 +1178,6 @@ def _queue_term_output(term_sid: str, conn_id: str, text: str) -> None:
         entry["timer"] = loop.call_later(_TERM_FLUSH_INTERVAL_S, _flush)
 
 
-def _cleanup_term_out_buf(term_sid: str) -> None:
-    """会话清理时丢弃残留缓冲与未触发的定时器。"""
-    entry = _term_out_buf.pop(term_sid, None)
-    if entry and entry.get("timer") is not None:
-        entry["timer"].cancel()
-
-
 def _setup_win_pty_reader(term_sid: str) -> None:
     """Windows ConPTY：后台线程读 PtyProcess 输出，推回事件循环（合帧）。"""
     with _pty_sessions_lock:
@@ -1238,8 +1247,45 @@ def _setup_win_pipe_reader(term_sid: str) -> None:
     t.start()
 
 
+def _reap_unix_child(pid: int) -> int:
+    """线程池内执行：SIGKILL 补刀 + 有界轮询收割，返回真实退出码。
+
+    reader 看到 EOF/EIO 时子进程可能尚未真正退出；旧实现
+    waitpid(WNOHANG) 拿到 (0,0) 会被误判为 rc=0 且不再收割 → defunct 堆积。
+    轮询最坏 ~300ms，必须离开事件循环线程执行（否则单进程
+    WebUI+QQ+WS 共享的 loop 整体停摆）。"""
+    try:
+        os.kill(pid, signal.SIGKILL)
+    except (ProcessLookupError, PermissionError):
+        pass  # 已退出（正常 EOF 路径常见）或无权限
+    for _ in range(30):
+        try:
+            wpid, status = os.waitpid(pid, os.WNOHANG)
+        except ChildProcessError:
+            return -1  # 已无此子进程（被别处收割）
+        if wpid == pid:
+            return os.WEXITSTATUS(status) if os.WIFEXITED(status) else -1
+        time.sleep(0.01)
+    return -1
+
+
+def _notify_terminal_exit(loop: asyncio.AbstractEventLoop, conn_id: str,
+                          term_sid: str, rc: int) -> None:
+    try:
+        loop.call_soon_threadsafe(
+            lambda: asyncio.ensure_future(
+                manager.send_to(conn_id, {
+                    "type": "terminal_exit", "term_sid": term_sid, "returncode": rc
+                }), loop=loop))
+    except RuntimeError:
+        logger.debug("ws.terminal_exit_send_failed term_sid={}", term_sid)
+
+
 def _cleanup_pty(term_sid: str) -> None:
-    """清理终端会话（在 reader 回调中调用，不能 await）。"""
+    """清理终端会话（在 reader 回调中调用，不能 await）。
+
+    注意：本函数只做非阻塞操作；Unix 收割下放线程池，
+    terminal_exit 通知由收割完成回调发送。"""
     # 先冲刷残留输出再清缓冲，保证退出前的最后几行不丢
     entry = _term_out_buf.pop(term_sid, None)
     if entry and entry["buf"]:
@@ -1255,9 +1301,8 @@ def _cleanup_pty(term_sid: str) -> None:
     session["alive"] = False
     conn_id = session["conn_id"]
     loop: asyncio.AbstractEventLoop = session["loop"]
-    is_win = session.get("is_windows", False)
 
-    if is_win:
+    if session.get("is_windows", False):
         # ── Windows: ConPTY 优先，其次 subprocess 管道 ──
         wp = session.get("winpty") if session.get("conpty") else None
         if wp is not None:
@@ -1281,45 +1326,36 @@ def _cleanup_pty(term_sid: str) -> None:
                     except (OSError, PermissionError):
                         logger.debug("ws.process_kill_error", exc_info=True)
                     rc = -1
+        _notify_terminal_exit(loop, conn_id, term_sid, rc)
+        logger.info("ws.terminal.exit term_sid={} rc={}", term_sid, rc)
     else:
-        # ── Unix: 关闭 PTY fd + 收割子进程（防僵尸） ──
+        # ── Unix: 关闭 PTY fd（非阻塞）；收割下放线程池 ──
         fd = session["fd"]
         try:
             loop.remove_reader(fd)
         except (OSError, ValueError):
             logger.debug("ws.remove_reader_error", exc_info=True)
-        # reader 看到 EOF/EIO 时子进程可能尚未真正退出；旧实现
-        # waitpid(WNOHANG) 拿到 (0,0) 会被误判为 rc=0 且不再收割 → defunct 堆积。
-        # 先 SIGKILL 补刀（已退出则为无害 no-op），再有界轮询等收割。
-        pid = session["pid"]
-        try:
-            os.kill(pid, signal.SIGKILL)
-        except (ProcessLookupError, PermissionError):
-            pass
-        rc = -1
-        for _ in range(30):  # ≤300ms：SIGKILL 后通常首轮即收走
-            try:
-                wpid, status = os.waitpid(pid, os.WNOHANG)
-            except ChildProcessError:
-                break  # 已无此子进程（被别处收割）
-            if wpid == pid:
-                rc = os.WEXITSTATUS(status) if os.WIFEXITED(status) else -1
-                break
-            time.sleep(0.01)
         try:
             os.close(fd)
         except OSError:
             logger.debug("ws.close_fd_error", exc_info=True)
 
-    try:
-        loop.call_soon_threadsafe(
-            lambda: asyncio.ensure_future(
-                manager.send_to(conn_id, {
-                    "type": "terminal_exit", "term_sid": term_sid, "returncode": rc
-                }), loop=loop))
-    except RuntimeError:
-        logger.debug("ws.terminal_exit_send_failed term_sid={}", term_sid)
-    logger.info("ws.terminal.exit term_sid={} rc={}", term_sid, rc)
+        def _reap_done(fut: "asyncio.Future[int]") -> None:
+            try:
+                rc = fut.result()
+            except Exception:  # noqa: BLE001 —— 收割线程任何异常都不阻断通知
+                rc = -1
+            _notify_terminal_exit(loop, conn_id, term_sid, rc)
+            logger.info("ws.terminal.exit term_sid={} rc={}", term_sid, rc)
+
+        try:
+            loop.run_in_executor(None, _reap_unix_child,
+                                 session["pid"]).add_done_callback(_reap_done)
+        except RuntimeError:
+            # loop 已关闭（停机竞态）：退化为就地收割，不再发通知
+            _reap_unix_child(session["pid"])
+            logger.info("ws.terminal.exit term_sid={} rc=-1 loop_closed",
+                        term_sid)
 
 
 def _handle_terminal_input(conn_id: str, msg: dict) -> None:

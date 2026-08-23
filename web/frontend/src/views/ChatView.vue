@@ -243,7 +243,6 @@ async function removeSession(sid: string) {
     message.success(t('chatView.session') + ' ' + t('deleted'))
   } catch (e: any) { message.error(e.message) }
 }
-
 async function startNew() {
   if (loadingSessionId.value) return  // 加载进行中禁止新建，避免与 loadSession 竞态覆盖新会话
   await chat.newSession()

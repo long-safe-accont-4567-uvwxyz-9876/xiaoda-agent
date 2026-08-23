@@ -1,17 +1,17 @@
 from __future__ import annotations
-from typing import Any
 
 import base64
 import json
 import re
 import time
 from pathlib import Path
+from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 from loguru import logger
 
-from web.schemas import Envelope
 from web.routers.auth import get_current_user
+from web.schemas import Envelope
 
 router = APIRouter(tags=["agents"])
 
@@ -40,7 +40,7 @@ async def get_public_wallpaper(request: Request) -> Any:
             return Envelope(data={"wallpaper": main["wallpaper"]})
     except (OSError, KeyError, ValueError, RuntimeError, TypeError) as e:
         logger.debug("agents.public_wallpaper_failed: {}", e)
-    except Exception as e:
+    except Exception:
         logger.exception("agents.get_public_wallpaper.unexpected_error")
     return Envelope(data={"wallpaper": ""})
 
@@ -52,7 +52,7 @@ async def _audit(request: Request, action: str, detail: str) -> None:
         await core.db.commit()
     except (OSError, RuntimeError, ValueError) as exc:
         logger.debug("agents.audit_failed: {}", exc, exc_info=True)
-    except Exception as exc:
+    except Exception:
         logger.exception("agents._audit.unexpected_error")
 
 
@@ -106,7 +106,7 @@ async def update_agent(name: str, body: dict, request: Request, _user: str = Dep
                         sub_agent.reload_personality()
         except (OSError, KeyError, ValueError, RuntimeError, TypeError) as exc:
             logger.debug("agents.reload_personality_failed: {}", exc, exc_info=True)
-        except Exception as exc:
+        except Exception:
             logger.exception("agents.update_agent.unexpected_error")
     # 通知所有标签页刷新（display_name 等变更需全局联动）
     try:
@@ -114,7 +114,7 @@ async def update_agent(name: str, body: dict, request: Request, _user: str = Dep
         await manager.broadcast({"type": "config_changed", "domain": "agents"})
     except (OSError, KeyError, ValueError, RuntimeError, TypeError) as exc:
         logger.debug("agents.broadcast_failed: {}", exc, exc_info=True)
-    except Exception as exc:
+    except Exception:
         logger.exception("agents.update_agent.unexpected_error")
     return Envelope(data=data)
 
@@ -185,7 +185,7 @@ async def set_permissions(name: str, body: dict, request: Request, _user: str = 
         await manager.broadcast({"type": "config_changed", "domain": "agents"})
     except (OSError, KeyError, ValueError, RuntimeError, TypeError) as exc:
         logger.debug("agents.broadcast_failed: {}", exc, exc_info=True)
-    except Exception as exc:
+    except Exception:
         logger.exception("agents.set_permissions.unexpected_error")
     return Envelope(data=data)
 
@@ -206,7 +206,7 @@ async def set_personality(name: str, body: dict, request: Request, _user: str = 
     text = body.get("personality", "")
     # 主体小妲特殊处理：人格写入 SOUL.md，build_system_prompt 按 mtime 自动失效缓存
     if name == "xiaoda":
-        from config import reverse_agent_name_replacements, WORKSPACE_DIR
+        from config import WORKSPACE_DIR, reverse_agent_name_replacements
         text = reverse_agent_name_replacements(text)
         soul_path = WORKSPACE_DIR / "SOUL.md"
         soul_path.write_text(text, encoding="utf-8-sig")
@@ -228,9 +228,9 @@ async def get_agent_names(_user: str = Depends(get_current_user)) -> Any:
     只使用中文显示名 (display_name)，不使用英文显示名。
     """
     from config import (
-        get_all_deprecated_names,
-        get_agent_display_name,
         agent_names,
+        get_agent_display_name,
+        get_all_deprecated_names,
     )
 
     def _best_display(agent_key: str) -> str | None:
@@ -326,7 +326,7 @@ async def _extract_video_poster(video: Path, poster: Path) -> bool:
         return False
     cmd = [
         ffmpeg, "-y", "-i", str(video),
-        "-vf", "select=eq(n\,0)", "-frames:v", "1", "-q:v", "4",
+        "-vf", r"select=eq(n\,0)", "-frames:v", "1", "-q:v", "4",
         str(poster),
     ]
     try:
@@ -379,7 +379,7 @@ async def upload_wallpaper(name: str, body: dict, request: Request, _user: str =
     except (OSError, KeyError, ValueError, RuntimeError, TypeError) as exc:
         logger.debug("agents.base64_decode_failed: {}", exc, exc_info=True)
         raise HTTPException(400, "base64 解码失败") from None
-    except Exception as exc:
+    except Exception:
         logger.exception("agents.upload_wallpaper.unexpected_error")
         raise HTTPException(400, "base64 解码失败") from None
 
@@ -549,7 +549,7 @@ async def list_stickers(name: str, request: Request, _user: str = Depends(get_cu
             descriptions = json.loads(desc_file.read_text(encoding="utf-8"))
         except (OSError, PermissionError, FileNotFoundError) as exc:
             logger.debug("agents.sticker_desc_parse_failed: {}", exc, exc_info=True)
-        except Exception as exc:
+        except Exception:
             logger.exception("agents.list_stickers.unexpected_error")
     stickers = []
     for emo_dir in sorted(sticker_dir.iterdir()):
@@ -654,7 +654,7 @@ async def upload_sticker(
             descriptions = json.loads(desc_file.read_text(encoding="utf-8"))
         except (OSError, PermissionError, FileNotFoundError) as exc:
             logger.debug("agents.sticker_desc_parse_failed: {}", exc, exc_info=True)
-        except Exception as exc:
+        except Exception:
             logger.exception("agents.unknown.unexpected_error")
     descriptions[filename] = description
     desc_file.write_text(json.dumps(descriptions, ensure_ascii=False, indent=2), encoding="utf-8")
@@ -670,7 +670,7 @@ async def upload_sticker(
     except (OSError, KeyError, ValueError, RuntimeError, TypeError) as exc:
         logger.debug("agents.sticker_reload_failed: {}", exc, exc_info=True)
 
-    except Exception as exc:
+    except Exception:
         logger.exception("agents.unknown.unexpected_error")
     await _audit(request, "sticker_upload", json.dumps({"agent": name, "file": filename}, ensure_ascii=False))
 
@@ -686,6 +686,9 @@ async def upload_sticker(
 async def delete_sticker(
     name: str, filename: str, request: Request, _user: str = Depends(get_current_user)
 ) -> Any:
+    # 删除类接口统一要求确认头（前端 deleteSticker 已带 X-Confirm）
+    if request.headers.get("X-Confirm") != "yes":
+        raise HTTPException(400, "缺少 X-Confirm: yes 确认头")
     _validate_agent_name(name)
     """删除指定表情包。"""
     # 路径遍历防护：禁止 .. 和路径分隔符
@@ -719,7 +722,7 @@ async def delete_sticker(
         except (OSError, PermissionError, FileNotFoundError) as exc:
             logger.debug("agents.sticker_desc_update_failed: {}", exc, exc_info=True)
 
-        except Exception as exc:
+        except Exception:
             logger.exception("agents.delete_sticker.unexpected_error")
     # 热重载缓存
     try:
@@ -732,7 +735,7 @@ async def delete_sticker(
     except (OSError, KeyError, ValueError, RuntimeError, TypeError) as exc:
         logger.debug("agents.sticker_reload_failed: {}", exc, exc_info=True)
 
-    except Exception as exc:
+    except Exception:
         logger.exception("agents.unknown.unexpected_error")
     await _audit(request, "sticker_delete", json.dumps({"agent": name, "file": filename}, ensure_ascii=False))
     return Envelope(data={"deleted": filename})
@@ -765,6 +768,6 @@ async def set_agent_model(name: str, body: dict, request: Request, _user: str = 
         await manager.broadcast({"type": "config_changed", "domain": "agents"})
     except (OSError, KeyError, ValueError, RuntimeError, TypeError) as exc:
         logger.debug("agents.broadcast_failed: {}", exc, exc_info=True)
-    except Exception as exc:
+    except Exception:
         logger.exception("agents.set_agent_model.unexpected_error")
     return Envelope(data=data)

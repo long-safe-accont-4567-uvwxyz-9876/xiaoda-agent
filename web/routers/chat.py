@@ -1,5 +1,4 @@
 from __future__ import annotations
-from typing import Any
 
 import asyncio
 import json
@@ -9,14 +8,15 @@ import tempfile
 import time
 import uuid
 from pathlib import Path
+from typing import Any
 
 from fastapi import APIRouter, Depends, File, HTTPException, Query, Request, UploadFile
 from fastapi.responses import PlainTextResponse
 from loguru import logger
 
-from web.schemas import Envelope, ChatRequest, SessionInfo, MessageItem, SlashCommand
-from web.routers.auth import get_current_user
 from emotion.emotion_simple import detect_emotion
+from web.routers.auth import get_current_user
+from web.schemas import ChatRequest, Envelope, MessageItem, SessionInfo, SlashCommand
 
 router = APIRouter(tags=["chat"], dependencies=[Depends(get_current_user)])
 
@@ -192,6 +192,9 @@ async def get_messages(session_id: str, request: Request,
 
 @router.delete("/sessions/{session_id}", response_model=Envelope[dict])
 async def delete_session(session_id: str, request: Request) -> Any:
+    # 删除整段会话历史属不可逆操作，与其他删除类接口一致要求确认头
+    if request.headers.get("X-Confirm") != "yes":
+        raise HTTPException(400, "缺少 X-Confirm: yes 确认头")
     core = request.app.state.core
     await core.db.execute(
         "DELETE FROM conversation_logs WHERE session_id=?", (session_id,))
@@ -333,7 +336,7 @@ def _parse_asr_json_text(text: str) -> str:
             return _json.loads(text).get("text", text)
         except (ValueError, KeyError) as exc:
             logger.debug("chat.json_parse_failed: {}", exc, exc_info=True)
-        except Exception as exc:
+        except Exception:
             logger.exception("chat._parse_asr_json_text.unexpected_error")
     return text
 
