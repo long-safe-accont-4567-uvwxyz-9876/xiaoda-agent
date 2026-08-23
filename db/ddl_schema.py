@@ -8,6 +8,8 @@ from __future__ import annotations
 
 from loguru import logger
 
+from .db_memory_reconciliation import create_schema as create_reconciliation_schema
+
 
 class DDLMixin:
     async def _create_tables(self) -> None:
@@ -90,9 +92,16 @@ class DDLMixin:
                 user_id TEXT DEFAULT 'default',
                 agent_id TEXT DEFAULT 'xiaoda',
                 is_raw INTEGER DEFAULT 0,
-                updated_at REAL DEFAULT 0
+                updated_at REAL DEFAULT 0,
+                memory_type TEXT DEFAULT 'event',
+                classification_status TEXT DEFAULT 'pending',
+                classification_version INTEGER DEFAULT 0,
+                classified_at REAL DEFAULT 0,
+                status TEXT NOT NULL DEFAULT 'active',
+                superseded_by INTEGER
             )
         """)
+        await create_reconciliation_schema(self._conn)
 
         # 触发器：summary 变更时自动维护 updated_at
         # SQLite 默认 recursive_triggers=OFF，AFTER UPDATE 内对同表非触发列的
@@ -285,6 +294,9 @@ class DDLMixin:
         await self._conn.execute("""CREATE INDEX IF NOT EXISTS idx_session_entries_created ON session_entries(created_at)""")
         await self._conn.execute("""CREATE INDEX IF NOT EXISTS idx_tool_error_rules_tool ON tool_error_rules(tool_name)""")
         await self._conn.execute("""CREATE INDEX IF NOT EXISTS idx_episodic_scope ON episodic_memories(user_id, agent_id, is_raw, timestamp DESC)""")
+        await self._conn.execute("""CREATE INDEX IF NOT EXISTS idx_episodic_memory_type ON episodic_memories(memory_type)""")
+        await self._conn.execute("""CREATE INDEX IF NOT EXISTS idx_episodic_classification_pending ON episodic_memories(user_id, agent_id, classification_status, id)""")
+        await self._conn.execute("""CREATE INDEX IF NOT EXISTS idx_episodic_active_scope ON episodic_memories(user_id, agent_id, status, is_raw, id)""")
         await self._conn.execute("""CREATE INDEX IF NOT EXISTS idx_memory_entities_name ON memory_entities(name)""")
         await self._conn.execute("""CREATE INDEX IF NOT EXISTS idx_memory_entities_type ON memory_entities(entity_type)""")
         await self._conn.execute("""CREATE INDEX IF NOT EXISTS idx_eml_entity ON entity_memory_links(entity_id)""")

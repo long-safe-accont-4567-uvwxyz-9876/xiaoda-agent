@@ -6,6 +6,7 @@ Mixin 组合：MemoryDB 继承 DistillPortraitMixin 获得记忆 enrichment、
 """
 from __future__ import annotations
 
+import asyncio
 import time
 
 from loguru import logger
@@ -59,6 +60,62 @@ class DistillPortraitMixin:
             return True
         except Exception as e:
             logger.warning("db_memory.enrichment_update_failed", error=str(e))
+            return False
+
+    async def merge_memory_knowledge_state(
+        self,
+        memory_id: int,
+        *,
+        summary: str,
+        metadata_json: str,
+        memory_type: str,
+        importance: float,
+        phase: str,
+        stability: float,
+        reinforcement_count: int,
+        auto_commit: bool = True,
+        strict: bool = False,
+    ) -> bool:
+        try:
+            cursor = await self._conn.execute(
+                "UPDATE episodic_memories SET summary=?, metadata_json=?, "
+                "memory_type=?, importance=?, phase=?, stability=?, "
+                "reinforcement_count=? WHERE id=? AND is_raw=0",
+                (
+                    summary,
+                    metadata_json,
+                    memory_type,
+                    importance,
+                    phase,
+                    stability,
+                    reinforcement_count,
+                    memory_id,
+                ),
+            )
+            if cursor.rowcount <= 0:
+                if auto_commit:
+                    await self._conn.commit()
+                return False
+            await self._sync_fts(
+                memory_id,
+                summary,
+                "db_memory.knowledge_merge_fts_failed",
+                auto_commit=False,
+                strict=strict,
+            )
+            if auto_commit:
+                await self._conn.commit()
+            return True
+        except asyncio.CancelledError:
+            if auto_commit:
+                await asyncio.shield(self._conn.rollback())
+            raise
+        except Exception as e:
+            logger.warning("db_memory.knowledge_merge_failed", error=str(e))
+            if auto_commit:
+                await self._conn.rollback()
+            if strict:
+                raise
             return False
 
     async def insert_portrait(self, content: str, version: int = 1,

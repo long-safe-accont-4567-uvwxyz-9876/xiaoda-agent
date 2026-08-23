@@ -5,8 +5,14 @@
 - session_id: 会话标识（复用已有字段，会话级隔离）
 - agent_id: Agent 标识（xiaoda/xiaoli/xiaolian/xiaoke）
 """
-from dataclasses import dataclass
 from contextvars import ContextVar, Token
+from dataclasses import dataclass
+from enum import Enum
+
+
+class ScopeBoundary(str, Enum):
+    PERSONAL = "personal"
+    CONVERSATION = "conversation"
 
 
 @dataclass
@@ -22,6 +28,81 @@ class Scope:
     session_id: str = "user"
     agent_id: str = "xiaoda"
     request_id: str = ""
+    _boundary: ScopeBoundary | None = None
+
+    @classmethod
+    def personal(
+        cls,
+        user_id: str = "default",
+        session_id: str = "user",
+        agent_id: str = "xiaoda",
+        request_id: str = "",
+    ) -> "Scope":
+        """Build a personal scope that shares memory across private sessions."""
+        return cls(
+            user_id=user_id,
+            session_id=session_id,
+            agent_id=agent_id,
+            request_id=request_id,
+            _boundary=ScopeBoundary.PERSONAL,
+        )
+
+    @classmethod
+    def group(
+        cls,
+        user_id: str,
+        group_id: str,
+        agent_id: str = "xiaoda",
+        request_id: str = "",
+    ) -> "Scope":
+        """Build a conversation-bound QQ group scope."""
+        session_id = (
+            group_id
+            if group_id.startswith("qq_group:")
+            else f"qq_group:{group_id}"
+        )
+        return cls(
+            user_id=user_id,
+            session_id=session_id,
+            agent_id=agent_id,
+            request_id=request_id,
+            _boundary=ScopeBoundary.CONVERSATION,
+        )
+
+    @property
+    def boundary(self) -> ScopeBoundary:
+        if self._boundary is not None:
+            return self._boundary
+        if self.session_id.startswith("qq_group:"):
+            return ScopeBoundary.CONVERSATION
+        return ScopeBoundary.PERSONAL
+
+    def matches_record(self, record: dict) -> bool:
+        if (
+            record.get("user_id") != self.user_id
+            or record.get("agent_id") != self.agent_id
+        ):
+            return False
+        record_session = str(record.get("session_id") or "")
+        if record_session == "archived":
+            return False
+        if self.boundary is ScopeBoundary.CONVERSATION:
+            return record_session == self.session_id
+        return not record_session.startswith("qq_group:")
+
+    def kg_partition_key(self) -> str:
+        """返回 KG v2 分区键；私聊跨会话共享，QQ群按群会话隔离。"""
+        if self.user_id == "default" and self.agent_id == "xiaoda":
+            base = "default"
+        else:
+            base = f"{self.user_id}::{self.agent_id}"
+        if self.session_id.startswith("qq_group:"):
+            return f"{base}::{self.session_id}"
+        return base
+
+    def cache_namespace(self) -> str:
+        """Return the scope-only cache namespace, excluding cache epochs."""
+        return f"{self.kg_partition_key()}::{self.user_id}"
 
     def to_sql_filter(self, table: str = "episodic_memories") -> str:
         """生成 SQL WHERE 子句（user_id + agent_id 过滤）。

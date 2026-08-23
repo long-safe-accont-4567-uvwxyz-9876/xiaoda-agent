@@ -4,22 +4,30 @@
 所有编码逻辑通过 self._mm 访问依赖与状态，保证与重构前行为完全一致，
 同时避免 `memory_manager` 的反向 import（循环依赖）。
 """
-from typing import Any
 import asyncio
+import json
 import re
 import time
+from typing import Any
+
 from loguru import logger
 
+from config import get_agent_display_name
 from core.background_tasks import _bg_tasks, _spawn
-
 from memory._memory_utils import (
-    _log_task_exception,
-    validate_memory_content,
     RuleBasedMemoryExtractor,
     _char_bigrams,
+    _log_task_exception,
+    validate_memory_content,
 )
-from .fsrs_model import estimate_initial_difficulty, S_INIT, S_PERMANENT, should_be_permanent_on_create
-from config import get_agent_display_name
+from memory.enrichment import CLASSIFICATION_VERSION, parse_memory_enrichment
+
+from .fsrs_model import (
+    S_INIT,
+    S_PERMANENT,
+    estimate_initial_difficulty,
+    should_be_permanent_on_create,
+)
 
 
 class MemoryEncoder:
@@ -171,14 +179,13 @@ class MemoryEncoder:
             # ── mem0 SPEC: 异步触发实体提取+链接 ──
             self._schedule_entity_extraction(mem_id, summary, scope)
 
-            # ── mem0 SPEC: 异步触发蒸馏（原始记忆 → is_raw=0 提炼知识）──
-            self._schedule_distill(mem_id, summary, scope, importance, emotion, exchanges)
-
-            await self._finalize_encode(mem_id, summary, importance, emotion, exchanges)
+            await self._finalize_encode(
+                mem_id, summary, scope, importance, emotion, exchanges
+            )
         except Exception as e:
             logger.warning("memory.encode_failed", error=str(e))
 
-        self._schedule_kg_extraction(summary)
+        self._schedule_kg_extraction(summary, scope)
 
     def _prep_encode_sync(self, exchanges: list[dict], context: dict) -> tuple:
         """单线程完成所有同步预处理：摘要→安全过滤→安全扫描→重要性→规则提取。
@@ -291,10 +298,8 @@ class MemoryEncoder:
             except Exception as e:
                 logger.debug("memory.entity_spawn_failed", error=str(e))
 
-    def _schedule_distill(self, mem_id: int, summary: str, scope: Any,
-                          importance: float, emotion: str,
-                          exchanges: list[dict]) -> None:
-        """异步调度蒸馏（原始记忆 → is_raw=0 提炼知识，fire-and-forget）。"""
+    @staticmethod
+    def _build_full_text(exchanges: list[dict]) -> str:
         full_text_parts = []
         for msg in exchanges[-6:]:
             role = msg.get("role", "")
@@ -303,32 +308,94 @@ class MemoryEncoder:
                 full_text_parts.append(f"你说了：{content}")
             elif role == "assistant" and content:
                 full_text_parts.append(f"我回应：{content}")
-        full_text = "；".join(full_text_parts)[:3000]
+        return "；".join(full_text_parts)[:3000]
 
-        if self._mm.distiller:
-            try:
-                _distill_task = asyncio.create_task(
+    def _schedule_enrichment_pipeline(
+        self,
+        mem_id: int,
+        summary: str,
+        scope: Any,
+        importance: float,
+        emotion: str,
+        exchanges: list[dict],
+    ) -> None:
+        """Schedule one strongly referenced enrichment-then-distill task."""
+        try:
+            task = asyncio.create_task(
+                self._run_enrichment_pipeline(
+                    mem_id, summary, scope, importance, emotion, exchanges
+                )
+            )
+            _bg_tasks.add(task)
+            task.add_done_callback(_bg_tasks.discard)
+            task.add_done_callback(_log_task_exception)
+        except Exception as e:
+            logger.debug("memory.enrichment_pipeline_spawn_failed", error=str(e))
+
+    def _schedule_legacy_enrichment_and_distill(
+        self,
+        mem_id: int,
+        summary: str,
+        scope: Any,
+        importance: float,
+        emotion: str,
+        exchanges: list[dict],
+    ) -> None:
+        """Preserve the disabled-switch fixed point with independent tasks."""
+        try:
+            enrichment_task = asyncio.create_task(
+                self._mm._enrich_memory_async(mem_id, exchanges)
+            )
+            _bg_tasks.add(enrichment_task)
+            enrichment_task.add_done_callback(_bg_tasks.discard)
+            enrichment_task.add_done_callback(_log_task_exception)
+            if self._mm.distiller:
+                distill_task = asyncio.create_task(
                     self._mm._distill_to_knowledge(
-                        mem_id, summary, scope, importance, emotion,
-                        full_text=full_text
+                        mem_id,
+                        summary,
+                        scope,
+                        importance,
+                        emotion,
+                        full_text=self._build_full_text(exchanges),
                     )
                 )
-                _bg_tasks.add(_distill_task)
-                _distill_task.add_done_callback(_bg_tasks.discard)
-                def _log_distill_exception(t: asyncio.Task) -> None:
-                    if t.cancelled():
-                        return
-                    exc = t.exception()
-                    if exc:
-                        logger.warning("memory.distill_async_failed", error=str(exc))
-                _distill_task.add_done_callback(_log_distill_exception)
-            except Exception as e:
-                logger.debug("memory.distill_spawn_failed", error=str(e))
+                _bg_tasks.add(distill_task)
+                distill_task.add_done_callback(_bg_tasks.discard)
+                distill_task.add_done_callback(_log_task_exception)
+        except Exception as e:
+            logger.debug("memory.legacy_pipeline_spawn_failed", error=str(e))
 
-    async def _finalize_encode(self, mem_id: int, summary: str,
+    async def _run_enrichment_pipeline(
+        self,
+        mem_id: int,
+        summary: str,
+        scope: Any,
+        importance: float,
+        emotion: str,
+        exchanges: list[dict],
+    ) -> None:
+        """Run enrichment serially before distillation; cancellation stops the chain."""
+        try:
+            await self._mm._enrich_memory_async(mem_id, exchanges)
+        except asyncio.CancelledError:
+            raise
+        except Exception as e:
+            logger.warning("memory.enrichment_pipeline_failed", error=str(e))
+        if self._mm.distiller:
+            await self._mm._distill_to_knowledge(
+                mem_id,
+                summary,
+                scope,
+                importance,
+                emotion,
+                full_text=self._build_full_text(exchanges),
+            )
+
+    async def _finalize_encode(self, mem_id: int, summary: str, scope: Any,
                                importance: float, emotion: str,
                                exchanges: list[dict]) -> None:
-        """编码收尾：更新状态、失效缓存、保存状态文件并调度 enrichment。"""
+        """编码收尾：更新状态、失效缓存、保存状态文件并调度受控流水线。"""
         self._mm._last_encode_time = time.time()
         logger.info("memory.encoded", summary=summary[:80], importance=importance, is_raw=1)
 
@@ -341,33 +408,27 @@ class MemoryEncoder:
         # 同步文件写入移到线程池（USB 盘 I/O 可能慢）
         await asyncio.to_thread(self._mm._save_state_json, summary, importance, emotion)
 
-        # fire-and-forget 后台 LLM 结构化提取（不阻塞主流程）
-        # 用 GLM-4-9B-0414 提取实体/事件/决策/偏好，完成后更新记忆条目
-        try:
-            _enrich_task = asyncio.create_task(
-                self._mm._enrich_memory_async(mem_id, exchanges)
+        import config as _cfg
+
+        if getattr(_cfg, "MEMORY_TYPE_ENRICHMENT_ENABLED", False):
+            self._schedule_enrichment_pipeline(
+                mem_id, summary, scope, importance, emotion, exchanges
             )
-            _bg_tasks.add(_enrich_task)
-            _enrich_task.add_done_callback(_bg_tasks.discard)
-            def _log_enrich_exception(t: asyncio.Task) -> None:
-                if t.cancelled():
-                    return
-                exc = t.exception()
-                if exc:
-                    logger.warning("memory.enrich_async_failed", error=str(exc))
+        else:
+            self._schedule_legacy_enrichment_and_distill(
+                mem_id, summary, scope, importance, emotion, exchanges
+            )
 
-            _enrich_task.add_done_callback(_log_enrich_exception)
-        except Exception as e:
-            logger.debug("memory.enrich_spawn_failed", error=str(e))
-
-    def _schedule_kg_extraction(self, summary: str) -> None:
+    def _schedule_kg_extraction(self, summary: str, scope: Any) -> None:
         """异步调度知识图谱提取（fire-and-forget）。"""
         if self._mm.kg and summary:
             # KG 提取改为 fire-and-forget：auto_extract_and_merge 内部调用 LLM（10s+8s 超时）
             # + DB merge 操作，直接 await 会阻塞主编码流程 10-20s。
             # 知识图谱是增强层，可异步补建，不应阻塞记忆编码主流程。
             try:
-                _kg_task = asyncio.create_task(self._mm.kg.auto_extract_and_merge(summary))
+                _kg_task = asyncio.create_task(
+                    self._mm.kg.auto_extract_and_merge(summary, scope=scope)
+                )
                 # 强引用：与索引/实体/蒸馏任务一致加入 _bg_tasks，
                 # 否则任务仅由局部变量持有，可能在完成前被 GC 回收
                 _bg_tasks.add(_kg_task)
@@ -464,21 +525,36 @@ class MemoryEncoder:
 
             if similar:
                 # 3a. 有相似知识 → UPDATE（合并）
-                await self._mm._update_knowledge(similar["id"], distilled, raw_id, scope)
+                updated = await self._mm._update_knowledge(
+                    similar["id"], distilled, raw_id, scope
+                )
+                if not updated:
+                    return
             else:
                 # 3b. 无相似知识 → 新建提炼知识（is_raw=0）
+                raw = await self._mm.memory.get_memory_by_id(raw_id) or {}
+                knowledge_importance = max(
+                    importance, float(raw.get("importance", importance))
+                )
                 knowledge_id = await self._mm.memory.insert_episodic_memory(
                     summary=distilled,
-                    importance=importance,
+                    importance=knowledge_importance,
                     emotion_label=emotion,
                     scope=scope,
                     is_raw=0,
+                    memory_type=raw.get("memory_type", "event"),
+                    phase=raw.get("phase", "buffer"),
+                    stability=raw.get("stability", S_INIT),
+                    reinforcement_count=raw.get("reinforcement_count", 0),
                 )
                 if self._mm.vec and knowledge_id:
                     try:
                         await self._mm.vec.upsert(knowledge_id, distilled)
                     except Exception as e:
                         logger.debug("memory.distill_vec_upsert_failed", error=str(e))
+                self._schedule_reconciliation_candidate(
+                    knowledge_id, raw_id, scope
+                )
                 logger.info("memory.distilled_new",
                            raw_id=raw_id, knowledge_id=knowledge_id)
             # 蒸馏完成后失效查询缓存：新提炼知识需被后续检索感知
@@ -504,21 +580,49 @@ class MemoryEncoder:
             else:
                 await self._mm._save_fallback_raw(raw_id, summary, full_text)
 
+    def _schedule_reconciliation_candidate(
+        self, knowledge_id: int, raw_id: int, scope: Any
+    ) -> None:
+        """Register a candidate, then fire one independent worker pass."""
+        repository = getattr(self._mm.memory, "reconciliation", None)
+        if repository is None:
+            return
+
+        async def _register() -> None:
+            try:
+                from memory.reconciliation_policy import configured_policy
+                from memory.reconciliation_service import run_pending_once
+
+                effective_mode, _ = configured_policy()
+                await repository.register_candidate(
+                    knowledge_id,
+                    raw_id,
+                    user_id=scope.user_id,
+                    agent_id=scope.agent_id,
+                    mode=effective_mode,
+                )
+                _spawn(
+                    run_pending_once(
+                        self._mm,
+                        user_id=scope.user_id,
+                        agent_id=scope.agent_id,
+                    )
+                )
+            except Exception as exc:
+                logger.warning(
+                    "memory.reconciliation_enqueue_failed",
+                    knowledge_id=knowledge_id,
+                    raw_id=raw_id,
+                    error=str(exc),
+                )
+
+        _spawn(_register())
+
     async def _save_fallback_raw(self, raw_id: int, truncated_summary: str,
                                   full_text: str) -> None:
+        """Mark fallback state without modifying append-only raw content."""
         try:
-            if full_text and len(full_text) > len(truncated_summary):
-                await self._mm.memory.update_fallback_raw(raw_id, full_text, "", distill_status="failed")
-                logger.info("memory.fallback_raw_updated", raw_id=raw_id,
-                           old_len=len(truncated_summary), new_len=len(full_text))
-                if self._mm.vec:
-                    try:
-                        await self._mm.vec.upsert(raw_id, full_text)
-                    except Exception as e:
-                        logger.debug("memory.fallback_vec_upsert_failed", error=str(e))
-            else:
-                await self._mm.memory.update_distill_status(raw_id, "distill_failed")
-            # summary 更新后失效读缓存总线（查询缓存 + 扩散激活），避免返回旧内容
+            await self._mm.memory.update_distill_status(raw_id, "failed")
             self._mm.invalidate_read_caches()
         except Exception as e:
             logger.error("degradation_triggered memory.fallback_save_failed raw_id={} error={}",
@@ -561,6 +665,70 @@ class MemoryEncoder:
             logger.debug("memory.find_similar_knowledge_failed", error=str(e))
             return None
 
+    @staticmethod
+    def _merge_canonical_state(existing: dict, raw: dict) -> dict:
+        """Choose the stronger derived state without weakening canonical knowledge."""
+        existing_type = existing.get("memory_type", "event")
+        raw_type = raw.get("memory_type", "event")
+        if raw_type == "fact" or existing_type == "fact":
+            memory_type = "fact"
+        elif raw_type in {"relation", "affect"}:
+            memory_type = (
+                raw_type
+                if existing_type in {"event", "instruction"}
+                else existing_type
+            )
+        elif raw_type == "instruction" and existing_type == "event":
+            memory_type = "instruction"
+        else:
+            memory_type = existing_type
+
+        phase_rank = {
+            "buffer": 0,
+            "decayed": 0,
+            "reinforced": 1,
+            "permanent": 2,
+            "archived": 0,
+        }
+        existing_phase = existing.get("phase", "buffer")
+        raw_phase = raw.get("phase", "buffer")
+        phase = (
+            raw_phase
+            if phase_rank.get(raw_phase, 0) > phase_rank.get(existing_phase, 0)
+            else existing_phase
+        )
+        if memory_type == "fact":
+            phase = "permanent"
+        elif memory_type in {"affect", "relation"} and phase_rank.get(phase, 0) < 1:
+            phase = "reinforced"
+
+        stability = max(
+            float(existing.get("stability", S_INIT)),
+            float(raw.get("stability", S_INIT)),
+        )
+        reinforcement_count = max(
+            int(existing.get("reinforcement_count", 0)),
+            int(raw.get("reinforcement_count", 0)),
+        )
+        importance = max(
+            float(existing.get("importance", 0.5)),
+            float(raw.get("importance", 0.5)),
+        )
+        if memory_type == "fact":
+            stability = max(stability, S_PERMANENT)
+            reinforcement_count = max(reinforcement_count, 1)
+        elif memory_type in {"affect", "relation"}:
+            importance = max(importance, 0.6)
+            stability = max(stability, S_INIT)
+            reinforcement_count = max(reinforcement_count, 1)
+        return {
+            "memory_type": memory_type,
+            "importance": importance,
+            "phase": phase,
+            "stability": stability,
+            "reinforcement_count": reinforcement_count,
+        }
+
     async def _update_knowledge(self, knowledge_id: int, new_content: str,
                                  raw_id: int, scope: Any) -> None:
         """更新已有提炼知识（合并新信息）。
@@ -595,14 +763,36 @@ class MemoryEncoder:
             source_raw_ids: list = existing_meta.get("source_raw_ids", [])
             if raw_id not in source_raw_ids:
                 source_raw_ids.append(raw_id)
-            await self._mm.memory.update_memory_enrichment(
-                memory_id=knowledge_id,
-                summary=merged,
-                metadata_json=json.dumps({
-                    "source_raw_ids": source_raw_ids,
-                    "merged_at": time.time(),
-                }),
-            )
+            raw = await self._mm.memory.get_memory_by_id(raw_id) or {}
+            merged_state = self._merge_canonical_state(existing, raw)
+            async with self._mm.db.write_transaction():
+                updated = await self._mm.memory.merge_memory_knowledge_state(
+                    memory_id=knowledge_id,
+                    summary=merged,
+                    metadata_json=json.dumps({
+                        "source_raw_ids": source_raw_ids,
+                        "merged_at": time.time(),
+                    }),
+                    auto_commit=False,
+                    strict=True,
+                    **merged_state,
+                )
+                if not updated:
+                    raise RuntimeError(
+                        f"canonical memory {knowledge_id} was not updated"
+                    )
+                if self._mm._governance:
+                    await self._mm._governance.record_version_update(
+                        knowledge_id,
+                        merged,
+                        auto_commit=False,
+                        strict=True,
+                    )
+                repository = getattr(self._mm.memory, "reconciliation", None)
+                if repository is not None:
+                    await repository.add_knowledge_source(
+                        knowledge_id, raw_id, transactional=False
+                    )
 
             # 4. 向量更新
             if self._mm.vec:
@@ -610,6 +800,11 @@ class MemoryEncoder:
                     await self._mm.vec.upsert(knowledge_id, merged)
                 except Exception as e:
                     logger.debug("memory.update_knowledge_vec_failed", error=str(e))
+
+            try:
+                self._mm.invalidate_read_caches()
+            except Exception as e:
+                logger.debug("memory.update_knowledge_cache_invalidation_failed", error=str(e))
 
             logger.info("memory.knowledge_updated",
                        knowledge_id=knowledge_id, raw_id=raw_id)
@@ -662,6 +857,7 @@ class MemoryEncoder:
             [{content, embed_content, chunk_type, weight, overlap_hash}, ...]
         """
         import hashlib
+
         import config as _cfg
 
         overlap_chars = getattr(_cfg, 'CHILD_CHUNK_OVERLAP_CHARS', 30)
@@ -714,84 +910,136 @@ class MemoryEncoder:
         return children
 
     async def _enrich_memory_async(self, mem_id: int, exchanges: list[dict]) -> None:
-        """后台 LLM 提取：用 GLM-4-9B-0414 从对话中提取结构化信息，更新记忆条目。
+        """Run the existing single LLM call and safely enrich one raw memory."""
+        import config as _cfg
 
-        fire-and-forget 调用，不阻塞主流程。失败静默（记忆保留原始字符串摘要）。
-        提取内容：更高质量摘要、实体列表、事件类型、元数据（决策/话题/情绪）。
-        """
-        import json
-        try:
-            text = self._build_enrichment_text(exchanges)
-            if not text or len(text) < 10:
-                return
+        enrichment_enabled = getattr(
+            _cfg, "MEMORY_TYPE_ENRICHMENT_ENABLED", False
+        )
+        text = self._build_enrichment_text(exchanges)
+        if not text or len(text) < 10:
+            return
 
-            prompt = f"""你是记忆结构化提取助手。从以下对话中提取结构化信息，返回 JSON 格式（只返回 JSON，不要任何其他内容）：
+        prompt = f"""你是记忆结构化提取助手。从以下对话中提取结构化信息，返回 JSON 格式（只返回 JSON，不要任何其他内容）：
 
 对话内容：
 {text}
 
 请返回以下 JSON 格式：
 {{
-  "summary": "高质量摘要，保留所有关键信息：人物、时间、地点、决策、偏好、情感，200字以内",
-  "entities": ["涉及的人物、物品、地点、技术名词等实体"],
-  "event_type": "事件类型（对话/决策/偏好/事件/闲聊/调试/学习 之一）",
+  "summary": "高质量摘要，保留关键信息，200字以内",
+  "entities": ["人物、物品、地点、技术名词等实体"],
+  "event_type": "事件类型",
+  "memory_type": "fact/event/affect/relation/instruction 五选一",
+  "importance": 0.0,
   "metadata": {{
-    "decision": "如果有决策或结论写在这里，没有则空字符串",
-    "topic": "主要话题，1-3个词",
-    "mood": "用户情绪（喜悦/悲伤/愤怒/平静/焦虑等）"
+    "decision": "决策或结论，没有则空字符串",
+    "topic": "主要话题",
+    "mood": "用户情绪"
   }}
 }}"""
 
-            messages = [{"role": "user", "content": prompt}]
-            result = await self._mm.distiller._call_free_model(messages, temperature=0.3, max_tokens=1024)
+        try:
+            result = await self._mm.distiller._call_free_model(
+                [{"role": "user", "content": prompt}],
+                temperature=0.3,
+                max_tokens=1024,
+            )
             if not result:
-                return
+                raise ValueError("empty enrichment response")
+            parsed = parse_memory_enrichment(result)
+        except asyncio.CancelledError:
+            raise
+        except Exception as e:
+            logger.debug(
+                "memory.enrich_failed",
+                error=str(e),
+                error_type=type(e).__name__,
+            )
+            if enrichment_enabled:
+                await self._persist_memory_classification(
+                    mem_id,
+                    memory_type="event",
+                    classification_status="fallback",
+                    llm_importance=None,
+                )
+            return
 
-            data = self._extract_enrichment_json(result)
+        data = {
+            "entities": list(parsed.entities),
+            "event_type": parsed.event_type,
+            "metadata": parsed.metadata,
+            "summary": parsed.summary,
+        }
+        await self._mm.memory.update_memory_enrichment(
+            mem_id,
+            summary="",
+            entities=json.dumps(data["entities"], ensure_ascii=False),
+            event_type=parsed.event_type,
+            metadata_json=json.dumps(parsed.metadata, ensure_ascii=False),
+        )
 
-            new_summary = data.get("summary", "").strip()
-            entities = json.dumps(data.get("entities", []), ensure_ascii=False)
-            event_type = data.get("event_type", "").strip()
-            metadata = json.dumps(data.get("metadata", {}), ensure_ascii=False)
-
-            # 更新 DB：只用 LLM 提取的 entities/event_type/metadata 补充，不用 LLM 摘要替换原始 summary
-            # 原因：原始 summary 是从真实对话直接生成的，保留原始细节；
-            #       LLM 摘要是二次加工，可能丢失信息或产生幻觉（用户反馈蒸馏破坏60%+真实内容）
-            update_summary = ""
-            await self._mm.memory.update_memory_enrichment(
+        if enrichment_enabled:
+            await self._persist_memory_classification(
                 mem_id,
-                summary=update_summary,
-                entities=entities,
-                event_type=event_type,
-                metadata_json=metadata,
+                memory_type=parsed.memory_type,
+                classification_status=parsed.classification_status,
+                llm_importance=parsed.importance,
             )
 
-            # ContextNest A3: summary 变更时记录新版本到哈希链
-            if self._mm._governance and update_summary:
-                try:
-                    await self._mm._governance.record_version_update(mem_id, update_summary)
-                except Exception as e:
-                    logger.debug("memory.governance_update_failed", error=str(e))
+        logger.info(
+            "memory.enriched",
+            mem_id=mem_id,
+            event_type=parsed.event_type,
+            memory_type=parsed.memory_type if enrichment_enabled else "disabled",
+            entities_count=len(parsed.entities),
+        )
+        await self._write_enrichment_child_chunks(
+            mem_id, data, "", parsed.summary
+        )
+        self._mm.invalidate_query_cache()
 
-            # 如果 summary 更新了，重新生成向量（让向量检索也能用到更好的摘要）
-            if update_summary and self._mm.vec:
-                try:
-                    await self._mm.vec.upsert(mem_id, update_summary)
-                except Exception as e:
-                    logger.debug("memory.enrich_vec_failed", error=str(e))
+    async def _persist_memory_classification(
+        self,
+        mem_id: int,
+        *,
+        memory_type: str,
+        classification_status: str,
+        llm_importance: float | None,
+    ) -> None:
+        """Apply type invariants without lowering rule-derived importance or phase."""
+        current = await self._mm.memory.get_memory_by_id(mem_id)
+        if not current:
+            return
+        importance = float(current.get("importance", 0.5))
+        if llm_importance is not None:
+            importance = max(importance, llm_importance)
+        phase = current.get("phase", "buffer")
+        stability = float(current.get("stability", S_INIT))
+        reinforcement_count = int(current.get("reinforcement_count", 0))
 
-            logger.info("memory.enriched", mem_id=mem_id, event_type=event_type,
-                        entities_count=len(data.get("entities", [])))
+        if memory_type == "fact":
+            phase = "permanent"
+            stability = max(stability, S_PERMANENT)
+            reinforcement_count = max(reinforcement_count, 1)
+        elif memory_type in {"affect", "relation"}:
+            importance = max(importance, 0.6)
+            if phase != "permanent":
+                phase = "reinforced"
+            stability = max(stability, S_INIT)
+            reinforcement_count = max(reinforcement_count, 1)
 
-            await self._write_enrichment_child_chunks(mem_id, data, update_summary, new_summary)
-
-            # enrichment 更新了 summary/entities/子chunk（未动 concept_nodes），
-            # 仅失效查询缓存
-            self._mm.invalidate_query_cache()
-
-        except Exception as e:
-            logger.debug("memory.enrich_failed",
-                         error=str(e), error_type=type(e).__name__)
+        await self._mm.memory.update_memory_classification(
+            mem_id,
+            memory_type=memory_type,
+            importance=importance,
+            classification_status=classification_status,
+            classification_version=CLASSIFICATION_VERSION,
+            classified_at=time.time(),
+            phase=phase,
+            stability=stability,
+            reinforcement_count=reinforcement_count,
+        )
 
     @staticmethod
     def _build_enrichment_text(exchanges: list[dict]) -> str:

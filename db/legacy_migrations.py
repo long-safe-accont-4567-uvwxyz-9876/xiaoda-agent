@@ -91,22 +91,74 @@ class LegacyMigrationMixin:
         # 防御性校验：检查关键列是否真正存在（防止 schema_version 被标记但列未实际添加）
         if current >= 10:
             epi_cols = {r["name"] for r in await self.fetch_all("PRAGMA table_info(episodic_memories)")}
-            # v15 关键列缺失 → 回退 schema_version 到 v9，触发重新迁移
             critical_v15_cols = {"phase", "difficulty", "stability"}
-            if current >= 15 and not critical_v15_cols.issubset(epi_cols):
-                logger.warning("database.migration_integrity_check_failed",
-                               msg=f"schema_version={current} 但缺失关键列 {critical_v15_cols - epi_cols}，回退到 v9 重新迁移")
-                # 删除 v10+ 的 schema_version 记录
-                await self._conn.execute("DELETE FROM schema_version WHERE version >= 10")
+            critical_v31_cols = {
+                "memory_type", "classification_status",
+                "classification_version", "classified_at",
+            }
+            missing_v15 = (
+                critical_v15_cols - epi_cols if current >= 15 else set()
+            )
+            missing_v18 = (
+                {"distill_status"} - epi_cols if current >= 18 else set()
+            )
+            missing_v31 = (
+                critical_v31_cols - epi_cols if current >= 31 else set()
+            )
+            missing_v32 = set()
+            if current >= 32:
+                critical_v32_cols = {"status", "superseded_by"}
+                critical_v32_tables = {
+                    "memory_knowledge_sources",
+                    "memory_reconciliation_jobs",
+                    "memory_reconciliation_actions",
+                    "memory_reconciliation_targets",
+                    "memory_reconciliation_snapshots",
+                    "memory_index_outbox",
+                    "memory_retrieval_epochs",
+                }
+                missing_v32 |= critical_v32_cols - epi_cols
+                table_rows = await self.fetch_all(
+                    "SELECT name FROM sqlite_master WHERE type='table'"
+                )
+                tables = {row["name"] for row in table_rows}
+                missing_v32 |= critical_v32_tables - tables
+            rollback_versions = []
+            if missing_v15:
+                rollback_versions.append(9)
+            if missing_v18:
+                rollback_versions.append(17)
+            if missing_v31:
+                rollback_versions.append(30)
+                reset_sets = []
+                if "classification_status" in epi_cols:
+                    reset_sets.append("classification_status='pending'")
+                if "classification_version" in epi_cols:
+                    reset_sets.append("classification_version=0")
+                if "classified_at" in epi_cols:
+                    reset_sets.append("classified_at=0")
+                if reset_sets:
+                    await self._conn.execute(
+                        "UPDATE episodic_memories SET " + ", ".join(reset_sets)
+                    )
+            if missing_v32:
+                rollback_versions.append(31)
+            if rollback_versions:
+                rollback_current = min(rollback_versions)
+                missing = missing_v15 | missing_v18 | missing_v31 | missing_v32
+                logger.warning(
+                    "database.migration_integrity_check_failed",
+                    msg=(
+                        f"schema_version={current} 但缺失关键列 {missing}，"
+                        f"回退到 v{rollback_current} 重新迁移"
+                    ),
+                )
+                await self._conn.execute(
+                    "DELETE FROM schema_version WHERE version >= ?",
+                    (rollback_current + 1,),
+                )
                 await self._conn.commit()
-                current = 9
-            # v18 关键列缺失
-            elif current >= 18 and "distill_status" not in epi_cols:
-                logger.warning("database.migration_integrity_check_failed",
-                               msg="schema_version>=18 但缺失 distill_status 列，回退到 v17 重新迁移")
-                await self._conn.execute("DELETE FROM schema_version WHERE version >= 18")
-                await self._conn.commit()
-                current = 17
+                current = rollback_current
         return current
 
     def _migration_entries(self) -> list:
@@ -142,6 +194,8 @@ class LegacyMigrationMixin:
             (28, "workflow_v2_config_table", self._migrate_v28),
             (29, "workflow_v2_review_table", self._migrate_v29),
             (30, "drop_dead_v06_cognitive_tables", self._migrate_v30),
+            (31, "episodic_memory_type_enrichment", self._migrate_v31),
+            (32, "memory_reconciliation_shadow", self._migrate_v32),
         ]
 
     async def _run_migrations(self) -> None:
@@ -1094,3 +1148,90 @@ class LegacyMigrationMixin:
         await self._conn.execute("DROP TABLE IF EXISTS bridge_memories")
         await self._conn.execute("DROP TABLE IF EXISTS preference_patterns")
         logger.info("database.migration_v30_drop_cognitive_tables_done")
+
+    async def _migrate_v31(self) -> None:
+        """v31: add memory taxonomy columns and deterministic local backfill."""
+        from memory.enrichment import (
+            CLASSIFICATION_VERSION,
+            classify_memory_deterministically,
+        )
+
+        await self._ensure_columns("episodic_memories", {
+            "memory_type": "memory_type TEXT DEFAULT 'event'",
+            "classification_status": (
+                "classification_status TEXT DEFAULT 'pending'"
+            ),
+            "classification_version": (
+                "classification_version INTEGER DEFAULT 0"
+            ),
+            "classified_at": "classified_at REAL DEFAULT 0",
+        })
+
+        import json as _json
+
+        cursor = await self._conn.execute(
+            "SELECT id, summary, emotion_label, is_raw, metadata_json "
+            "FROM episodic_memories WHERE classification_status IS NULL "
+            "OR classification_status = 'pending' ORDER BY id"
+        )
+        rows = await cursor.fetchall()
+        raw_types: dict[int, str] = {}
+        for row in rows:
+            if row[3] == 1:
+                raw_types[row[0]] = classify_memory_deterministically(
+                    row[1] or "", row[2] or ""
+                )
+
+        classified_at = time.time()
+        for row in rows:
+            if row[3] == 1:
+                memory_type = raw_types[row[0]]
+            else:
+                memory_type = "event"
+                try:
+                    metadata = _json.loads(row[4] or "{}")
+                    source_ids = metadata.get("source_raw_ids", [])
+                    inherited = {
+                        raw_types[source_id]
+                        for source_id in source_ids
+                        if isinstance(source_id, int) and source_id in raw_types
+                    }
+                    if len(inherited) == 1:
+                        memory_type = inherited.pop()
+                except (AttributeError, TypeError, ValueError, _json.JSONDecodeError):
+                    pass
+            await self._conn.execute(
+                "UPDATE episodic_memories SET memory_type=?, "
+                "classification_status='backfilled', classification_version=?, "
+                "classified_at=? WHERE id=?",
+                (memory_type, CLASSIFICATION_VERSION, classified_at, row[0]),
+            )
+
+        await self._conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_episodic_memory_type "
+            "ON episodic_memories(memory_type)"
+        )
+        await self._conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_episodic_classification_pending "
+            "ON episodic_memories(user_id, agent_id, classification_status, id)"
+        )
+        logger.info("database.migration_v31_memory_type_done", rows=len(rows))
+
+    async def _migrate_v32(self) -> None:
+        """v32: additive reconciliation, provenance, outbox, and visibility state."""
+        from .db_memory_reconciliation import create_schema
+
+        await self._ensure_columns("episodic_memories", {
+            "status": "status TEXT NOT NULL DEFAULT 'active'",
+            "superseded_by": "superseded_by INTEGER",
+        })
+        await self._conn.execute(
+            "UPDATE episodic_memories SET status='active' "
+            "WHERE status IS NULL OR status=''"
+        )
+        await create_schema(self._conn)
+        await self._conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_episodic_active_scope "
+            "ON episodic_memories(user_id, agent_id, status, is_raw, id)"
+        )
+        logger.info("database.migration_v32_reconciliation_done")

@@ -238,9 +238,20 @@ class ScoringTouchMixin:
                 logger.debug("memory.kg_boost_failed", error=str(e))
         # 统一评分公式
         for i, r in enumerate(results):
-            # rerank_score: 从 rerank_score 或 rrf_score 字段获取，归一化到 0-1
-            rerank_raw = r.get("rerank_score", r.get("rrf_score", 0.0))
-            rerank_score = _normalize_score(rerank_raw, default=0.0)
+            declared_score_kind = r.get("score_kind")
+            if declared_score_kind == "source":
+                score_kind = "source"
+                retrieval_raw = r.get("score", r.get("rrf_score", 0.0))
+            elif "rerank_score" in r:
+                score_kind = "rerank"
+                retrieval_raw = r.get("rerank_score", 0.0)
+            elif "rrf_score" in r:
+                score_kind = "rrf"
+                retrieval_raw = r.get("rrf_score", 0.0)
+            else:
+                score_kind = r.get("score_kind", "source")
+                retrieval_raw = r.get("score", 0.0)
+            retrieval_score = _normalize_score(retrieval_raw, default=0.0)
             # R: FSRS-DSR Retrievability（_apply_fsrs_scoring 已计算）
             R = _normalize_score(r.get("fluid_score"), default=0.5)
             # kg_boost: KG 召回标记或实体匹配加成（0.5-1.0），否则 0
@@ -254,7 +265,10 @@ class ScoringTouchMixin:
             # recency: 时间新鲜度加成（近期记忆优先）
             recency = _normalize_score(self._mm._compute_recency_boost(r), default=0.3)
             # 写入中间分数字段（用于调试和可观测性）
-            r["rerank_score"] = rerank_score
+            r["score_kind"] = score_kind
+            r["retrieval_score"] = retrieval_score
+            if score_kind != "rerank":
+                r.pop("rerank_score", None)
             r["fluid_score"] = R
             r["kg_boost"] = kg_boost
             r["importance_score"] = importance
@@ -267,7 +281,7 @@ class ScoringTouchMixin:
             _w_importance = getattr(config, 'RAG_IMPORTANCE_WEIGHT', 0.10)
             _w_residual = max(0.0, 1.0 - _w_rerank - _w_kg - _w_importance) / 3.0
             r["final_score"] = (
-                rerank_score * _w_rerank
+                retrieval_score * _w_rerank
                 + R * _w_residual
                 + recency * _w_residual
                 + kg_boost * _w_kg

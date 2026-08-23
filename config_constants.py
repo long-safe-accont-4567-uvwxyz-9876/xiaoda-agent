@@ -241,6 +241,37 @@ STREAM_TEXT_PUSH = os.getenv("STREAM_TEXT_PUSH", "true").lower() in ("1", "true"
 # P0: 工具调用中间状态推送（started/completed/failed）
 STREAM_TOOL_STATUS = os.getenv("STREAM_TOOL_STATUS", "true").lower() in ("1", "true", "yes")
 
+# P0: 工具轮结构化流事件。默认关闭；关闭时保留旧文本流/工具非流式路径。
+STRUCTURED_STREAM_EVENTS = os.getenv(
+    "STRUCTURED_STREAM_EVENTS", "false"
+).lower() in ("1", "true", "yes")
+# P0: QQ 群 @ 消息易失上下文缓冲。默认关闭，关闭时保持成员级上下文现状。
+GROUP_CHAT_BUFFER_ENABLED = os.getenv(
+    "GROUP_CHAT_BUFFER_ENABLED", "false"
+).lower() in ("1", "true", "yes")
+# P1 隐私修复：QQ 群回复默认排除主人私聊提炼的个人记忆（personal-boundary），
+# 防止私忆内容经记忆检索注入后进入全群可见回复。
+# 设 true 恢复旧行为（群回复允许注入个人记忆，有泄露风险）。
+GROUP_REPLY_PERSONAL_MEMORY_ENABLED = os.getenv(
+    "GROUP_REPLY_PERSONAL_MEMORY_ENABLED", "false"
+).lower() in ("1", "true", "yes")
+# P0: 写入侧四动作消解发布模式。默认 shadow，不改变记忆可见性。
+MEMORY_RECONCILIATION_MODE = os.getenv(
+    "MEMORY_RECONCILIATION_MODE", "shadow"
+).strip().lower()
+MEMORY_RECONCILIATION_ALLOWED_ACTIONS = os.getenv(
+    "MEMORY_RECONCILIATION_ALLOWED_ACTIONS", ""
+).strip().lower()
+# P1 悬空接线：记忆对账后台轮询循环开关。默认关闭——enqueue 侧事件驱动触发
+# （蒸馏落库后 run_pending_once）已覆盖常规路径，轮询仅兜底重试/积压 job；
+# 开启后由 web/server.py lifespan 启动 reconciliation_worker.run_forever。
+MEMORY_RECONCILIATION_WORKER_ENABLED = os.getenv(
+    "MEMORY_RECONCILIATION_WORKER_ENABLED", "false"
+).lower() in ("1", "true", "yes")
+MEMORY_RECONCILIATION_WORKER_INTERVAL = _safe_float(
+    os.getenv("MEMORY_RECONCILIATION_WORKER_INTERVAL"), 30.0
+)
+
 # Task 12: 熔断器智能恢复配置（P2）
 # COOLDOWN 从 60→30：熔断后恢复更快，避免长时间快速失败拖累用户体验
 CIRCUIT_BREAKER_COOLDOWN = _safe_int(os.getenv("CIRCUIT_BREAKER_COOLDOWN"), 30)
@@ -310,6 +341,9 @@ MEMORY_WARM_VEC_WEIGHT = _safe_float(os.getenv("MEMORY_WARM_VEC_WEIGHT"), 0.6)
 MAX_EPISODIC_MEMORIES = _safe_int(os.getenv("MAX_EPISODIC_MEMORIES"), 200)
 MEMORY_DISTILL_BATCH = _safe_int(os.getenv("MEMORY_DISTILL_BATCH"), 30)
 MEMORY_DISTILL_ENABLED = os.getenv("MEMORY_DISTILL_ENABLED", "false").lower() in ("1", "true", "yes")
+MEMORY_TYPE_ENRICHMENT_ENABLED = os.getenv(
+    "MEMORY_TYPE_ENRICHMENT_ENABLED", "false"
+).lower() in ("1", "true", "yes")
 
 # ── H1 情景记忆行数上限 (episodic_limiter) ──
 MAX_EPISODIC_ROWS = _safe_int(os.getenv("MAX_EPISODIC_ROWS"), 10000)

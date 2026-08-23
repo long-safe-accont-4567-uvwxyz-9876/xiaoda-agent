@@ -77,7 +77,8 @@ class ContextGovernance:
         return content_hash
 
     async def record_version_update(self, memory_id: int, new_summary: str,
-                                      auto_commit: bool = True) -> str | None:
+                                      auto_commit: bool = True,
+                                      strict: bool = False) -> str | None:
         """记录记忆更新版本: 自增 version, prev_hash = 旧 content_hash。
 
         用于 _enrich_memory_async 更新 summary 时保持哈希链连续。
@@ -115,6 +116,8 @@ class ContextGovernance:
         except Exception as e:
             logger.warning("governance.record_update_failed",
                            memory_id=memory_id, error=str(e))
+            if strict:
+                raise
             return None
         return new_hash
 

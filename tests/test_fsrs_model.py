@@ -6,10 +6,8 @@ import pytest
 from memory.fsrs_model import (
     BUFFER_DAYS,
     D_INIT,
-    D_MEAN,
     DREAM_THRESHOLD,
     FORGET_THRESHOLD,
-    MEAN_REVERT,
     R_ARCHIVE,
     S_INIT,
     S_PERMANENT,
@@ -107,6 +105,22 @@ class TestTransition:
 
 
 class TestReinforce:
+    @pytest.mark.parametrize("phase", [MemoryPhase.PERMANENT, MemoryPhase.REINFORCED])
+    def test_first_retrieval_does_not_downgrade_explicit_high_phase(self, phase):
+        model = FSRSModel()
+        now = time.time()
+        state = MemoryState(
+            phase=phase,
+            stability=S_PERMANENT if phase is MemoryPhase.PERMANENT else S_INIT,
+            reinforcement_count=1,
+            created_at=now,
+            last_review=now,
+        )
+
+        result = model.reinforce(state, ReinforcementSignal.PASSIVE_USE, now=now)
+
+        assert result.phase == phase
+
     def test_stability_increases_on_confirm(self):
         model = FSRSModel()
         now = time.time()

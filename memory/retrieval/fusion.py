@@ -53,6 +53,7 @@ class FusionRerankMixin:
             if item_id in all_items:
                 item = all_items[item_id]
                 item["rrf_score"] = rrf_score
+                item["score_kind"] = "rrf"
                 candidates.append(item)
         candidates = await self._mm._apply_entity_boost(query, candidates, scope)
 
@@ -187,6 +188,7 @@ class FusionRerankMixin:
                 if item_id and item_id in all_items:
                     mem = all_items[item_id]
                     mem["rerank_score"] = item["relevance_score"]
+                    mem["score_kind"] = "rerank"
                     mem["rrf_score"] = dict(fused).get(item_id, 0)
                     results.append(mem)
             return results if results else None

@@ -209,6 +209,38 @@ def e2e_instance_manager() -> tuple[InstanceManager, dict[str, E2ERuntime]]:
 
 
 @pytest.mark.asyncio
+async def test_prepared_instance_does_not_change_selection_until_commit():
+    instances, _ = e2e_instance_manager()
+    first = await instances.start("embedding-a")
+    before = instances.selection_identity(ModelPurpose.EMBEDDING)
+
+    prepared = await instances.start("embedding-b", select=False)
+
+    assert instances.selection_identity(ModelPurpose.EMBEDDING) == before
+    instances.select_instance(ModelPurpose.EMBEDDING, prepared.id)
+    assert instances.selection_identity(ModelPurpose.EMBEDDING)[0] == prepared.id
+    instances.select_instance(ModelPurpose.EMBEDDING, first.id)
+    await instances.stop(prepared.id)
+    assert instances.selection_identity(ModelPurpose.EMBEDDING)[0] == first.id
+
+
+@pytest.mark.asyncio
+async def test_selection_generation_cas_rejects_stale_transaction():
+    instances, _ = e2e_instance_manager()
+    first = await instances.start("embedding-a")
+    stale_generation = instances.selection_generation(ModelPurpose.EMBEDDING)
+    second = await instances.start("embedding-b")
+
+    with pytest.raises(RuntimeError, match="changed concurrently"):
+        instances.select_instance(
+            ModelPurpose.EMBEDDING,
+            first.id,
+            expected_generation=stale_generation,
+        )
+    assert instances.selection_identity(ModelPurpose.EMBEDDING)[0] == second.id
+
+
+@pytest.mark.asyncio
 async def test_production_services_follow_instances_started_after_bootstrap(tmp_path):
     instances, runtimes = e2e_instance_manager()
     services = await bootstrap._local_memory_services(

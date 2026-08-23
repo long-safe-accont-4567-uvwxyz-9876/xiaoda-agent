@@ -6,10 +6,9 @@
 """
 from __future__ import annotations
 
-import asyncio
-from unittest.mock import AsyncMock, MagicMock
-from pathlib import Path
 import sys
+from pathlib import Path
+from unittest.mock import AsyncMock, MagicMock
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
@@ -69,6 +68,18 @@ async def test_single_channel_sets_rrf_score(channel, score_field, score_val):
     for r in results:
         assert "rrf_score" in r
         assert r["rrf_score"] == score_val
+        assert r["score_kind"] == "source"
+
+
+@pytest.mark.asyncio
+async def test_single_fts_tiny_bm25_score_is_not_treated_as_reranker_score():
+    results = await _call_single_channel(
+        "fts", [{"id": 1, "score": 8.8e-7, "summary": "精确命中"}], k=5
+    )
+    from memory._retrieval_engine import RetrievalEngine
+
+    assert results[0]["source_channel"] == "fts"
+    assert RetrievalEngine._passes_min_relevance(results[0], 0.08) is True
 
 
 @pytest.mark.asyncio

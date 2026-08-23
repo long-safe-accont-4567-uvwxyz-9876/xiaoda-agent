@@ -11,6 +11,31 @@ from typing import Any
 from loguru import logger
 
 
+def active_memory_visibility_sql(table: str = "episodic_memories") -> str:
+    """Return the canonical SQL predicate for user-visible episodic memory."""
+    p = f"{table}." if table else ""
+    try:
+        from memory.reconciliation_policy import configured_policy
+        effective_mode, _ = configured_policy()
+    except ImportError:
+        effective_mode = "shadow"
+    if effective_mode != "enforce":
+        return f"{p}status = 'active'"
+    return (
+        "("
+        f"({p}is_raw = 0 AND {p}status = 'active') OR "
+        f"({p}is_raw = 1 AND {p}status = 'active' AND NOT EXISTS ("
+        "SELECT 1 FROM memory_knowledge_sources AS mks "
+        "JOIN episodic_memories AS active_knowledge "
+        "ON active_knowledge.id = mks.knowledge_id "
+        f"WHERE mks.raw_id = {p}id "
+        "AND active_knowledge.is_raw = 0 "
+        "AND active_knowledge.status = 'active'"
+        "))"
+        ")"
+    )
+
+
 def compute_missing_vec_ids(memory_ids: list[int], vec_rowids: set[int]) -> list[int]:
     """对账：返回在主表存在但向量表缺失的记忆 id 列表。
 
@@ -72,6 +97,16 @@ def _scope_where(scope: Any, *, is_raw: int | None = None,
     p = f"{table}." if table else ""
     where = f" AND {p}user_id = ? AND {p}agent_id = ?"
     params: list = [scope.user_id, scope.agent_id]
+    boundary = getattr(scope, "_boundary", None)
+    boundary_value = getattr(boundary, "value", boundary)
+    if boundary_value is None and str(getattr(scope, "session_id", "")).startswith("qq_group:"):
+        boundary_value = "conversation"
+    if boundary_value == "conversation":
+        where += f" AND {p}session_id = ?"
+        params.append(scope.session_id)
+    elif boundary_value == "personal":
+        where += f" AND {p}session_id NOT LIKE ?"
+        params.append("qq_group:%")
     if include_archived_filter:
         where += f" AND {p}session_id != 'archived'"
     if is_raw is not None:

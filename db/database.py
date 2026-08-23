@@ -17,6 +17,7 @@ from .db_knowledge import KnowledgeDB
 from .db_learning import LearningDB
 from .db_local_ai import LocalAIDB, transaction_lock_for
 from .db_memory import MemoryDB
+from .db_memory_reconciliation import ReconciliationRepository
 from .db_notebook import NotebookDB
 from .db_temporal_memory import TemporalMemoryDB
 from .ddl_schema import DDLMixin
@@ -28,7 +29,7 @@ from .session_store import SessionStoreMixin
 
 DB_DIR = DATA_DIR
 DB_PATH = DB_DIR / "agent.db"
-CURRENT_SCHEMA_VERSION = 30
+CURRENT_SCHEMA_VERSION = 32
 
 
 def _detect_fs_type(path: Path) -> str:
@@ -109,6 +110,7 @@ class DatabaseManager(LegacyMigrationMixin, DDLMixin, ConversationLogMixin, Life
         self.profiles: ProfileStore | None = None
         self.kg_v2: KnowledgeDBV2 | None = None
         self.local_ai: LocalAIDB | None = None
+        self.reconciliation: ReconciliationRepository | None = None
 
     async def _close_if_present(self, conn: Any, event: str) -> None:
         """幂等关闭旧连接；关闭失败只记 debug，不阻断 init 重连。"""
@@ -170,6 +172,10 @@ class DatabaseManager(LegacyMigrationMixin, DDLMixin, ConversationLogMixin, Life
         await self._setup_pragmas(self._is_fat_fs)
         self.memory = MemoryDB(self._conn)
         await self._create_tables()
+        self.reconciliation = ReconciliationRepository(
+            self._conn, self.write_transaction
+        )
+        self.memory.reconciliation = self.reconciliation
         # Phase 6: 创建复合索引 (P2 性能优化)
         # 必须在 _create_tables 之后, 因为复合索引依赖迁移后的列 (如 confidence/session_id)
         await self._apply_composite_indexes()

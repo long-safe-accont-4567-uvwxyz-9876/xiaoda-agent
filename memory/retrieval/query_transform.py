@@ -285,6 +285,7 @@ class QueryTransformMixin:
                     if 0 <= idx < len(all_results):
                         mem = all_results[idx]
                         mem["rerank_score"] = item.get("relevance_score", 0.0)
+                        mem["score_kind"] = "rerank"
                         reranked_results.append(mem)
                 if reranked_results:
                     all_results = reranked_results

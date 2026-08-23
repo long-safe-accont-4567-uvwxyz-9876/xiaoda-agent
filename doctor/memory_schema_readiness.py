@@ -6,7 +6,6 @@ import sqlite3
 from dataclasses import dataclass
 from pathlib import Path
 
-
 _REQUIRED_COLUMNS: dict[str, tuple[str, ...]] = {
     "episodic_memories": (
         "entities",
@@ -14,9 +13,30 @@ _REQUIRED_COLUMNS: dict[str, tuple[str, ...]] = {
         "metadata_json",
         "content_hash",
         "version",
+        "memory_type",
+        "classification_status",
+        "classification_version",
+        "classified_at",
+        "status",
+        "superseded_by",
     ),
 }
-_REQUIRED_TABLES = ("memory_versions", "context_audit_log", "kg_entities_v2", "kg_relations_v2", "kg_episodes", "memory_facts", "memory_preferences")
+_REQUIRED_TABLES = (
+    "memory_versions",
+    "context_audit_log",
+    "kg_entities_v2",
+    "kg_relations_v2",
+    "kg_episodes",
+    "memory_facts",
+    "memory_preferences",
+    "memory_knowledge_sources",
+    "memory_reconciliation_jobs",
+    "memory_reconciliation_actions",
+    "memory_reconciliation_targets",
+    "memory_reconciliation_snapshots",
+    "memory_index_outbox",
+    "memory_retrieval_epochs",
+)
 
 
 @dataclass(frozen=True)

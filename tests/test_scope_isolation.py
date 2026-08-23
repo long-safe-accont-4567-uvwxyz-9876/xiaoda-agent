@@ -148,3 +148,43 @@ class TestScopeDBIntegration:
         assert mem["is_raw"] == 1
         assert mem["user_id"] == "charlie"
         await db.close()
+
+    async def test_same_user_private_and_qq_groups_are_isolated(self, scoped_db):
+        """同一用户的私聊、群 A、群 B 互不检索，私聊仍跨 session 共享。"""
+        private_one = Scope.personal(
+            user_id="alice", session_id="private-session-1", agent_id="xiaoda"
+        )
+        private_two = Scope.personal(
+            user_id="alice", session_id="private-session-2", agent_id="xiaoda"
+        )
+        group_a = Scope.group(
+            user_id="alice", group_id="group-a", agent_id="xiaoda"
+        )
+        group_b = Scope.group(
+            user_id="alice", group_id="group-b", agent_id="xiaoda"
+        )
+
+        for summary, scope in (
+            ("boundary private one", private_one),
+            ("boundary private two", private_two),
+            ("boundary group a", group_a),
+            ("boundary group b", group_b),
+        ):
+            await scoped_db.memory.insert_episodic_memory(summary=summary, scope=scope)
+
+        private_results = await scoped_db.memory.search_memories_fts_scoped(
+            "boundary", scope=private_two, limit=10
+        )
+        group_a_results = await scoped_db.memory.search_memories_fts_scoped(
+            "boundary", scope=group_a, limit=10
+        )
+        group_b_results = await scoped_db.memory.search_memories_fts_scoped(
+            "boundary", scope=group_b, limit=10
+        )
+
+        assert {row["summary"] for row in private_results} == {
+            "boundary private one",
+            "boundary private two",
+        }
+        assert [row["summary"] for row in group_a_results] == ["boundary group a"]
+        assert [row["summary"] for row in group_b_results] == ["boundary group b"]

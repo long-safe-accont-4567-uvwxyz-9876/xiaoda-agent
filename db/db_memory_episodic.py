@@ -6,9 +6,8 @@ _sync_fts 保留在 MemoryDB（跨组共享且依赖模块级计数器 _record_f
 """
 from __future__ import annotations
 
-from typing import Any
-
 import time
+from typing import Any
 
 from loguru import logger
 
@@ -34,7 +33,11 @@ class EpisodicMixin:
                                       embedding_id: int = -1, auto_commit: bool = True,
                                       source: str = "user",
                                       scope: Any | None = None,
-                                      is_raw: int = 0) -> Any:
+                                      is_raw: int = 0,
+                                      memory_type: str = "event",
+                                      phase: str | None = None,
+                                      stability: float | None = None,
+                                      reinforcement_count: int | None = None) -> Any:
         """插入情景记忆。
 
         Args:
@@ -49,13 +52,38 @@ class EpisodicMixin:
         else:
             user_id = "default"
             agent_id = "xiaoda"
+        columns = [
+            "timestamp", "summary", "importance", "emotion_label", "session_id",
+            "embedding_id", "source", "user_id", "agent_id", "is_raw",
+        ]
+        values: list[Any] = [
+            time.time(), summary, importance, emotion_label, session_id,
+            embedding_id, source, user_id, agent_id, is_raw,
+        ]
+        available = getattr(self, "_episodic_columns_cache", None)
+        if available is None:
+            schema_cursor = await self._conn.execute(
+                "PRAGMA table_info(episodic_memories)"
+            )
+            available = {row[1] for row in await schema_cursor.fetchall()}
+            self._episodic_columns_cache = available
+        optional_values = {
+            "memory_type": memory_type,
+            "phase": phase or "buffer",
+            "stability": stability if stability is not None else 3.0,
+            "reinforcement_count": (
+                reinforcement_count if reinforcement_count is not None else 0
+            ),
+        }
+        for column, value in optional_values.items():
+            if column in available:
+                columns.append(column)
+                values.append(value)
+        placeholders = ", ".join("?" for _ in columns)
         cursor = await self._conn.execute(
-            """INSERT INTO episodic_memories
-               (timestamp, summary, importance, emotion_label, session_id,
-                embedding_id, source, user_id, agent_id, is_raw)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-            (time.time(), summary, importance, emotion_label, session_id,
-             embedding_id, source, user_id, agent_id, is_raw),
+            f"INSERT INTO episodic_memories ({', '.join(columns)}) "
+            f"VALUES ({placeholders})",
+            values,
         )
         mem_id = cursor.lastrowid
         if auto_commit:
@@ -85,6 +113,54 @@ class EpisodicMixin:
         rows = await cursor.fetchall()
         return [dict(r) for r in rows]
 
+    async def get_pending_memory_classifications(
+        self, scope: Any, limit: int = 50
+    ) -> list[dict]:
+        """Return one bounded pending classification batch for a user/agent scope."""
+        bounded_limit = max(1, min(int(limit), 50))
+        cursor = await self._read_conn().execute(
+            "SELECT * FROM episodic_memories "
+            "WHERE user_id=? AND agent_id=? AND classification_status='pending' "
+            "ORDER BY id ASC LIMIT ?",
+            (scope.user_id, scope.agent_id, bounded_limit),
+        )
+        return [dict(row) for row in await cursor.fetchall()]
+
+    async def update_memory_classification(
+        self,
+        memory_id: int,
+        *,
+        memory_type: str,
+        importance: float,
+        classification_status: str,
+        classification_version: int,
+        classified_at: float,
+        phase: str,
+        stability: float,
+        reinforcement_count: int,
+        auto_commit: bool = True,
+    ) -> bool:
+        """Atomically persist classification, effective importance, and FSRS state."""
+        cursor = await self._conn.execute(
+            "UPDATE episodic_memories SET memory_type=?, importance=?, "
+            "classification_status=?, classification_version=?, classified_at=?, "
+            "phase=?, stability=?, reinforcement_count=? WHERE id=?",
+            (
+                memory_type,
+                importance,
+                classification_status,
+                classification_version,
+                classified_at,
+                phase,
+                stability,
+                reinforcement_count,
+                memory_id,
+            ),
+        )
+        if auto_commit:
+            await self._conn.commit()
+        return cursor.rowcount > 0
+
     async def update_emotion_label(self, mem_id: int, label: str) -> None:
         await self._conn.execute(
             "UPDATE episodic_memories SET emotion_label = ? WHERE id = ?",
@@ -101,26 +177,46 @@ class EpisodicMixin:
         await self._conn.commit()
 
     async def update_memory_summary(self, mem_id: int, new_summary: str) -> None:
-        await self._conn.execute(
-            "UPDATE episodic_memories SET summary = ? WHERE id = ?",
+        cursor = await self._conn.execute(
+            "UPDATE episodic_memories SET summary = ? WHERE id = ? AND is_raw = 0",
             (new_summary, mem_id),
         )
-        await self._sync_fts(mem_id, new_summary, "db_memory.fts_sync_on_summary_update_failed")
+        if cursor.rowcount > 0:
+            await self._sync_fts(
+                mem_id,
+                new_summary,
+                "db_memory.fts_sync_on_summary_update_failed",
+            )
         await self._conn.commit()
 
     async def update_fallback_raw(self, mem_id: int, new_summary: str, label: str,
                                     distill_status: str = "") -> None:
         if distill_status:
-            await self._conn.execute(
-                "UPDATE episodic_memories SET summary = ?, emotion_label = ?, distill_status = ? WHERE id = ?",
+            cursor = await self._conn.execute(
+                "UPDATE episodic_memories SET summary = ?, emotion_label = ?, "
+                "distill_status = ? WHERE id = ? AND is_raw = 0",
                 (new_summary, label, distill_status, mem_id),
             )
-        else:
             await self._conn.execute(
-                "UPDATE episodic_memories SET summary = ?, emotion_label = ? WHERE id = ?",
+                "UPDATE episodic_memories SET emotion_label = ?, distill_status = ? "
+                "WHERE id = ? AND is_raw = 1",
+                (label, distill_status, mem_id),
+            )
+        else:
+            cursor = await self._conn.execute(
+                "UPDATE episodic_memories SET summary = ?, emotion_label = ? "
+                "WHERE id = ? AND is_raw = 0",
                 (new_summary, label, mem_id),
             )
-        await self._sync_fts(mem_id, new_summary, "db_memory.fts_sync_on_fallback_failed")
+            await self._conn.execute(
+                "UPDATE episodic_memories SET emotion_label = ? "
+                "WHERE id = ? AND is_raw = 1",
+                (label, mem_id),
+            )
+        if cursor.rowcount > 0:
+            await self._sync_fts(
+                mem_id, new_summary, "db_memory.fts_sync_on_fallback_failed"
+            )
         await self._conn.commit()
 
     async def increment_access_count(self, memory_id: int, auto_commit: bool = True) -> None:
@@ -151,24 +247,26 @@ class EpisodicMixin:
             await self._conn.commit()
 
     async def archive_memory(self, memory_id: int) -> None:
-        """归档记忆（标记为已归档，不删除）"""
+        """Archive a memory without changing immutable raw scope fields."""
         await self._conn.execute(
-            "UPDATE episodic_memories SET session_id = 'archived' WHERE id = ?",
+            "UPDATE episodic_memories SET "
+            "status = CASE WHEN is_raw = 1 THEN 'archived' ELSE status END, "
+            "session_id = CASE WHEN is_raw = 0 THEN 'archived' ELSE session_id END "
+            "WHERE id = ?",
             (memory_id,),
         )
         await self._conn.commit()
 
     async def archive_memories_batch(self, memory_ids: list[int]) -> None:
-        """批量归档记忆（标记为已归档，不删除）。
-
-        使用 IN 子句一次 UPDATE，消除 N+1 查询。
-        与 archive_memory 行为等价（仅 DB UPDATE，无其他副作用）。
-        """
+        """Archive memories in one update while preserving raw scope."""
         if not memory_ids:
             return
         placeholders = _sql_placeholders(memory_ids)
         await self._conn.execute(
-            f"UPDATE episodic_memories SET session_id = 'archived' WHERE id IN ({placeholders})",
+            "UPDATE episodic_memories SET "
+            "status = CASE WHEN is_raw = 1 THEN 'archived' ELSE status END, "
+            "session_id = CASE WHEN is_raw = 0 THEN 'archived' ELSE session_id END "
+            f"WHERE id IN ({placeholders})",
             memory_ids,
         )
         await self._conn.commit()

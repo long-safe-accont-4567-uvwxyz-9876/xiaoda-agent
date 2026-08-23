@@ -1,32 +1,31 @@
-from typing import Any
 import asyncio
+from typing import Any
+
 from loguru import logger
 
+from config import get_agent_display_name  # noqa: F401
 from db.database import DatabaseManager
 from db.db_memory import MemoryDB
+
 # FTS5 分词工具从 db.fts_utils 导入 (打破 db <-> memory 循环); 这里 re-export
 # 保持向后兼容 (其他模块仍可 `from memory.memory_manager import _tokenize_for_fts`)
-from db.fts_utils import _tokenize_for_fts
-from .vector_store import VectorStore
-from .fsrs_model import FSRSModel, estimate_initial_difficulty
+from db.fts_utils import _tokenize_for_fts  # noqa: F401
+from memory._memory_encoder import MemoryEncoder
+from memory._memory_maintenance import MemoryMaintenance
+from memory._memory_utils import (  # noqa: F401
+    _normalize_for_dedupe,
+    _normalize_score,
+    _parse_temporal_query,
+    reciprocal_rank_fusion,
+    validate_memory_content,
+)
+from memory._retrieval_engine import RetrievalEngine
+
+from .fsrs_model import FSRSModel, estimate_initial_difficulty  # noqa: F401
 from .memory_distiller import MemoryDistiller
 from .query_cache import QueryCache
 from .retrieval_assessor import RetrievalAssessor
-from config import get_agent_display_name
-
-
-# 以下 _memory_utils re-export 仅保留有真实外部消费者（`from memory.memory_manager import X`）的符号。
-from memory._memory_utils import (
-    _parse_temporal_query,
-    reciprocal_rank_fusion,
-    _normalize_score,
-    validate_memory_content,
-    _normalize_for_dedupe,
-)
-
-from memory._retrieval_engine import RetrievalEngine
-from memory._memory_encoder import MemoryEncoder
-from memory._memory_maintenance import MemoryMaintenance
+from .vector_store import VectorStore
 
 
 class MemoryManager:
@@ -83,10 +82,10 @@ class MemoryManager:
         self.concept_graph = None
         self.spreading_engine = None
         try:
-            from memory.concept_graph import ConceptGraph
-            from memory.spreading_activation import SpreadingActivationEngine
-            from memory.key_extractor import KeyExtractor
             from db.db_concept import ConceptDB
+            from memory.concept_graph import ConceptGraph
+            from memory.key_extractor import KeyExtractor
+            from memory.spreading_activation import SpreadingActivationEngine
             if hasattr(self, 'db') and self.db and hasattr(self.db, '_conn') and self.db._conn is not None:
                 concept_db = ConceptDB(self.db._conn)
                 self._concept_db = concept_db
@@ -437,6 +436,35 @@ class MemoryManager:
 
     async def _enrich_memory_async(self, mem_id: int, exchanges: list[dict]) -> None:
         return await self._encoder._enrich_memory_async(mem_id, exchanges)
+
+    async def _run_enrichment_pipeline(
+        self,
+        mem_id: int,
+        summary: str,
+        scope: Any,
+        importance: float,
+        emotion: str,
+        exchanges: list[dict],
+    ) -> None:
+        return await self._encoder._run_enrichment_pipeline(
+            mem_id, summary, scope, importance, emotion, exchanges
+        )
+
+    async def classify_pending_memories(
+        self, scope: Any, limit: int = 50
+    ) -> int:
+        """Classify one bounded scope batch serially using the normal pipeline hook."""
+        import config as _cfg
+
+        if not getattr(_cfg, "MEMORY_TYPE_ENRICHMENT_ENABLED", False):
+            return 0
+        rows = await self.memory.get_pending_memory_classifications(
+            scope=scope, limit=limit
+        )
+        for row in rows:
+            exchanges = [{"role": "user", "content": row["summary"]}]
+            await self._enrich_memory_async(row["id"], exchanges)
+        return len(rows)
 
     def _estimate_importance(self, exchanges: list[dict], context: dict) -> float:
         return self._encoder._estimate_importance(exchanges, context)

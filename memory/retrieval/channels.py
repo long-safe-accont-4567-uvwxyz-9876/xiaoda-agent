@@ -5,6 +5,7 @@
 RecallChannels（七路召回结果打包）定义于此：fusion 的签名引用它，
 放在 channels 可避免 fusion → pipeline 循环依赖；pipeline 再 re-export。
 """
+import inspect
 import time
 from typing import Any, NamedTuple
 
@@ -35,6 +36,90 @@ class RecallChannels(NamedTuple):
 
 class RecallChannelMixin:
     """检索通道实现组：向量/HyDE/扩散/时间/对话日志/确定性 selector。"""
+
+    @staticmethod
+    def _explicit_attr(owner: Any, name: str) -> Any | None:
+        """Read only real attributes, ignoring MagicMock's dynamic children."""
+        if owner is None:
+            return None
+        try:
+            inspect.getattr_static(owner, name)
+        except AttributeError:
+            return None
+        return getattr(owner, name, None)
+
+    def _memory_repositories(self) -> list[Any]:
+        repositories: list[Any] = []
+        direct = self._explicit_attr(self._mm, "memory")
+        if direct is not None:
+            repositories.append(direct)
+        db = self._explicit_attr(self._mm, "db")
+        nested = self._explicit_attr(db, "memory")
+        if nested is not None and all(nested is not repo for repo in repositories):
+            repositories.append(nested)
+        return repositories
+
+    async def _get_visible_vector_memories(
+        self,
+        ids: list[int],
+        scope: Any | None,
+        original_memories: dict[int, dict],
+    ) -> list[dict]:
+        """Backfill vector hits through active visibility when the DB supports it."""
+        repositories = self._memory_repositories()
+        visibility_capable: set[int] = set()
+        visibility_failed: set[int] = set()
+
+        for repository in repositories:
+            method = self._explicit_attr(repository, "get_visible_memories_by_ids")
+            if method is None or not inspect.iscoroutinefunction(method):
+                continue
+            visibility_capable.add(id(repository))
+            try:
+                result = method(ids, scope=scope)
+                if inspect.isawaitable(result):
+                    rows = await result
+                    if isinstance(rows, list):
+                        return rows
+            except Exception as exc:
+                visibility_failed.add(id(repository))
+                logger.debug("memory.vector_visibility_filter_failed", error=str(exc))
+
+        # Legacy test doubles expose only get_memories_by_ids. If a real repository's
+        # visibility query fails, preserve the channel but enforce active status locally.
+        for repository in repositories:
+            if (
+                id(repository) in visibility_capable
+                and id(repository) not in visibility_failed
+            ):
+                continue
+            method = self._explicit_attr(repository, "get_memories_by_ids")
+            if method is None or not inspect.iscoroutinefunction(method):
+                continue
+            try:
+                result = method(ids)
+                if inspect.isawaitable(result):
+                    rows = await result
+                    if not isinstance(rows, list):
+                        continue
+                    if id(repository) in visibility_failed:
+                        rows = [row for row in rows if row.get("status") == "active"]
+                        if scope is not None:
+                            rows = [row for row in rows if scope.matches_record(row)]
+                    return rows
+            except Exception as exc:
+                logger.debug("memory.vector_legacy_backfill_failed", error=str(exc))
+
+        fallback = [
+            original_memories[memory_id]
+            for memory_id in ids
+            if memory_id in original_memories
+        ]
+        if visibility_capable:
+            fallback = [row for row in fallback if row.get("status") == "active"]
+            if scope is not None:
+                fallback = [row for row in fallback if scope.matches_record(row)]
+        return fallback
 
     async def _hybrid_vec_search(self, query: str, k: int,
                                  candidate_ids: list[int] | None = None,
@@ -83,8 +168,42 @@ class RecallChannelMixin:
                 _stage_log("vec_embed_search", __st, query)
             if not vec_results:
                 return []
+            normalized_vec_results: list[tuple[int, float]] = []
+            original_memories: dict[int, dict] = {}
+            for hit in vec_results:
+                if isinstance(hit, dict):
+                    row_id = hit.get("rowid", hit.get("id"))
+                    distance = hit.get("distance")
+                else:
+                    try:
+                        row_id, distance = hit
+                    except (TypeError, ValueError):
+                        continue
+                if row_id is None or distance is None:
+                    continue
+                try:
+                    normalized_row_id = int(row_id)
+                    normalized_vec_results.append(
+                        (normalized_row_id, float(distance))
+                    )
+                    if isinstance(hit, dict) and any(
+                        key in hit
+                        for key in (
+                            "summary", "content", "status", "is_raw", "user_id"
+                        )
+                    ):
+                        original = dict(hit)
+                        original.setdefault("id", normalized_row_id)
+                        original_memories[normalized_row_id] = original
+                except (TypeError, ValueError):
+                    continue
+            if not normalized_vec_results:
+                return []
+            vec_results = normalized_vec_results
             vec_ids = [row_id for row_id, _ in vec_results]
-            vec_mems = await self._mm.memory.get_memories_by_ids(vec_ids)
+            vec_mems = await self._get_visible_vector_memories(
+                vec_ids, scope, original_memories
+            )
             if is_raw is not None:
                 vec_mems = [m for m in vec_mems if m.get("is_raw") == is_raw]
             if scope is not None:
@@ -193,7 +312,9 @@ class RecallChannelMixin:
             for mid, score in mem_ids:
                 if mid not in score_map or score > score_map[mid]:
                     score_map[mid] = score
-            memories = await self._mm.memory.get_memories_by_ids(ids)
+            memories = await self._mm.memory.get_visible_memories_by_ids(
+                ids, scope=scope
+            )
             if scope is not None:
                 memories = [m for m in memories
                             if m.get("user_id") == scope.user_id
@@ -253,6 +374,8 @@ class RecallChannelMixin:
         if "min_importance" in selectors:
             clauses.append("importance >= ?")
             params.append(selectors["min_importance"])
+        from db.db_memory_utils import active_memory_visibility_sql
+        clauses.append(active_memory_visibility_sql())
         # ORDER BY id 保证候选集本身有序确定
         where = " AND ".join(clauses) if clauses else "1=1"
         params.append(limit)
@@ -404,7 +527,9 @@ class RecallChannelMixin:
             vec_results = await self._mm.vec.search(query, top_k=k)
             if vec_results:
                 vec_ids = [row_id for row_id, _ in vec_results]
-                vec_mems = await self._mm.memory.get_memories_by_ids(vec_ids)
+                vec_mems = await self._mm.memory.get_visible_memories_by_ids(
+                    vec_ids, scope=scope
+                )
                 # scope 后过滤：向量索引是全局的，需确保不跨用户泄露
                 if scope is not None:
                     vec_mems = [m for m in vec_mems

@@ -8,6 +8,7 @@ RetrievalEngine 在此组合各职责 Mixin：
 - ScoringTouchMixin   (retrieval.scoring)         FSRS 评分/去重/topic/touch
 """
 import asyncio
+import inspect
 import time
 from typing import Any
 
@@ -35,6 +36,44 @@ class RetrievalEngine(RecallChannelMixin, FusionRerankMixin, QueryTransformMixin
 
     def __init__(self, mm: Any) -> None:
         self._mm = mm
+
+    @staticmethod
+    def _explicit_attr(owner: Any, name: str) -> Any | None:
+        """Read only real attributes, ignoring MagicMock's dynamic children."""
+        if owner is None:
+            return None
+        try:
+            inspect.getattr_static(owner, name)
+        except AttributeError:
+            return None
+        return getattr(owner, name, None)
+
+    async def _get_retrieval_epoch(self, scope: Any) -> int:
+        """Read the cache epoch from either supported memory repository path."""
+        repositories: list[Any] = []
+        direct = self._explicit_attr(self._mm, "memory")
+        if direct is not None:
+            repositories.append(direct)
+        db = self._explicit_attr(self._mm, "db")
+        nested = self._explicit_attr(db, "memory")
+        if nested is not None and all(nested is not repo for repo in repositories):
+            repositories.append(nested)
+
+        for repository in repositories:
+            method = self._explicit_attr(repository, "get_retrieval_epoch")
+            if method is None or not inspect.iscoroutinefunction(method):
+                continue
+            try:
+                result = method(scope)
+                if not inspect.isawaitable(result):
+                    continue
+                epoch = await result
+            except Exception as exc:
+                logger.debug("memory.retrieval_epoch_failed", error=str(exc))
+                continue
+            if isinstance(epoch, int) and not isinstance(epoch, bool):
+                return epoch
+        return 0
 
     # ── 冷启动路由: 记忆计数 + 档位判断 ──────────────────────────
 
@@ -121,13 +160,17 @@ class RetrievalEngine(RecallChannelMixin, FusionRerankMixin, QueryTransformMixin
             channels, scope, _start)
 
 
-    async def _recall_kg_v2(self, query: str, recall_limit: int) -> list[dict]:
+    async def _recall_kg_v2(
+        self, query: str, recall_limit: int, scope: Any
+    ) -> list[dict]:
         """KG v2: 直接返回 KG 事实/实体作为上下文候选。"""
         import config as _v2_cfg
         if not getattr(_v2_cfg, 'KG_V2_ENABLED', False) or not getattr(self._mm, '_kg_v2_engine', None):
             return []
         try:
-            results = await self._mm._kg_v2_engine.search(query, top_k=recall_limit)
+            results = await self._mm._kg_v2_engine.search(
+                query, top_k=recall_limit, scope=scope
+            )
             if not results:
                 return []
             # 将 KG 事实格式化为 dict 供上下文使用
@@ -148,6 +191,9 @@ class RetrievalEngine(RecallChannelMixin, FusionRerankMixin, QueryTransformMixin
                     })
             return formatted
         except Exception as e:
+            from utils.metrics import metrics
+
+            metrics.inc("retrieval.channel.kg_v2.degraded")
             logger.debug("memory.kg_v2_recall_failed", error=str(e))
             return []
 
@@ -161,9 +207,16 @@ class RetrievalEngine(RecallChannelMixin, FusionRerankMixin, QueryTransformMixin
         但 FTS 无结果时仍尝试向量检索作为兜底（避免 cold_max > 0 时丢失向量召回）。
         """
         fts_items, kg_v2_items = await asyncio.gather(
-            self._mm._hybrid_fts_search_scoped(
-                query, recall_limit, scope, is_raw_filter),
-            self._recall_kg_v2(query, recall_limit),
+            self._timed(
+                "fts",
+                self._mm._hybrid_fts_search_scoped(
+                    query, recall_limit, scope, is_raw_filter
+                ),
+                query,
+            ),
+            self._timed(
+                "kg_v2", self._recall_kg_v2(query, recall_limit, scope), query
+            ),
         )
         if fts_items:
             results = fts_items[:k]
@@ -320,7 +373,9 @@ class RetrievalEngine(RecallChannelMixin, FusionRerankMixin, QueryTransformMixin
                 return []
 
             # 获取父chunk完整记录
-            parent_mems = await self._mm.memory.get_memories_by_ids(list(parent_ids))
+            parent_mems = await self._mm.memory.get_visible_memories_by_ids(
+                list(parent_ids), scope=scope
+            )
             # scope 后过滤：子chunk向量检索是全局的，需确保父记忆不跨用户泄露
             parent_mems = [pm for pm in parent_mems
                            if pm.get("user_id") == scope.user_id
@@ -334,11 +389,22 @@ class RetrievalEngine(RecallChannelMixin, FusionRerankMixin, QueryTransformMixin
 
 
     async def _timed(self, channel: str, coro: Any, query: str) -> Any:
-        """每通道独立计时（并行执行，各通道耗时互不影响，日志定位最慢通道）。"""
+        """每通道独立计时，并记录固定低基数指标。"""
+        from utils.metrics import metrics
+
         _ch_st = time.time()
+        metric_prefix = f"retrieval.channel.{channel}"
         try:
-            return await coro
+            result = await coro
+            metrics.inc(f"{metric_prefix}.success")
+            if isinstance(result, (list, tuple, set)):
+                metrics.histogram(f"{metric_prefix}.candidates", len(result))
+            return result
+        except BaseException:
+            metrics.inc(f"{metric_prefix}.error")
+            raise
         finally:
+            metrics.observe(f"{metric_prefix}.latency", time.time() - _ch_st)
             _stage_log(f"channel_{channel}", _ch_st, query)
 
 
@@ -355,7 +421,7 @@ class RetrievalEngine(RecallChannelMixin, FusionRerankMixin, QueryTransformMixin
             self._timed("child", self._recall_child(query, recall_limit, scope, query_vec), query),
             self._timed("spreading", self._mm._spreading_recall(query, recall_limit, scope=scope), query),
             self._timed("entity", self._mm._entity_recall(query, scope, recall_limit), query),
-            self._timed("kg_v2", self._recall_kg_v2(query, recall_limit), query),
+            self._timed("kg_v2", self._recall_kg_v2(query, recall_limit, scope), query),
         )
         return RecallChannels(
             fts_items, vec_items, kg_items, child_items,
@@ -440,19 +506,22 @@ class RetrievalEngine(RecallChannelMixin, FusionRerankMixin, QueryTransformMixin
             if all(not channels_map[other] for other in empties):
                 return self._return_single_channel(
                     active_items, k, kg_v2_items if append_kg_v2 else [],
-                    query, tier, _start, score_keys)
+                    query, tier, _start, score_keys, active)
         return None
 
 
     @staticmethod
     def _return_single_channel(items: list, k: int, kg_v2_items: list,
                                 query: str, tier: str, _start: float,
-                                score_keys: tuple[str, ...]) -> list[dict]:
+                                score_keys: tuple[str, ...],
+                                source_channel: str) -> list[dict]:
         """单路短路统一后处理：补 rrf_score → 切片 k → 可选补 kg_v2 → log → 返回。"""
         for item in items:
             # 按字段链取值：vec 走 (similarity, score)，其它走 (score,)
             val = next((item.get(key) for key in score_keys if item.get(key) is not None), 0.0)
             item.setdefault("rrf_score", val)
+            item.setdefault("score_kind", "source")
+            item.setdefault("source_channel", source_channel)
         results = items[:k]
         if kg_v2_items and len(results) < k:
             results.extend(kg_v2_items[:k - len(results)])
@@ -485,11 +554,14 @@ class RetrievalEngine(RecallChannelMixin, FusionRerankMixin, QueryTransformMixin
         去噪），recall 工具传 False 跳过该过滤。
         """
         import config
+        from utils.metrics import metrics
+
         scope_source = "explicit"
         if scope is None:
             from memory.scope import current_scope
             scope = current_scope()
             scope_source = "bound"
+        conv_user_id = scope.user_id
         logger.bind(
             scope_user_id=scope.user_id,
             scope_session_id=scope.session_id,
@@ -499,10 +571,12 @@ class RetrievalEngine(RecallChannelMixin, FusionRerankMixin, QueryTransformMixin
             conv_user_filter_present=bool(conv_user_id),
             requested_k=k,
         ).info("memory.scope_resolved")
-        # 查询语义缓存：命中则直接返回，跳过完整检索流水线
-        _scope_cache_prefix = f"{scope.user_id}::{scope.agent_id}"
+        # 查询语义缓存：namespace 只用于隔离，不参与 query embedding。
+        _retrieval_epoch = await self._get_retrieval_epoch(scope)
+        _cache_namespace = (
+            f"{scope.kg_partition_key()}::{conv_user_id}::epoch={_retrieval_epoch}"
+        )
         if getattr(config, 'QUERY_CACHE_ENABLED', True):
-            _cache_key = f"{_scope_cache_prefix}::{conv_user_id}::{query}"
             logger.bind(
                 scope_user_id=scope.user_id,
                 scope_agent_id=scope.agent_id,
@@ -510,7 +584,7 @@ class RetrievalEngine(RecallChannelMixin, FusionRerankMixin, QueryTransformMixin
                 conv_user_filter_present=bool(conv_user_id),
             ).debug("memory.cache_lookup")
             logger.debug("memory.retrieve_stage", stage="query_cache_get", query=query[:50])
-            cached = await self._mm._query_cache.get(_cache_key)
+            cached = await self._mm._query_cache.get(_cache_namespace, query)
             if cached is not None:
                 logger.bind(
                     scope_user_id=scope.user_id,
@@ -518,7 +592,10 @@ class RetrievalEngine(RecallChannelMixin, FusionRerankMixin, QueryTransformMixin
                     request_id=scope.request_id,
                     result_count=len(cached),
                 ).info("memory.cache_hit")
+                metrics.inc("retrieval.cache.hit")
+                metrics.histogram("retrieval.result_count", len(cached))
                 return cached
+            metrics.inc("retrieval.cache.miss")
             logger.bind(
                 scope_user_id=scope.user_id,
                 scope_agent_id=scope.agent_id,
@@ -566,7 +643,7 @@ class RetrievalEngine(RecallChannelMixin, FusionRerankMixin, QueryTransformMixin
         # A1: 智能短路 - 简单查询跳过查询变换，直接走混合检索
         if getattr(config, "RETRIEVAL_SMART_SKIP", True) and self._mm._is_retrieval_simple(query):
             return await self._retrieve_simple_path(
-                query, k, intent, config, scope, _cache_key,
+                query, k, intent, config, scope, _cache_namespace,
                 _retry_attempted, apply_min_score)
 
         # 查询变换 + 多查询检索
@@ -594,7 +671,7 @@ class RetrievalEngine(RecallChannelMixin, FusionRerankMixin, QueryTransformMixin
         # 根因：_query_cache.put 内部调 embed API（网络 1-2s），await 阻塞检索返回。
         # 缓存写入不影响当前检索结果，无需让用户等待。
         if getattr(config, 'QUERY_CACHE_ENABLED', True) and results:
-            _spawn(self._mm._query_cache.put(_cache_key, results))
+            _spawn(self._mm._query_cache.put(_cache_namespace, query, results))
 
         # 检索命中后批量递增 access_count（passive_use）
         # 修复：此前 increment_access_count 从未被调用，导致记忆永远无法进入 PERMANENT 状态
@@ -606,8 +683,27 @@ class RetrievalEngine(RecallChannelMixin, FusionRerankMixin, QueryTransformMixin
         return results
 
 
+    @staticmethod
+    def _passes_min_relevance(result: dict, min_score: float) -> bool:
+        if result.get("topic_trigger"):
+            return True
+        score_kind = result.get("score_kind")
+        if score_kind == "rrf":
+            # RRF 是排名融合分，不与交叉编码器分数同量纲；候选已按 rank 截断。
+            return True
+        if score_kind == "rerank":
+            return float(result.get("rerank_score", 0.0)) >= min_score
+        if score_kind == "source":
+            if result.get("source_channel") != "vec":
+                return True
+            return float(
+                result.get("retrieval_score", result.get("score", 0.0))
+            ) >= min_score
+        # 未迁移的旧候选保持原有 rerank 阈值语义。
+        return float(result.get("rerank_score", 0.0)) >= min_score
+
     async def _retrieve_simple_path(self, query: str, k: int, intent: str,
-                                     config, scope: Any, _cache_key: str,
+                                     config, scope: Any, cache_namespace: str,
                                      _retry_attempted: bool,
                                      apply_min_score: bool) -> list[dict]:
         """A1 智能短路：简单查询跳过查询变换，直接走混合检索。
@@ -674,7 +770,7 @@ class RetrievalEngine(RecallChannelMixin, FusionRerankMixin, QueryTransformMixin
             if apply_min_score and intent != "chat" and _min_score > 0 and results:
                 _before = len(results)
                 results = [r for r in results
-                           if float(r.get("rerank_score", 0)) >= _min_score]
+                           if self._passes_min_relevance(r, _min_score)]
                 if len(results) != _before:
                     logger.info("memory.low_score_filtered",
                                 query=query[:60],
@@ -683,7 +779,7 @@ class RetrievalEngine(RecallChannelMixin, FusionRerankMixin, QueryTransformMixin
 
             # 写入缓存（P0: 使用 user_id 隔离的 cache key）
             if getattr(config, 'QUERY_CACHE_ENABLED', True) and results:
-                await self._mm._query_cache.put(_cache_key, results)
+                await self._mm._query_cache.put(cache_namespace, query, results)
             return results
 
 
@@ -812,8 +908,7 @@ class RetrievalEngine(RecallChannelMixin, FusionRerankMixin, QueryTransformMixin
         if apply_min_score and intent != "chat" and _min_score > 0 and results:
             _before = len(results)
             results = [r for r in results
-                       if float(r.get("rerank_score", 0)) >= _min_score
-                       or r.get("topic_trigger")]
+                       if self._passes_min_relevance(r, _min_score)]
             if len(results) != _before:
                 logger.info("memory.low_score_filtered",
                             query=query[:60],

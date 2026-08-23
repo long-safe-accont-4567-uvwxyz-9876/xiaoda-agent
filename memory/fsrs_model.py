@@ -6,7 +6,7 @@
 """
 import math
 import time
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from enum import Enum
 
 
@@ -150,6 +150,12 @@ class FSRSModel:
 
     def _compute_phase(self, D: float, S: float, state: MemoryState,
                        now: float) -> MemoryPhase:
+        if state.phase == MemoryPhase.PERMANENT:
+            return MemoryPhase.PERMANENT
+        if state.phase == MemoryPhase.REINFORCED:
+            if S >= S_PERMANENT:
+                return MemoryPhase.PERMANENT
+            return MemoryPhase.REINFORCED
         age_days = (now - state.created_at) / 86400.0
         if S >= S_PERMANENT and state.reinforcement_count > 0 and age_days > BUFFER_DAYS:
             return MemoryPhase.PERMANENT
