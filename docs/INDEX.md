@@ -18,6 +18,7 @@
 - [CLAUDE 开发指南](../CLAUDE.md)（内部使用） - 开发命令、架构说明、配置体系
 - [改进计划](IMPROVEMENT_PLAN.md) - 项目改进路线图
 - [情感陪伴升级方案](research/external-specs/astrbot-tdbm-companion-upgrade.md) - 基于 AstrBot / TencentDB-Agent-Memory 的对照研究与 P0-P2 优化路线（2026-08-23）
+- [情感陪伴升级核验记录](research/external-specs/astrbot-tdbm-companion-upgrade-validation.md) - 外部固定点、已证伪假设、实施与灰度门禁（2026-08-23）
 - [WebUI 设计](WEBUI_DESIGN.md) - Web 前端设计文档
 - [场景感知重设计](SCENE_AWARE_REDESIGN.md) - 场景感知系统重设计
 
@@ -66,7 +67,7 @@
 - [报告问题批量修复 Spec](../.trae/specs/report-issues-batch-fix/spec.md) - 当前批次修复规格
 - [docs/SPECS 子规格](SPECS/) - 文档子规格目录
 - [项目规格目录](../specs/) - 项目规格文档
-- [RAG 优化规格](../RAG-OPTIMIZATION-SPEC.md) - RAG 检索优化规格
+- [检索、RAG 与功能节点提示词优化调研](research/retrieval-rag-functional-node-prompt-optimization-2026-08-23.md) - 当前代码基线、16 节点提示词治理、评测闭环与 P0-P4 路线（2026-08-23）
 - [改进计划](IMPROVEMENT_PLAN.md) - 项目改进路线图
 - [Bugfix 计划 2026-07-19](../BUGFIX_PLAN_2026-07-19.md) - 最新 Bugfix 计划
 - [优化任务清单](../optimization-tasks.md) - 优化任务清单

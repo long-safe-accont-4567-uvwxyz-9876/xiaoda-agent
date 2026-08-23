@@ -1,9 +1,9 @@
 # 小妲长期情感陪伴升级方案 — 基于 AstrBot 与 TencentDB-Agent-Memory 对照研究
 
-> **版本**: v1.0 | **日期**: 2026-08-23 | **基线**: 当前 HEAD（xiaoda-agent）
-> **参考仓库**: AstrBot v4.27.4（`/mnt/kioxia/github-repos/AstrBot`）、TencentDB-Agent-Memory v2.0.1-beta.1（`/mnt/kioxia/github-repos/TencentDB-Agent-Memory`）
+> **版本**: v1.1 | **日期**: 2026-08-23 | **实现基线**: `eba85d91`（xiaoda-agent）
+> **参考固定点**: AstrBot `19d00fb1f0d822690a467e8dca498adebbb2d67b`、TencentDB-Agent-Memory `97f94654280b2932c35ba4806a491999ed244cc9`（`v2.0.1-beta.2` 后 1 个提交）
 > **研究方式**: 三路并行只读调研——①AstrBot 平台接入/流式输出/群聊机制；②TDB 记忆全生命周期；③本项目记忆/流式/群聊现状基线
-> **定位**: 本文档为**待评审的优化方案**，按 P0→P2 分批实施；每项含现状痛点、借鉴来源、落点文件与验收标准
+> **定位**: 本文档为**已评审、分批灰度的实现规格**；外部证据与仓库契约核验见 [`astrbot-tdbm-companion-upgrade-validation.md`](astrbot-tdbm-companion-upgrade-validation.md)
 
 ---
 
@@ -29,7 +29,7 @@
 
 **总判断**：
 
-1. 记忆检索不用动——本项目的 FSRS×相似度打分 + recency boost 相对 TDB 的"无时间加权 RRF top5"是降维打击。
+1. 不重写检索排序架构；P0-2 仍必须为所有召回通道补统一的 current-memory 可见性谓词，否则 superseded 记录会从旁路重新进入结果。
 2. TDB 真正值得偷的是**写入侧**（去重消解）和**调度侧**（触发节奏），以及 L2"叙事文件"思想恰好补 MEMORY.md 静态/动态割裂。
 3. AstrBot 值得偷的是三个小而美的接口模式（break 信号 / 能力声明位 / 攒批 ICL），不是它的管线全家桶。
 4. 最大空白是群聊——但受 QQ 官方 bot API 限制（只回调 @bot 消息），先在现有协议内修"@了也失明"，NapCat 双轨作为远期可选项。
@@ -182,44 +182,45 @@ _should_remember = is_master or source != "qq_group"
 #### P0-1 记忆类型学改造：加入 affect/relation 类别 【SYN，反用 TDB】
 
 - **痛点**：B2。重要性纯规则（负面+0.3/正面+0.1）；情绪事件与关系里程碑没有专属容器，和普通闲聊同等衰减速度。
-- **方案**：把记忆编码 prompt 从单一 summary 改为五类分类提取：
+- **方案**：复用现有异步 enrichment 的单次 LLM 调用，在 raw 证据完成落库后增加五类分类与 importance；不得在主写入前新增 LLM：
   - `fact`（事实：生日/地址/职业——保留现有关键词直通 permanent 逻辑）
   - `event`（客观事件，对应 TDB episodic）
   - `affect`（**情绪事件：触发源 + 情绪 + 小妲的回应方式 + 效果**）
   - `relation`（**关系里程碑：称呼变化、承诺、"爸爸说过的雷区/禁忌"**）
-  - `instruction`（习得规则，对接已有习得规则通道）
-- `affect/relation` 类 importance 基线更高（0.6 起），FSRS 相位直升 reinforced；`fact` 维持关键词直通 permanent。
-- 重要性打分改由 memory_encoding 槽位的 LLM 在分类时顺带给（0~1），规则分只做兜底下限。
-- **落点**：`memory/_memory_encoder.py`（encode_memory prompt 与分类逻辑、_estimate_importance 降级为兜底）、`db/ddl_schema.py`（episodic_memories 加 memory_type 列 + 迁移）、`config/workspace/TOOLS.md` 不涉及。
-- **验收**：构造含情绪倾诉/承诺/事实三类对话的回归用例，断言分类正确率 ≥90%、affect/relation 的 importance ≥0.6、fact 类 phase=permanent；存量记忆迁移后可正常检索。
+  - `instruction`（习得规则；本批只分类，不自动接入规则执行通道）
+- `affect/relation` 类 importance 基线更高（0.6 起），FSRS 相位直升 reinforced；`fact` 维持关键词直通 permanent。分类失败回退 `event`，保留规则分，raw 记忆不得丢失。
+- 重要性打分由 memory_encoding 槽位的 LLM 在分类时顺带给出（0~1），规则分作为不可下调的兜底下限。
+- **落点**：`memory/_memory_encoder.py`（enrichment 分类与严格解析、_estimate_importance 兜底）、`db/ddl_schema.py` / `db/legacy_migrations.py`（v31 非破坏迁移）、`doctor/memory_schema_readiness.py`。
+- **验收**：CI 用确定性 fixture 覆盖五类、非法枚举、NaN/Inf/bool/越界 importance、超时与取消；断言 affect/relation importance≥0.6、fact permanent、失败不丢 raw。预生产另用固定 golden dataset 做离线模型评估，目标正确率≥90%，随机模型输出不作为普通 CI 门禁。
 
 #### P0-2 冲突消解四动作协议（写入侧去重）【TDB batchDedup】
 
 - **痛点**：B1。ADD-only 导致"我搬到上海了"之后旧记忆"住在北京"不消失，矛盾双记忆可能同时注入；表无限膨胀。
-- **方案**：借鉴 `l1-dedup.ts::batchDedup` 两阶段——①新记忆入库后异步召回 topK=5 相似候选（复用 `ConflictSupersession.detect_conflicts` 作召回器）；②单次批量 LLM 判定统一候选池，输出 store/update/merge/skip 四动作，支持一条新记忆替换多条旧碎片、timestamps 并集保时间线。挂在后台任务里（复用空闲让路机制），不阻塞主链路。
-- **落点**：`memory/_memory_encoder.py` 新增 dedup 阶段、`core/conflict_supersession.py`（扩展 apply 支持 merge 动作）、`core/background_tasks.py`（编排）。
-- **验收**：注入"住在北京→搬到上海""喜欢猫→其实更爱狗"序列，断言旧记忆 superseded 或 merged 且注入 prompt 中不再出现矛盾双条目；dedup 失败时回退纯 ADD-only 行为（不丢数据）。
+- **方案**：借鉴 `l1-dedup.ts::batchDedup` 两阶段——①新知识异步召回同 scope 的 active topK=5 候选；②严格校验的批量 LLM 输出 store/update/merge/skip。raw 证据 append-only，四动作只作用于 `is_raw=0` 知识层；LLM/embedding 在事务外，动作与审计在单一写事务内，索引经 outbox 收敛。
+- **约束**：`ConflictSupersession.detect_conflicts` 只识别数值 token 冲突，`apply_supersession()` 明确是无持久化 stub，不能复用为执行器。P0-2 使用独立 reconciliation job/action/provenance 模型，并以 shadow 为默认模式。
+- **落点**：`memory/` reconciliation 组件、`db/ddl_schema.py` / `db/legacy_migrations.py`（v32）、`core/background_tasks.py`，以及所有检索通道的统一 active 可见性过滤。
+- **验收**：注入"住在北京→搬到上海""喜欢猫→其实更爱狗"序列，断言旧知识 superseded 或 merged 且所有普通检索通道不再返回矛盾双条目；LLM 失败时 raw 保留并 fallback store，shadow 模式结果与现状一致。
 
 #### P0-3 工具轮流式状态推送（break 思想）【AST break 信号】
 
 - **痛点**：B5。`main_path.py:646` 一挂工具 WebUI 就整段返回；验收循环期间用户干等。
-- **方案**：
-  1. WebUI：去掉 `not tools` 短路；验收循环每轮开始经 status_callback 推 `{type:"tool_status", tool, phase}`（"正在查资料…"），文本 delta 继续推。前端 ws on_status 通道已存在。
-  2. 保持 final 兜底语义不变——stream_text/tool_status 只是预览通道（**渐进增强**，避免 AstrBot"流式跳过装饰"的行为矩阵分裂教训）。
-  3. QQ：受 5 条配额约束不做真流式，但把子代理 STARTED 通知模式推广为主流程：工具轮超过 N 秒用剩余配额发一条进度提示。
-- **落点**：`agent_core/mixins/main_path.py:646`、`agent_core/mixins/streaming.py`、`agent_core/mixins/verification.py`（轮次开始处发事件）、`web/frontend`（tool_status 渲染，需重建 dist）、`agent_core/user_qq.py`。
-- **验收**：带工具请求下 WebUI 能看到工具状态事件与后续文本增量；final 事件内容与无流式路径一致（幂等）；QQ 配额不被进度提示挤爆（ACK+进度+正文 ≤5）。
+- **方案**：不能简单删除 `not tools`。当前 `ModelRouter.chat_stream()` 只暴露文本 `str`，会丢失结构化 tool calls。先在既有 transport 契约上增加 tool-call delta 与 turn result，新增版本化 `stream_event v1`；旧 `chat_stream()` 保持兼容。标准/DSML 工具调用、多轮 verification、finish_reason、fallback 与取消都必须保真。
+  1. WebUI：预览事件带 `msg_id/seq/turn/tool_call_id`；`final` 仍是唯一权威结果，终态后拒绝迟到预览。
+  2. DSML 使用跨 chunk 有界过滤状态机，工具协议文本不得泄漏到 UI。
+  3. QQ：统一 `QQReplyBudget(max_total=5)`；ACK、SUB_STARTED/typing、最多一条延迟进度、正文和媒体共同记账，始终保留至少一条正文额度。
+- **落点**：`llm_gateway/transports/`、`llm_gateway/router_execution.py`、streaming/verification/tool handler、`web/ws_hub.py`、Vue chat store 与工具卡、QQ adapter。
+- **验收**：标准与 DSML 多轮工具均有状态和后续文本增量；seq/终态/取消幂等；final 与非流式业务结果一致；QQ 任意路径总发送数≤5。
 
 #### P0-4 群聊上下文修复：GroupChatBuffer + 攒批 ICL【AST group_chat_context】
 
 - **痛点**：B7。@了也失明：群消息零留痕、不同成员 history 互相隔离、每次 @ 都是孤立单轮。
 - **方案**（在官方 botpy 协议内，不需要 NapCat）：
-  1. 建 per-group `GroupChatBuffer`（deque，上限如 50 条）：@ 消息处理完后也写入 buffer，格式 `[昵称(openid尾号)/HH:MM]: 内容`；
-  2. 同群下次唤醒时，buffer 内容作为 ICL 块注入 Volatile 层（替代现在的静态场景 hint），然后清空——token 成本 O(1)/轮；
-  3. master 之外的成员发言：入 buffer 与群历史（conversation_logs 加 group_channel 字段），但**不触发个人画像/记忆编码**（隐私边界，维持 `_should_remember` 对个人 scope 的保护，只放开群上下文记录）；
-  4. 群聊响应不再 switch_user_context 到各成员独立 history，改用群级共享 history（master 私聊不受影响）。
-- **落点**：新建 `agent_core/group_context.py`、`qq_bot_adapter.py:787 _handle_group_at_message`、`agent_core/mixins/main_path.py:233`、`agent_context.py`（Volatile 层注入点 :831-847 替换）、`db/ddl_schema.py`（conversation_logs 加列）。
-- **验收**：同一群内 A @ 后 B 再 @，第二次回复能引用 A 刚说的话；非 master 成员发言不出现在任何 user_portrait/episodic_memories；buffer 溢出行为符合 FIFO；重启后 buffer 丢失不致崩溃（可接受，ICL 是易失缓存）。
+  1. 建有界 per-group `GroupChatBuffer`，只记录机器人实际收到的 @ 消息；官方 SDK 不提供昵称，使用进程内群级稳定别名，禁止注入 openid 尾号；
+  2. snapshot 仅取当前输入之前的条目，以独立 `<group_recent_context>` system/volatile 块注入；成功后按 watermark 清理，失败/取消/降级保留；
+  3. **保持现有“仅主人当前轮”边界**：成员级个人 AgentContext/scope 不改成群级共享 history；主人当前输入与回复可进入个人记忆，非主人和群 buffer 均不得进入主人 portrait/episodic；
+  4. 群审计复用 `conversation_logs.source/session_id/request_context_json`，无需新 `group_channel` 列；日志不保存 member_openid。
+- **落点**：新建 `agent_core/group_context.py`，扩展 QQ adapter、消息构造和后台日志/个人编码策略；不新增数据库列。
+- **验收**：同群 A@ 后 B@ 能引用 A、不同群隔离、当前输入不重复；主人当前轮仍可编码；非主人和 buffer 不进入主人画像/记忆；FIFO/token/TTL/watermark/失败保留均有测试；只验收已收到的 @ 消息。
 
 ### 5.2 P1 — 结构性改进
 
@@ -304,18 +305,20 @@ ProfileStore（已支持版本化 + get_as_of 时间点重建）增加亲密度/
 
 | 批次 | 内容 | 改动面 | 预估规模 |
 |---|---|---|---|
-| 第一批 | P0-1 记忆类型学 + P0-3 工具轮流式状态 | encoder prompt/schema 列 + streaming/verification mixin + 前端重建 dist | 中 |
-| 第二批 | P0-2 四动作消解 + P0-4 群聊 buffer/ICL | encoder 后台阶段 + adapter/db schema/main_path | 中大 |
-| 第三批 | P1-1 叙事回写 + P1-2 warm-up + P1-3 能力表 + P1-4 切句 + P1-5 群唤醒 | 蒸馏/调度/adapter 重构 | 大 |
-| 第四批 | P2 项逐个评估 | — | 按需 |
+| 地基层 | 修正 `eba85d91` adapter 模板半成品 | 请求类型/异常边界/TTL/分段恢复 + 契约测试 | 中 |
+| 第一批 | P0-1 记忆类型学 | v31 + enrichment/FSRS/回填 | 中 |
+| 第二批 | P0-2 四动作消解 | v32 + reconciliation/provenance/outbox/检索可见性 | 大 |
+| 第三批 | P0-3 结构化工具流式 | transport/router/verification/WS/Vue/QQ budget | 大 |
+| 第四批 | P0-4 群聊 buffer/ICL | QQ adapter/group context/审计与个人记忆边界 | 中大 |
+| 后续批 | P1/P2 项逐个评估 | — | 按需 |
 
 ### 7.2 风险与对策
 
-1. **schema 迁移**（P0-1 加列、P0-4 conversation_logs 加列）：走 ddl_schema 既有迁移阶段，外挂盘 btrfs 先快照。
+1. **schema 迁移**（P0-1 v31、P0-2 v32）：走 ddl_schema + legacy_migrations 既有迁移阶段，迁移只增不删；生产库先做只读 readiness 检查并在外挂盘 btrfs 上由运维单独快照。P0-4 复用 conversation_logs 现有字段，不新增列。
 2. **LLM 成本上升**（P0-2 dedup、P0-1 分类打分）：全部挂后台任务走既有空闲让路机制（_chat_idle + semaphore），主 chat 开始时可取消——现成基础设施直接复用。
 3. **群聊隐私边界**：P0-4 明确"非 master 发言只进群上下文，不进个人画像/记忆"；实现时加单测锁死该边界。
 4. **前端改动**：凡动 web/frontend 必须重新 build 并提交 web/dist，否则 pre-push 门禁拦截（仓库既有规则）。
-5. **回滚**：每批独立 commit；P0-3/P1-5 均设计为"关闭开关 = 现状行为"，保证零回归退路。
+5. **灰度与回滚**：`MEMORY_TYPE_ENRICHMENT_ENABLED=false`、`MEMORY_RECONCILIATION_MODE=shadow`、`STRUCTURED_STREAM_EVENTS=false`、`GROUP_CHAT_BUFFER_ENABLED=false` 为初始策略；关闭开关回到现状。迁移只增不删，不通过删除 schema_version 回滚。
 
 ### 7.3 总验收指标（陪伴体验向）
 
