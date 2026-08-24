@@ -258,3 +258,12 @@ class TestEndToEndMemoryFlow:
         refined_rows = await cursor.fetchall()
         assert len(refined_rows) >= 1
         assert "蒸馏" in refined_rows[0]["summary"]
+
+
+async def test_bootstrap_injects_entity_components():
+    """R1-1 回归：生产 bootstrap 必须注入 entity_store/extractor（否则实体路恒空）。"""
+    import inspect
+    from core import bootstrap
+    src = inspect.getsource(bootstrap)
+    assert "EntityExtractor(router=None)" in src, "bootstrap 应注入规则模式 EntityExtractor"
+    assert "EntityStore(" in src, "bootstrap 应注入 EntityStore"

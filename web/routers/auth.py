@@ -52,33 +52,37 @@ _RENEWAL_GRACE_SECONDS = 30.0
 # token -> 宽限期截止时间（epoch 秒）。仅内存态，用于续期撤销的短窗口豁免。
 _revoked_grace: dict[str, float] = {}
 
-# VULN-29：媒体访问 cookie。前端用裸 <audio :src>/<img src> 引用 /media
-# （无法携带 Authorization 头），登录成功时下发本 cookie（Path=/media，
-# HttpOnly + SameSite=Strict），/media 中间件校验之，前端零改动。
+# VULN-29：媒体访问 cookie。前端用裸 <audio :src>/<img src> 引用 /media 与
+# 贴纸端点（无法携带 Authorization 头），登录成功时下发本 cookie（HttpOnly +
+# SameSite=Strict），Path 覆盖 /media 静态目录与 /api/v1/agents 贴纸路由，
+# 前端零改动。
 MEDIA_COOKIE_NAME = "x_media_token"
+_MEDIA_COOKIE_PATHS = ("/media", "/api/v1/agents")
 
 
 def set_media_cookie(response: Any, token: str, expires_at: float) -> None:
-    """在响应上下发 /media 访问 cookie（HttpOnly + SameSite=Strict + Path 限定）。
+    """在响应上下发媒体访问 cookie（HttpOnly + SameSite=Strict，双路径）。
 
     response 为 None 时（直调/测试场景无响应对象）跳过。
     """
     if response is None:
         return
-    response.set_cookie(
-        MEDIA_COOKIE_NAME, token,
-        path="/media",
-        httponly=True,
-        samesite="strict",
-        max_age=int(max(0, expires_at - time.time())),
-    )
+    for cookie_path in _MEDIA_COOKIE_PATHS:
+        response.set_cookie(
+            MEDIA_COOKIE_NAME, token,
+            path=cookie_path,
+            httponly=True,
+            samesite="strict",
+            max_age=int(max(0, expires_at - time.time())),
+        )
 
 
 def clear_media_cookie(response: Any) -> None:
-    """登出/撤销时清除 /media 访问 cookie。response 为 None 时跳过。"""
+    """登出/撤销时清除全部媒体访问 cookie。response 为 None 时跳过。"""
     if response is None:
         return
-    response.delete_cookie(MEDIA_COOKIE_NAME, path="/media")
+    for cookie_path in _MEDIA_COOKIE_PATHS:
+        response.delete_cookie(MEDIA_COOKIE_NAME, path=cookie_path)
 
 _token_epoch: int | None = None
 _token_epoch_lock = Lock()

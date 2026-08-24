@@ -1,8 +1,12 @@
-# requirements.lock — 固化依赖精确版本
+# requirements.lock — 直接依赖精确 pin
 # 生成日期: 2026-08-23（技术债 P0-1：与 .venv 实测对齐，修复 openai 跨大版本冲突）
 # 用法: pip install -r requirements.lock
 # 环境: Python 3.11 / 板端 Orange Pi ARM64 实测版本
 # 约束: 每个包的 == 版本必须满足 requirements.txt 的范围约束（pre-push 校验）
+#
+# 注意（2026-08-24 如实修订）：本文件只固化「直接依赖」的精确版本，
+# 不是传递闭包哈希锁（非 --no-deps + --require-hashes 的完整供应链锁定）。
+# 间接依赖仍由 pip 按上界解析，构建不完全可复现；升级到哈希闭包锁为后续待办。
 
 # ── Web 服务 ──
 fastapi==0.136.3
@@ -89,4 +93,7 @@ pywebview==5.4
 pytest==9.0.3
 pytest-asyncio==1.4.0
 pytest-timeout==2.3.1
+# CI 全集测试带 --cov 生成覆盖率（ci-tests.yml）；此前 lock 缺失导致 --cov 报错
+# exit 4，又被 `| tail -50` 吞成假绿——两者都已修复（2026-08-24 门禁复审）。
+pytest-cov==7.0.0
 ruff==0.15.21

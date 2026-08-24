@@ -38,6 +38,19 @@ _REQUIRED_TABLES = (
     "memory_retrieval_epochs",
 )
 
+# 数据库小任务B-3：reconciliation 必需能力清单（公开常量，供测试/运维引用；
+# 与 _REQUIRED_TABLES 中 v32 接入段保持一致）
+REQUIRED_RECONCILIATION_TABLES = frozenset({
+    "memory_knowledge_sources",
+    "memory_reconciliation_jobs",
+    "memory_reconciliation_actions",
+    "memory_reconciliation_targets",
+    "memory_reconciliation_snapshots",
+    "memory_index_outbox",
+    "memory_retrieval_epochs",
+})
+assert REQUIRED_RECONCILIATION_TABLES <= set(_REQUIRED_TABLES)
+
 
 @dataclass(frozen=True)
 class MemorySchemaReadiness:

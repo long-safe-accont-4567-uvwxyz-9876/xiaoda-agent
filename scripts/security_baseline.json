@@ -1,0 +1,15 @@
+{
+  "_comment": "安全扫描门禁基线（2026-08-24 生成，bandit 1.9.4）。扫描命令与 ci-tests.yml security job 完全一致。门禁规则：未豁免 HIGH 计数 > baseline.high_count(=0) 即失败；high_count 表示允许的新增未豁免 HIGH 数量，不是存量总数；豁免条目必须带 reason 字段说明理由。重新生成：bandit -r . -x ./tests,./chaos,./.venv,./node_modules -f json 然后统计 HIGH 条目更新本文件（需在 PR 中说明计数变化原因）。",
+  "_generated": "2026-08-24",
+  "_tool": "bandit==1.9.4",
+  "high_count": 0,
+  "medium_count": 235,
+  "exemptions": [
+    {
+      "file": "./evaluation/retrieval_pipeline_harness.py",
+      "line_number": 132,
+      "test_id": "B324",
+      "reason": "evaluation harness only; MD5 used for cache key of local dataset, not security"
+    }
+  ]
+}

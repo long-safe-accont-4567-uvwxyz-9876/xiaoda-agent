@@ -41,3 +41,25 @@ def test_conversation_session_normalizes_empty_session_id():
     )
 
     assert session.session_id == "user"
+
+
+def test_qq_group_session_builds_scope_from_real_group_openid():
+    principal = Principal("owner", True, "爸爸", "爸爸")
+    session = ConversationSession.create(
+        principal=principal,
+        context_id="shared_context:owner",
+        session_id="qq_group:group-openid-real",
+        agent_id="xiaoda",
+        source="qq_group",
+        channel_subject_id="member-openid",
+    )
+
+    scope = session.memory_scope("request-group")
+
+    from memory.scope import Scope
+
+    assert scope == Scope.group(
+        user_id="owner", group_id="group-openid-real", request_id="request-group"
+    )
+    assert session.activation_key == "qq_group:group-openid-real"
+    assert "member-openid" not in scope.session_id

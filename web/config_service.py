@@ -16,6 +16,8 @@ from typing import Any
 
 from loguru import logger
 
+from web.node_registry import NODES as FUNCTIONAL_NODES
+
 # ── 调试: TrackedDict 捕获所有直接变异 ──────────────────────────
 # 历史背景: 配置文件在运行时被神秘覆盖为 mimo，根因调查阶段用 TrackedDict
 # 捕获通过 cfg.get() 引用直接变异 _data 的代码路径（Python 陷阱: get() 返回引用）。
@@ -172,21 +174,17 @@ _DEFAULTS: dict[str, Any] = {
         "shared_platforms": [],
         "shared_key": "shared",
     },
+    "retrieval": {},
+    "prompt_profiles": {"staging": {}, "production": {}, "history": {}},
     # 本地部署：embedding 引擎模式（""=跟随 env EMBED_MODE；local/remote=用户显式选择）
     # device：算力设备（""=跟随 LOCAL_EMBED_BACKEND/auto；cpu/npu=用户显式选择，重启生效）
     # nodes：功能节点后端选择（auto/local/api/off，主 LLM 除外；默认 api=走硅基流动免费模型）
     "local_deploy": {
+        "schema_version": 1,
         "mode": "",
         "device": "",
-        "nodes": {
-            "embedding": "api",
-            "reranker": "api",
-            "query_transform": "api",
-            "instinct": "api",
-            "error_rule": "api",
-            "kg_extract": "api",
-            "asr": "api",
-        },
+        "nodes": {node["id"]: node["default"] for node in FUNCTIONAL_NODES},
+        "node_models": {},
     },
     # Local AI Platform (Task 6): default_model_root 是用户在 WebUI 选择并持久化的
     # 模型下载根目录（PUT /api/v1/local-ai/storage/default 写入）；
@@ -370,6 +368,49 @@ class ConfigService:
                             ",".join(models_paths), _stack)
             for path, value in updates.items():
                 self._notify(path, value)
+
+    def replace_many(
+        self, updates: dict[str, Any], deletes: list[str]
+    ) -> None:
+        """在一次原子写盘中批量设置并删除路径。"""
+        touched = set(updates) | set(deletes)
+        with self._lock:
+            old_values = {
+                path: copy.deepcopy(self._get_nested(path)) for path in touched
+            }
+            for path, value in updates.items():
+                self._assign(path, value)
+            for path in deletes:
+                parts = path.split(".")
+                node: Any = self._data
+                for part in parts[:-1]:
+                    if not isinstance(node, dict) or part not in node:
+                        node = None
+                        break
+                    node = node[part]
+                if isinstance(node, dict):
+                    node.pop(parts[-1], None)
+            try:
+                self._save()
+            except (OSError, RuntimeError):
+                for path, value in old_values.items():
+                    if value is None:
+                        parts = path.split(".")
+                        node = self._data
+                        for part in parts[:-1]:
+                            if not isinstance(node, dict) or part not in node:
+                                node = None
+                                break
+                            node = node[part]
+                        if isinstance(node, dict):
+                            node.pop(parts[-1], None)
+                    else:
+                        self._assign(path, value)
+                raise
+        for path, value in updates.items():
+            self._notify(path, value)
+        for path in deletes:
+            self._notify(path, None)
 
     def delete(self, path: str) -> None:
         """按点分路径删除配置项, 落盘并通知 watcher.

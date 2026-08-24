@@ -36,6 +36,7 @@ const testError = ref('')
 const evalText = ref('')
 const evaluating = ref(false)
 const evalReport = ref<Record<string, any> | null>(null)
+const evaluationScope = { user_id: 'default', agent_id: 'xiaoda', session_id: 'web-retrieval-eval' }
 
 const boolKeys = computed(() => [
   { key: 'RERANKER_ENABLED', label: t('retrieval.labels.RERANKER_ENABLED'), desc: t('retrieval.descs.RERANKER_ENABLED') },
@@ -154,6 +155,7 @@ async function runTest() {
       query: testQuery.value,
       top_k: testTopK.value,
       expect_keywords: splitKeywords(testExpect.value),
+      scope: evaluationScope,
     })
     testResults.value = data.results || []
     testCount.value = data.count || 0
@@ -187,7 +189,7 @@ async function runEval() {
       cases: Array<Record<string, unknown>>
       cases_total?: number
       aggregate?: { recall_macro: number; precision_macro: number; f1_macro: number; mrr_macro: number; hit_rate: number }
-    }>('/retrieval/evaluate', { cases, top_k: testTopK.value })
+    }>('/retrieval/evaluate', { cases, top_k: testTopK.value, scope: evaluationScope })
     evalReport.value = data
   } catch (e: any) {
     message.error(e.message)

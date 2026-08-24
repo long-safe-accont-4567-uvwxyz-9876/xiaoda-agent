@@ -27,5 +27,6 @@ def test_excluded_tool_names_merges_config_excluded():
     agent = SubAgent.__new__(SubAgent)
     agent.config = _Cfg()
     assert agent._excluded_tool_names() == {
-        "web_search", "profile_get", "profile_set", "profile_history", "profile_forget"
+        "web_search", "profile_get", "profile_set", "profile_history",
+        "profile_forget", SUB_AGENT_MEMORY_TOOL,
     }

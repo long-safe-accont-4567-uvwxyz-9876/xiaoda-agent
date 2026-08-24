@@ -107,6 +107,16 @@ async def create_schema(conn: aiosqlite.Connection) -> None:
             await conn.execute(statement)
 
 
+async def register_migration(conn: aiosqlite.Connection) -> None:
+    """迁移钩子（数据库小任务B-3）：在任意连接上接入 reconciliation schema。
+
+    SCHEMA_SQL 全部为 CREATE ... IF NOT EXISTS，幂等可重复调用；供迁移框架
+    显式调用（正式迁移链 v32 已内置同构 DDL），不反向触碰 legacy_migrations。
+    """
+    await create_schema(conn)
+    await conn.commit()
+
+
 class _TransactionContext(Protocol):
     async def __aenter__(self) -> Any: ...
 

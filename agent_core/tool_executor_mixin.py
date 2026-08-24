@@ -141,17 +141,32 @@ class ToolExecutorMixin:
         self._tool_call_handler.set_status_callback(_ctx.status_callback if _ctx else None)
         return await self._tool_call_handler.handle(tool_calls, messages, trace, assistant_content=assistant_content, reasoning_content=reasoning_content, user_openid=user_openid, session_id=session_id, safe_mode=safe_mode, current_user_input=_ctx.user_input if _ctx else "", user_id=_ctx.user_id if _ctx else "", skip_summarize=skip_summarize)
 
-    async def _load_notebook_context(self) -> None:
+    async def _load_notebook_context(self, user_token: Any | None = None) -> bool:
+        token = user_token or self.context.get_user_context_token()
+        if token is None:
+            return False
         try:
             focus = await self.notebook_manager.get_current_focus()
             if focus:
-                self.context.notebook_focus = focus
+                committed = await self.context.commit_user_context(
+                    token,
+                    notebook_focus=focus,
+                )
+                if not committed:
+                    return False
 
             tasks = await self.notebook_manager.get_pending_tasks_summary()
             if tasks:
-                self.context.pending_tasks = tasks
+                committed = await self.context.commit_user_context(
+                    token,
+                    pending_tasks=tasks,
+                )
+                if not committed:
+                    return False
+            return self.context.get_user_context_token() == token
         except Exception as e:
             logger.warning("notebook.context_load_failed", error=str(e))
+            return False
 
     async def _extract_media_from_tool_results(self, tool_results: list, reply: str) -> tuple[list[Path], Path | None, str]:
         """从工具结果中提取图片/视频路径，并清理回复文本中的冗余路径描述。"""

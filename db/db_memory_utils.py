@@ -6,9 +6,66 @@
 """
 from __future__ import annotations
 
+import contextlib
 from typing import Any
 
 from loguru import logger
+
+from db.db_local_ai import transaction_lock_for
+
+
+class WriteTxGuard:
+    """子仓库事务守卫（数据库小任务B-1）。
+
+    由 DatabaseManager 装配时注入（``MemoryDB.attach_tx_guard``），使
+    MemoryDB 的 auto_commit 写点能感知外层 ``write_transaction()``：
+    - 外层事务持锁期间：语句直接执行，提交由外层统一负责；
+    - 独立 auto_commit 写：在 transaction_lock_for(conn) 同一把连接级锁内
+      执行并提交——不再裸 commit，杜绝把他人半事务提前提交。
+    """
+
+    def __init__(self, conn: Any, tx_active: Any) -> None:
+        self._conn = conn
+        self._tx_active = tx_active
+
+    @property
+    def conn(self) -> Any:
+        return self._conn
+
+    def active(self) -> bool:
+        return bool(self._tx_active.get())
+
+
+@contextlib.asynccontextmanager
+async def owned_write_section(owner: Any, auto_commit: bool = True):
+    """子仓库 auto_commit 写段的统一所有权边界（数据库小任务B-1）。
+
+    yield 值 do_commit 表示本段是否负责 commit：
+    - auto_commit=False：让渡（调用方/外层事务负责提交）；
+    - 已注入守卫且外层 write_transaction 持锁中：让渡，避免锁重入死锁；
+    - 已注入守卫的独立写：连接级锁内执行，退出时提交（不裸提交）；
+    - 未注入守卫（独立构造实例）：退化为历史行为——退出时提交，无锁。
+
+    用法：
+        async with owned_write_section(self, auto_commit) as do_commit:
+            cursor = await self._conn.execute(sql, params)
+            ...
+            if do_commit:
+                await self._conn.commit()
+    段内异常时提交被跳过（与历史裸路径一致：隐式事务留存由上层处置）。
+    """
+    guard = getattr(owner, "_tx_guard", None)
+    if not auto_commit:
+        yield False
+    elif guard is not None and guard.active():
+        yield False
+    elif guard is not None:
+        async with transaction_lock_for(guard.conn):
+            yield True
+            await guard.conn.commit()
+    else:
+        yield True
+        await owner._conn.commit()
 
 
 def active_memory_visibility_sql(table: str = "episodic_memories") -> str:
@@ -97,18 +154,16 @@ def _scope_where(scope: Any, *, is_raw: int | None = None,
     p = f"{table}." if table else ""
     where = f" AND {p}user_id = ? AND {p}agent_id = ?"
     params: list = [scope.user_id, scope.agent_id]
-    boundary = getattr(scope, "_boundary", None)
+    boundary = getattr(scope, "boundary", None)
     boundary_value = getattr(boundary, "value", boundary)
-    if boundary_value is None and str(getattr(scope, "session_id", "")).startswith("qq_group:"):
-        boundary_value = "conversation"
     if boundary_value == "conversation":
         where += f" AND {p}session_id = ?"
         params.append(scope.session_id)
-    elif boundary_value == "personal":
-        where += f" AND {p}session_id NOT LIKE ?"
+    else:
+        where += f" AND COALESCE({p}session_id, '') NOT LIKE ?"
         params.append("qq_group:%")
     if include_archived_filter:
-        where += f" AND {p}session_id != 'archived'"
+        where += f" AND COALESCE({p}session_id, '') != 'archived'"
     if is_raw is not None:
         where += f" AND {p}is_raw = ?"
         params.append(is_raw)

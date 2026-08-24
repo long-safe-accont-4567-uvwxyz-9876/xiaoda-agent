@@ -169,7 +169,7 @@ class TestCnToEnMap:
         "愤怒": "angry",
         "焦虑": "anxious",
         "害羞": "shy",
-        "好奇": "confused",
+        "好奇": "curious",
         "思考": "thinking",
         "恐惧": "fear",
         "平静": "neutral",

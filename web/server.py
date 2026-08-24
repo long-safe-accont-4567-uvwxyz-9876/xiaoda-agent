@@ -1,17 +1,17 @@
-from typing import Any
-from collections.abc import AsyncIterator
 import asyncio
 import hashlib
 import os
 import sys
+from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager, suppress
 from pathlib import Path
-
-from core.app_exception import LLMError
+from typing import Any
 
 from fastapi import FastAPI
 from fastapi.staticfiles import StaticFiles
 from loguru import logger
+
+from core.app_exception import LLMError
 
 # Ensure project root is in path
 sys.path.insert(0, str(Path(__file__).parent.parent))
@@ -19,8 +19,8 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 
 async def _apply_model_overrides(core: Any, provider_service: Any | None = None) -> None:
     """重启后恢复：自定义 provider 注册 + 路由表覆盖。"""
-    from web.config_service import get_config_service
     from model_router import ROUTE_TABLE
+    from web.config_service import get_config_service
 
     logger.info("webui._apply_model_overrides_start")
     cfg = get_config_service()
@@ -240,7 +240,7 @@ def _restore_chat_model(cfg: Any, core: Any) -> None:
         return
     provider = chat_model["provider"]
     model_id = chat_model["model_id"]
-    from model_router import ModelRouteRegistry, ROUTE_TABLE
+    from model_router import ROUTE_TABLE, ModelRouteRegistry
     # 测试场景 core.router 可能是 MagicMock，用临时 registry；生产用真实实例
     registry = getattr(core.router, '_registry', None)
     if not isinstance(registry, ModelRouteRegistry):
@@ -274,8 +274,8 @@ def _restore_chat_model(cfg: Any, core: Any) -> None:
             provider, model_id, str(e)
         )
         try:
-            from config import get_default_model_for_provider
             import config as _config_mod
+            from config import get_default_model_for_provider
             fallback_provider = _config_mod.DEFAULT_PROVIDER or "mimo"
             fallback_model = get_default_model_for_provider(fallback_provider)
             if not fallback_model:
@@ -317,8 +317,8 @@ def _restore_chat_model(cfg: Any, core: Any) -> None:
 
 async def _start_user_mcp_servers(core: Any) -> None:
     """启动 WebUI 管理的 MCP server。"""
-    from web.config_service import get_config_service
     from tool_engine.mcp_client import MCPClient
+    from web.config_service import get_config_service
     cfg = get_config_service()
     for name, rec in (cfg.get("mcp", {}) or {}).items():
         if not isinstance(rec, dict) or not rec.get("enabled", True):
@@ -399,11 +399,43 @@ async def _init_mail_poller(core: Any, config_service: Any) -> tuple[str, Any]:
         return ("mail_poller", None)
 
 
+def _setup_plugin_manager(app: Any, core: Any) -> Any:
+    """创建 PluginManager 并 discover + 注册到中立注册点（幂等，已注册则复用）。
+
+    T5（2026-08-24 审查修复）：必须在 core.init() 之前调用——bootstrap 的
+    _auto_enable_plugins 经 get_active_plugin_manager() 取 manager，取不到
+    直接 return，插件自动启用静默失效且事后无人补跑。manager 构造依赖
+    （_hook_engine/_mcp_manager）在 AgentCore.__init__ 阶段已就绪；
+    memory/kg 等 init 后期才填充的依赖由 _start_services 回绑。
+    """
+    existing = getattr(app.state, "plugin_manager", None)
+    if existing is not None:
+        return existing
+    import tool_engine.tool_registry as _tool_registry_mod
+    from plugins.manager import PluginManager, set_active_plugin_manager
+
+    plugin_manager = PluginManager(
+        tool_registry=None,
+        hook_engine=core._hook_engine if hasattr(core, "_hook_engine") else None,
+        memory_manager=core.memory if hasattr(core, "memory") else None,
+        knowledge_graph=core.kg if hasattr(core, "kg") else None,
+        mcp_manager=core._mcp_manager,
+        agent_core=core,
+    )
+    plugin_manager._tool_registry = _tool_registry_mod
+    plugin_manager.discover()
+    app.state.plugin_manager = plugin_manager
+    # 同步注册到中立注册点：core/bootstrap 经 plugins.manager 获取，
+    # 不反向 import web.server（依赖倒置，技术债 P1-3）
+    set_active_plugin_manager(plugin_manager)
+    return plugin_manager
+
+
 async def _start_services(app: Any, core: Any) -> None:
     """启动正常模式下的所有服务组件（PluginManager、MediaTaskQueue、GreetingScheduler、QQ Bot）。"""
     from web.config_service import get_config_service
-    from web.media_tasks import MediaTaskQueue
     from web.greeting_scheduler import GreetingScheduler
+    from web.media_tasks import MediaTaskQueue
     from web.routers.tools import apply_tool_overrides
     from web.ws_hub import manager, start_media_cleanup
 
@@ -414,24 +446,16 @@ async def _start_services(app: Any, core: Any) -> None:
     start_media_cleanup()
     await _start_user_mcp_servers(core)
 
-    # Initialize Plugin Manager
-    from plugins.manager import PluginManager
-    plugin_manager = PluginManager(
-        tool_registry=None,
-        hook_engine=core._hook_engine if hasattr(core, "_hook_engine") else None,
-        memory_manager=core.memory if hasattr(core, "memory") else None,
-        knowledge_graph=core.kg if hasattr(core, "kg") else None,
-        mcp_manager=core._mcp_manager,
-        agent_core=core,
-    )
-    import tool_engine.tool_registry as _tool_registry_mod
-    plugin_manager._tool_registry = _tool_registry_mod
-    plugin_manager.discover()
-    app.state.plugin_manager = plugin_manager
-    # 同步注册到中立注册点：core/bootstrap 经 plugins.manager 获取，
-    # 不反向 import web.server（依赖倒置，技术债 P1-3）
-    from plugins.manager import set_active_plugin_manager
-    set_active_plugin_manager(plugin_manager)
+    # T5：PluginManager 已在 _init_lifespan_resources 中于 core.init() 之前
+    # 创建并注册（保证 _auto_enable_plugins 生效恰好一次）；此处仅回绑
+    # init 后期才就绪的依赖，不再重复 discover（二次 discover 语义漂移）。
+    plugin_manager = getattr(app.state, "plugin_manager", None)
+    if plugin_manager is None:
+        # 兼容路径：lifespan 未经过 _init_lifespan_resources 的调用方兜底
+        plugin_manager = _setup_plugin_manager(app, core)
+    else:
+        plugin_manager._memory = getattr(core, "memory", None)
+        plugin_manager._kg = getattr(core, "kg", None)
 
     queue = MediaTaskQueue(core, manager.broadcast)
     queue.start()
@@ -600,9 +624,13 @@ async def _ensure_wechat_bot_task(app: FastAPI) -> None:
     凭证由 WebUI 扫码登录后保存到 ~/.ai-agent/wechat_credentials.json。
     服务重启后自动恢复轮询，保持登录状态。启动失败不阻塞 WebUI（仅警告日志），
     用户可在设置页重新扫码登录。
+
+    T4：start() 返回结构化 readiness dict {ok, connected, polling, error}——
+    自动恢复路径与 /wechat/start 路由复用同一判定口径；仅 ok=True 时挂载
+    app.state.wechat_bot，杜绝"看似已挂载、实际未运行"的僵尸实例。
     """
     try:
-        from wechat_bot_adapter import WeChatBotAdapter, CREDENTIALS_PATH
+        from wechat_bot_adapter import CREDENTIALS_PATH, WeChatBotAdapter
         if not CREDENTIALS_PATH.exists():
             return
         core = app.state.core
@@ -610,18 +638,16 @@ async def _ensure_wechat_bot_task(app: FastAPI) -> None:
             db=core.db, router=core.router, api=None,
             user_openid="", core=core,
         )
-        await adapter.start()
-        # 仅当适配器真正连接上且轮询已启动时才记录为活跃并打成功日志。
-        # start() 内部会吞掉 ILinkClient 初始化/轮询失败并返回正常，
-        # 也可能因凭证文件为空 token 而"看似成功"。若未就绪仍挂到
-        # app.state.wechat_bot，会把一个无效适配器误报为已恢复连接。
-        if adapter.is_connected and adapter.is_polling:
+        readiness = await adapter.start() or {}
+        # 仅当适配器真正就绪（readiness.ok）时才记录为活跃并打成功日志。
+        if readiness.get("ok"):
             app.state.wechat_bot = adapter
             logger.info("webui.wechat_bot_auto_started")
         else:
             logger.warning(
-                "webui.wechat_bot_auto_start_not_ready connected={} has_poller={}",
-                adapter.is_connected, adapter.is_polling,
+                "webui.wechat_bot_auto_start_not_ready connected={} has_poller={} error={}",
+                bool(readiness.get("connected")), bool(readiness.get("polling")),
+                str(readiness.get("error") or "")[:200],
             )
     except (RuntimeError, OSError, ConnectionError, ImportError) as e:
         logger.warning(
@@ -687,6 +713,11 @@ async def lifespan(app: FastAPI) -> AsyncIterator[Any]:
         # 恢复生成型节点后端选择：重启后生效，避免 WebUI 已保存的「本地/远程」被重置
         _spawn(_restore_generative_backends(core, app))
 
+        # 记忆对账后台轮询（P1 悬空接线，MEMORY_RECONCILIATION_WORKER_ENABLED
+        # 默认 false 门控）：句柄挂 app.state 供 shutdown 干净取消。放非降级分支
+        # ——降级模式无模型凭证，循环只会空转刷日志。
+        app.state.reconciliation_worker_task = _start_reconciliation_worker(core)
+
     # 启动事件循环阻塞 watchdog：检测同步阻塞并打印线程栈定位根因
     # 根因：后台任务集体卡 257-265s，_spawn timeout 无法取消同步阻塞
     _stop_watchdog = None
@@ -724,6 +755,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[Any]:
 async def _prewarm_connections() -> None:
     """预热 agnes + embed HTTP 连接（治本修复 2026-08-05）。"""
     import os as _os
+
     import httpx as _httpx
     # 预热 agnes
     try:
@@ -797,8 +829,8 @@ async def _prewarm_local_singletons(core: Any) -> None:
 
 async def _restore_local_node_instances(core: Any) -> None:
     try:
-        from web.local_deploy_nodes import restore_local_instances
         from web.config_service import get_config_service
+        from web.local_deploy_nodes import restore_local_instances
         await restore_local_instances(core, get_config_service())
         logger.info("local_deploy.instances_restored")
     except (ImportError, RuntimeError, OSError, ValueError) as _e:
@@ -807,10 +839,13 @@ async def _restore_local_node_instances(core: Any) -> None:
 
 async def _restore_generative_backends(core: Any, app: FastAPI) -> None:
     try:
-        from web.local_deploy_nodes import (
-            NODES, apply_to_runtime, get_backend, get_local_model,
-        )
         from web.config_service import get_config_service
+        from web.local_deploy_nodes import (
+            NODES,
+            apply_to_runtime,
+            get_backend,
+            get_local_model,
+        )
         _cfg = get_config_service()
         for _node in NODES:
             if _node.get("kind") != "generative":
@@ -845,20 +880,67 @@ async def _local_ai_health_loop(instances: Any) -> None:
             logger.debug("local_ai.health_refresh_failed error={}", _e)
 
 
+def _start_reconciliation_worker(core: Any) -> Any:
+    """P1 悬空接线：记忆对账后台轮询循环（reconciliation_worker.run_forever）。
+
+    - 开关 MEMORY_RECONCILIATION_WORKER_ENABLED（默认 false）门控：关闭时
+      零开销直接返回 None；enqueue 侧事件驱动触发不受影响，轮询仅兜底
+      重试/积压 job
+    - decision provider 或 reconciliation 仓库缺失时安静跳过（info 一次），
+      避免无模型凭证环境刷错误日志
+    - 轮询 scope 固定默认 ('default', 'xiaoda')：多 QQ 用户各自 scope 的积压
+      仍依赖 enqueue 时的事件驱动单步，跨 scope 扫描留待后续
+    - 返回任务句柄挂 app.state，由 _shutdown_lifespan 统一取消
+    """
+    try:
+        import config as _cfg
+        if not getattr(_cfg, "MEMORY_RECONCILIATION_WORKER_ENABLED", False):
+            return None
+        from memory.reconciliation_service import (
+            build_decision_provider,
+            build_reconciliation_worker,
+        )
+        from memory.reconciliation_worker import run_forever
+
+        memory_manager = getattr(core, "memory", None)
+        db = getattr(memory_manager, "db", None) if memory_manager is not None else None
+        provider = (
+            build_decision_provider(memory_manager)
+            if memory_manager is not None and db is not None
+            else None
+        )
+        if provider is None or getattr(db, "reconciliation", None) is None:
+            logger.info(
+                "memory.reconciliation_worker.skipped reason=no_provider_or_repository")
+            return None
+        worker = build_reconciliation_worker(db, provider, user_id="default", agent_id="xiaoda")
+        task = asyncio.get_running_loop().create_task(run_forever(worker))
+        logger.info("memory.reconciliation_worker.started")
+        return task
+    except Exception as e:  # noqa: BLE001
+        logger.warning("webui.reconciliation_worker_start_failed error={}", str(e))
+        return None
+
+
 async def _init_lifespan_resources(app: FastAPI) -> tuple[Any, bool]:
     """初始化 core、配置服务与 agent registry, 返回 (core, owns_core)"""
     from agent_core import AgentCore
+    from config import get_provider_catalog
+    from llm_gateway.provider_service import ProviderService
     from web.agent_registry import AgentRegistry
     from web.config_service import get_config_service
-    from llm_gateway.provider_service import ProviderService
-    from config import get_provider_catalog
     from web.routers.local_ai import initialize_local_ai_services
+    from web.routers.retrieval import apply_persisted_retrieval_config
     from web.ws_hub import manager
 
     core = getattr(app.state, "core", None)
     owns_core = core is None
+    apply_persisted_retrieval_config()
     if owns_core:
         core = AgentCore()
+        # T5：先创建并注册 PluginManager（discover + set_active）再 core.init()，
+        # 保证 bootstrap._auto_enable_plugins 恰好生效一次
+        _setup_plugin_manager(app, core)
         await core.init()
     app.state.core = core
 
@@ -940,8 +1022,8 @@ def _has_any_provider_credential() -> bool:
     # 3. 自定义 provider：复用 config_service 已加载的 providers 配置 +
     #    load_provider_key 读取凭证文件，不新写 JSON 解析
     try:
-        from web.config_service import get_config_service
         from web._provider_keys import load_provider_key
+        from web.config_service import get_config_service
         cfg = get_config_service()
         for pid in (cfg.get("models.providers", {}) or {}):
             if pid in ("ollama", "llama.cpp"):
@@ -992,6 +1074,12 @@ async def _shutdown_lifespan(app: FastAPI, core: Any, owns_core: bool) -> None:
         _local_ai_health_task.cancel()
         with suppress(asyncio.CancelledError, RuntimeError):
             await _local_ai_health_task
+    # 取消记忆对账后台轮询任务（run_forever 内 run_once 取消安全：shield 释放租约）
+    _reconciliation_worker_task = getattr(app.state, "reconciliation_worker_task", None)
+    if _reconciliation_worker_task and not _reconciliation_worker_task.done():
+        _reconciliation_worker_task.cancel()
+        with suppress(asyncio.CancelledError, RuntimeError):
+            await _reconciliation_worker_task
     # Shutdown plugins
     plugin_mgr = getattr(app.state, "plugin_manager", None)
     if plugin_mgr:
@@ -1088,6 +1176,7 @@ def _add_security_and_sla_middleware(app: FastAPI) -> None:
     @app.middleware("http")
     async def _allow_frame_embed(request: Any, call_next: Any) -> Any:
         import time as _time
+
         from utils.trace_context import new_trace_id
         _trace_id = new_trace_id()
         _start = _time.monotonic()
@@ -1129,33 +1218,35 @@ def _add_security_and_sla_middleware(app: FastAPI) -> None:
 
 
 def _register_routes(app: FastAPI) -> None:
+    from web.routers.agents import router as agents_router
     from web.routers.auth import router as auth_router
     from web.routers.chat import router as chat_router
-    from web.routers.system import router as system_router, public_router as system_public_router
-    from web.routers.agents import router as agents_router
-    from web.routers.models import router as models_router
-    from web.routers.providers import router as providers_router
-    from web.routers.tools import router as tools_router
-    from web.routers.mcp import router as mcp_router
-    from web.routers.insight import router as insight_router
-    from web.routers.schedule import router as schedule_router
-    from web.routers.media import router as media_router
     from web.routers.health import router as health_router
-    from web.routers.plugins import router as plugins_router
-    from web.routers.setup import router as setup_router
-    from web.routers.model_discovery import router as model_discovery_router
-    from web.routers.market import router as market_router
+    from web.routers.insight import router as insight_router
+    from web.routers.jspace import router as jspace_router
+    from web.routers.local_ai import router as local_ai_router
+    from web.routers.local_ai_storage import router as local_ai_storage_router
+    from web.routers.local_deploy import router as local_deploy_router
     from web.routers.mail_manage import router as mail_manage_router
+    from web.routers.market import router as market_router
+    from web.routers.mcp import router as mcp_router
+    from web.routers.media import router as media_router
+    from web.routers.model_discovery import router as model_discovery_router
+    from web.routers.models import router as models_router
+    from web.routers.plugins import router as plugins_router
+    from web.routers.providers import router as providers_router
+    from web.routers.retrieval import router as retrieval_router
+    from web.routers.schedule import router as schedule_router
+    from web.routers.search_engines import router as search_engines_router
+    from web.routers.setup import router as setup_router
+    from web.routers.system import public_router as system_public_router
+    from web.routers.system import router as system_router
+    from web.routers.tools import router as tools_router
+    from web.routers.wechat import public_router as wechat_public_router
+    from web.routers.wechat import router as wechat_router
     from web.routers.workflows import router as workflows_router
     from web.routers.workflows_v2 import router as workflows_v2_router
     from web.routers.workspace import router as workspace_router
-    from web.routers.wechat import router as wechat_router, public_router as wechat_public_router
-    from web.routers.local_ai import router as local_ai_router
-    from web.routers.local_deploy import router as local_deploy_router
-    from web.routers.local_ai_storage import router as local_ai_storage_router
-    from web.routers.retrieval import router as retrieval_router
-    from web.routers.search_engines import router as search_engines_router
-    from web.routers.jspace import router as jspace_router
 
     for r in (auth_router, chat_router, system_router, agents_router,
               models_router, providers_router, tools_router, mcp_router, insight_router,

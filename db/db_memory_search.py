@@ -16,9 +16,26 @@ from db.db_memory_utils import _rows_to_fts_results, _scope_where, _sql_placehol
 class SearchMixin:
     """会话查询 + 检索方法组。"""
 
-    async def get_recent_conversations(self, limit: int = 20, user_id: str = "") -> Any:
-        """获取最近的对话记录。支持按 user_id 过滤（群聊场景下隔离不同用户的历史）。"""
-        if user_id:
+    async def get_recent_conversations(
+        self, limit: int = 20, user_id: str = "", scope: Any | None = None
+    ) -> Any:
+        """Get recent conversations inside the supplied privacy boundary."""
+        if scope is not None:
+            from memory.scope import ScopeBoundary
+
+            params: list[Any] = []
+            if scope.boundary is ScopeBoundary.CONVERSATION:
+                where = "WHERE session_id = ?"
+                params.append(scope.session_id)
+            else:
+                where = "WHERE user_id = ? AND COALESCE(session_id, '') NOT LIKE ?"
+                params.extend([scope.user_id, "qq_group:%"])
+            params.append(limit)
+            cursor = await self._read_conn().execute(
+                f"SELECT * FROM conversation_logs {where} ORDER BY id DESC LIMIT ?",
+                params,
+            )
+        elif user_id:
             cursor = await self._read_conn().execute(
                 """SELECT * FROM conversation_logs
                    WHERE user_id = ?
@@ -34,8 +51,14 @@ class SearchMixin:
         rows = await cursor.fetchall()
         return [dict(r) for r in reversed(rows)]
 
-    async def get_conversations_by_time_range(self, start_ts: float, end_ts: float,
-                                               user_id: str = "", limit: int = 50) -> list[dict]:
+    async def get_conversations_by_time_range(
+        self,
+        start_ts: float,
+        end_ts: float,
+        user_id: str = "",
+        limit: int = 50,
+        scope: Any | None = None,
+    ) -> list[dict]:
         """按时间范围查询 conversation_logs 原始对话。用于时间型回忆查询。
 
         CodeRabbit 复审修复：原 ORDER BY timestamp ASC LIMIT ? 在记录数超过 limit 时
@@ -44,12 +67,25 @@ class SearchMixin:
         """
         params: list = [start_ts, end_ts]
         where = "WHERE timestamp >= ? AND timestamp <= ?"
-        if user_id:
+        if scope is not None:
+            from memory.scope import ScopeBoundary
+
+            if scope.boundary is ScopeBoundary.CONVERSATION:
+                where += " AND session_id = ?"
+                params.append(scope.session_id)
+            else:
+                if user_id:
+                    where += " AND user_id = ?"
+                    params.append(user_id)
+                where += " AND COALESCE(session_id, '') NOT LIKE ?"
+                params.append("qq_group:%")
+        elif user_id:
             where += " AND user_id = ?"
             params.append(user_id)
         params.append(limit)
         cursor = await self._read_conn().execute(
-            f"""SELECT timestamp, user_message, assistant_reply FROM conversation_logs
+            f"""SELECT timestamp, user_message, assistant_reply, user_id, session_id
+                FROM conversation_logs
                 {where} ORDER BY timestamp DESC LIMIT ?""",
             params,
         )

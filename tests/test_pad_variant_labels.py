@@ -8,22 +8,17 @@ recall_and_enact 中的 PAD 微调使用 pad_from_emotion(mem.emotion, 0.5)，
 本测试验证变体标签经过 CN_TO_EN_MAP 归一化后能正确映射到 PAD 值。
 """
 import pytest
-from memory.emotional_memory import CN_TO_EN_MAP
-from emotion.pad_model import from_emotion as pad_from_emotion, EMOTION_PAD_REFERENCE, PADEmotion
+
+from emotion.pad_model import EMOTION_PAD_REFERENCE, PADEmotion
+from emotion.pad_model import from_emotion as pad_from_emotion
+from memory.emotional_memory import CN_TO_EN_MAP, EN_TO_CN_PAD
 
 
 class TestPADVariantLabels:
     """变体标签 → PAD 值的正确映射"""
 
-    # 反向映射：英文 → 标准中文（与 emotional_memory.py recall_and_enact 中的 _EN_TO_CN_PAD 一致）
-    _EN_TO_CN_PAD = {
-        "happy": "喜悦", "excited": "兴奋", "sad": "悲伤",
-        "angry": "愤怒", "anxious": "焦虑", "shy": "害羞",
-        "confused": "好奇", "thinking": "思考", "fear": "恐惧",
-        "neutral": "平静", "playful": "喜悦", "pout": "害羞",
-        "surprised": "好奇", "love": "喜欢", "moved": "感动",
-        "curious": "好奇", "greeting": "问候",
-    }
+    # 反向映射直接导入生产实现（单一事实源，防止测试副本与代码漂移）
+    _EN_TO_CN_PAD = EN_TO_CN_PAD
 
     def _normalize_to_pad(self, emotion_label: str, intensity: float = 0.5) -> PADEmotion:
         """模拟 recall_and_enact 中的标签归一化 + PAD 查表逻辑"""
@@ -47,11 +42,15 @@ class TestPADVariantLabels:
         ("不安", "焦虑"),
         ("害怕", "恐惧"),
         ("恐慌", "恐惧"),
-        ("感动", "喜悦"),
-        ("调皮", "喜悦"),
-        ("撒娇", "害羞"),
-        ("惊讶", "好奇"),
-        ("困惑", "好奇"),
+        ("感动", "感动"),
+        ("欣慰", "感动"),
+        ("调皮", "调皮"),
+        ("撒娇", "撒娇"),
+        ("惊讶", "惊讶"),
+        ("困惑", "困惑"),
+        ("好奇", "好奇"),
+        ("喜爱", "喜爱"),
+        ("喜欢", "喜爱"),  # 存量兼容：旧规范标签"喜欢"归一到新键
     ])
     def test_variant_label_normalizes_to_correct_cn(self, variant, expected_cn):
         """变体标签通过 CN_TO_EN_MAP + _EN_TO_CN_PAD 归一化到标准中文"""
@@ -64,7 +63,8 @@ class TestPADVariantLabels:
     @pytest.mark.parametrize("variant", [
         "开心", "快乐", "高兴", "难过", "伤心", "孤独", "失落",
         "生气", "不满", "烦躁", "担心", "紧张", "不安",
-        "害怕", "恐慌", "感动", "调皮", "撒娇", "惊讶", "困惑",
+        "害怕", "恐慌", "感动", "欣慰", "调皮", "撒娇", "惊讶",
+        "困惑", "好奇", "喜爱",
     ])
     def test_variant_label_produces_non_neutral_pad(self, variant):
         """变体标签归一化后产生非 neutral 的 PAD 值"""

@@ -21,14 +21,14 @@ from memory.emotional_memory import EmotionalMemory
 
 @pytest.fixture(autouse=True)
 def _isolate_free_model_backend():
-    """关闭免费模型后端，让无 router 场景稳定走模板、有 router 场景走 mock router。
-
-    避免测试环境配置了 SILICONFLOW_API_KEY 时走真实网络导致结果不确定。
-    """
-    original = reunion_mod._free.backend
-    reunion_mod.set_backend("off")
+    """API 模式下禁用真实免费模型，让测试稳定验证模板/mock router。"""
+    original_backend = reunion_mod._free.backend
+    original_key = reunion_mod._free._api_key
+    reunion_mod.set_backend("api")
+    reunion_mod._free._api_key = ""
     yield
-    reunion_mod.set_backend(original)
+    reunion_mod._free._api_key = original_key
+    reunion_mod.set_backend(original_backend)
 
 
 class MockRouter:
@@ -126,6 +126,21 @@ def test_format_idle_days():
     """_format_idle：天格式化"""
     assert _format_idle(86400) == "1天"
     assert _format_idle(86400 * 3) == "3天"
+
+
+async def test_off_uses_template_without_router_call():
+    reunion_mod.set_backend("off")
+
+    class FailingRouter:
+        async def route(self, *_args, **_kwargs):
+            raise AssertionError("router must not run")
+
+    msg = await generate_reunion_message(
+        idle_seconds=3600 * 2,
+        last_emotion=("neutral", 0.0),
+        router=FailingRouter(),
+    )
+    assert "刚才聊到哪了" in msg
 
 
 # ── LLM 生成 ──

@@ -4,6 +4,8 @@ import os
 import sys
 import asyncio
 import hashlib
+import math
+import struct
 import threading
 from collections import OrderedDict
 from pathlib import Path
@@ -1181,6 +1183,40 @@ class VectorStore:
             logger.warning("vector_store.delete_failed", row_id=row_id, error=str(e))
             return False
 
+    def _search_candidates_exact(
+        self,
+        table: str,
+        query_vec: list[float],
+        candidate_ids: list[int],
+        top_k: int,
+    ) -> list[tuple[int, float]]:
+        """Exact bounded search over candidate rowids when vec0 cannot filter KNN."""
+        if not candidate_ids or top_k <= 0:
+            return []
+        candidate_list = sorted({int(value) for value in candidate_ids})
+        ranked: list[tuple[int, float]] = []
+        for offset in range(0, len(candidate_list), 900):
+            batch = candidate_list[offset:offset + 900]
+            placeholders = ",".join("?" for _ in batch)
+            rows = self._vec_conn.execute(
+                f"SELECT rowid, embedding FROM {table} "
+                f"WHERE rowid IN ({placeholders})",
+                batch,
+            ).fetchall()
+            for row_id, raw in rows:
+                if not isinstance(raw, (bytes, bytearray, memoryview)):
+                    continue
+                values = struct.unpack(f"<{len(raw) // 4}f", bytes(raw))
+                if len(values) != len(query_vec):
+                    continue
+                distance = math.sqrt(sum(
+                    (float(value) - float(query_value)) ** 2
+                    for value, query_value in zip(values, query_vec, strict=True)
+                ))
+                ranked.append((int(row_id), distance))
+        ranked.sort(key=lambda item: (item[1], item[0]))
+        return ranked[:top_k]
+
     async def search(self, query_text: str, top_k: int = 5,
                      candidate_ids: list[int] | None = None,
                      deterministic: bool = True,
@@ -1233,15 +1269,9 @@ class VectorStore:
                 # sqlite-vec 的 vec0 KNN 只允许 ORDER BY distance (不允许 , rowid)
                 # 所以 tie-breaking 在 Python 层做: 按 (distance, rowid) 稳定排序
                 if candidate_ids is not None:
-                    cand_set = set(candidate_ids)
-                    oversample = min(top_k * 6, len(candidate_ids) + top_k * 2)
-                    rows = self._vec_conn.execute(
-                        "SELECT rowid, distance FROM memories_vec "
-                        "WHERE embedding MATCH vec_f32(?) AND k=? "
-                        "ORDER BY distance",
-                        [vec_json, oversample],
-                    ).fetchall()
-                    results = [(row[0], row[1]) for row in rows if row[0] in cand_set]
+                    return self._search_candidates_exact(
+                        "memories_vec", vec, candidate_ids, top_k
+                    )
                 else:
                     rows = self._vec_conn.execute(
                         "SELECT rowid, distance FROM memories_vec "
@@ -1261,7 +1291,12 @@ class VectorStore:
             logger.warning("vector_store.search_failed", error=str(e))
             return []
 
-    async def search_child(self, query_vec: list[float], top_k: int = 20) -> list[dict]:
+    async def search_child(
+        self,
+        query_vec: list[float],
+        top_k: int = 20,
+        candidate_ids: list[int] | None = None,
+    ) -> list[dict]:
         """子chunk向量相似度检索。返回 [{id, distance}, ...]"""
         if not self._initialized or not self._vec_conn:
             return []
@@ -1277,9 +1312,18 @@ class VectorStore:
                 # 内存暴力加速路径：None=不可用/失败 → 回退 SQLite
                 if self._brute is not None:
                     brute_res = self._brute.search(
-                        "memories_child_vec", query_vec, top_k, ef=top_k * 2)
+                        "memories_child_vec", query_vec, top_k,
+                        candidate_ids=candidate_ids,
+                        ef=max(top_k * 2, len(candidate_ids or [])),
+                    )
                     if brute_res is not None:
                         return [{"id": r[0], "distance": r[1]} for r in brute_res]
+                if candidate_ids is not None:
+                    exact = self._search_candidates_exact(
+                        "memories_child_vec", query_vec, candidate_ids, top_k
+                    )
+                    return [{"id": row_id, "distance": distance}
+                            for row_id, distance in exact]
                 rows = self._vec_conn.execute(
                     "SELECT rowid, distance FROM memories_child_vec "
                     "WHERE embedding MATCH vec_f32(?) AND k=? "
@@ -1358,15 +1402,9 @@ class VectorStore:
                             return [{"rowid": r[0], "distance": r[1]}
                                     for r in brute_res[:k]]
                     if cand_int is not None:
-                        cand_set = set(cand_int)
-                        oversample = min(k * 6, len(cand_set) + k * 2)
-                        rows = self._vec_conn.execute(
-                            "SELECT rowid, distance FROM memories_vec "
-                            "WHERE embedding MATCH vec_f32(?) AND k=? "
-                            "ORDER BY distance",
-                            [vec_json, oversample],
-                        ).fetchall()
-                        results = [(row[0], row[1]) for row in rows if row[0] in cand_set]
+                        results = self._search_candidates_exact(
+                            "memories_vec", mixed, cand_int, k
+                        )
                     else:
                         rows = self._vec_conn.execute(
                             "SELECT rowid, distance FROM memories_vec "
@@ -1467,7 +1505,12 @@ class VectorStore:
 
         return await asyncio.to_thread(_do_upsert)
 
-    async def search_kg_entities(self, query_text: str, top_k: int = 5) -> list[tuple[int, float]]:
+    async def search_kg_entities(
+        self,
+        query_text: str,
+        top_k: int = 5,
+        candidate_ids: list[int] | None = None,
+    ) -> list[tuple[int, float]]:
         """搜索 KG 实体向量，返回 [(rowid, distance), ...]。"""
         if not self._initialized or not self._vec_conn:
             return []
@@ -1485,9 +1528,16 @@ class VectorStore:
                 # 内存暴力加速路径：None=不可用/失败 → 回退 SQLite
                 if self._brute is not None:
                     brute_res = self._brute.search(
-                        "kg_entities_vec", vec, top_k, ef=top_k * 2)
+                        "kg_entities_vec", vec, top_k,
+                        candidate_ids=candidate_ids,
+                        ef=max(top_k * 2, len(candidate_ids or [])),
+                    )
                     if brute_res is not None:
                         return brute_res
+                if candidate_ids is not None:
+                    return self._search_candidates_exact(
+                        "kg_entities_vec", vec, candidate_ids, top_k
+                    )
                 rows = self._vec_conn.execute(
                     "SELECT rowid, distance FROM kg_entities_vec "
                     "WHERE embedding MATCH vec_f32(?) AND k=? "
@@ -1504,8 +1554,13 @@ class VectorStore:
             logger.warning("vector_store.search_kg_entities_failed", error=str(e))
             return []
 
-    async def search_kg_relations(self, query_text: str, top_k: int = 5) -> list[tuple[int, float]]:
-        """搜索 KG 关系向量，返回 [(rowid, distance), ...]。"""
+    async def search_kg_relations(
+        self,
+        query_text: str,
+        top_k: int = 5,
+        candidate_ids: list[int] | None = None,
+    ) -> list[tuple[int, float]]:
+        """搜索 KG 关系向量，可限定允许的 relation rowid。"""
         if not self._initialized or not self._vec_conn:
             return []
         vectors = await self.embed([query_text])
@@ -1522,16 +1577,33 @@ class VectorStore:
                 # 内存暴力加速路径：None=不可用/失败 → 回退 SQLite
                 if self._brute is not None:
                     brute_res = self._brute.search(
-                        "kg_relations_vec", vec, top_k, ef=top_k * 2)
+                        "kg_relations_vec", vec, top_k,
+                        candidate_ids=candidate_ids,
+                        ef=max(top_k * 2, len(candidate_ids or [])),
+                    )
                     if brute_res is not None:
                         return brute_res
+                if candidate_ids is not None:
+                    if not candidate_ids:
+                        return []
+                    candidate_set = set(candidate_ids)
+                    count_row = self._vec_conn.execute(
+                        "SELECT COUNT(*) FROM kg_relations_vec"
+                    ).fetchone()
+                    fetch_count = max(int(count_row[0] if count_row else 0), top_k)
+                else:
+                    candidate_set = None
+                    fetch_count = fetch_k
                 rows = self._vec_conn.execute(
                     "SELECT rowid, distance FROM kg_relations_vec "
                     "WHERE embedding MATCH vec_f32(?) AND k=? "
                     "ORDER BY distance",
-                    [vec_json, fetch_k],
+                    [vec_json, fetch_count],
                 ).fetchall()
-                results = [(row[0], row[1]) for row in rows]
+                results = [
+                    (row[0], row[1]) for row in rows
+                    if candidate_set is None or row[0] in candidate_set
+                ]
                 results.sort(key=lambda r: (r[1], r[0]))
                 return results[:top_k]
 

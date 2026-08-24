@@ -570,19 +570,19 @@ async def list_stickers(name: str, request: Request, _user: str = Depends(get_cu
 
 
 @router.get("/agents/{name}/stickers/file/{filename}")
-async def serve_sticker(name: str, filename: str, request: Request, token: str = "") -> Any:
+async def serve_sticker(name: str, filename: str, request: Request) -> Any:
     _validate_agent_name(name)
-    """提供表情包图片文件。支持 query token 认证（img 标签无法发 header）。"""
+    """提供表情包图片文件。凭据链：媒体 cookie（裸 <img> 场景）→ Authorization Bearer。"""
     # 路径遍历防护
     if ".." in filename or "/" in filename or "\\" in filename:
         raise HTTPException(400, "非法文件名")
-    # 支持 header 或 query 参数认证
-    from web.routers.auth import _validate_token
-    auth_ok = False
-    auth_header = request.headers.get("authorization", "")
-    if (auth_header.startswith("Bearer ") and _validate_token(auth_header[7:])) or (token and _validate_token(token)):
-        auth_ok = True
-    if not auth_ok:
+    from web.routers.auth import MEDIA_COOKIE_NAME, _validate_token
+    token = request.cookies.get(MEDIA_COOKIE_NAME, "")
+    if not token:
+        auth_header = request.headers.get("authorization", "")
+        if auth_header.startswith("Bearer "):
+            token = auth_header[7:]
+    if not _validate_token(token):
         raise HTTPException(401, "未授权")
     from fastapi.responses import FileResponse
     sticker_dir = _resolve_sticker_dir(name, request)

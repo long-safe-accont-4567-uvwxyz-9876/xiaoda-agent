@@ -6,6 +6,7 @@ import DeploymentsTab from '../components/local-ai/DeploymentsTab.vue'
 import DownloadTasksTab from '../components/local-ai/DownloadTasksTab.vue'
 import InstalledModelsTab from '../components/local-ai/InstalledModelsTab.vue'
 import ModelMarketTab from '../components/local-ai/ModelMarketTab.vue'
+import PromptProfilesTab from '../components/local-ai/PromptProfilesTab.vue'
 import SystemModelNodesTab from '../components/local-ai/SystemModelNodesTab.vue'
 import ViewTitleIcon from '../components/fx/ViewTitleIcon.vue'
 import { useLocalAiStore } from '../stores/localAi'
@@ -43,6 +44,7 @@ onBeforeUnmount(() => store.disconnectWebSocket())
         <n-tab-pane name="installed" :tab="t('localDeployView.tabInstalled')"><InstalledModelsTab /></n-tab-pane>
         <n-tab-pane name="devices" :tab="t('localDeployView.tabDevicesShort')"><ComputeDevicesTab /></n-tab-pane>
         <n-tab-pane name="nodes" :tab="t('localDeployView.tabNodes')"><SystemModelNodesTab /></n-tab-pane>
+        <n-tab-pane name="prompts" :tab="t('localDeployView.tabPrompts')"><PromptProfilesTab /></n-tab-pane>
         <n-tab-pane name="downloads" :tab="t('localDeployView.tabDownloads')"><DownloadTasksTab /></n-tab-pane>
       </n-tabs>
     </n-spin>

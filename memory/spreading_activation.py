@@ -66,8 +66,9 @@ class SpreadingActivationEngine:
         # Rust 常驻节点索引（perf/rust-hybrid-poc）：与 alive_nodes 同步重建，
         # 开关关闭时恒为 None，零开销
         self._rust_index: Any | None = None
-        # Rust 侧已加载的边快照版本（对应 _graph_ts；-1 = 从未加载）
-        self._rust_edges_ts: float = -1.0
+        self._rust_node_ids: frozenset[str] = frozenset()
+        # Rust 侧已加载的边快照版本（graph timestamp + scoped node ids）。
+        self._rust_edges_version: tuple[float, frozenset[str]] | None = None
 
     async def _ensure_graph_snapshot(self) -> dict[str, dict[str, float]]:
         """取整图边快照（{source: {target: weight}}），TTL 内复用，过期后台重建。
@@ -122,17 +123,26 @@ class SpreadingActivationEngine:
         重建为纯内存操作（实测 2417 节点 <10ms），无需后台化。
         返回 None 表示不可用（模块缺失/构建失败），调用方回退 Python。
         """
-        if self._rust_index is not None and self._rust_index.size == len(alive_nodes):
+        node_ids = frozenset(alive_nodes)
+        if self._rust_index is not None and self._rust_node_ids == node_ids:
             return self._rust_index
         try:
             self._rust_index = rust_hybrid.RustNodeIndex(alive_nodes)
+            self._rust_node_ids = node_ids
+            self._rust_edges_version = None
             logger.info("memory.rust_index_built nodes={}", self._rust_index.size)
         except Exception as e:  # noqa: BLE001
             logger.debug("memory.rust_index_build_failed error={}", str(e)[:120])
             self._rust_index = None
         return self._rust_index
 
-    async def recall(self, query: str, top_k: int = 5) -> list[dict]:
+    async def recall(
+        self,
+        query: str,
+        top_k: int = 5,
+        candidate_ids: list[int] | None = None,
+        cache_namespace: str = "",
+    ) -> list[dict]:
         """扩散激活检索主入口
 
         Returns:
@@ -140,8 +150,8 @@ class SpreadingActivationEngine:
 
         G13: 按 (query, top_k) 缓存结果，TTL 5 分钟，maxsize 256。
         """
-        # G13: 缓存命中检查
-        cache_key = (query, top_k)
+        # Privacy namespace is part of the key even though candidates are also filtered.
+        cache_key = (cache_namespace, query, top_k)
         now = time.monotonic()
         cached_entry = self._recall_cache.get(cache_key)
         if cached_entry is not None:
@@ -160,6 +170,12 @@ class SpreadingActivationEngine:
 
         # Step 2: 获取存活节点
         alive_nodes = await self.db.get_alive_nodes()
+        if candidate_ids is not None:
+            allowed = {int(value) for value in candidate_ids}
+            alive_nodes = {
+                node_id: node for node_id, node in alive_nodes.items()
+                if node.get("source_mem_id") in allowed
+            }
         if not alive_nodes:
             return []
 
@@ -238,7 +254,8 @@ class SpreadingActivationEngine:
         # 边快照版本一并失效：索引重建后邻接表必须重载
         if getattr(self, "_rust_index", None) is not None:
             self._rust_index = None
-        self._rust_edges_ts = -1.0
+        self._rust_node_ids = frozenset()
+        self._rust_edges_version = None
 
     def _compute_idf(self, keys: set, alive_nodes: dict) -> dict:
         """计算每个 key 的 IDF 值
@@ -304,7 +321,14 @@ class SpreadingActivationEngine:
         if not self.vec or not getattr(self.vec, "enabled", False):
             return direct
         try:
-            vec_results = await self.vec.search(query, top_k=20)
+            candidate_ids = [
+                int(node["source_mem_id"])
+                for node in alive_nodes.values()
+                if node.get("source_mem_id") is not None
+            ]
+            vec_results = await self.vec.search(
+                query, top_k=20, candidate_ids=candidate_ids
+            )
         except Exception as e:
             logger.debug("spreading.pattern_completion_failed", error=str(e))
             return direct
@@ -340,14 +364,18 @@ class SpreadingActivationEngine:
             try:
                 idx = self._get_rust_index(alive_nodes)
                 if idx is not None:
-                    # 边快照仅在图重建后重载：以 _graph_ts 为版本指纹，
-                    # 未重建时跳过 100 万行转换（实测 ~600ms/次，不跟踪
-                    # 会把 Rust 游走的收益全部吃掉）
-                    if getattr(self, "_rust_edges_ts", -1.0) != self._graph_ts:
+                    edge_version = (self._graph_ts, frozenset(alive_nodes))
+                    if self._rust_edges_version != edge_version:
                         idx.load_edges(
-                            [(s, t, w) for s, targets in graph.items()
-                             for t, w in targets.items()])
-                        self._rust_edges_ts = self._graph_ts
+                            [
+                                (source, target, weight)
+                                for source, targets in graph.items()
+                                if source in alive_nodes
+                                for target, weight in targets.items()
+                                if target in alive_nodes
+                            ]
+                        )
+                        self._rust_edges_version = edge_version
                     spread = idx.spreading_channel(
                         list(direct.items()),
                         radius=self.RECALL_RADIUS,

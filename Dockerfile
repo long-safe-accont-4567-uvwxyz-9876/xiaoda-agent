@@ -1,4 +1,9 @@
 # ── Stage 1: 构建前端 ──
+# TODO(digest-pinning): 2026-08-24 门禁复审要求 FROM 固定 digest。当前构建环境
+# 无法访问 registry-1.docker.io / auth.docker.io 解析 manifest digest，暂以具体
+# 版本 tag 固定；联网 CI 环境应执行以下命令取 digest 后替换：
+#   docker buildx imagetools inspect node:20-slim@sha256:<digest>
+#   docker buildx imagetools inspect python:3.11-slim-bookworm@sha256:<digest>
 FROM node:20-slim AS frontend-builder
 WORKDIR /build
 COPY web/frontend/package*.json web/frontend/
@@ -12,6 +17,7 @@ RUN npm install -g @tencent-qqmail/agently-cli
 
 # ── Stage 2a: Build Python dependencies ──
 FROM python:3.11-slim-bookworm AS builder
+# digest 固定待办见文件头 TODO(digest-pinning) 注释
 RUN apt-get update && apt-get install -y --no-install-recommends \
     gcc g++ python3-dev \
     && rm -rf /var/lib/apt/lists/*
@@ -23,6 +29,7 @@ RUN PYTHONPATH=/install/lib/python3.11/site-packages python -c "import onnxrunti
 
 # ── Stage 2b: Python runtime ──
 FROM python:3.11-slim-bookworm
+# digest 固定待办见文件头 TODO(digest-pinning) 注释
 
 # System runtime dependencies only (no build tools)
 RUN apt-get update && apt-get install -y --no-install-recommends \
@@ -81,21 +88,18 @@ USER appuser
 ENV WEBUI_PORT=8082
 EXPOSE 8082
 
-# 健康检查：先尝试 HTTP 探针，失败则运行 doctor --fix 自动修复后重试
+# 健康检查：只读 HTTP 探针。失败仅非零退出交给 restart 策略处理，
+# 绝不执行 doctor --fix（VACUUM/删锁/删日志属破坏性自愈，不能由探针触发）
 HEALTHCHECK --interval=30s --timeout=30s --retries=3 \
     CMD python -c "\
-import os, urllib.request, urllib.error, subprocess, sys; \
+import os, urllib.request, sys; \
 port = os.environ.get('WEBUI_PORT', '8082'); \
 url = f'http://localhost:{port}/api/v1/system/os'; \
 try: \
     urllib.request.urlopen(url, timeout=3); \
-except Exception: \
-    print('Health check failed, running doctor --fix...'); \
-    subprocess.run([sys.executable, 'agent.py', 'doctor', '--fix']); \
-    try: \
-        urllib.request.urlopen(url, timeout=3); \
-    except Exception: \
-        sys.exit(1)"
+except Exception as e: \
+    print(f'Health check failed: {e}'); \
+    sys.exit(1)"
 
 # 启动命令（端口由 WEBUI_PORT 环境变量控制，默认 8082）
 CMD ["python", "agent.py", "--web"]

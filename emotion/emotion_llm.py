@@ -14,13 +14,12 @@ from __future__ import annotations
 
 import asyncio
 import json
-import re
 from typing import Any
 
 from loguru import logger
 
-from utils.free_model_backend import FreeModelBackend
 from utils.common import safe_float as _safe_float
+from utils.free_model_backend import FreeModelBackend
 
 # 超时时间（秒）
 LLM_EMOTION_TIMEOUT = 0.5  # 500ms
@@ -71,15 +70,29 @@ async def detect_emotion_llm(
     _free.set_router(router)
 
     prompt = _build_prompt(text, context)
+    system_prompt = _SYSTEM_PROMPT
+    try:
+        from web.config_service import get_config_service
+        from web.prompt_profile_repository import PromptProfileRepository
+
+        override = PromptProfileRepository(get_config_service()).resolve(
+            "emotion.analyze", {"input": text, "context": context}
+        )
+        if override is not None:
+            system_prompt, prompt = override
+    except (ImportError, ValueError) as exc:
+        logger.warning("emotion_llm.prompt_override_ignored error={}", str(exc))
+    except Exception:
+        logger.exception("emotion_llm.prompt_override.unexpected_error")
     messages = [
-        {"role": "system", "content": _SYSTEM_PROMPT},
+        {"role": "system", "content": system_prompt},
         {"role": "user", "content": prompt},
     ]
 
     try:
         async def _route():
             raw = await _free.call(messages, temperature=0.3, max_tokens=512)
-            if raw is None:
+            if raw is None and _free.backend == "api":
                 # emotion 是轻量分类任务，用 emotion_analysis（max_tokens=1024, timeout=10s）足够
                 # chat_flash 已合并进 chat，改用专门的 emotion_analysis task 避免浪费配额
                 raw = await router.route("emotion_analysis", messages, temperature=0.3)
@@ -118,13 +131,15 @@ needs: 用户深层心理需求（如"被理解"、"休息"、"安全感"）
 style: 建议回应风格（如"温柔陪伴"、"轻快回应"、"认真倾听"）"""
 
 
+_USER_PROMPT_TEMPLATE = '用户说：「{input}」{context_block}\n请分析情绪并返回 JSON。'
+
+
 def _build_prompt(text: str, context: str) -> str:
-    """构建分析提示"""
-    prompt = f'用户说：「{text}」'
-    if context:
-        prompt += f'\n上下文：{context}'
-    prompt += '\n请分析情绪并返回 JSON。'
-    return prompt
+    """构建分析提示。"""
+    context_block = f"\n上下文：{context}" if context else ""
+    return _USER_PROMPT_TEMPLATE.format(
+        input=text, context_block=context_block
+    )
 
 
 def _parse_llm_response(raw: str) -> dict:

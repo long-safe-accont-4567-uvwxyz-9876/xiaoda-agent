@@ -5,6 +5,9 @@
 #   - 选取标准：改坏即生产事故的核心链路（路由/安全/凭证/事件总线/终端/启动）
 #   - 新增高频改动模块的守卫测试时必须同步加入本清单（pre-push 会校验文件存在）
 tests/test_smoke.py
+tests/test_prompt_ab_harness.py
+tests/test_prompt_ab_runner.py
+tests/test_prompt_profile_api.py
 tests/test_agent_routing.py
 tests/test_context_compressor.py
 tests/test_risk_classifier.py

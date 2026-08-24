@@ -6,13 +6,11 @@
 import { ref, watch, onBeforeUnmount } from 'vue'
 import { NButton, NInput, NSelect, NSpin, NTag, NImage, NEmpty, NPopconfirm, useMessage } from 'naive-ui'
 import { api } from '../../api'
-import { useAuthStore } from '../../stores/auth'
 import { t } from '../../i18n'
 
 const props = defineProps<{ agentName: string }>()
 
 const message = useMessage()
-const auth = useAuthStore()
 
 const stickerList = ref<Array<{ name: string; description: string; emotion: string; url: string }>>([])
 const stickerEmotions = ref<string[]>([])
@@ -124,7 +122,7 @@ onBeforeUnmount(() => {
     <n-spin :show="stickerLoading">
       <div v-if="stickerList.length" class="sticker-grid">
         <div v-for="s in stickerList" :key="s.name" class="sticker-card">
-          <n-image :src="s.url + '?token=' + auth.token" width="100" height="100" object-fit="cover"
+          <n-image :src="s.url" width="100" height="100" object-fit="cover"
                    :fallback-src="''" lazy class="sticker-img" />
           <div class="sticker-info">
             <span class="sticker-desc">{{ s.description }}</span>

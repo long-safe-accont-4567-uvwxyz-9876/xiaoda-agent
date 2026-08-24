@@ -36,20 +36,14 @@ def _queue(request: Request) -> Any:
 
 
 def _signed_media_url(request: Request, url: str) -> str:
-    """给 /media URL 附加当前请求的 token，供 <audio>/<img> 直连静态资源。
+    """原样返回 /media URL（保留函数避免改动调用点）。
 
-    /media 静态目录已启用 token 鉴权（web/media_auth.AuthStaticFiles），
-    浏览器加载 <audio>/<img> 不会带 Authorization 头，因此由后端在返回
-    audio_url/url 字段时拼上 ?token=…。取不到 token 时保持原样（访问时 401，
-    fail-closed）。
+    历史：曾在此把 token 作为 URL 查询参数拼进地址供 <audio>/<img> 直连静态
+    资源，但凭据出现在 URL 中会经访问日志/Referer/浏览器历史泄露。现在
+    /media 凭据只走 HttpOnly cookie（x_media_token，登录时下发）或
+    Authorization 头，见 web/media_auth.py。
     """
-    auth = request.headers.get("Authorization", "")
-    if not auth.startswith("Bearer "):
-        return url
-    token = auth[7:].strip()
-    if not token:
-        return url
-    return f"{url}?token={token}"
+    return url
 
 
 # ── TTS ──────────────────────────────────────────────────────────

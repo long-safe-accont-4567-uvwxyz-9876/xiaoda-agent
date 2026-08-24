@@ -22,8 +22,27 @@ from memory.retrieval.channels import RecallChannelMixin, RecallChannels
 from memory.retrieval.fusion import FusionRerankMixin
 from memory.retrieval.query_transform import QueryTransformMixin
 from memory.retrieval.scoring import ScoringTouchMixin
+from memory.retrieval.trace import (
+    ChannelOutcome,
+    begin_retrieval_trace,
+    capture_channel_trace,
+    mark_retrieval_degraded,
+    mark_retrieval_dropped,
+    merge_channel_outcomes,
+    read_retrieval_trace,
+)
 
-__all__ = ["RecallChannels", "RetrievalEngine"]
+__all__ = [
+    "RecallChannels", "RetrievalEngine", "begin_retrieval_trace",
+    "mark_retrieval_degraded", "read_retrieval_trace",
+]
+
+
+def _take_with_trace(items: list[dict], limit: int) -> list[dict]:
+    safe_limit = max(0, int(limit))
+    for dropped in items[safe_limit:]:
+        mark_retrieval_dropped(dropped.get("id"), "top_k")
+    return items[:safe_limit]
 
 
 class RetrievalEngine(RecallChannelMixin, FusionRerankMixin, QueryTransformMixin,
@@ -168,9 +187,26 @@ class RetrievalEngine(RecallChannelMixin, FusionRerankMixin, QueryTransformMixin
         if not getattr(_v2_cfg, 'KG_V2_ENABLED', False) or not getattr(self._mm, '_kg_v2_engine', None):
             return []
         try:
-            results = await self._mm._kg_v2_engine.search(
-                query, top_k=recall_limit, scope=scope
-            )
+            search_limit = recall_limit
+            max_candidates = min(max(recall_limit * 8, recall_limit), 400)
+            while True:
+                results = await self._mm._kg_v2_engine.search(
+                    query, top_k=search_limit, scope=scope
+                )
+                if scope.boundary.value != "conversation":
+                    break
+                # KG v2 entity summaries are global; only relations are episode-scoped.
+                scoped_relations = [
+                    row for row in results if row.get("type") == "relation"
+                ]
+                if (
+                    len(scoped_relations) >= recall_limit
+                    or search_limit >= max_candidates
+                    or len(results) < search_limit
+                ):
+                    results = scoped_relations
+                    break
+                search_limit = min(search_limit * 2, max_candidates)
             if not results:
                 return []
             # 将 KG 事实格式化为 dict 供上下文使用
@@ -178,22 +214,39 @@ class RetrievalEngine(RecallChannelMixin, FusionRerankMixin, QueryTransformMixin
             for r in results:
                 if r.get("type") == "relation":
                     formatted.append({
+                        "id": r.get("id"),
                         "summary": r.get("fact", ""),
                         "source": "kg_v2",
+                        "evidence_type": "kg_v2_relation",
                         "rrf_score": r.get("rrf_score", 0),
+                        "valid_at": r.get("valid_at"),
+                        "invalid_at": r.get("invalid_at"),
+                        "is_current": r.get("is_current", 1),
+                        "from_entity": r.get("from_entity"),
+                        "relation_type": r.get("relation_type"),
+                        "provenance_ids": r.get("episode_ids") or [],
+                        "user_id": scope.user_id,
+                        "agent_id": scope.agent_id,
+                        "session_id": scope.session_id,
                     })
                 elif r.get("type") == "entity":
                     summary_text = f"{r.get('name', '')}({r.get('kind', '')}): {r.get('summary', '')}"
                     formatted.append({
+                        "id": r.get("id"),
                         "summary": summary_text,
                         "source": "kg_v2",
+                        "evidence_type": "kg_v2_entity",
                         "rrf_score": r.get("rrf_score", 0),
+                        "user_id": scope.user_id,
+                        "agent_id": scope.agent_id,
+                        "session_id": scope.session_id,
                     })
             return formatted
         except Exception as e:
             from utils.metrics import metrics
 
             metrics.inc("retrieval.channel.kg_v2.degraded")
+            mark_retrieval_degraded("kg_v2")
             logger.debug("memory.kg_v2_recall_failed", error=str(e))
             return []
 
@@ -206,23 +259,31 @@ class RetrievalEngine(RecallChannelMixin, FusionRerankMixin, QueryTransformMixin
 
         但 FTS 无结果时仍尝试向量检索作为兜底（避免 cold_max > 0 时丢失向量召回）。
         """
-        fts_items, kg_v2_items = await asyncio.gather(
-            self._timed(
-                "fts",
-                self._mm._hybrid_fts_search_scoped(
-                    query, recall_limit, scope, is_raw_filter
-                ),
-                query,
+        # B1: gather 会把每个通道包成独立 Task（contextvars 快照拷贝），
+        # kg_v2 通道内的降级打点必须捕获后由本协程合并，否则父级读不到。
+        fts_outcome, kg_v2_outcome = await asyncio.gather(
+            capture_channel_trace(
+                self._timed(
+                    "fts",
+                    self._mm._hybrid_fts_search_scoped(
+                        query, recall_limit, scope, is_raw_filter
+                    ),
+                    query,
+                )
             ),
-            self._timed(
-                "kg_v2", self._recall_kg_v2(query, recall_limit, scope), query
+            capture_channel_trace(
+                self._timed(
+                    "kg_v2", self._recall_kg_v2(query, recall_limit, scope), query
+                )
             ),
         )
+        merge_channel_outcomes((fts_outcome, kg_v2_outcome))
+        fts_items, kg_v2_items = fts_outcome.result, kg_v2_outcome.result
         if fts_items:
-            results = fts_items[:k]
+            results = _take_with_trace(fts_items, k)
             # KG v2 事实作为补充候选追加 (已带 rrf_score, 不参与 ID-based 去重)
             if kg_v2_items and len(results) < k:
-                results.extend(kg_v2_items[:k - len(results)])
+                results.extend(_take_with_trace(kg_v2_items, k - len(results)))
             logger.info("memory.search", event="memory_search",
                         query=query[:100], tier="cold", results=len(results),
                         duration_ms=int((time.time() - _start) * 1000))
@@ -230,16 +291,16 @@ class RetrievalEngine(RecallChannelMixin, FusionRerankMixin, QueryTransformMixin
         # FTS 无结果，尝试向量兜底 + KG v2
         vec_items = await self._mm._hybrid_vec_search(query, recall_limit, is_raw=is_raw_filter, scope=scope, query_vec=query_vec)
         if vec_items:
-            results = vec_items[:k]
+            results = _take_with_trace(vec_items, k)
             if kg_v2_items and len(results) < k:
-                results.extend(kg_v2_items[:k - len(results)])
+                results.extend(_take_with_trace(kg_v2_items, k - len(results)))
             logger.info("memory.search", event="memory_search",
                         query=query[:100], tier="cold+vec_fallback", results=len(results),
                         duration_ms=int((time.time() - _start) * 1000))
             return results
         # FTS + 向量均无结果, 仅返回 KG v2 事实 (若存在)
         if kg_v2_items:
-            results = kg_v2_items[:k]
+            results = _take_with_trace(kg_v2_items, k)
             logger.info("memory.search", event="memory_search",
                         query=query[:100], tier="cold+kg_v2_only", results=len(results),
                         duration_ms=int((time.time() - _start) * 1000))
@@ -276,11 +337,24 @@ class RetrievalEngine(RecallChannelMixin, FusionRerankMixin, QueryTransformMixin
         if not self._mm.kg or not use_kg:
             return []
         try:
-            related_names = await self._mm.kg.recall_by_query(query, limit=recall_limit)
-            if not related_names:
-                return []
-            return await self._mm.memory.search_memories_by_entities_scoped(
-                related_names, limit=recall_limit, scope=scope)
+            max_candidates = min(max(recall_limit * 8, recall_limit), 400)
+            candidate_limit = recall_limit
+            while True:
+                related_names = await self._mm.kg.recall_by_query(
+                    query, limit=candidate_limit
+                )
+                if not related_names:
+                    return []
+                results = await self._mm.memory.search_memories_by_entities_scoped(
+                    related_names, limit=recall_limit, scope=scope
+                )
+                results = [row for row in results if scope.matches_record(row)]
+                if len(results) >= recall_limit or candidate_limit >= max_candidates:
+                    return results[:recall_limit]
+                next_limit = min(candidate_limit * 2, max_candidates)
+                if next_limit == candidate_limit:
+                    return results[:recall_limit]
+                candidate_limit = next_limit
         except Exception as e:
             logger.debug("memory.kg_recall_failed", error=str(e))
             return []
@@ -309,10 +383,43 @@ class RetrievalEngine(RecallChannelMixin, FusionRerankMixin, QueryTransformMixin
                     _qv = query_vectors[0] if query_vectors else []
                 if not _qv:
                     return []
-                results = await self._mm.vec.search_child(_qv, top_k=recall_limit)
-                if not results:
+                # P0 隐私（2026-08-24）：与主向量通道对齐，scoped 子chunk候选
+                # 改为 recent-first keyset 分页逐页送入向量检索并跨页合并 top-N；
+                # 预算耗尽记 scope_scan_partial 并保留已扫部分；scope=None 单页直通。
+                from memory.retrieval.channels import (
+                    _merge_vector_page_hits,
+                    _normalize_vector_hits,
+                )
+
+                child_results: list[tuple[int, float]] = []
+                seen_child_ids: set[int] = set()
+                async for page_candidates in self._iter_visible_candidate_pages(
+                    scope, children=True, component="child_vector"
+                ):
+                    # None=无限制全库检索；[]=本页无可见候选跳过
+                    page_list = (
+                        None if page_candidates is None
+                        else list(page_candidates)
+                    )
+                    if page_list == []:
+                        continue
+                    page_hits = await self._mm.vec.search_child(
+                        _qv, top_k=recall_limit,
+                        candidate_ids=page_list,
+                    )
+                    page_pairs, _page_rows = _normalize_vector_hits(
+                        [
+                            {"id": hit.get("id"), "distance": hit.get("distance")}
+                            for hit in page_hits or []
+                            if isinstance(hit, dict)
+                        ]
+                    )
+                    _merge_vector_page_hits(
+                        child_results, page_pairs, seen_child_ids, recall_limit
+                    )
+                if not child_results:
                     return []
-                child_ids = [r["id"] for r in results]
+                child_ids = [row_id for row_id, _ in child_results]
                 return await self._mm.memory.get_child_parent_ids(child_ids)
 
             # return_exceptions=True：两个独立检索任务互不取消。
@@ -325,18 +432,26 @@ class RetrievalEngine(RecallChannelMixin, FusionRerankMixin, QueryTransformMixin
             # 协程泄漏防御：先创建协程对象再传入 gather。
             # 若 gather 因参数非 awaitable（如测试中 mock 返回 MagicMock）在
             # 同步阶段抛异常，已创建的协程未被调度 → 手动 close 避免 RuntimeWarning。
-            _child_fts_coro = self._mm.memory.search_child_fts(query, recall_limit)
+            _child_fts_coro = self._mm.memory.search_child_fts(
+                query, recall_limit, scope=scope
+            )
             _child_vec_coro = _child_vec_recall()
+            # B1: 内层 gather 同样是独立 Task，_child_vec_recall 预算耗尽时的
+            # scope_scan_partial 打点只存在于自己的 contextvars 副本里，
+            # 捕获后带回本协程，再随 "child" 通道的外层包装上抛合并。
+            _child_fts_traced = capture_channel_trace(_child_fts_coro)
+            _child_vec_traced = capture_channel_trace(_child_vec_coro)
             try:
                 _child_results = await asyncio.gather(
-                    _child_fts_coro,
-                    _child_vec_coro,
+                    _child_fts_traced,
+                    _child_vec_traced,
                     return_exceptions=True,
                 )
             except (ImportError, OSError, RuntimeError, ValueError):
                 # gather 同步阶段失败（参数非 awaitable），
                 # 关闭未调度的协程避免 "was never awaited" 警告
-                for _c in (_child_fts_coro, _child_vec_coro):
+                for _c in (_child_fts_traced, _child_vec_traced,
+                           _child_fts_coro, _child_vec_coro):
                     if asyncio.iscoroutine(_c):
                         _c.close()
                 raise
@@ -344,23 +459,28 @@ class RetrievalEngine(RecallChannelMixin, FusionRerankMixin, QueryTransformMixin
                 logger.exception(".memory._retrieval_engine.unexpected")
                 # gather 同步阶段失败（参数非 awaitable），
                 # 关闭未调度的协程避免 "was never awaited" 警告
-                for _c in (_child_fts_coro, _child_vec_coro):
+                for _c in (_child_fts_traced, _child_vec_traced,
+                           _child_fts_coro, _child_vec_coro):
                     if asyncio.iscoroutine(_c):
                         _c.close()
                 raise
             # 分别处理异常：一个检索通道失败不影响另一个的结果
+            merge_channel_outcomes(
+                outcome for outcome in _child_results
+                if isinstance(outcome, ChannelOutcome)
+            )
             if isinstance(_child_results[0], Exception):
                 logger.debug("memory.child_fts_failed",
                              error=f"{type(_child_results[0]).__name__}: {_child_results[0]}")
                 child_fts_results = []
             else:
-                child_fts_results = _child_results[0]
+                child_fts_results = _child_results[0].result
             if isinstance(_child_results[1], Exception):
                 logger.debug("memory.child_vec_recall_failed",
                              error=f"{type(_child_results[1]).__name__}: {_child_results[1]}")
                 child_vec_parent_ids = []
             else:
-                child_vec_parent_ids = _child_results[1]
+                child_vec_parent_ids = _child_results[1].result
 
             # 合并 parent_ids（去重）
             parent_ids: set[int] = set()
@@ -377,9 +497,7 @@ class RetrievalEngine(RecallChannelMixin, FusionRerankMixin, QueryTransformMixin
                 list(parent_ids), scope=scope
             )
             # scope 后过滤：子chunk向量检索是全局的，需确保父记忆不跨用户泄露
-            parent_mems = [pm for pm in parent_mems
-                           if pm.get("user_id") == scope.user_id
-                           and pm.get("agent_id") == scope.agent_id]
+            parent_mems = [pm for pm in parent_mems if scope.matches_record(pm)]
             for pm in parent_mems:
                 pm["child_recall"] = True
             return parent_mems
@@ -414,19 +532,22 @@ class RetrievalEngine(RecallChannelMixin, FusionRerankMixin, QueryTransformMixin
         """温/热用户: 并行执行 FTS、向量、KG、子chunk、扩散、实体、KG v2 七路召回。"""
         logger.info("memory.gather_start", query=query[:30])
 
-        fts_items, vec_items, kg_items, child_items, spread_items, entity_items, kg_v2_items = await asyncio.gather(
-            self._timed("fts", self._mm._hybrid_fts_search_scoped(query, recall_limit, scope, is_raw_filter), query),
-            self._timed("vec", self._mm._hybrid_vec_search(query, recall_limit, candidate_ids=candidate_ids, is_raw=is_raw_filter, scope=scope, query_vec=query_vec), query),
-            self._timed("kg", self._recall_kg(query, recall_limit, scope, use_kg), query),
-            self._timed("child", self._recall_child(query, recall_limit, scope, query_vec), query),
-            self._timed("spreading", self._mm._spreading_recall(query, recall_limit, scope=scope), query),
-            self._timed("entity", self._mm._entity_recall(query, scope, recall_limit), query),
-            self._timed("kg_v2", self._recall_kg_v2(query, recall_limit, scope), query),
+        # B1: 七路召回各自是独立 Task（contextvars 快照拷贝），通道内
+        # mark_retrieval_degraded 的打点对父协程不可见。每个通道包一层
+        # capture_channel_trace 捕获本任务新增的 degraded 事件，gather 返回后
+        # 在本协程单点合并——只写进本次请求自己的 trace，不会跨请求串味。
+        # fusion/scoring 的打点在父协程内，不经此处，行为不变。
+        outcomes = await asyncio.gather(
+            capture_channel_trace(self._timed("fts", self._mm._hybrid_fts_search_scoped(query, recall_limit, scope, is_raw_filter), query)),
+            capture_channel_trace(self._timed("vec", self._mm._hybrid_vec_search(query, recall_limit, candidate_ids=candidate_ids, is_raw=is_raw_filter, scope=scope, query_vec=query_vec), query)),
+            capture_channel_trace(self._timed("kg", self._recall_kg(query, recall_limit, scope, use_kg), query)),
+            capture_channel_trace(self._timed("child", self._recall_child(query, recall_limit, scope, query_vec), query)),
+            capture_channel_trace(self._timed("spreading", self._mm._spreading_recall(query, recall_limit, scope=scope), query)),
+            capture_channel_trace(self._timed("entity", self._mm._entity_recall(query, scope, recall_limit), query)),
+            capture_channel_trace(self._timed("kg_v2", self._recall_kg_v2(query, recall_limit, scope), query)),
         )
-        return RecallChannels(
-            fts_items, vec_items, kg_items, child_items,
-            spread_items, entity_items, kg_v2_items,
-        )
+        merge_channel_outcomes(outcomes)
+        return RecallChannels(*(outcome.result for outcome in outcomes))
 
 
     async def _resolve_fallback_or_single_channel(
@@ -443,10 +564,15 @@ class RetrievalEngine(RecallChannelMixin, FusionRerankMixin, QueryTransformMixin
         # 空通道自动剔除: 七路都空则 fallback 查原始记忆（蒸馏失败时兜底）
         if not fts_items and not vec_items and not kg_items and not child_items and not spread_items and not entity_items and not kg_v2_items:
             # Fallback: 用相同 FTS+Vec 检索，但 include_raw（is_raw=0 和 is_raw=1 都返回）
-            raw_fts, raw_vec = await asyncio.gather(
-                self._mm._hybrid_fts_search_scoped(query, recall_limit, scope, is_raw_filter=None),
-                self._mm._hybrid_vec_search(query, recall_limit, candidate_ids=candidate_ids, is_raw=None, scope=scope, query_vec=query_vec),
+            # B1: vec 通道的 scope_scan_partial 打点同样产生于独立 Task，需捕获合并。
+            raw_fts_outcome, raw_vec_outcome = await asyncio.gather(
+                capture_channel_trace(
+                    self._mm._hybrid_fts_search_scoped(query, recall_limit, scope, is_raw_filter=None)),
+                capture_channel_trace(
+                    self._mm._hybrid_vec_search(query, recall_limit, candidate_ids=candidate_ids, is_raw=None, scope=scope, query_vec=query_vec)),
             )
+            merge_channel_outcomes((raw_fts_outcome, raw_vec_outcome))
+            raw_fts, raw_vec = raw_fts_outcome.result, raw_vec_outcome.result
             raw_results = (raw_fts or []) + (raw_vec or [])
             if raw_results:
                 # 去重 + 按 score 排序
@@ -458,7 +584,7 @@ class RetrievalEngine(RecallChannelMixin, FusionRerankMixin, QueryTransformMixin
                         seen_ids.add(rid)
                         deduped.append(r)
                 deduped.sort(key=lambda x: x.get("score", x.get("rrf_score", 0)), reverse=True)
-                results = deduped[:k]
+                results = _take_with_trace(deduped, k)
                 logger.info("memory.search", event="memory_search",
                             query=query[:100], tier=f"{tier}+raw_fallback",
                             results=len(results),
@@ -470,7 +596,7 @@ class RetrievalEngine(RecallChannelMixin, FusionRerankMixin, QueryTransformMixin
             return []
         # 仅 KG v2 有结果: 直接返回 (KG v2 事实已带 rrf_score, 无需补全)
         if not fts_items and not vec_items and not kg_items and not child_items and kg_v2_items:
-            results = kg_v2_items[:k]
+            results = _take_with_trace(kg_v2_items, k)
             logger.info("memory.search", event="memory_search",
                         query=query[:100], tier=tier, results=len(results),
                         duration_ms=int((time.time() - _start) * 1000))
@@ -522,9 +648,9 @@ class RetrievalEngine(RecallChannelMixin, FusionRerankMixin, QueryTransformMixin
             item.setdefault("rrf_score", val)
             item.setdefault("score_kind", "source")
             item.setdefault("source_channel", source_channel)
-        results = items[:k]
+        results = _take_with_trace(items, k)
         if kg_v2_items and len(results) < k:
-            results.extend(kg_v2_items[:k - len(results)])
+            results.extend(_take_with_trace(kg_v2_items, k - len(results)))
         logger.info("memory.search", event="memory_search",
                     query=query[:100], tier=tier, results=len(results),
                     duration_ms=int((time.time() - _start) * 1000))
@@ -556,6 +682,7 @@ class RetrievalEngine(RecallChannelMixin, FusionRerankMixin, QueryTransformMixin
         import config
         from utils.metrics import metrics
 
+        begin_retrieval_trace()
         scope_source = "explicit"
         if scope is None:
             from memory.scope import current_scope
@@ -744,6 +871,8 @@ class RetrievalEngine(RecallChannelMixin, FusionRerankMixin, QueryTransformMixin
                             retry_results = await self._mm._apply_fsrs_scoring(retry_results)
                             await self._mm._compute_final_scores(query, retry_results, config, query_entities)
                             retry_results.sort(key=lambda x: x.get("final_score", 0), reverse=True)
+                            for dropped in retry_results[k:]:
+                                mark_retrieval_dropped(dropped.get("id"), "top_k")
                             results = retry_results[:k]
                             # 重新评估
                             reassessment = self._mm._assessor.assess(query, results)
@@ -752,6 +881,8 @@ class RetrievalEngine(RecallChannelMixin, FusionRerankMixin, QueryTransformMixin
                                         level=reassessment["level"])
 
                 results.sort(key=lambda x: x.get("final_score", 0), reverse=True)
+                for dropped in results[k:]:
+                    mark_retrieval_dropped(dropped.get("id"), "top_k")
                 results = results[:k]
 
             # 注：移除 importance fallback
@@ -769,8 +900,13 @@ class RetrievalEngine(RecallChannelMixin, FusionRerankMixin, QueryTransformMixin
             _min_score = getattr(config, 'RAG_MIN_FINAL_SCORE', 0.15)
             if apply_min_score and intent != "chat" and _min_score > 0 and results:
                 _before = len(results)
+                before_results = list(results)
                 results = [r for r in results
                            if self._passes_min_relevance(r, _min_score)]
+                kept_objects = {id(item) for item in results}
+                for dropped in before_results:
+                    if id(dropped) not in kept_objects:
+                        mark_retrieval_dropped(dropped.get("id"), "low_score")
                 if len(results) != _before:
                     logger.info("memory.low_score_filtered",
                                 query=query[:60],
@@ -861,6 +997,8 @@ class RetrievalEngine(RecallChannelMixin, FusionRerankMixin, QueryTransformMixin
                         query, retry_results, config, query_entities)
                     retry_results.sort(
                         key=lambda x: x.get("final_score", 0), reverse=True)
+                    for dropped in retry_results[k:]:
+                        mark_retrieval_dropped(dropped.get("id"), "top_k")
                     results = retry_results[:k]
                     # 重新评估
                     reassessment = self._mm._assessor.assess(query, results)
@@ -871,6 +1009,8 @@ class RetrievalEngine(RecallChannelMixin, FusionRerankMixin, QueryTransformMixin
             # 注：移除 importance fallback（同上，会注入"重要但无关"的记忆）
 
         results.sort(key=lambda x: x.get("final_score", 0), reverse=True)
+        for dropped in results[k:]:
+            mark_retrieval_dropped(dropped.get("id"), "top_k")
         results = results[:k]
         return results
 
@@ -889,7 +1029,7 @@ class RetrievalEngine(RecallChannelMixin, FusionRerankMixin, QueryTransformMixin
         results = await self._mm._apply_topic_trigger(query, results, k, scope=scope)
 
         # KG 上下文增强（保留原有逻辑）
-        await self._mm._apply_kg_context_enhance(results)
+        await self._mm._apply_kg_context_enhance(results, scope=scope)
 
         results = self._mm._dedup_by_content_similarity(results)
 
@@ -899,6 +1039,8 @@ class RetrievalEngine(RecallChannelMixin, FusionRerankMixin, QueryTransformMixin
         _has_topic = any(r.get("topic_trigger") for r in results)
         _final_k = k + 2 if _has_topic else k
         if len(results) > _final_k:
+            for dropped in results[_final_k:]:
+                mark_retrieval_dropped(dropped.get("id"), "top_k")
             results = results[:_final_k]
 
         # 智能最低分过滤：非闲聊型 query 过滤低相关度噪声（保留话题触发记忆）
@@ -907,8 +1049,13 @@ class RetrievalEngine(RecallChannelMixin, FusionRerankMixin, QueryTransformMixin
         _min_score = getattr(config, 'RAG_MIN_FINAL_SCORE', 0.15)
         if apply_min_score and intent != "chat" and _min_score > 0 and results:
             _before = len(results)
+            before_results = list(results)
             results = [r for r in results
                        if self._passes_min_relevance(r, _min_score)]
+            kept_objects = {id(item) for item in results}
+            for dropped in before_results:
+                if id(dropped) not in kept_objects:
+                    mark_retrieval_dropped(dropped.get("id"), "low_score")
             if len(results) != _before:
                 logger.info("memory.low_score_filtered",
                             query=query[:60],

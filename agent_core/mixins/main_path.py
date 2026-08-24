@@ -12,6 +12,7 @@ agent_core.mixins.voice 及 config/core 叶子模块，不得 import agent_core.
 from __future__ import annotations
 
 import asyncio
+import inspect
 import os
 import re
 import tempfile
@@ -325,6 +326,7 @@ class MainPathMixin:
                 "surprised": 0.7, "confused": 0.4, "thinking": 0.3,
                 "playful": 0.6, "moved": 0.7, "anxious": 0.6,
                 "fear": 0.8, "pout": 0.5, "neutral": 0.2,
+                "curious": 0.4, "greeting": 0.3,
             }
             get_emotion_state(getattr(ctx, "user_id", "")).update(
                 emotion_label, _intensity_map.get(emotion_label, 0.5)
@@ -388,6 +390,10 @@ class MainPathMixin:
     ) -> Any:
         """主路径记忆检索（含情绪触发的安抚记忆）与 notebook 加载并行。"""
         _retrieve_start = time.time()
+        if user_token is not None:
+            await self.context.commit_user_context(
+                user_token, evidence_bundle=None
+            )
         # 记忆检索超时（秒）在此统一解析一次，内层检索与外层 gather 复用同一值，
         # 避免配置 MEMORY_RETRIEVE_TIMEOUT > 8 时被外层写死的 8s 硬顶（日志口径不一致）。
         import config as _cfg
@@ -413,46 +419,99 @@ class MainPathMixin:
                     #   8s 给慢速存储足够余量，同时控制最坏延迟（LLM 前串行 await）。
                     from memory.scope import Scope, current_scope
                     memory_scope = current_scope()
-                    # P1 隐私修复（2026-08-24）：QQ 群回复默认排除 personal-boundary 记忆。
-                    # 根因：本函数仅判 is_master 即按绑定 scope 检索，而向量/FTS/时间线
-                    #       通道只按 user_id 过滤、不区分回复去向——主人私聊提炼的个人
-                    #       记忆会注入全群可见回复（存量隐私缺口，审查确认）。
-                    # 等价判定：主路径中仅 source="qq_group" 会绑定 "qq_group:*" session
-                    #       （core.process ← adapter 群管线），故以前缀判定群回复去向；
-                    #       C2C/Web/CLI 的 session 无此前缀，路径完全不受影响。
-                    # 修复：scope 显式降为该群 conversation 形态（Scope.group，boundary-
-                    #       aware 通道提前过滤），并对结果按 matches_record 后过滤兜底
-                    #       不感知 boundary 的通道。GROUP_REPLY_PERSONAL_MEMORY_ENABLED=true
-                    #       可恢复旧行为（含旧 scope 与不过滤）。
-                    import config as _cfg_scope
+                    # 群回复始终使用 conversation boundary；P0 隐私边界不可由配置绕过。
                     _session_id = str(getattr(memory_scope, "session_id", ""))
-                    _exclude_personal_in_group = (
-                        not bool(getattr(_cfg_scope, "GROUP_REPLY_PERSONAL_MEMORY_ENABLED", False))
-                        and _session_id.startswith("qq_group:")
-                    )
-                    if _exclude_personal_in_group:
+                    _is_group_scope = _session_id.startswith("qq_group:")
+                    if _is_group_scope:
                         memory_scope = Scope.group(
                             user_id=memory_scope.user_id,
                             group_id=str(memory_scope.session_id)[len("qq_group:"):],
                             agent_id=memory_scope.agent_id,
                             request_id=memory_scope.request_id,
                         )
-                    results = await asyncio.wait_for(
-                        self.memory.retrieve_memories(
-                            user_input,
-                            k=_k,
-                            scope=memory_scope,
-                            conv_user_id=memory_scope.user_id,
-                        ),
-                        timeout=_mem_timeout,
+                    traced_retrieve = getattr(
+                        self.memory, "retrieve_memories_with_trace", None
                     )
-                    if results and _exclude_personal_in_group:
+                    if inspect.iscoroutinefunction(traced_retrieve):
+                        outcome = await asyncio.wait_for(
+                            traced_retrieve(
+                                user_input,
+                                k=_k,
+                                scope=memory_scope,
+                                conv_user_id=memory_scope.user_id,
+                            ),
+                            timeout=_mem_timeout,
+                        )
+                        results = list(outcome.results)
+                        outcome_degraded = outcome.degraded_components
+                        outcome_dropped = outcome.dropped
+                    else:
+                        results = await asyncio.wait_for(
+                            self.memory.retrieve_memories(
+                                user_input,
+                                k=_k,
+                                scope=memory_scope,
+                                conv_user_id=memory_scope.user_id,
+                            ),
+                            timeout=_mem_timeout,
+                        )
+                        outcome_degraded = ()
+                        outcome_dropped = ()
+                    if results and _is_group_scope:
                         _raw_count = len(results)
                         results = [m for m in results if memory_scope.matches_record(m)]
                         if len(results) != _raw_count:
                             logger.info("privacy.group_personal_memory_filtered",
                                         dropped=_raw_count - len(results),
                                         kept=len(results))
+                    if user_token is not None:
+                        try:
+                            from memory.evidence import EvidenceBundle, RetrievalPlan
+                            from memory.retrieval.trace import (
+                                read_retrieval_dropped,
+                                read_retrieval_trace,
+                            )
+                            channels = tuple(dict.fromkeys(
+                                str(channel)
+                                for item in (results or [])
+                                for channel in (
+                                    item.get("channels")
+                                    or [item.get("source_channel") or item.get("source")]
+                                )
+                                if channel
+                            ))
+                            plan = RetrievalPlan.from_query(
+                                str(user_input), scope=memory_scope, top_k=_k,
+                                enabled_channels=channels,
+                                budget_ms=int(_mem_timeout * 1000),
+                            )
+                            degraded_components = tuple(dict.fromkeys(
+                                (*outcome_degraded, *read_retrieval_trace())
+                            ))
+                            upstream_dropped = tuple(dict.fromkeys(
+                                (*outcome_dropped, *read_retrieval_dropped())
+                            ))
+                            evidence_bundle = EvidenceBundle.from_results(
+                                plan, results or [],
+                                degraded_components=degraded_components,
+                                upstream_dropped=upstream_dropped,
+                            ).apply_budget(
+                                int(getattr(_cfg, "MEMORY_EVIDENCE_TOKEN_BUDGET", 3000))
+                            )
+                            committed = await self.context.commit_user_context(
+                                user_token, evidence_bundle=evidence_bundle
+                            )
+                            logger.debug(
+                                "memory.evidence_shadow_built committed={} retrieved={} injected={} dropped={}",
+                                committed,
+                                len(evidence_bundle.evidence) + len(evidence_bundle.dropped),
+                                len(evidence_bundle.evidence),
+                                len(evidence_bundle.dropped),
+                            )
+                        except Exception as evidence_error:
+                            logger.warning(
+                                "memory.evidence_shadow_failed error={}", str(evidence_error)
+                            )
                     _retrieve_ms = int((time.time() - _t0) * 1000)
                     logger.info("pipeline.memory.retrieve.done elapsed_ms={} result_count={}",
                                 _retrieve_ms, len(results) if results else 0)
@@ -474,8 +533,8 @@ class MainPathMixin:
                     # 动态情绪阈值: 根据对话情景自适应调整
                     _base_threshold = 0.5
                     try:
-                        import config as _cfg
-                        _base_threshold = float(getattr(_cfg, "EMOTION_TRIGGER_THRESHOLD", 0.5))
+                        import config as _emotion_cfg
+                        _base_threshold = float(getattr(_emotion_cfg, "EMOTION_TRIGGER_THRESHOLD", 0.5))
                     except (ImportError, ValueError, TypeError):
                         logger.debug("main_path.emotion_threshold_config_fallback")
                     _emo_threshold = self._dynamic_emotion_threshold(

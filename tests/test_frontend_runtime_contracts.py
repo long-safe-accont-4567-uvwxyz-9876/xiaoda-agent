@@ -67,8 +67,10 @@ def test_chat_resend_uses_structured_image_option():
 
 def test_mail_autosave_replays_changes_made_during_request():
     view = source("web/frontend/src/views/MailView.vue")
-    assert "savePending" in view
-    assert "if (savePending)" in view
+    settings = source("web/frontend/src/composables/useMailSettings.ts")
+    assert "useMailSettings" in view
+    assert "savePending" in settings
+    assert "if (savePending)" in settings
 
 
 def test_stale_session_history_cannot_overwrite_active_session():

@@ -504,12 +504,19 @@ class MentalStateManager:
 
     @staticmethod
     def _emotion_guidance(user_emotion: str) -> str:
-        """根据用户情绪给出回应语气建议."""
-        _soothing = {"焦虑", "悲伤", "愤怒", "恐惧", "孤独", "沮丧", "失落", "不安"}
-        _cheering = {"开心", "喜悦", "兴奋", "期待"}
-        if user_emotion in _soothing:
+        """根据用户情绪给出回应语气建议.
+
+        经 resolve_emotion 归一到核心枚举后按效价分类：既兼容关键词变体
+        （烦躁/委屈/迷茫…），也兼容 emotion_llm 的自由文本标签，
+        不再依赖与枚举脱节的手抄集合（2026-08 review 二轮 Fix A）。
+        """
+        from emotion.emotion_enum import Emotion, resolve_emotion
+        emo = resolve_emotion(user_emotion)
+        if emo in (Emotion.SAD, Emotion.ANGRY, Emotion.ANXIOUS,
+                   Emotion.FEAR, Emotion.CONFUSED):
             return "安抚"
-        if user_emotion in _cheering:
+        if emo in (Emotion.HAPPY, Emotion.EXCITED, Emotion.LOVE,
+                   Emotion.PLAYFUL, Emotion.MOVED):
             return "轻快"
         return "温柔"
 

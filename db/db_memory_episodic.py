@@ -11,7 +11,7 @@ from typing import Any
 
 from loguru import logger
 
-from db.db_memory_utils import _sql_placeholders
+from db.db_memory_utils import _sql_placeholders, owned_write_section
 
 
 class EpisodicMixin:
@@ -80,17 +80,19 @@ class EpisodicMixin:
                 columns.append(column)
                 values.append(value)
         placeholders = ", ".join("?" for _ in columns)
-        cursor = await self._conn.execute(
-            f"INSERT INTO episodic_memories ({', '.join(columns)}) "
-            f"VALUES ({placeholders})",
-            values,
-        )
-        mem_id = cursor.lastrowid
-        if auto_commit:
-            await self._conn.commit()
-        # 同步写入 FTS 索引
-        await self._sync_fts(mem_id, summary, "db_memory.fts_insert_failed",
-                             delete_first=False, auto_commit=auto_commit)
+        # B-1：auto_commit 提交经事务守卫（锁内/外层让渡），不再裸提交
+        async with owned_write_section(self, auto_commit) as do_commit:
+            cursor = await self._conn.execute(
+                f"INSERT INTO episodic_memories ({', '.join(columns)}) "
+                f"VALUES ({placeholders})",
+                values,
+            )
+            mem_id = cursor.lastrowid
+            # 同步写入 FTS 索引（并入本段，由段所有权决定唯一提交点）
+            await self._sync_fts(mem_id, summary, "db_memory.fts_insert_failed",
+                                 delete_first=False, auto_commit=False)
+            if do_commit:
+                await self._conn.commit()
         return mem_id
 
     async def get_memory_by_id(self, memory_id: int) -> dict | None:
@@ -141,92 +143,104 @@ class EpisodicMixin:
         auto_commit: bool = True,
     ) -> bool:
         """Atomically persist classification, effective importance, and FSRS state."""
-        cursor = await self._conn.execute(
-            "UPDATE episodic_memories SET memory_type=?, importance=?, "
-            "classification_status=?, classification_version=?, classified_at=?, "
-            "phase=?, stability=?, reinforcement_count=? WHERE id=?",
-            (
-                memory_type,
-                importance,
-                classification_status,
-                classification_version,
-                classified_at,
-                phase,
-                stability,
-                reinforcement_count,
-                memory_id,
-            ),
-        )
-        if auto_commit:
-            await self._conn.commit()
+        async with owned_write_section(self, auto_commit) as do_commit:
+            cursor = await self._conn.execute(
+                "UPDATE episodic_memories SET memory_type=?, importance=?, "
+                "classification_status=?, classification_version=?, classified_at=?, "
+                "phase=?, stability=?, reinforcement_count=? WHERE id=?",
+                (
+                    memory_type,
+                    importance,
+                    classification_status,
+                    classification_version,
+                    classified_at,
+                    phase,
+                    stability,
+                    reinforcement_count,
+                    memory_id,
+                ),
+            )
+            if do_commit:
+                await self._conn.commit()
         return cursor.rowcount > 0
 
     async def update_emotion_label(self, mem_id: int, label: str) -> None:
-        await self._conn.execute(
-            "UPDATE episodic_memories SET emotion_label = ? WHERE id = ?",
-            (label, mem_id),
-        )
-        await self._conn.commit()
+        async with owned_write_section(self) as do_commit:
+            await self._conn.execute(
+                "UPDATE episodic_memories SET emotion_label = ? WHERE id = ?",
+                (label, mem_id),
+            )
+            if do_commit:
+                await self._conn.commit()
 
     async def update_distill_status(self, mem_id: int, status: str) -> None:
         """更新蒸馏状态字段（不污染 emotion_label）。"""
-        await self._conn.execute(
-            "UPDATE episodic_memories SET distill_status = ? WHERE id = ?",
-            (status, mem_id),
-        )
-        await self._conn.commit()
+        async with owned_write_section(self) as do_commit:
+            await self._conn.execute(
+                "UPDATE episodic_memories SET distill_status = ? WHERE id = ?",
+                (status, mem_id),
+            )
+            if do_commit:
+                await self._conn.commit()
 
     async def update_memory_summary(self, mem_id: int, new_summary: str) -> None:
-        cursor = await self._conn.execute(
-            "UPDATE episodic_memories SET summary = ? WHERE id = ? AND is_raw = 0",
-            (new_summary, mem_id),
-        )
-        if cursor.rowcount > 0:
-            await self._sync_fts(
-                mem_id,
-                new_summary,
-                "db_memory.fts_sync_on_summary_update_failed",
+        async with owned_write_section(self) as do_commit:
+            cursor = await self._conn.execute(
+                "UPDATE episodic_memories SET summary = ? WHERE id = ? AND is_raw = 0",
+                (new_summary, mem_id),
             )
-        await self._conn.commit()
+            if cursor.rowcount > 0:
+                await self._sync_fts(
+                    mem_id,
+                    new_summary,
+                    "db_memory.fts_sync_on_summary_update_failed",
+                    auto_commit=False,
+                )
+            if do_commit:
+                await self._conn.commit()
 
     async def update_fallback_raw(self, mem_id: int, new_summary: str, label: str,
                                     distill_status: str = "") -> None:
-        if distill_status:
-            cursor = await self._conn.execute(
-                "UPDATE episodic_memories SET summary = ?, emotion_label = ?, "
-                "distill_status = ? WHERE id = ? AND is_raw = 0",
-                (new_summary, label, distill_status, mem_id),
-            )
-            await self._conn.execute(
-                "UPDATE episodic_memories SET emotion_label = ?, distill_status = ? "
-                "WHERE id = ? AND is_raw = 1",
-                (label, distill_status, mem_id),
-            )
-        else:
-            cursor = await self._conn.execute(
-                "UPDATE episodic_memories SET summary = ?, emotion_label = ? "
-                "WHERE id = ? AND is_raw = 0",
-                (new_summary, label, mem_id),
-            )
-            await self._conn.execute(
-                "UPDATE episodic_memories SET emotion_label = ? "
-                "WHERE id = ? AND is_raw = 1",
-                (label, mem_id),
-            )
-        if cursor.rowcount > 0:
-            await self._sync_fts(
-                mem_id, new_summary, "db_memory.fts_sync_on_fallback_failed"
-            )
-        await self._conn.commit()
+        async with owned_write_section(self) as do_commit:
+            if distill_status:
+                cursor = await self._conn.execute(
+                    "UPDATE episodic_memories SET summary = ?, emotion_label = ?, "
+                    "distill_status = ? WHERE id = ? AND is_raw = 0",
+                    (new_summary, label, distill_status, mem_id),
+                )
+                await self._conn.execute(
+                    "UPDATE episodic_memories SET emotion_label = ?, distill_status = ? "
+                    "WHERE id = ? AND is_raw = 1",
+                    (label, distill_status, mem_id),
+                )
+            else:
+                cursor = await self._conn.execute(
+                    "UPDATE episodic_memories SET summary = ?, emotion_label = ? "
+                    "WHERE id = ? AND is_raw = 0",
+                    (new_summary, label, mem_id),
+                )
+                await self._conn.execute(
+                    "UPDATE episodic_memories SET emotion_label = ? "
+                    "WHERE id = ? AND is_raw = 1",
+                    (label, mem_id),
+                )
+            if cursor.rowcount > 0:
+                await self._sync_fts(
+                    mem_id, new_summary, "db_memory.fts_sync_on_fallback_failed",
+                    auto_commit=False,
+                )
+            if do_commit:
+                await self._conn.commit()
 
     async def increment_access_count(self, memory_id: int, auto_commit: bool = True) -> None:
         """递增记忆访问计数（检索强化）"""
-        await self._conn.execute(
-            "UPDATE episodic_memories SET access_count = access_count + 1 WHERE id = ?",
-            (memory_id,),
-        )
-        if auto_commit:
-            await self._conn.commit()
+        async with owned_write_section(self, auto_commit) as do_commit:
+            await self._conn.execute(
+                "UPDATE episodic_memories SET access_count = access_count + 1 WHERE id = ?",
+                (memory_id,),
+            )
+            if do_commit:
+                await self._conn.commit()
 
     async def batch_increment_access_count(self, memory_ids: list[int],
                                             auto_commit: bool = True) -> None:
@@ -238,35 +252,40 @@ class EpisodicMixin:
         if not memory_ids:
             return
         placeholders = _sql_placeholders(memory_ids)
-        await self._conn.execute(
-            f"UPDATE episodic_memories SET access_count = access_count + 1 "
-            f"WHERE id IN ({placeholders})",
-            memory_ids,
-        )
-        if auto_commit:
-            await self._conn.commit()
+        async with owned_write_section(self, auto_commit) as do_commit:
+            await self._conn.execute(
+                f"UPDATE episodic_memories SET access_count = access_count + 1 "
+                f"WHERE id IN ({placeholders})",
+                memory_ids,
+            )
+            if do_commit:
+                await self._conn.commit()
 
     async def archive_memory(self, memory_id: int) -> None:
         """Archive a memory without changing immutable raw scope fields."""
-        await self._conn.execute(
-            "UPDATE episodic_memories SET "
-            "status = CASE WHEN is_raw = 1 THEN 'archived' ELSE status END, "
-            "session_id = CASE WHEN is_raw = 0 THEN 'archived' ELSE session_id END "
-            "WHERE id = ?",
-            (memory_id,),
-        )
-        await self._conn.commit()
+        async with owned_write_section(self) as do_commit:
+            await self._conn.execute(
+                "UPDATE episodic_memories SET "
+                "status = CASE WHEN is_raw = 1 THEN 'archived' ELSE status END, "
+                "session_id = CASE WHEN is_raw = 0 THEN 'archived' ELSE session_id END "
+                "WHERE id = ?",
+                (memory_id,),
+            )
+            if do_commit:
+                await self._conn.commit()
 
     async def archive_memories_batch(self, memory_ids: list[int]) -> None:
         """Archive memories in one update while preserving raw scope."""
         if not memory_ids:
             return
         placeholders = _sql_placeholders(memory_ids)
-        await self._conn.execute(
-            "UPDATE episodic_memories SET "
-            "status = CASE WHEN is_raw = 1 THEN 'archived' ELSE status END, "
-            "session_id = CASE WHEN is_raw = 0 THEN 'archived' ELSE session_id END "
-            f"WHERE id IN ({placeholders})",
-            memory_ids,
-        )
-        await self._conn.commit()
+        async with owned_write_section(self) as do_commit:
+            await self._conn.execute(
+                "UPDATE episodic_memories SET "
+                "status = CASE WHEN is_raw = 1 THEN 'archived' ELSE status END, "
+                "session_id = CASE WHEN is_raw = 0 THEN 'archived' ELSE session_id END "
+                f"WHERE id IN ({placeholders})",
+                memory_ids,
+            )
+            if do_commit:
+                await self._conn.commit()

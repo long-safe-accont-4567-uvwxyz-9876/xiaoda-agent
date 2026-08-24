@@ -149,7 +149,7 @@ class KnowledgeGraph:
             ]
             # 优先使用免费模型，降级到主路由
             result = await self._call_free_model(messages, temperature=0.1, max_tokens=1024)
-            if result is None and self._router:
+            if result is None and self._router and self._free.backend == "api":
                 # 修复 P0-2：降级路由加 8s 超时保护
                 # 根因：原代码 router.route 无超时，主模型卡住会让实体提取无限阻塞，
                 # 进而阻塞整个记忆检索流程（kg.get_query_entities 在主检索路径中被同步等待）。
@@ -416,7 +416,9 @@ class KnowledgeGraph:
         """注入 KnowledgeGraphV2 实例。"""
         self._kg_v2 = kg_v2
 
-    async def auto_extract_and_merge(self, summary: str) -> None:
+    async def auto_extract_and_merge(
+        self, summary: str, scope: Any | None = None
+    ) -> None:
         if not summary:
             return
 
@@ -425,7 +427,9 @@ class KnowledgeGraph:
             import config as _cfg
             if getattr(_cfg, 'KG_V2_ENABLED', False) and getattr(self, '_kg_v2', None):
                 try:
-                    await self._kg_v2.add_facts_from_episode(summary, time.time())
+                    await self._kg_v2.add_facts_from_episode(
+                        summary, time.time(), scope=scope
+                    )
                     return
                 except Exception as e:
                     logger.warning("kg.v2_extract_failed_fallback_to_v1", error=str(e))

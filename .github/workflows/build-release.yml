@@ -33,7 +33,7 @@ jobs:
 
     steps:
       - name: Checkout code
-        uses: actions/checkout@v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           fetch-depth: 0
 
@@ -52,7 +52,7 @@ jobs:
             libatomic1
 
       - name: Set up Python 3.11
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
         with:
           python-version: '3.11'
 
@@ -77,7 +77,7 @@ jobs:
           echo "Assets present OK"
 
       - name: Set up Node.js
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: '20'
 
@@ -158,6 +158,12 @@ jobs:
           # 1.28.0 升级到最新版，导致 native lib ABI 不匹配、frozen exe 加载 genai so
           # 失败。最后强制 pin 回实测兼容版本。
           pip install "onnxruntime==1.28.0" "onnxruntime-genai==0.15.2"
+          # Windows 专属可选依赖（ConPTY 真终端）：pywin32 + pywinpty。
+          # 缺失时 WebUI 虚拟终端静默回退 subprocess 管道——resize/TUI 全失效，
+          # 且 PyInstaller 静态分析不会收集懒加载的 winpty，必须显式装+显式验。
+          if [ "$RUNNER_OS" = "Windows" ]; then
+            pip install ".[windows]"
+          fi
 
       - name: Verify pilk installed (SILK codec for voice messages)
         shell: python
@@ -286,6 +292,29 @@ jobs:
           fi
           echo ""
           echo "Embedding bundle verified (remote default + local fallback runtime)"
+
+      - name: Verify winpty ConPTY bundled (Windows virtual terminal)
+        if: runner.os == 'Windows'
+        shell: bash
+        run: |
+          # 2026-08-24 门禁复审：ConPTY 依赖（pywinpty → winpty .pyd + winpty-agent.exe）
+          # 必须进 dist，否则 Windows 终端静默降级为无 TTY 管道（resize/TUI 失效）。
+          echo "=== Checking pywinpty bundled ==="
+          WINPTY=$(find dist/xiaoda-agent \( -name "winpty*.pyd" -o -name "*winpty*.dll" \) -print -quit 2>/dev/null)
+          if [ -z "$WINPTY" ]; then
+            echo "FATAL: pywinpty extension NOT bundled! Windows terminal will fall back to pipe mode (no resize/TUI)."
+            find dist/xiaoda-agent -iname "*winpty*" 2>/dev/null | head -10 || true
+            exit 1
+          fi
+          echo "OK: pywinpty found:"
+          ls -lh "$WINPTY"
+          AGENT_EXE=$(find dist/xiaoda-agent \( -name "winpty-agent.exe" \) -print -quit 2>/dev/null)
+          if [ -z "$AGENT_EXE" ]; then
+            echo "FATAL: winpty-agent.exe NOT bundled!"
+            exit 1
+          fi
+          echo "OK: winpty-agent.exe found:"
+          ls -lh "$AGENT_EXE"
 
       - name: Verify CLI modules bundled (interactive slash commands)
         shell: bash
@@ -512,7 +541,7 @@ jobs:
 
       - name: Cache NSIS
         if: runner.os == 'Windows'
-        uses: actions/cache@v4
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
         with:
           path: C:\Program Files (x86)\NSIS
           key: nsis-3-windows-x64
@@ -647,8 +676,65 @@ jobs:
           cat xiaoda-agent-linux-arm64-v${VERSION}.tar.gz >> xiaoda-agent-linux-arm64-v${VERSION}.run
           chmod +x xiaoda-agent-linux-arm64-v${VERSION}.run
 
+      # 2026-08-24 门禁复审：.run 自解压此前必坏——install-linux.sh 用非锚定
+      # grep '__ARCHIVE__' | head -1 取 marker，脚本头部注释里的字样被误当
+      # marker，tail 输出纯文本，tar 必然解压失败。安装脚本已改为锚定整行 +
+      # 取最后一次命中；此步骤在 CI 端用假 payload 复现完整拼接→提取链路，
+      # 确保 marker 定位正确（tail -n +N 输出必须是 gzip magic 开头）。
+      - name: Smoke test .run self-extracting installer (Linux)
+        if: startsWith(matrix.platform, 'linux-')
+        shell: bash
+        run: |
+          set -euo pipefail
+          VERSION="${{ steps.version.outputs.version }}"
+          RUN_FILE="xiaoda-agent-${{ matrix.platform }}-v${VERSION}.run"
+          [ -f "$RUN_FILE" ] || { echo "FATAL: $RUN_FILE not found"; exit 1; }
+
+          # 1) 安装脚本本身语法必须通过
+          bash -n scripts/install-linux.sh
+
+          # 2) 按安装脚本的同一算法定位 marker：锚定 ^__ARCHIVE__$ 行、取最后一次
+          # （-a：payload 为二进制 gzip，grep 会把 .run 判成 binary file，
+          #   不加 -a 时 GNU grep 仍能匹配但输出带 binary 前缀，显式声明语义）
+          ARCHIVE_LINE=$(grep -a -n '^__ARCHIVE__$' "$RUN_FILE" | tail -1 | cut -d: -f1)
+          [ -n "$ARCHIVE_LINE" ] || { echo "FATAL: anchored __ARCHIVE__ marker not found in .run"; exit 1; }
+          echo "marker at line: $ARCHIVE_LINE (total lines: $(wc -l < "$RUN_FILE"))"
+
+          # 3) 提取的 payload 必须以 gzip magic (1f 8b) 开头且能被 tar 列出
+          PAYLOAD=$(mktemp /tmp/run-payload-XXXXXX.tar.gz)
+          tail -n +$((ARCHIVE_LINE + 1)) "$RUN_FILE" > "$PAYLOAD"
+          MAGIC=$(head -c 2 "$PAYLOAD" | od -An -tx1 | tr -d ' \n')
+          [ "$MAGIC" = "1f8b" ] || { echo "FATAL: payload magic=$MAGIC, expected gzip 1f8b"; exit 1; }
+          tar -tzf "$PAYLOAD" > /dev/null || { echo "FATAL: payload is not a valid tar.gz"; exit 1; }
+          tar -tzf "$PAYLOAD" | head -3
+          rm -f "$PAYLOAD"
+
+          # 4) 反向验证：用假 payload 注入临时副本，确认脚本对「注释里含
+          #    __ARCHIVE__ 字样」的干扰免疫（回归测试原缺陷）
+          SMOKE_SCRIPT=$(mktemp /tmp/smoke-install-XXXXXX.sh)
+          cp scripts/install-linux.sh "$SMOKE_SCRIPT"
+          sed -i '3i # decoy comment mentioning __ARCHIVE__ token inside a sentence' "$SMOKE_SCRIPT"
+          # 构造 .run 副本：脚本(含 decoy 注释) + 锚定 marker + gzip 假 payload
+          GZIP_PAYLOAD=$(mktemp /tmp/fake-XXXXXX.tar.gz)
+          echo fake-payload-content | gzip > "$GZIP_PAYLOAD"
+          cat "$SMOKE_SCRIPT" > "${RUN_FILE}.smoke"
+          printf '\n__ARCHIVE__\n' >> "${RUN_FILE}.smoke"
+          cat "$GZIP_PAYLOAD" >> "${RUN_FILE}.smoke"
+          chmod +x "${RUN_FILE}.smoke"
+          SMOKE_LINE=$(grep -a -n '^__ARCHIVE__$' "${RUN_FILE}.smoke" | tail -1 | cut -d: -f1)
+          DECOY_LINE=$(grep -n '__ARCHIVE__' "$SMOKE_SCRIPT" | head -1 | cut -d: -f1)
+          [ -n "$DECOY_LINE" ] || { echo "FATAL: decoy not injected, test invalid"; exit 1; }
+          if [ "$SMOKE_LINE" = "$DECOY_LINE" ]; then
+            echo "FATAL: extraction would anchor on the decoy comment line ($DECOY_LINE)"
+            exit 1
+          fi
+          EXTRACT_MAGIC=$(tail -n +$((SMOKE_LINE + 1)) "${RUN_FILE}.smoke" | head -c 2 | od -An -tx1 | tr -d ' \n')
+          [ "$EXTRACT_MAGIC" = "1f8b" ] || { echo "FATAL: smoke extract magic=$EXTRACT_MAGIC, expected gzip 1f8b"; exit 1; }
+          rm -f "$SMOKE_SCRIPT" "$GZIP_PAYLOAD" "${RUN_FILE}.smoke"
+          echo ".run self-extract smoke OK"
+
       - name: Upload artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: ${{ matrix.artifact }}
           path: |
@@ -662,15 +748,67 @@ jobs:
             xiaoda-agent-linux-arm64-*.run
           if-no-files-found: error
 
+  # 2026-08-24 门禁复审：console script 指 agent:main，但 packages.find 不含
+  # 根目录单文件模块——pip install 后入口 ModuleNotFoundError（已实证）。
+  # pyproject 已显式声明 py-modules；此 job 构建 wheel → 干净 venv 安装 →
+  # 冒烟入口，防止打包声明回归。
+  wheel-smoke:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - name: Set up Python 3.11
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: '3.11'
+
+      - name: Build wheel
+        run: |
+          python -m pip install --upgrade pip build
+          python -m build --wheel --outdir dist-wheel/
+
+      - name: Install wheel into clean venv (runtime deps only)
+        run: |
+          # 干净 venv：只装 wheel 本身，验证元数据声明的依赖/模块自洽
+          python -m venv clean-venv
+          clean-venv/bin/pip install --upgrade pip
+          clean-venv/bin/pip install dist-wheel/*.whl
+
+      - name: Smoke test console entrypoint
+        run: |
+          # 入口可执行且 agent 模块可导入（ModuleNotFoundError 直接红）
+          clean-venv/bin/xiaoda-agent --help
+          clean-venv/bin/python -c "import agent, config, model_router, prompt_builder; print('wheel modules OK')"
+
+      - name: Assert root modules shipped in wheel
+        run: |
+          # py-modules 契约：全部根目录被 import 的顶层模块必须出现在 wheel 内
+          python - <<'EOF'
+          import glob, sys, tomllib, zipfile
+          with open("pyproject.toml", "rb") as f:
+              declared = tomllib.load(f)["tool"]["setuptools"]["py-modules"]
+          wheel = next(iter(glob.glob("dist-wheel/*.whl")))
+          names = set(zipfile.ZipFile(wheel).namelist())
+          missing = [m for m in declared if f"{m}.py" not in names]
+          if missing:
+              print("FATAL: modules missing from wheel:", missing)
+              sys.exit(1)
+          print(f"All {len(declared)} declared py-modules present in wheel")
+          EOF
+
   docker:
+    # 2026-08-24 门禁复审：docker job 此前无 needs，main push 时 build/test 尚未
+    # 跑完就把 latest/version 标签推上 registry（坏镜像可直接被拉取）。
+    # 现在必须 build + test 全绿才允许 push；build-push 拆为 load 与 push 两步。
+    needs: [build, test]
     runs-on: ubuntu-latest
     permissions:
       packages: write
       contents: read
     steps:
       - name: Checkout code
-        uses: actions/checkout@v4
-
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
       - name: Extract version
         id: version
         shell: bash
@@ -697,21 +835,39 @@ jobs:
           fi
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
 
+      # 登录推迟到 push 步骤之前：build(load) 阶段不需要凭据，减少 secret 暴露面
       - name: Log in to Container Registry
-        uses: docker/login-action@v3
+        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Set up QEMU (multi-arch build)
-        uses: docker/setup-qemu-action@v3
-
+        uses: docker/setup-qemu-action@c7c53464625b32c7a7e944ae62b3e17d2b600130 # v3
       - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
+        uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
+      # Step 1: 多架构构建并 load 到本地 docker（amd64 单架构可 load；
+      # 多平台 manifest 不能 load，因此此处仅构建 amd64 验证可运行性）
+      - name: Build image (load, no push)
+        uses: docker/build-push-action@ca052bb54ab0790a636c9b5f226502c73d547a25 # v5
+        with:
+          context: .
+          push: false
+          load: true
+          platforms: linux/amd64
+          tags: ghcr.io/${{ github.repository_owner }}/xiaoda-agent:rc
 
+      - name: Smoke test loaded image
+        run: |
+          # 本地冒烟：镜像能启动且注入了正确版本号，才允许推送
+          VERSION="${{ steps.version.outputs.version }}"
+          docker run --rm --entrypoint python ghcr.io/${{ github.repository_owner }}/xiaoda-agent:rc \
+            -c "print(open('.version').read().strip())" | grep -qx "$VERSION"
+
+      # Step 2: 全量多架构构建并推送（到达这里说明 build+test 全绿 + 冒烟通过）
       - name: Build and push Docker image (multi-arch)
-        uses: docker/build-push-action@v5
+        uses: docker/build-push-action@ca052bb54ab0790a636c9b5f226502c73d547a25 # v5
         with:
           context: .
           push: true
@@ -729,7 +885,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 45
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
       - name: Install system dependencies
         run: |
           sudo apt-get update && sudo apt-get install -y \
@@ -742,12 +898,12 @@ jobs:
             libnuma1 \
             libgomp1 \
             libatomic1
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
         with:
           python-version: '3.11'
           cache: pip
       - name: Set up Node.js
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: '20'
       # test_frontend_local_ai_contracts 等测试需要 esbuild 打包前端模块，
@@ -775,7 +931,11 @@ jobs:
           mkdir -p ~/.ai-agent/data/db
           cp -r config/workspace ~/.ai-agent/workspace/
           cp -r config/agents/*.json ~/.ai-agent/config/agents/ 2>/dev/null || true
-      - run: python -m pytest tests/ -q --timeout=60 -k "not e2e_real_scenario" --deselect tests/test_a4_rag_root_fix.py::TestIntentClassifyDefault::test_intent_llm_classify_default_false 2>&1 | tail -50
+      # 2026-08-24 门禁复审：移除 `| tail -50`（管道吞退出码，pytest 失败被吞为
+      # 假绿）与 --deselect tests/test_a4_rag_root_fix.py（用例已改为环境无关，
+      # 见 tests/test_a4_rag_root_fix.py 内注释）。
+      - name: Run full test suite (strict)
+        run: python -m pytest tests/ -q --timeout=60 -k "not e2e_real_scenario"
       - name: Run critical tests (strict)
         run: |
           # 单一事实源：scripts/critical_tests.txt（与 pre-push / ci-tests 共用）
@@ -795,12 +955,12 @@ jobs:
       # CodeRabbit 审查：release job 需要 checkout 源码才能读取 pyproject.toml
       # 否则 workflow_dispatch 时 SOURCE_VERSION 为空，版本校验永远失败
       - name: Checkout code
-        uses: actions/checkout@v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           fetch-depth: 0
 
       - name: Download all artifacts
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
           path: artifacts
           merge-multiple: true
@@ -845,7 +1005,7 @@ jobs:
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
 
       - name: Create GitHub Release
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2
         with:
           tag_name: v${{ steps.version.outputs.version }}
           name: Release v${{ steps.version.outputs.version }}

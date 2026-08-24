@@ -113,6 +113,7 @@ export default {
     tabInstalled: '已安装',
     tabDevicesShort: '算力设备',
     tabNodes: '功能节点',
+    tabPrompts: '提示词治理',
     tabDownloads: '下载任务',
     loadFailed: '本地 AI 资源加载失败',
     unitInstances: '个运行实例 ·',

@@ -340,3 +340,75 @@ async def test_init_mail_poller_passes_config_service(monkeypatch):
     assert captured["core"] is sentinel_core
     assert captured["config_service"] is sentinel_cfg
     assert captured.get("started") is True
+
+
+# ============================================================
+# 记忆对账后台轮询接线（P1 悬空接线）：开关门控 + 干净取消
+# ============================================================
+
+def _recon_core() -> types.SimpleNamespace:
+    """构造满足 _start_reconciliation_worker 探测路径的 mock core。"""
+    return types.SimpleNamespace(
+        memory=types.SimpleNamespace(
+            distiller=types.SimpleNamespace(_call_free_model=lambda *a, **k: None),
+            db=types.SimpleNamespace(reconciliation=object()),
+        )
+    )
+
+
+def test_reconciliation_worker_disabled_by_default():
+    """默认配置零开销：开关缺省 false，不启动任何循环。"""
+    import config
+    from web import server as server_module
+
+    assert config.MEMORY_RECONCILIATION_WORKER_ENABLED is False
+    assert server_module._start_reconciliation_worker(_recon_core()) is None
+
+
+@pytest.mark.asyncio
+async def test_reconciliation_worker_starts_and_cancels_cleanly_when_enabled(monkeypatch):
+    """开关开→返回任务句柄且能干净取消；worker 经真实 build 路径构造。"""
+    import asyncio as _aio
+    from contextlib import suppress
+
+    import config
+    from memory.reconciliation_worker import ReconciliationWorker
+    from web import server as server_module
+
+    monkeypatch.setattr(config, "MEMORY_RECONCILIATION_WORKER_ENABLED", True)
+
+    started: dict = {}
+
+    async def _fake_run_forever(worker, *, interval=None):
+        started["worker"] = worker
+        await _aio.Event().wait()
+
+    monkeypatch.setattr(
+        "memory.reconciliation_worker.run_forever", _fake_run_forever)
+
+    task = server_module._start_reconciliation_worker(_recon_core())
+    try:
+        await _aio.sleep(0)  # 让 create_task 的 stub 跑到首个 await
+        assert task is not None and not task.done()
+        assert isinstance(started.get("worker"), ReconciliationWorker)
+    finally:
+        task.cancel()
+        with suppress(_aio.CancelledError, _aio.TimeoutError):
+            await _aio.wait_for(task, timeout=5)
+
+
+@pytest.mark.asyncio
+async def test_reconciliation_worker_skips_quietly_without_provider(monkeypatch):
+    """无 provider（memory 缺失）→ 安静跳过返回 None，不抛错不启动。"""
+    import config
+    from web import server as server_module
+
+    monkeypatch.setattr(config, "MEMORY_RECONCILIATION_WORKER_ENABLED", True)
+
+    async def _never(*args, **kwargs):  # pragma: no cover
+        raise AssertionError("run_forever must not start without provider")
+
+    monkeypatch.setattr("memory.reconciliation_worker.run_forever", _never)
+
+    bare_core = types.SimpleNamespace(memory=None)
+    assert server_module._start_reconciliation_worker(bare_core) is None

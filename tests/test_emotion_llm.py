@@ -21,14 +21,14 @@ from emotion.emotion_llm import (
 
 @pytest.fixture(autouse=True)
 def _isolate_free_model_backend():
-    """关闭免费模型后端，让 detect_emotion_llm 只走注入的 mock router。
-
-    避免测试环境配置了 SILICONFLOW_API_KEY 时走真实网络导致超时/结果不确定。
-    """
-    original = emotion_llm_mod._free.backend
-    emotion_llm_mod.set_backend("off")
+    """API 模式下禁用真实免费模型，让测试稳定验证 mock router fallback。"""
+    original_backend = emotion_llm_mod._free.backend
+    original_key = emotion_llm_mod._free._api_key
+    emotion_llm_mod.set_backend("api")
+    emotion_llm_mod._free._api_key = ""
     yield
-    emotion_llm_mod.set_backend(original)
+    emotion_llm_mod._free._api_key = original_key
+    emotion_llm_mod.set_backend(original_backend)
 
 
 # ── Mock Router ──────────────────────────────────────────────
@@ -234,6 +234,44 @@ class TestDetectEmotionLlm:
         # router=None 且全局 router 不可用时返回空字典
         result = await detect_emotion_llm("我今天好累啊", router=None)
         assert result == {}
+
+    async def test_promoted_prompt_override_is_used(self, tmp_path, monkeypatch):
+        from web import config_service as config_service_module
+        from web.config_service import ConfigService
+        from web.prompt_profile_repository import PromptProfileRepository
+
+        config = ConfigService(tmp_path / "overrides.json")
+        repository = PromptProfileRepository(config)
+        repository.stage({
+            "prompt_id": "emotion.analyze",
+            "version": "2.0.0",
+            "system_template": "override-system",
+            "user_template": "override-user:{input}|{context}",
+            "variables": {
+                "input": {"required": True},
+                "context": {"required": False},
+            },
+            "output_schema": {
+                "type": "object", "required": ["primary"],
+                "properties": {"primary": {"type": "string"}},
+            },
+        })
+        repository.promote("emotion.analyze")
+        monkeypatch.setattr(config_service_module, "_instance", config)
+        router = MockRouter(
+            '{"primary":"平静","P":0,"A":0,"D":0.5,"needs":[],"style":""}'
+        )
+
+        await detect_emotion_llm("输入", context="上下文", router=router)
+
+        assert router.last_messages[0]["content"] == "override-system"
+        assert router.last_messages[1]["content"] == "override-user:输入|上下文"
+
+    async def test_off_does_not_call_router(self):
+        emotion_llm_mod.set_backend("off")
+        router = MockRouter('{}')
+        assert await detect_emotion_llm("测试", router=router) == {}
+        assert router.last_route_name is None
 
     async def test_normal_response_with_mock_router(self):
         response = '{"primary": "悲伤", "P": -0.6, "A": 0.3, "D": 0.2, "needs": ["休息", "被理解"], "style": "温柔陪伴"}'

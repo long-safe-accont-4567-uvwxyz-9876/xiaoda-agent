@@ -101,7 +101,10 @@ def test_common_process_kwargs_omit_empty_session_and_channel_fields() -> None:
 
 
 @pytest.mark.asyncio
-async def test_wechat_unknown_session_error_propagates_without_fallback() -> None:
+async def test_wechat_session_error_uses_channel_fallback() -> None:
+    """T3：_resolve_session 异常必须走通道兜底（原实现位于两个 try 之间裸传播，
+    LookupError 直接炸穿消息任务、用户无任何回复；修复后单一 try 覆盖
+    ACK/session/bind/process/post 全阶段）。"""
     core = SimpleNamespace(process=AsyncMock(return_value=_Result()))
     bot = _wechat_bot(core)
     bot._send_ack = AsyncMock()
@@ -115,11 +118,56 @@ async def test_wechat_unknown_session_error_propagates_without_fallback() -> Non
         context_token="ctx",
     )
 
-    with pytest.raises(LookupError, match="unknown session"):
-        await bot._process_with_core(req)
+    assert await bot._process_with_core(req) is None
 
     core.process.assert_not_awaited()
-    bot.send_message.assert_not_awaited()
+    bot.send_message.assert_awaited_once_with(
+        "出了点小问题，等会儿再聊好不好？",
+        to_user_id="wx-openid",
+        context_token="ctx",
+    )
+
+
+@pytest.mark.asyncio
+async def test_wechat_ack_error_uses_channel_fallback() -> None:
+    """T3：ACK 阶段异常同样统一走通道兜底（微信覆写 CORE_ERROR_TYPES=(Exception,)，
+    原实现已如此，此处固化该阶段在合并后的保护区内的行为不回退）。"""
+    core = SimpleNamespace(process=AsyncMock())
+    bot = _wechat_bot(core)
+    bot._send_ack = AsyncMock(side_effect=RuntimeError("ack send failed"))
+    bot.send_message = AsyncMock(return_value=True)
+    req = WxProcessRequest(
+        text="hello",
+        user_id="wechat-user",
+        source="wechat_c2c",
+        user_openid="wx-openid",
+        context_token="ctx",
+    )
+
+    assert await bot._process_with_core(req) is None
+
+    core.process.assert_not_awaited()
+    bot.send_message.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_skeleton_cancellation_propagates_from_any_stage() -> None:
+    """T3：CancelledError 在任何阶段都必须裸重抛（停机/取消语义不被兜底吞掉）。"""
+    core = SimpleNamespace(process=AsyncMock())
+    bot = _wechat_bot(core)
+    bot._send_ack = AsyncMock(side_effect=asyncio.CancelledError())
+    with pytest.raises(asyncio.CancelledError):
+        await bot._process_with_core(WxProcessRequest(
+            text="hello", user_id="u", source="wechat_c2c",
+            user_openid="wx", context_token="ctx",
+        ))
+
+    # process 阶段被取消：解绑后仍需重抛（不落入 _on_core_timeout/_on_core_error）
+    harness = _PipelineHarness(AsyncMock(side_effect=asyncio.CancelledError()))
+    with pytest.raises(asyncio.CancelledError):
+        await harness._process_with_core(CoreProcessRequest("hi", "u", "test", "o"))
+    assert "unbind" in harness.events, "取消时 EventBus 仍应解绑"
+    assert "error" not in harness.events and "timeout" not in harness.events
 
 
 @pytest.mark.asyncio
@@ -189,10 +237,10 @@ class _PipelineHarness(ChannelAdapterBase):
 @pytest.mark.parametrize(
     ("side_effect", "post_error", "expected_tail"),
     [
-        (None, False, ["unbind", "post"]),
-        (TimeoutError("late"), False, ["unbind", "timeout"]),
-        (RuntimeError("core failed"), False, ["unbind", "error"]),
-        (None, True, ["unbind", "post", "error"]),
+        (None, False, ["post", "unbind"]),
+        (TimeoutError("late"), False, ["timeout", "unbind"]),
+        (RuntimeError("core failed"), False, ["error", "unbind"]),
+        (None, True, ["post", "error", "unbind"]),
     ],
 )
 async def test_event_bus_unbinds_on_success_timeout_and_core_or_post_error(
@@ -209,6 +257,7 @@ async def test_event_bus_unbinds_on_success_timeout_and_core_or_post_error(
     await adapter._process_with_core(req)
 
     assert adapter.events[:3] == ["ack", "session", "bind"]
+    # T3：解绑移入骨架 finally——无论成功/超时/异常，"unbind" 都是最后一步
     assert adapter.events[-len(expected_tail) :] == expected_tail
     assert adapter.events.count("unbind") == 1
 

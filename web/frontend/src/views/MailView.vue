@@ -10,6 +10,7 @@ import { onMounted } from 'vue'
 import { NEmpty } from 'naive-ui'
 import { t } from '../i18n'
 import Tilt3D from '../components/fx/Tilt3D.vue'
+import ViewTitleIcon from '../components/fx/ViewTitleIcon.vue'
 import MailConnectCard from '../components/mail/MailConnectCard.vue'
 import MailConfigForm from '../components/mail/MailConfigForm.vue'
 import MailStatsCard from '../components/mail/MailStatsCard.vue'
@@ -38,7 +39,7 @@ onMounted(async () => {
 
 <template>
   <div class="mail-view">
-    <h2 class="view-title">{{ t('mailView.title') }}</h2>
+    <h2 class="view-title view-title-icon"><ViewTitleIcon name="mail" /> {{ t('mailView.title') }}</h2>
 
     <!-- 邮箱连接向导 -->
     <MailConnectCard

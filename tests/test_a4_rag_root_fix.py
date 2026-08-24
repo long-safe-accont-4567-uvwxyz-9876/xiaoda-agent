@@ -26,13 +26,41 @@ class TestIntentClassifyDefault:
     """测试意图分类默认配置"""
 
     def test_intent_llm_classify_default_false(self):
-        """INTENT_LLM_CLASSIFY 默认应为 False，避免 3-8s LLM 延迟"""
+        """INTENT_LLM_CLASSIFY 默认应为 False，避免 3-8s LLM 延迟
+
+        2026-08-24 修复：此前该用例在 CI 被 --deselect 跳过（CI 环境曾预置
+        INTENT_LLM_CLASSIFY=true 导致断言失败）。deselect 掩盖了真实回归——
+        正确做法是测试内显式清空该环境变量，让被测对象暴露「无环境干预时的
+        默认值」；若默认值真的漂移为 True，本用例应当变红。
+
+        2026-08-24 二次修复：reload(config_constants) 后必须同步 reload(config)，
+        否则 float 常量在两个模块中变成不同对象，下游
+        test_config_reexports_same_objects 的恒等断言随机失败；
+        环境变量需在最后一次 reload 前还原，避免残留值被固化进模块。
+        """
+        import os as _os
+
         import config
-        # 不设置环境变量时，默认应为 False
-        assert config.INTENT_LLM_CLASSIFY is False, (
-            "INTENT_LLM_CLASSIFY 默认应为 False，避免每次意图分类都调用 LLM（3-8s 延迟）。"
-            "规则匹配已经足够处理大部分情况。"
-        )
+        original = _os.environ.get("INTENT_LLM_CLASSIFY")
+        try:
+            _os.environ.pop("INTENT_LLM_CLASSIFY", None)
+            import importlib
+
+            import config_constants
+            importlib.reload(config_constants)
+            assert config_constants.INTENT_LLM_CLASSIFY is False, (
+                "INTENT_LLM_CLASSIFY 默认应为 False，避免每次意图分类都调用 LLM（3-8s 延迟）。"
+                "规则匹配已经足够处理大部分情况。"
+            )
+        finally:
+            if original is not None:
+                _os.environ["INTENT_LLM_CLASSIFY"] = original
+            else:
+                _os.environ.pop("INTENT_LLM_CLASSIFY", None)
+            import importlib
+
+            importlib.reload(config_constants)
+            importlib.reload(config)
 
     def test_intent_classify_timeout_at_least_10s(self):
         """INTENT_CLASSIFY_TIMEOUT 应至少 10s，覆盖慢速模型的响应时间"""

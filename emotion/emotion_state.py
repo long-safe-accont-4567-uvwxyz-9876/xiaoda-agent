@@ -188,6 +188,7 @@ class EmotionState:
             "surprised": "惊讶", "confused": "困惑", "thinking": "思考",
             "playful": "调皮", "moved": "感动", "anxious": "焦虑",
             "fear": "害怕", "pout": "撒娇",
+            "curious": "好奇", "greeting": "问候",
         }
         cn = cn_map.get(emotion, emotion)
 

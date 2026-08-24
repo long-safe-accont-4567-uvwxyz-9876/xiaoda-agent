@@ -67,7 +67,8 @@ async def test_group_pipeline_injects_prior_at_without_ids_or_current_duplicatio
     await bot._run_message_pipeline(
         _message("m-a", "group-raw"), is_group=True,
         user_input="A 的问题", user_id="qq_member-a", openid="member-a",
-        is_master=False, image_data=None, group_key="group-raw",
+        is_master=False, image_data=None, session_id="qq_group:wrong-group",
+        group_key="wrong-group",
     )
     await bot._run_message_pipeline(
         _message("m-b", "group-raw"), is_group=True,
@@ -89,6 +90,7 @@ async def test_group_pipeline_injects_prior_at_without_ids_or_current_duplicatio
     assert metadata["is_owner"] is True
     assert metadata["message_id"] == "m-b"
     assert metadata["group_key"] != "group-raw"
+    assert first_req.session_id == "qq_group:group-raw"
     assert "member-a" not in repr(metadata)
     assert "member-b" not in repr(metadata)
 

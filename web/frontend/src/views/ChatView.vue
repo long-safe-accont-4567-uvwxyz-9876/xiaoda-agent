@@ -4,7 +4,6 @@ import type { Ref } from 'vue'
 import { NDrawer, NDrawerContent, NButton, NPopconfirm, useMessage } from 'naive-ui'
 import { useChatStore } from '../stores/chat'
 import type { ChatRequestSnapshot } from '../stores/chat'
-import { useAuthStore } from '../stores/auth'
 import { useUiStore } from '../stores/ui'
 import { api, exportSessionDownload } from '../api'
 import { getWsClient } from '../api/ws'
@@ -24,7 +23,6 @@ import { t } from '../i18n'
 defineOptions({ name: 'ChatView' })
 
 const chat = useChatStore()
-const auth = useAuthStore()
 const ui = useUiStore()
 const ws = useWorkspaceStore()
 const message = useMessage()
@@ -358,9 +356,9 @@ const emotionColors: Record<string, string> = {
             <video v-if="msg.videoUrl" :src="msg.videoUrl" controls class="media-video"></video>
             <audio v-if="msg.audioUrl" :src="msg.audioUrl" controls class="media-audio"></audio>
           </div>
-          <!-- 表情包：贴在气泡尾部，不与产物混淆 -->
-          <img v-if="msg.stickerUrl" :src="msg.stickerUrl + '?token=' + auth.token" class="sticker-img"
-               :title="t('chatView.zoom')" @click="lightboxUrl = msg.stickerUrl + '?token=' + auth.token" />
+          <!-- 表情包：贴在气泡尾部，不与产物混淆（凭据走 HttpOnly cookie，URL 不带 token） -->
+          <img v-if="msg.stickerUrl" :src="msg.stickerUrl" class="sticker-img"
+               :title="t('chatView.zoom')" @click="lightboxUrl = msg.stickerUrl" />
 
           <div class="bubble-footer" v-if="!msg.streaming && msg.content && msg.role !== 'system'">
             <span class="msg-time">{{ fmtTime(msg.timestamp) }}</span>

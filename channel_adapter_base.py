@@ -554,36 +554,40 @@ class ChannelAdapterBase:
           4. 成功：_post_process_result（仍在保护区内）后返回 ProcessResult
           5. 超时/异常：_on_core_timeout / _on_core_error 兜底后返回 None
              （调用方据此跳过回复投递）
+
+        T3（保护区缺口修复）：单一 try 覆盖 ACK/session/bind/process/post 全阶段。
+        原实现 ACK 在 try 内、_resolve_session 悬在两个 try 之间——session 阶段
+        异常（如 DB 抖动抛非窄集异常）会裸传播炸穿消息任务，用户收不到任何回复，
+        且各适配器行为漂移。CancelledError 单独重抛（停机/取消语义不被兜底吞掉），
+        TimeoutError 走超时兜底，其余异常统一走 _on_core_error 通道兜底。
         """
         core = self._get_core()
         if core is None:
             return None
+        token: Any = None
+        bound = False
         try:
             await self._send_ack(req)
-        except TimeoutError:
-            await self._on_core_timeout(req)
-            return None
-        except self.CORE_ERROR_TYPES as e:
-            await self._on_core_error(req, e)
-            return None
-
-        session_id = await self._resolve_session(req)
-        try:
+            session_id = await self._resolve_session(req)
             token = self._bind_bus_user(req)
-            try:
-                result = await asyncio.wait_for(
-                    core.process(req.text, **self._build_process_kwargs(req, session_id)),
-                    timeout=self.CORE_PROCESS_TIMEOUT,
-                )
-            finally:
-                self._unbind_bus_user(token)
+            bound = True
+            result = await asyncio.wait_for(
+                core.process(req.text, **self._build_process_kwargs(req, session_id)),
+                timeout=self.CORE_PROCESS_TIMEOUT,
+            )
             return await self._post_process_result(req, result)
+        except asyncio.CancelledError:
+            # 停机/取消语义：裸重抛，绝不落入兜底文案（finally 仍负责解绑）
+            raise
         except TimeoutError:
             await self._on_core_timeout(req)
             return None
         except self.CORE_ERROR_TYPES as e:
             await self._on_core_error(req, e)
             return None
+        finally:
+            if bound:
+                self._unbind_bus_user(token)
 
     async def _send_segments_paced(
         self,

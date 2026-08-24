@@ -10,6 +10,14 @@ from loguru import logger
 
 from memory._memory_utils import _stage_log, reciprocal_rank_fusion
 from memory.retrieval.channels import RecallChannels
+from memory.retrieval.trace import mark_retrieval_degraded, mark_retrieval_dropped
+
+
+def _take_with_trace(items: list[dict], limit: int) -> list[dict]:
+    safe_limit = max(0, int(limit))
+    for dropped in items[safe_limit:]:
+        mark_retrieval_dropped(dropped.get("id"), "top_k")
+    return items[:safe_limit]
 
 
 class FusionRerankMixin:
@@ -38,10 +46,16 @@ class FusionRerankMixin:
         ranked_lists, weights = self._build_fusion_lists(
             fts_items, vec_items, kg_items, child_items, spread_items, entity_items,
             fts_weight, vec_weight)
-        fused = reciprocal_rank_fusion(
-            ranked_lists, limit=rerank_limit,
+        unique_candidate_count = len({
+            item_id for ranked in ranked_lists for item_id in ranked
+        })
+        fused_all = reciprocal_rank_fusion(
+            ranked_lists, limit=max(rerank_limit, unique_candidate_count),
             weights=weights, rank_penalty=rank_penalty,
         )
+        for item_id, _score in fused_all[rerank_limit:]:
+            mark_retrieval_dropped(item_id, "rerank_limit")
+        fused = fused_all[:rerank_limit]
 
         # 按 RRF 排序获取完整记录（合并所有通道候选）
         all_items = self._merge_all_items(
@@ -64,11 +78,11 @@ class FusionRerankMixin:
             return reranked_results
 
         # 降级：无 Reranker 或 Reranker 失败时走 candidates (已含 entity boost)
-        final = candidates[:k]
+        final = _take_with_trace(candidates, k)
         # KG v2 事实作为补充候选追加 (已带 rrf_score, 不参与 ID-based 去重)
         # 先切片再追加, 确保至少有部分 kg_v2 命中能露出
         if kg_v2_items and len(final) < k:
-            final.extend(kg_v2_items[:k - len(final)])
+            final.extend(_take_with_trace(kg_v2_items, k - len(final)))
         logger.info("memory.search", event="memory_search",
                     query=query[:100], tier=tier, results=len(final),
                     duration_ms=int((time.time() - _start) * 1000))
@@ -147,14 +161,20 @@ class FusionRerankMixin:
         reranked = await self._mm._hybrid_rerank(query, fused, all_items, k)
         _stage_log("hybrid_rerank", __st, query)
         if not reranked:
+            mark_retrieval_degraded("reranker")
+            for candidate in candidates:
+                degraded = list(candidate.get("degraded_components") or [])
+                if "reranker" not in degraded:
+                    degraded.append("reranker")
+                candidate["degraded_components"] = degraded
             return None
         # 对 reranked 也应用 entity boost
         reranked = await self._mm._apply_entity_boost(query, reranked, scope)
         # KG v2 事实作为补充候选追加 (已带 rrf_score, 不参与 Reranker ID-based 排序)
         # 先切片再追加, 避免 reranker 返回 k 条时 [:k] 丢弃全部 kg_v2_items
-        results = reranked[:k]
+        results = _take_with_trace(reranked, k)
         if kg_v2_items and len(results) < k:
-            results.extend(kg_v2_items[:k - len(results)])
+            results.extend(_take_with_trace(kg_v2_items, k - len(results)))
         logger.info("memory.search", event="memory_search",
                     query=query[:100], tier=tier, results=len(results),
                     duration_ms=int((time.time() - _start) * 1000))
@@ -169,28 +189,33 @@ class FusionRerankMixin:
         """
         docs: list[str] = []
         idx_map: dict[int, str] = {}
-        for i, (item_id, _rrf_score) in enumerate(fused):
+        for item_id, _rrf_score in fused:
             if item_id in all_items:
+                idx_map[len(docs)] = item_id
                 docs.append(all_items[item_id].get("summary", ""))
-                idx_map[i] = item_id
         if not docs:
             return None
         try:
             reranked = await self._mm._reranker.rerank(
                 query=query,
                 documents=docs,
-                top_n=k,
+                top_n=len(docs),
             )
             results: list[dict] = []
+            returned_ids: set[str] = set()
             for item in reranked:
                 orig_idx = item["index"]
                 item_id = idx_map.get(orig_idx)
                 if item_id and item_id in all_items:
+                    returned_ids.add(item_id)
                     mem = all_items[item_id]
                     mem["rerank_score"] = item["relevance_score"]
                     mem["score_kind"] = "rerank"
                     mem["rrf_score"] = dict(fused).get(item_id, 0)
                     results.append(mem)
+            for item_id in idx_map.values():
+                if item_id not in returned_ids:
+                    mark_retrieval_dropped(item_id, "reranker_omitted")
             return results if results else None
         except Exception as e:
             if self._mm._reranker_service is not None:

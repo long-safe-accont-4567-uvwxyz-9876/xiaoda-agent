@@ -81,11 +81,14 @@ class NudgeEngine:
         logger.info("nudge.started", user=self._user_openid[:8])
 
     async def stop(self) -> None:
+        """停止周期任务。幂等：重复调用、未 start、任务已结束时均安全。"""
         self._running = False
-        if self._task:
-            self._task.cancel()
+        task = self._task
+        if task is not None and not task.done():
+            task.cancel()
             with contextlib.suppress(asyncio.CancelledError):
-                await self._task
+                await task
+        self._task = None
         logger.info("nudge.stopped")
 
     def poke(self) -> None:
@@ -275,7 +278,24 @@ class NudgeEngine:
                 recent_hint = f'\n（你最近几次说的是类似：{joined}。这次不要相似。）'
 
             # 通过小妲 agent 生成问候（使用真实 user_id 加载记忆上下文）
-            if self._core:
+            if self._free.disabled:
+                return "", None
+            if self._free.backend == "local":
+                local_messages = [
+                    {"role": "system", "content": (
+                        f"你是{get_agent_display_name('xiaoda')}，现在{time_desc}，"
+                        f"{address_term}{idle_desc}。说一句自然简短的问候。"
+                    )},
+                    {"role": "user", "content": "（主动问候）"},
+                ]
+                local_result = await self._free.call(
+                    local_messages, temperature=get_temperature(default=0.9)
+                )
+                if not local_result:
+                    return "", None
+                greeting = local_result
+                sticker_path = None
+            elif self._core:
                 # P0 修复：场景提示走 system_context，不污染 conversation_logs.user_message
                 # 根因：原实现把"（场景：现在早上...）"作为 user_input 传入，
                 #       导致 DB 历史记录出现系统提示，LLM 在后续轮次回应这些元提示。
@@ -347,7 +367,7 @@ class NudgeEngine:
                     {"role": "user", "content": user_msg},
                 ]
                 result = await self._free.call(messages, temperature=get_temperature(default=0.9))
-                if result is None:
+                if result is None and self._free.backend == "api":
                     result = await asyncio.wait_for(
                         self._router.route("memory_encoding", messages, temperature=get_temperature(default=0.9)),
                         timeout=30,

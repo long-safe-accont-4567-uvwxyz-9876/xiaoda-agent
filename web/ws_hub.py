@@ -103,6 +103,9 @@ class ConnectionManager:
         self._stream_sessions: OrderedDict[tuple[str, str], dict[str, Any]] = OrderedDict()
         self._MAX_STREAM_SESSIONS = 256
         self._SEND_QUEUE_MAX = 64  # 有界队列上限；溢出的连接视为过慢并关闭
+        # msg_id 幂等：已完成请求的短 TTL 记录（重试帧直接重放而非二次执行）
+        self._completed_results: dict[tuple[str, str], float] = {}
+        self._MSG_RESULT_TTL_SECONDS = 60.0
 
     def register(self, ws: WebSocket) -> str:
         """注册一个新连接, 返回生成的连接 ID."""
@@ -127,6 +130,13 @@ class ConnectionManager:
 
         P1-4: 改为 async 方法，先 await ws.close() 释放底层 TCP 资源，
         再清理内部状态。close 失败不应阻塞清理（defensive）。幂等：重复调用安全。
+
+        心跳超时路径自取消防护：unregister 可能被 heartbeat 任务自身调用，
+        cancel 集合必须排除 asyncio.current_task()——否则取消会在后续 await
+        处注入 CancelledError，中断 chat 任务清理导致 LLM/工具泄漏。
+
+        任务回收带超时上限：病态任务（吞掉 CancelledError 后挂起）不得拖死
+        unregister——否则心跳路径清理被卡住，连接状态半残。
         """
         ws = self._connections.get(conn_id)
         if ws is not None:
@@ -138,29 +148,63 @@ class ConnectionManager:
         self._connections.pop(conn_id, None)
         self._agent_map.pop(conn_id, None)
         self._session_map.pop(conn_id, None)
-        # G5: 取消心跳任务 + 清理 pong event
+        current = asyncio.current_task()
+        # G5: 取消心跳任务 + 清理 pong event（永不取消调用者自身）
         task = self._heartbeat_tasks.pop(conn_id, None)
-        if task and not task.done():
+        if task and task is not current and not task.done():
             task.cancel()
         self._pong_events.pop(conn_id, None)
         # 治本：取消写入任务 + 清理发送队列
         wtask = self._writer_tasks.pop(conn_id, None)
-        if wtask and not wtask.done():
+        if wtask and wtask is not current and not wtask.done():
             wtask.cancel()
         self._send_queues.pop(conn_id, None)
         for key in [key for key in self._stream_sessions if key[0] == conn_id]:
             self._stream_sessions.pop(key, None)
-        await self.cancel_connection_tasks(conn_id)
+        try:
+            await asyncio.wait_for(
+                self.cancel_connection_tasks(conn_id), timeout=5.0)
+        except asyncio.TimeoutError:
+            logger.warning("ws.unregister.reap_timeout conn_id={}", conn_id)
 
-    def track_message_task(self, conn_id: str, msg_id: str, task: asyncio.Task) -> None:
+    def track_message_task(self, conn_id: str, msg_id: str, task: asyncio.Task) -> bool:
+        """登记在途消息任务（put-if-absent 幂等）。
+
+        返回 False 表示同 (conn_id, msg_id) 已有在途任务——调用方不得重复执行
+        （客户端重试重发会造成双份 LLM/工具副作用，且 abort 只能取消后一份）。
+        """
         key = (conn_id, msg_id)
+        existing = self._tasks.get(key)
+        if existing is not None and not existing.done():
+            task.cancel()
+            return False
         self._tasks[key] = task
 
         def _discard(done_task: asyncio.Task) -> None:
             if self._tasks.get(key) is done_task:
                 self._tasks.pop(key, None)
+                # 完成结果短 TTL 缓存：客户端重试同 msg_id 时直接重放 final，
+                # 不再二次执行。
+                try:
+                    exc = done_task.exception()
+                except asyncio.CancelledError:
+                    return
+                if exc is None:
+                    self._completed_results[key] = (
+                        time.monotonic() + self._MSG_RESULT_TTL_SECONDS)
 
         task.add_done_callback(_discard)
+        return True
+
+    def get_completed_result_time(self, conn_id: str, msg_id: str) -> float | None:
+        """同 msg_id 已完成且仍在 TTL 内时返回完成时间戳（单调钟），否则 None。"""
+        deadline = self._completed_results.get((conn_id, msg_id))
+        if deadline is None:
+            return None
+        if time.monotonic() > deadline:
+            self._completed_results.pop((conn_id, msg_id), None)
+            return None
+        return deadline
 
     def get_message_task(self, conn_id: str, msg_id: str) -> asyncio.Task | None:
         return self._tasks.get((conn_id, msg_id))
@@ -621,7 +665,7 @@ async def process_and_serialize(core: Any, text: str, session_id: str,
                                 conn_id: str = "", msg_id: str = "",
                                 image_data: list[dict] | None = None,
                                 system_context: str = "") -> dict:
-    """统一处理入口：主体走 AgentCore.process；子代理直达 dispatcher（R5）。
+    """统一处理入口：主体走 process；Web 子代理走 AgentCore 锁内入口。
 
     斜杠命令（/ 开头）始终走主体 process（内部路由到 SlashCommandHandler）。
     Task 6: 当 TTS_ASYNC_MODE 开启且结果标记 tts_pending 时，启动后台合成任务。
@@ -647,22 +691,14 @@ async def process_and_serialize(core: Any, text: str, session_id: str,
                 except (RuntimeError, OSError, ConnectionError):
                     logger.warning("ws.agent_fallback_status_callback_failed", exc_info=True)
         else:
-            # 走与 QQ 通道相同的完整子代理流程：表情包/情绪/TTS/落库都不缺
-            from loguru import logger as _logger
-
-            from agent_core import RequestContext
-            from utils.trace_context import new_trace_id
-            # 身份解析：与 core.process() 主路径一致，确保 is_master/user_openid 语义正确
-            _identity = core._resolve_identity("webui", user_openid="", source="web")
-            ctx = RequestContext(session_id=session_id, user_id=os.getenv("MASTER_QQ_OPENID", "webui"),
-                                 user_input=text, status_callback=status_callback,
-                                 is_master=_identity.is_owner)
-            ctx.identity = _identity
-            _tid = new_trace_id()
-            trace = _logger.bind(trace_id=_tid)
-            result = await core._dispatch_single_sub_agent(
-                agent, text, user_id=os.getenv("MASTER_QQ_OPENID", "webui"), source="web",
-                session_id=session_id, trace=trace, ctx=ctx)
+            # Web 直达子代理必须经过 AgentCore 的锁内入口；Web 层不管理用户上下文。
+            result = await core.dispatch_web_sub_agent(
+                agent,
+                text,
+                session_id=session_id,
+                status_callback=status_callback,
+                user_id=os.getenv("MASTER_QQ_OPENID", "webui"),
+            )
             data = serialize_result(result)
             # XP 自动加成：子 agent 路径也需触发 XP（与主路径一致）
             # 根因修复：add_chat_xp 内部 json.dump 同步写文件，原直接调用阻塞事件循环。
@@ -789,8 +825,22 @@ async def _dispatch_message(conn_id: str, msg: dict, mtype: str, ws: WebSocket) 
 
     elif mtype == "chat":
         msg_id = str(msg.get("msg_id") or uuid.uuid4().hex[:8])
+        # 幂等防线 1：已完成且在 TTL 内的同 msg_id 直接重放，不二次执行
+        if msg_id and manager.get_completed_result_time(conn_id, msg_id) is not None:
+            await manager.send_to(conn_id, {
+                "type": "error", "msg_id": msg_id,
+                "code": "DUPLICATE_COMPLETED",
+                "message": "该消息已处理完成，请勿重复发送",
+            })
+            return
         task = asyncio.create_task(_handle_chat(conn_id, msg, msg_id, ws))
-        manager.track_message_task(conn_id, msg_id, task)
+        # 幂等防线 2：同 key 在途时拒绝新帧（put-if-absent），防止双跑副作用
+        if not manager.track_message_task(conn_id, msg_id, task):
+            await manager.send_to(conn_id, {
+                "type": "error", "msg_id": msg_id,
+                "code": "DUPLICATE_IN_FLIGHT",
+                "message": "相同消息正在处理中，已忽略重复请求",
+            })
 
     elif mtype == "terminal_start":
         term_sid = str(msg.get("term_sid") or uuid.uuid4().hex[:8])

@@ -265,17 +265,20 @@ class EntityMixin:
             return []
 
     async def _search_entities_impl(self, entity_names: list[str], limit: int,
-                                    user_id: str | None, agent_id: str | None,
+                                    scope: Any | None,
                                     event_label: str) -> list[dict]:
-        """实体反查共享实现：可选 user_id/agent_id scope 过滤。失败记 warning 返回 []。"""
+        """实体反查共享实现：可选完整 scope 过滤。失败记 warning 返回 []。"""
         if not entity_names:
             return []
         try:
             conditions, params = _entity_like_conditions(entity_names)
             where = "session_id != 'archived' AND (" + conditions + ")"
-            if user_id is not None and agent_id is not None:
-                where += " AND user_id = ? AND agent_id = ?"
-                params = [*params, user_id, agent_id]
+            if scope is not None:
+                scope_where, scope_params = _scope_where(
+                    scope, include_archived_filter=False
+                )
+                where += scope_where
+                params = [*params, *scope_params]
             cursor = await self._read_conn().execute(
                 f"""SELECT * FROM episodic_memories
                     WHERE {where}
@@ -295,7 +298,7 @@ class EntityMixin:
         I6: KG 召回通道 — 让 KG 关联的实体能反查到对应记忆，参与 RAG 候选池。
         """
         return await self._search_entities_impl(
-            entity_names, limit, None, None, "db_memory.entity_search_failed")
+            entity_names, limit, None, "db_memory.entity_search_failed")
 
     async def search_memories_by_entities_scoped(self, entity_names: list[str],
                                                    limit: int = 5,
@@ -310,5 +313,5 @@ class EntityMixin:
         if scope is None:
             return await self.search_memories_by_entities(entity_names, limit)
         return await self._search_entities_impl(
-            entity_names, limit, scope.user_id, scope.agent_id,
+            entity_names, limit, scope,
             "db_memory.entity_search_scoped_failed")

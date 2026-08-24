@@ -14,8 +14,7 @@ from typing import Any
 
 from loguru import logger
 
-from memory.knowledge_graph import KnowledgeGraph, _clean_json_response, _repair_json, _normalize_json_keys
-
+from memory.knowledge_graph import KnowledgeGraph, _clean_json_response, _normalize_json_keys, _repair_json
 
 ENTITY_EXTRACT_PROMPT_V2 = """从以下对话摘要中提取关键实体和关系，只提取最显著的3-5个。
 
@@ -76,19 +75,43 @@ class KnowledgeGraphV2(KnowledgeGraph):
         self._vector_store = vector_store
         self._conn = db_v2._conn if db_v2 else None
 
+    @staticmethod
+    def _build_extract_messages(summary: str) -> list[dict]:
+        """构建抽取消息：production override 优先，缺省回退内置模板。"""
+        clipped = summary[:500]
+        default_system = (
+            "你是一个知识提取助手，只输出纯JSON，不要输出任何其他内容，"
+            "不要用markdown代码块包裹。"
+        )
+        try:
+            from web.config_service import get_config_service
+            from web.prompt_profile_repository import PromptProfileRepository
+
+            override = PromptProfileRepository(get_config_service()).resolve(
+                "kg.extract_episode", {"summary": clipped},
+            )
+        except (ImportError, ValueError):
+            override = None
+        if override is not None:
+            system_prompt, user_prompt = override
+        else:
+            # 防御性加固：summary 来自 LLM 输出可能含 {} 字符
+            system_prompt, user_prompt = default_system, (
+                ENTITY_EXTRACT_PROMPT_V2.replace("{summary}", clipped)
+            )
+        return [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": user_prompt},
+        ]
+
     async def extract_from_summary(self, summary: str) -> dict:
         """使用 V2 prompt 提取实体和关系（含 fact 字段）。"""
-        if not summary:
+        if not summary or self._free.disabled:
             return {"entities": [], "relations": []}
         try:
-            # 防御性加固：summary 来自 LLM 输出可能含 {} 字符
-            prompt = ENTITY_EXTRACT_PROMPT_V2.replace("{summary}", summary[:500])
-            messages = [
-                {"role": "system", "content": "你是一个知识提取助手，只输出纯JSON，不要输出任何其他内容，不要用markdown代码块包裹。"},
-                {"role": "user", "content": prompt},
-            ]
+            messages = self._build_extract_messages(summary)
             result = await self._call_free_model(messages, temperature=0.1, max_tokens=1024)
-            if result is None and self._router:
+            if result is None and self._router and self._free.backend == "api":
                 # 修复 P0-2（同 knowledge_graph.py）：降级路由加 8s 超时保护
                 try:
                     result = await asyncio.wait_for(
@@ -129,6 +152,7 @@ class KnowledgeGraphV2(KnowledgeGraph):
         episode_content: str,
         episode_time: float,
         source_type: str = "summary",
+        scope: Any | None = None,
     ) -> dict:
         """从 Episode 提取并合并事实。"""
         if self._db_v2 is None:
@@ -136,20 +160,29 @@ class KnowledgeGraphV2(KnowledgeGraph):
             return {"episode_id": "", "new_facts": 0, "invalidated": 0}
         episode_id = f"EP-{uuid.uuid4().hex[:12]}"
         now = time.time()
+        scope_key = scope.kg_partition_key() if scope is not None else "default"
         await self._db_v2.insert_episode(
-            episode_id, episode_content, source_type, episode_time, now
+            episode_id, episode_content, source_type, episode_time, now,
+            group_id=scope_key,
         )
 
         extracted = await self.extract_from_summary(episode_content)
         if not extracted.get("entities") and not extracted.get("relations"):
             return {"episode_id": episode_id, "new_facts": 0, "invalidated": 0}
 
-        await self.merge_entities_v2(extracted["entities"], episode_content, episode_time)
+        # kg_entities_v2 当前按 name 全局唯一；scoped 写入不更新全局实体摘要，
+        # 关系事实仍通过 episode scope 完整隔离。
+        if scope is None:
+            await self.merge_entities_v2(
+                extracted["entities"], episode_content, episode_time
+            )
 
         invalidated_count = 0
         new_facts_count = 0
         for rel in extracted.get("relations", []):
-            is_new, invalidated = await self.merge_relation_v2(rel, episode_id, episode_time)
+            is_new, invalidated = await self.merge_relation_v2(
+                rel, episode_id, episode_time, scope_key=scope_key
+            )
             new_facts_count += int(is_new)
             invalidated_count += len(invalidated)
 
@@ -219,27 +252,44 @@ class KnowledgeGraphV2(KnowledgeGraph):
         self, old_summary: str, new_observations: list, entity_name: str
     ) -> str:
         """LLM 重写 summary。"""
-        # 防御性加固：参数可能含 {} 字符
-        prompt = (
-            SUMMARY_REWRITE_PROMPT
-            .replace("{old_summary}", old_summary)
-            .replace("{new_observations}", ", ".join(new_observations))
-            .replace("{entity_name}", entity_name)
-        )
+        # production override 优先（kg.summarize_entity），缺省回退内置模板
+        try:
+            from web.prompt_profile_repository import try_resolve
+
+            override = try_resolve("kg.summarize_entity", {
+                "old_summary": old_summary,
+                "new_observations": ", ".join(new_observations),
+                "entity_name": entity_name,
+            })
+        except Exception:
+            override = None
+        if override is not None:
+            prompt = override[1]
+        else:
+            # 防御性加固：参数可能含 {} 字符
+            prompt = (
+                SUMMARY_REWRITE_PROMPT
+                .replace("{old_summary}", old_summary)
+                .replace("{new_observations}", ", ".join(new_observations))
+                .replace("{entity_name}", entity_name)
+            )
         messages = [{"role": "user", "content": prompt}]
         result = await self._call_free_model(messages, temperature=0.3, max_tokens=512)
         if result and isinstance(result, str):
             return result.strip()
         return f"{old_summary}; {'; '.join(new_observations)}"
 
-    async def _ensure_episode_exists(self, episode_id: str, episode_time: float) -> None:
+    async def _ensure_episode_exists(
+        self, episode_id: str, episode_time: float, *, auto_commit: bool = True
+    ) -> None:
         """确保 episode 在 kg_episodes 中存在（ref JOIN 需要）。"""
         if self._db_v2 is None:
             return
         existing = await self._db_v2.get_episode(episode_id)
         if not existing:
             await self._db_v2.insert_episode(
-                episode_id, "", "summary", episode_time, time.time()
+                episode_id, "", "summary", episode_time, time.time(),
+                auto_commit=auto_commit,
             )
 
     async def merge_relation_v2(
@@ -247,6 +297,7 @@ class KnowledgeGraphV2(KnowledgeGraph):
         relation: dict,
         episode_id: str,
         episode_time: float,
+        scope_key: str | None = None,
     ) -> tuple[bool, list[dict]]:
         """合并新关系，自动处理超驰。Returns: (is_new, invalidated_relations)。
 
@@ -271,14 +322,17 @@ class KnowledgeGraphV2(KnowledgeGraph):
         try:
             await conn.execute("BEGIN IMMEDIATE")
         except Exception as e:
-            # aiosqlite 在已处于事务中时再 BEGIN 会报错；这里降级为隐式事务
-            logger.debug("kg_v2.merge_begin_failed_using_implicit", error=str(e))
+            # B-1：获取写锁失败 = 连接已处于未知/他人事务。绝不可降级为
+            # 隐式事务继续写入——本方 commit 会连带提交他人半事务、
+            # rollback 会使他人写入失效。报错回退，由调用方重试。
+            logger.warning("kg_v2.merge_begin_failed_abort", error=str(e))
+            raise
 
         try:
             # 搜索潜在冲突：同一 from_entity + relation_type 的当前有效关系
             # （to_entity 可能不同，如"用户喜欢篮球" vs "用户喜欢网球"）
             conflict_candidates = await self._db_v2.get_active_relations_by_subject_and_type(
-                from_entity, relation_type
+                from_entity, relation_type, group_id=scope_key
             )
 
             invalidated: list[dict] = []
@@ -289,7 +343,9 @@ class KnowledgeGraphV2(KnowledgeGraph):
                 for candidate in conflict_candidates:
                     if candidate.get("fact", "") == fact:
                         is_duplicate = True
-                        await self._ensure_episode_exists(episode_id, episode_time)
+                        await self._ensure_episode_exists(
+                            episode_id, episode_time, auto_commit=False
+                        )
                         await self._db_v2.append_episode_ref(
                             candidate["id"], episode_id, auto_commit=False,
                         )
@@ -349,12 +405,25 @@ class KnowledgeGraphV2(KnowledgeGraph):
             facts_list = "\n".join(
                 f"{i}. {f}" for i, f in enumerate(existing_facts)
             )
-            # 防御性加固：new_fact/existing_facts_list 可能含 {} 字符
-            prompt = (
-                CONTRADICTION_PROMPT
-                .replace("{new_fact}", new_fact)
-                .replace("{existing_facts_list}", facts_list)
-            )
+            # production override 优先（kg.resolve_conflict），缺省回退内置模板
+            try:
+                from web.prompt_profile_repository import try_resolve
+
+                override = try_resolve("kg.resolve_conflict", {
+                    "new_fact": new_fact,
+                    "existing_facts_list": facts_list,
+                })
+            except Exception:
+                override = None
+            if override is not None:
+                prompt = override[1]
+            else:
+                # 防御性加固：new_fact/existing_facts_list 可能含 {} 字符
+                prompt = (
+                    CONTRADICTION_PROMPT
+                    .replace("{new_fact}", new_fact)
+                    .replace("{existing_facts_list}", facts_list)
+                )
             messages = [{"role": "user", "content": prompt}]
             result = await self._call_free_model(messages, temperature=0.0, max_tokens=200)
             if result and isinstance(result, str):

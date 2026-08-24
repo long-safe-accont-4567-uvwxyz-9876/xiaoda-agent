@@ -34,6 +34,57 @@ class RecallChannels(NamedTuple):
     kg_v2_items: list
 
 
+def _normalize_vector_hits(vec_results: Any) -> tuple[list[tuple[int, float]], dict[int, dict]]:
+    """归一化向量检索命中为 (rowid, distance) 列表 + 附带完整记录表。
+
+    兼容 dict 命中（含 rowid/id/distance 与 summary 等字段）与二元组命中。
+    """
+    normalized: list[tuple[int, float]] = []
+    originals: dict[int, dict] = {}
+    for hit in vec_results or []:
+        if isinstance(hit, dict):
+            row_id = hit.get("rowid", hit.get("id"))
+            distance = hit.get("distance")
+        else:
+            try:
+                row_id, distance = hit
+            except (TypeError, ValueError):
+                continue
+        if row_id is None or distance is None:
+            continue
+        try:
+            normalized_row_id = int(row_id)
+            normalized.append((normalized_row_id, float(distance)))
+            if isinstance(hit, dict) and any(
+                key in hit
+                for key in (
+                    "summary", "content", "status", "is_raw", "user_id"
+                )
+            ):
+                original = dict(hit)
+                original.setdefault("id", normalized_row_id)
+                originals[normalized_row_id] = original
+        except (TypeError, ValueError):
+            continue
+    return normalized, originals
+
+
+def _merge_vector_page_hits(
+    collected: list[tuple[int, float]],
+    page_hits: list[tuple[int, float]],
+    seen_ids: set[int],
+    limit: int,
+) -> None:
+    """跨页合并向量命中：按 (distance, row_id) 升序维护全局 top-N。
+
+    同一 rowid 只保留首次（最近页）命中；截断保证候选规模不随页数膨胀。
+    """
+    fresh = [hit for hit in page_hits if hit[0] not in seen_ids]
+    seen_ids.update(row_id for row_id, _ in fresh)
+    merged = sorted((*collected, *fresh), key=lambda item: (item[1], item[0]))
+    collected[:] = merged[:limit]
+
+
 class RecallChannelMixin:
     """检索通道实现组：向量/HyDE/扩散/时间/对话日志/确定性 selector。"""
 
@@ -58,6 +109,139 @@ class RecallChannelMixin:
         if nested is not None and all(nested is not repo for repo in repositories):
             repositories.append(nested)
         return repositories
+
+    @staticmethod
+    def _mark_scope_scan_partial(component: str, pages: int, candidates: int) -> None:
+        from memory.retrieval.trace import mark_retrieval_degraded
+        from utils.metrics import metrics
+
+        mark_retrieval_degraded("scope_scan_partial")
+        metrics.inc("retrieval.scope_scan.partial")
+        logger.warning(
+            "memory.scope_scan_partial",
+            component=component,
+            pages=pages,
+            candidates=candidates,
+        )
+
+    async def _iter_visible_candidate_pages(
+        self,
+        scope: Any | None,
+        candidate_ids: list[int] | None = None,
+        *,
+        children: bool = False,
+        component: str = "vector",
+    ):
+        """Yield recent-first scoped ID pages until exhausted or budget-limited."""
+        if scope is None:
+            yield candidate_ids
+            return
+
+        page_method_name = (
+            "get_visible_child_id_page" if children
+            else "get_visible_memory_id_page"
+        )
+        repository = next(
+            (
+                repo for repo in self._memory_repositories()
+                if inspect.iscoroutinefunction(
+                    self._explicit_attr(repo, page_method_name)
+                )
+            ),
+            None,
+        )
+        if repository is None:
+            legacy = await self._get_visible_candidate_ids(
+                scope, candidate_ids, children=children
+            )
+            yield legacy
+            return
+
+        import config
+
+        page_size = max(1, int(getattr(config, "SCOPE_SCAN_PAGE_SIZE", 1000)))
+        max_pages = max(1, int(getattr(config, "SCOPE_SCAN_MAX_PAGES", 100)))
+        max_candidates = max(
+            page_size,
+            int(getattr(config, "SCOPE_SCAN_MAX_CANDIDATES", 100000)),
+        )
+        budget_ms = max(1, int(getattr(config, "SCOPE_SCAN_BUDGET_MS", 5000)))
+        selected = set(candidate_ids) if candidate_ids is not None else None
+        cursor: int | None = None
+        pages = 0
+        scanned = 0
+        started = time.monotonic()
+        has_more = False
+        page_method = getattr(repository, page_method_name)
+
+        while pages < max_pages and scanned < max_candidates:
+            if pages and (time.monotonic() - started) * 1000 >= budget_ms:
+                break
+            current_size = min(page_size, max_candidates - scanned)
+            page = await page_method(
+                scope, before_id=cursor, page_size=current_size
+            )
+            raw_ids = [int(value) for value in page.get("ids", [])]
+            pages += 1
+            scanned += len(raw_ids)
+            has_more = bool(page.get("has_more"))
+            page_ids = (
+                raw_ids if selected is None
+                else [value for value in raw_ids if value in selected]
+            )
+            if page_ids:
+                yield page_ids
+            if selected is not None:
+                selected.difference_update(page_ids)
+                if not selected:
+                    has_more = False
+                    break
+            if not has_more or not raw_ids:
+                break
+            next_cursor = page.get("next_cursor")
+            if next_cursor is None or next_cursor == cursor:
+                break
+            cursor = int(next_cursor)
+
+        if has_more:
+            self._mark_scope_scan_partial(component, pages, scanned)
+
+    async def _get_visible_candidate_ids(
+        self,
+        scope: Any | None,
+        candidate_ids: list[int] | None = None,
+        *,
+        children: bool = False,
+        limit: int = 50000,
+    ) -> list[int] | None:
+        """Resolve a bounded DB-filtered candidate set before vector top-k."""
+        if scope is None:
+            return candidate_ids
+        method_name = "get_visible_child_ids" if children else "get_visible_memory_ids"
+        capable = False
+        for repository in self._memory_repositories():
+            method = self._explicit_attr(repository, method_name)
+            if method is None or not inspect.iscoroutinefunction(method):
+                continue
+            capable = True
+            try:
+                visible = method(scope, limit=limit)
+                if not inspect.isawaitable(visible):
+                    continue
+                visible_ids = await visible
+                if not isinstance(visible_ids, list):
+                    continue
+                if candidate_ids is None:
+                    return [int(value) for value in visible_ids]
+                selected = set(candidate_ids)
+                return [int(value) for value in visible_ids if value in selected]
+            except Exception as exc:
+                logger.debug(
+                    "memory.vector_candidate_scope_failed",
+                    children=children,
+                    error=str(exc),
+                )
+        return [] if capable else candidate_ids
 
     async def _get_visible_vector_memories(
         self,
@@ -102,10 +286,18 @@ class RecallChannelMixin:
                     rows = await result
                     if not isinstance(rows, list):
                         continue
+                    # 可见性查询失败（fail-open 风险）时，本地兜底强制
+                    # active + scope 过滤，绝不因回退路径放大可见集合。
                     if id(repository) in visibility_failed:
-                        rows = [row for row in rows if row.get("status") == "active"]
+                        rows = [
+                            row for row in rows
+                            if row.get("status") == "active"
+                        ]
                         if scope is not None:
-                            rows = [row for row in rows if scope.matches_record(row)]
+                            rows = [
+                                row for row in rows
+                                if scope.matches_record(row)
+                            ]
                     return rows
             except Exception as exc:
                 logger.debug("memory.vector_legacy_backfill_failed", error=str(exc))
@@ -115,10 +307,16 @@ class RecallChannelMixin:
             for memory_id in ids
             if memory_id in original_memories
         ]
+        # 可见性仓储存在但查询失败时，本地兜底强制 active + scope 过滤。
         if visibility_capable:
-            fallback = [row for row in fallback if row.get("status") == "active"]
+            fallback = [
+                row for row in fallback
+                if row.get("status") == "active"
+            ]
             if scope is not None:
-                fallback = [row for row in fallback if scope.matches_record(row)]
+                fallback = [
+                    row for row in fallback if scope.matches_record(row)
+                ]
         return fallback
 
     async def _hybrid_vec_search(self, query: str, k: int,
@@ -143,63 +341,63 @@ class RecallChannelMixin:
             # 原 3.5s 超时在 embed 慢时必然先触发，导致向量通道被跳过 → "想不起来"。
             # 注：原注释"embed 6.9s 击穿 8s"的根因正是 connect=5s 过短，现已修复。
             __st = time.time()
+            # P0 隐私（2026-08-24）：scoped 候选改为 recent-first keyset 分页逐页
+            # 送入向量检索并跨页合并 top-N，替代旧的一次性候选收集：
+            # (a) 预算（SCOPE_SCAN_PAGE_SIZE/MAX_PAGES/BUDGET_MS）内流式消费；
+            # (b) 预算耗尽记 memory.scope_scan_partial 并保留已扫部分结果；
+            # (c) scope=None 时单页直通，行为与旧实现一致。
             # HyDE（假设文档嵌入）：开启时生成假设答案文档，与原查询向量混合检索。
             # 默认关闭（HYDE_ENABLED=False），避免查询变换跑偏（同多查询扩展教训）。
             import config as _hyde_cfg
             _hyde_enabled = getattr(_hyde_cfg, "HYDE_ENABLED", False)
             _hyde_doc = None
-            if _hyde_enabled and self._mm._query_transformer and self._mm._query_transformer.available:
+            if (
+                _hyde_enabled and self._mm._query_transformer
+                and self._mm._query_transformer.available
+            ):
                 try:
-                    _hyde_doc = await self._mm._query_transformer.generate_hyde_document(query)
+                    _hyde_doc = await (
+                        self._mm._query_transformer.generate_hyde_document(query)
+                    )
                 except Exception as e:
                     logger.debug("memory.hyde_failed", error=str(e))
                     _hyde_doc = None
-            if _hyde_doc:
-                vec_results = await self._mm.vec.search_with_hyde(
-                    query, hyde_doc=_hyde_doc, alpha=0.4,
-                    k=k * 2, candidate_ids=candidate_ids,
+            vec_results: list[tuple[int, float]] = []
+            original_memories: dict[int, dict] = {}
+            seen_ids: set[int] = set()
+            # 跨页合并维护全局 top-N（N=k）：每页只送当前页候选进向量检索，
+            # 合并后截断，保证返回规模与单次 KNN 一致且不随页数膨胀。
+            top_n = k
+            async for page_candidate_ids in self._iter_visible_candidate_pages(
+                scope, candidate_ids
+            ):
+                # None=无限制全库检索（scope=None 直通）；[]=本页无可见候选跳过
+                page_list = (
+                    None if page_candidate_ids is None
+                    else list(page_candidate_ids)
                 )
-                _stage_log("vec_embed_hyde_search", __st, query)
-            else:
-                vec_results = await self._mm.vec.search(
-                    query, top_k=k * 2, candidate_ids=candidate_ids, deterministic=True,
-                    query_vec=query_vec,
-                )
-                _stage_log("vec_embed_search", __st, query)
+                if page_list == []:
+                    continue
+                if _hyde_doc:
+                    page_raw = await self._mm.vec.search_with_hyde(
+                        query, hyde_doc=_hyde_doc, alpha=0.4,
+                        k=top_n, candidate_ids=page_list,
+                    )
+                    _stage_log("vec_embed_hyde_search", __st, query)
+                else:
+                    page_raw = await self._mm.vec.search(
+                        query, top_k=top_n,
+                        candidate_ids=page_list,
+                        deterministic=True,
+                        query_vec=query_vec,
+                    )
+                    _stage_log("vec_embed_search", __st, query)
+                page_hits, page_originals = _normalize_vector_hits(page_raw)
+                for row_id, original in page_originals.items():
+                    original_memories.setdefault(row_id, original)
+                _merge_vector_page_hits(vec_results, page_hits, seen_ids, top_n)
             if not vec_results:
                 return []
-            normalized_vec_results: list[tuple[int, float]] = []
-            original_memories: dict[int, dict] = {}
-            for hit in vec_results:
-                if isinstance(hit, dict):
-                    row_id = hit.get("rowid", hit.get("id"))
-                    distance = hit.get("distance")
-                else:
-                    try:
-                        row_id, distance = hit
-                    except (TypeError, ValueError):
-                        continue
-                if row_id is None or distance is None:
-                    continue
-                try:
-                    normalized_row_id = int(row_id)
-                    normalized_vec_results.append(
-                        (normalized_row_id, float(distance))
-                    )
-                    if isinstance(hit, dict) and any(
-                        key in hit
-                        for key in (
-                            "summary", "content", "status", "is_raw", "user_id"
-                        )
-                    ):
-                        original = dict(hit)
-                        original.setdefault("id", normalized_row_id)
-                        original_memories[normalized_row_id] = original
-                except (TypeError, ValueError):
-                    continue
-            if not normalized_vec_results:
-                return []
-            vec_results = normalized_vec_results
             vec_ids = [row_id for row_id, _ in vec_results]
             vec_mems = await self._get_visible_vector_memories(
                 vec_ids, scope, original_memories
@@ -207,11 +405,19 @@ class RecallChannelMixin:
             if is_raw is not None:
                 vec_mems = [m for m in vec_mems if m.get("is_raw") == is_raw]
             if scope is not None:
-                vec_mems = [m for m in vec_mems
-                            if m.get("user_id") == scope.user_id
-                            and m.get("agent_id") == scope.agent_id]
+                vec_mems = [m for m in vec_mems if scope.matches_record(m)]
             # 构建 id -> memory 映射，按 distance 排序组装结果
             vec_mem_map = {m["id"]: m for m in vec_mems}
+
+            # P0 分页合并（2026-08-24）：JOIN/后过滤会淘汰部分 top-N 候选
+            # （不可见/superseded/is_raw 不匹配），按距离升序截断回 top-N，
+            # 保证返回规模不随扫描页数膨胀，与单次 KNN 语义一致。
+            ordered_ids = [
+                row_id for row_id, _ in sorted(vec_results)
+            ]
+            if len(ordered_ids) > top_n:
+                for row_id in ordered_ids[top_n:]:
+                    vec_mem_map.pop(row_id, None)
 
             # 治本修复（TDD test_rag_quality_root_fix）：
             # 原 _hybrid_vec_search 用相对归一化 (1 - distance/max_dist) 美化距离，
@@ -287,7 +493,15 @@ class RecallChannelMixin:
         if not getattr(config, "MEMORY_RETRIEVAL_DIFFUSION", False):
             return []
         try:
-            results = await self._mm.spreading_engine.recall(query, top_k=limit)
+            candidate_ids = await self._get_visible_candidate_ids(scope)
+            if candidate_ids == []:
+                return []
+            results = await self._mm.spreading_engine.recall(
+                query,
+                top_k=limit,
+                candidate_ids=candidate_ids,
+                cache_namespace=scope.cache_namespace() if scope is not None else "",
+            )
             if not results:
                 return []
             # 映射回 episodic_memories，多 node 指向同一 memory 时取最高分。
@@ -364,9 +578,10 @@ class RecallChannelMixin:
         clauses: list[str] = []
         params: list = []
         if scope is not None:
-            clauses.append("user_id = ?")
-            clauses.append("agent_id = ?")
-            params.extend([scope.user_id, scope.agent_id])
+            scope_where, scope_params = scope.to_sql_filter_parametrized("")
+            clauses.append(f"({scope_where})")
+            params.extend(scope_params)
+
         if "time_range" in selectors:
             s, e = selectors["time_range"]
             clauses.append("timestamp BETWEEN ? AND ?")
@@ -464,7 +679,7 @@ class RecallChannelMixin:
         try:
             # P0 修复：按 conv_user_id 过滤，防止跨用户对话泄露
             raw = await self._mm.memory.get_conversations_by_time_range(
-                start_ts, end_ts, user_id=conv_user_id, limit=k
+                start_ts, end_ts, user_id=conv_user_id, limit=k, scope=scope
             )
             if not raw:
                 return []
@@ -507,6 +722,7 @@ class RecallChannelMixin:
                     "is_raw": 1,
                     "user_id": scope.user_id if scope else "",
                     "agent_id": scope.agent_id if scope else "",
+                    "session_id": row.get("session_id", ""),
                 })
             return results[:k]
         except Exception as e:
@@ -520,28 +736,5 @@ class RecallChannelMixin:
 
         scope 非空时后过滤 user_id/agent_id，防止跨用户记忆泄露。
         """
-        if not self._mm.vec:
-            return []
-        results: list[dict] = []
-        try:
-            vec_results = await self._mm.vec.search(query, top_k=k)
-            if vec_results:
-                vec_ids = [row_id for row_id, _ in vec_results]
-                vec_mems = await self._mm.memory.get_visible_memories_by_ids(
-                    vec_ids, scope=scope
-                )
-                # scope 后过滤：向量索引是全局的，需确保不跨用户泄露
-                if scope is not None:
-                    vec_mems = [m for m in vec_mems
-                                if m.get("user_id") == scope.user_id
-                                and m.get("agent_id") == scope.agent_id]
-                # 构建 id -> memory 映射，按 distance 排序组装结果
-                vec_mem_map = {m["id"]: m for m in vec_mems}
-                for row_id, distance in vec_results:
-                    mem = vec_mem_map.get(row_id)
-                    if mem:
-                        mem["score"] = 1.0 - distance
-                        results.append(mem)
-        except Exception as e:
-            logger.warning("memory.vec_search_failed", error=str(e))
-        return results
+        results = await self._hybrid_vec_search(query, k, scope=scope)
+        return results[:k]

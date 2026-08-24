@@ -68,19 +68,40 @@ body.low-gpu .n-message {
 }
 
 .dendro-btn {
+  position: relative;
+  isolation: isolate;
   min-height: 38px;
-  padding: 9px 18px;
-  border: 1px solid rgba(194, 255, 156, 0.38);
-  border-radius: var(--control-radius);
-  background: var(--gradient-dendro);
-  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.32), 0 8px 18px rgba(43, 110, 64, 0.2);
-  color: #0a1a12;
+  overflow: hidden;
+  padding: 9px 19px;
+  border: 1px solid rgba(238, 224, 164, 0.72);
+  border-radius: 10px 5px 10px 5px;
+  background:
+    linear-gradient(116deg, transparent 0 45%, rgba(232, 255, 205, 0.2) 45.5%, transparent 46.5%),
+    linear-gradient(155deg, rgba(229, 255, 204, 0.32), transparent 42%),
+    linear-gradient(135deg, #8fe560, #78d84f 56%, #55c98f);
+  box-shadow:
+    inset 0 1px 0 rgba(242, 255, 226, 0.46),
+    inset -10px -7px 18px rgba(18, 88, 43, 0.1),
+    0 5px 13px rgba(6, 35, 17, 0.22);
+  color: #0a2414;
   cursor: pointer;
   font: inherit;
   font-weight: 700;
   letter-spacing: 0;
-  text-shadow: 0 1px 0 rgba(255, 255, 255, 0.2);
+  text-shadow: 0 1px 0 rgba(255, 255, 255, 0.48);
   transition: transform var(--motion-fast) var(--ease-out), box-shadow var(--motion-normal), filter var(--motion-fast), opacity var(--motion-fast);
+}
+
+.dendro-btn::after {
+  content: '';
+  position: absolute;
+  z-index: -1;
+  inset: 1px;
+  border-radius: inherit;
+  background:
+    radial-gradient(ellipse at 18% 18%, rgba(255, 255, 255, 0.28), transparent 28%),
+    linear-gradient(116deg, transparent 0 45%, rgba(42, 104, 60, 0.08) 45.5%, transparent 46.5%);
+  pointer-events: none;
 }
 
 .dendro-btn:hover:not(:disabled) {

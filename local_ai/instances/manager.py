@@ -105,21 +105,26 @@ class InstanceManager:
                 return None
             return self._instances.get(instance_id)
 
-    def _register_instance(self, instance: ModelInstance, runtime: Any, installed: Any) -> None:
+    def _register_instance(
+        self, instance: ModelInstance, runtime: Any, installed: Any, *, select: bool = True
+    ) -> None:
         with self._state_lock:
             self._instances[instance.id] = instance
             self._runtimes[instance.id] = runtime
             self._model_instances[instance.model_id] = instance.id
             self._instance_purposes[instance.id] = installed.purpose
-            self._selected_instances[installed.purpose] = instance.id
-            self._selection_generations[installed.purpose] = (
-                self._selection_generations.get(installed.purpose, 0) + 1
-            )
+            if select:
+                self._selected_instances[installed.purpose] = instance.id
+                self._selection_generations[installed.purpose] = (
+                    self._selection_generations.get(installed.purpose, 0) + 1
+                )
 
     async def start(
         self,
         model_id: str,
         backend_override: str | None = None,
+        *,
+        select: bool = True,
     ) -> ModelInstance:
         lock = self._model_locks.setdefault(model_id, asyncio.Lock())
         async with lock:
@@ -154,7 +159,9 @@ class InstanceManager:
                     started_at=now,
                     updated_at=now,
                 )
-                self._register_instance(instance, runtime, installed)
+                self._register_instance(
+                    instance, runtime, installed, select=select
+                )
                 return instance
             except BaseException as start_error:
                 try:
@@ -396,6 +403,40 @@ class InstanceManager:
 
     def release_runtime(self, instance_id: str, route: str) -> None:
         self.unbind_route(instance_id, route)
+
+    def select_instance(
+        self,
+        purpose: ModelPurpose | str,
+        instance_id: str | None,
+        *,
+        expected_generation: int | None = None,
+    ) -> int:
+        """显式选择用途实例；expected_generation 提供 CAS 保护。"""
+        resolved_purpose = ModelPurpose(purpose)
+        with self._state_lock:
+            current_generation = self._selection_generations.get(resolved_purpose, 0)
+            if expected_generation is not None and current_generation != expected_generation:
+                raise RuntimeError(
+                    f"selection changed concurrently for {resolved_purpose.value}"
+                )
+            if instance_id is None:
+                self._selected_instances.pop(resolved_purpose, None)
+            else:
+                instance = self._instances.get(instance_id)
+                if instance is None:
+                    raise ValueError(f"unknown instance: {instance_id}")
+                if self._instance_purposes.get(instance_id) != resolved_purpose:
+                    raise ValueError(
+                        f"instance {instance_id} purpose does not match {resolved_purpose.value}"
+                    )
+                self._selected_instances[resolved_purpose] = instance_id
+            self._selection_generations[resolved_purpose] = current_generation + 1
+            return current_generation + 1
+
+    def selection_generation(self, purpose: ModelPurpose | str) -> int:
+        resolved_purpose = ModelPurpose(purpose)
+        with self._state_lock:
+            return self._selection_generations.get(resolved_purpose, 0)
 
     def selection_identity(self, purpose: ModelPurpose | str) -> tuple[str, int] | None:
         resolved_purpose = ModelPurpose(purpose)

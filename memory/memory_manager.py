@@ -319,10 +319,43 @@ class MemoryManager:
                                  scope: Any | None = None,
                                  conv_user_id: str = "",
                                  apply_min_score: bool = True) -> list[dict]:
-        return await self._retrieval.retrieve_memories(
+        results = await self._retrieval.retrieve_memories(
             query, k=k, context=context, _retry_attempted=_retry_attempted,
             scope=scope, conv_user_id=conv_user_id,
             apply_min_score=apply_min_score)
+        if results:
+            from memory.retrieval.trace import (
+                read_retrieval_dropped,
+                read_retrieval_trace,
+            )
+
+            degraded = read_retrieval_trace()
+            dropped = read_retrieval_dropped()
+            for result in results:
+                if degraded:
+                    result["degraded_components"] = list(degraded)
+            if dropped:
+                results[0]["retrieval_dropped"] = list(dropped)
+        return results
+
+    async def retrieve_memories_with_trace(
+        self, query: str, k: int = 5, context: str = "",
+        scope: Any | None = None, conv_user_id: str = "",
+        apply_min_score: bool = True,
+    ):
+        from memory.retrieval.trace import (
+            RetrievalOutcome,
+            read_retrieval_dropped,
+            read_retrieval_trace,
+        )
+
+        results = await self.retrieve_memories(
+            query, k=k, context=context, scope=scope,
+            conv_user_id=conv_user_id, apply_min_score=apply_min_score,
+        )
+        return RetrievalOutcome(
+            tuple(results), read_retrieval_trace(), read_retrieval_dropped()
+        )
 
     async def _try_temporal_search(self, query: str, k: int,
                                     scope: Any | None = None,
@@ -383,8 +416,12 @@ class MemoryManager:
     async def _batch_touch_memories(self, mem_ids: list[int | str]) -> None:
         return await self._retrieval._batch_touch_memories(mem_ids)
 
-    async def _apply_kg_context_enhance(self, results: list[dict]) -> None:
-        return await self._retrieval._apply_kg_context_enhance(results)
+    async def _apply_kg_context_enhance(
+        self, results: list[dict], scope: Any | None = None
+    ) -> None:
+        return await self._retrieval._apply_kg_context_enhance(
+            results, scope=scope
+        )
 
     async def encode_memory(self, context: dict, scope: Any | None = None) -> None:
         await self._encoder.encode_memory(context, scope=scope)

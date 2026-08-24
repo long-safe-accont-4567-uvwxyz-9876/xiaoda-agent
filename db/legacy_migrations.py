@@ -210,12 +210,12 @@ class LegacyMigrationMixin:
         await self._conn.commit()
 
     async def _apply_migration(self, version: int, description: str, migrate_fn: Any) -> None:
-        """执行单个迁移：标记 dirty → migrate_fn → INSERT schema_version → commit → 清除 dirty。
+        """执行单个迁移：标记 dirty → SAVEPOINT 包住 migrate_fn+版本记录 → commit → 清除 dirty。
 
-        失败时不杀进程，下次启动自动重试（dirty自动修复机制）。
-        含 SQLITE_BUSY 重试（Windows杀软锁文件常见）。
-        注意：不使用显式 BEGIN TRANSACTION，因为迁移函数内部的 executescript()
-        会隐式提交当前事务，在 vfat 上会导致死锁/挂起。
+        失败时先 ROLLBACK TO SAVEPOINT（部分 DDL/DML 不落盘），再独立事务记 dirty；
+        下次启动自动重试（dirty自动修复机制）。含 SQLITE_BUSY 重试（Windows杀软锁文件常见）。
+        注意：迁移函数内部禁止 executescript()（会隐式提交、释放 savepoint），
+        新迁移一律逐条 execute。
         """
         # 确保 migration_state 表存在（防御 vfat 上 executescript 静默失败）
         try:
@@ -260,26 +260,52 @@ class LegacyMigrationMixin:
 
         _max_retries = 3
         for attempt in range(1, _max_retries + 1):
+            # 原子性（2026-08-24 审查修复）：每个迁移体包在 SAVEPOINT 内，
+            # 失败先回滚到 savepoint 再独立事务记 dirty——否则失败路径的
+            # dirty commit 会把迁移已执行的部分 DDL/DML 一并提交，重试面对
+            # 半迁移状态（v31 故障注入已复现错误分类）。
+            # 前提：迁移函数内部不得使用 executescript()（隐式提交会释放
+            # savepoint）；现有迁移已全部改为逐条 execute。
+            sp_name = f"migration_v{version}_a{attempt}"
+            await self._conn.execute(f"SAVEPOINT {sp_name}")
             try:
-                # 不使用 BEGIN TRANSACTION：executescript() 会隐式提交，
-                # 在 vfat (DELETE journal_mode) 上显式事务 + 隐式提交会导致挂起
                 await migrate_fn()
                 await self._conn.execute(
                     "INSERT INTO schema_version (version, applied_at) VALUES (?, ?)",
                     (version, time.time()),
                 )
-                await self._conn.commit()
+                await self._conn.commit()  # RELEASE 前提交，兼容迁移内部 commit
+                logger.info("database.migration_v{}", version, desc=description)
                 # 迁移成功：清除 dirty
                 await self._conn.execute(
                     "UPDATE migration_state SET dirty = 0, last_version = ?, last_error = '' WHERE id = 1",
                     (version,),
                 )
                 await self._conn.commit()
-                logger.info("database.migration_v{}", version, desc=description)
                 return  # 成功，退出重试循环
             except Exception as e:
                 err_msg = str(e)
                 is_busy = "locked" in err_msg.lower() or "busy" in err_msg.lower()
+                # 迁移内部 commit 会释放 savepoint（no such savepoint），
+                # 此时部分写入已被提交、无法回滚——记录告警供运维排查；
+                # 未被释放时正常回滚到 savepoint。
+                rolled_back = True
+                try:
+                    await self._conn.execute(
+                        f"ROLLBACK TO SAVEPOINT {sp_name}")
+                    await self._conn.execute(
+                        f"RELEASE SAVEPOINT {sp_name}")
+                except (OSError, RuntimeError, ValueError) as rb_err:
+                    if "no such savepoint" in str(rb_err).lower():
+                        rolled_back = False
+                        logger.warning(
+                            "database.migration_partial_commit_not_recoverable "
+                            "v={} hint=迁移函数内部 commit 释放了 savepoint",
+                            version)
+                    else:
+                        logger.warning(
+                            "database.migration_rollback_error v={}", version,
+                            exc_info=True)
                 if is_busy and attempt < _max_retries:
                     # SQLITE_BUSY: Windows杀软/Defender锁文件，等一会重试
                     import asyncio
@@ -290,9 +316,7 @@ class LegacyMigrationMixin:
                     )
                     await asyncio.sleep(wait)
                     continue
-                # 非BUSY或重试耗尽
-                # 不需要 ROLLBACK：未使用显式事务，executescript 自行管理原子性
-                # 记录错误到 dirty state（独立事务）
+                # 非BUSY或重试耗尽：回滚已完成，独立事务记录 dirty
                 try:
                     await self._conn.execute(
                         "UPDATE migration_state SET dirty = 1, last_version = ?, last_error = ? WHERE id = 1",
@@ -812,7 +836,8 @@ class LegacyMigrationMixin:
             WHERE last_review = 0 AND timestamp > 0
         """)
 
-        await self._conn.commit()
+        # commit 由 _apply_migration 的 savepoint 流程统一管理（内部 commit
+        # 会释放 savepoint，失败时部分写入将不可回滚）
         logger.info("database.migration_v16_created_at_done")
 
     async def _migrate_v17(self) -> None:
@@ -831,12 +856,41 @@ class LegacyMigrationMixin:
         except Exception as e:
             logger.warning("database.migration_v17_check_failed", error=str(e))
 
-        # 重建表以更新 CHECK 约束 (含 user_id 列以匹配 v20 schema, 避免列数不匹配)
+        # 重建表以更新 CHECK 约束。
+        # 显式列清单复制（2026-08-24 审查修复）：目标表含 v20 才有的 user_id，
+        # `INSERT SELECT *` 对 v16 及更早的 13 列旧表必报列数不匹配并永久 dirty；
+        # 显式列出源列并为 user_id 补 'default'，兼容任意旧形状。
         await self._conn.execute("""CREATE TABLE IF NOT EXISTS greeting_schedules_v17 ( id INTEGER PRIMARY KEY AUTOINCREMENT, type TEXT NOT NULL CHECK(type IN ('fixed','random','reminder')), time TEXT DEFAULT '', window_start TEXT DEFAULT '', window_end TEXT DEFAULT '', count_per_day INTEGER DEFAULT 1, days TEXT NOT NULL DEFAULT '[1,2,3,4,5,6,7]', prompt_hint TEXT DEFAULT '', channels TEXT NOT NULL DEFAULT '["web"]', enabled INTEGER NOT NULL DEFAULT 1, next_fire_times TEXT DEFAULT '[]', drawn_date TEXT DEFAULT '', created_at REAL NOT NULL, user_id TEXT NOT NULL DEFAULT 'default' )""")
-        await self._conn.execute("""INSERT OR IGNORE INTO greeting_schedules_v17 SELECT * FROM greeting_schedules""")
+        src_cols = {r["name"] for r in await self.fetch_all(
+            "PRAGMA table_info(greeting_schedules)")}
+        base_cols = [
+            "id", "type", "time", "window_start", "window_end",
+            "count_per_day", "days", "prompt_hint", "channels",
+            "enabled", "next_fire_times", "drawn_date", "created_at",
+        ]
+        select_parts = [c for c in base_cols if c in src_cols]
+        missing_defaults = {
+            "days": "'[1,2,3,4,5,6,7]'",
+            "channels": "'[\"web\"]'",
+            "enabled": "1",
+            "next_fire_times": "'[]'",
+            "drawn_date": "''",
+            "created_at": "strftime('%s','now')",
+        }
+        for col, default_sql in missing_defaults.items():
+            if col not in select_parts:
+                select_parts.append(default_sql)
+        select_parts.append("'default' AS user_id")
+        cols_sql = ", ".join(
+            ["id", "type", "time", "window_start", "window_end",
+             "count_per_day", "days", "prompt_hint", "channels",
+             "enabled", "next_fire_times", "drawn_date", "created_at", "user_id"])
+        await self._conn.execute(
+            f"INSERT OR IGNORE INTO greeting_schedules_v17 ({cols_sql}) "
+            f"SELECT {', '.join(select_parts)} FROM greeting_schedules")
         await self._conn.execute("""DROP TABLE IF EXISTS greeting_schedules""")
         await self._conn.execute("""ALTER TABLE greeting_schedules_v17 RENAME TO greeting_schedules""")
-        await self._conn.commit()
+        # commit 由 _apply_migration 的 savepoint 流程统一管理
         logger.info("database.migration_v17_reminder_type_done")
 
     async def _migrate_v18(self) -> None:

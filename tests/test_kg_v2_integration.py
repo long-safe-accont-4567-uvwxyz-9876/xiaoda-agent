@@ -180,7 +180,12 @@ async def test_memory_manager_retrieve_returns_kg_v2_results(tmp_path):
     })
 
     # Step 1: Add facts via KnowledgeGraphV2 (episode ingestion)
-    result = await kg_v2.add_facts_from_episode("用户说喜欢打篮球", time.time())
+    # scope 必须与检索侧一致：无 scope 会写入 legacy "default" 分区，
+    # 而隐私契约（fail-closed）下 scoped 读对 legacy 分区不可见。
+    from memory.scope import Scope as _Scope
+    _scope = _Scope()
+    result = await kg_v2.add_facts_from_episode(
+        "用户说喜欢打篮球", time.time(), scope=_scope)
     assert result["new_facts"] == 1
 
     # Step 2: Create MemoryManager and inject KG v2 engine

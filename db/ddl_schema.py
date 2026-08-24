@@ -53,7 +53,9 @@ class DDLMixin:
                 user_message TEXT DEFAULT '',
                 assistant_reply TEXT DEFAULT '',
                 emotion_label TEXT DEFAULT '',
-                model_used TEXT DEFAULT ''
+                model_used TEXT DEFAULT '',
+                session_id TEXT DEFAULT '',
+                request_context_json TEXT DEFAULT '{}'
             )
         """)
 

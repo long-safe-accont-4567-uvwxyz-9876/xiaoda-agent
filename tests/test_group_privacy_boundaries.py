@@ -150,7 +150,7 @@ async def test_main_path_group_audit_uses_opaque_identity_and_owner_still_encode
         await harness._finalize_main_reply(
             "答复", [], "当前消息", "qq_member-openid-secret", "qq_group", {},
             "neutral", ctx, "member-openid-secret", is_owner, None, False,
-            MagicMock(), "member-openid-session",
+            MagicMock(), "qq_group:group-openid-real",
         )
         await _wait_for_owned_tasks(manager)
     finally:
@@ -158,11 +158,10 @@ async def test_main_path_group_audit_uses_opaque_identity_and_owner_still_encode
 
     inserted = db.insert_conversation_log.await_args.kwargs
     assert inserted["user_id"] == "qq_group:opaque-group-hash"
-    assert inserted["session_id"] == "qq_group:opaque-group-hash"
+    assert inserted["session_id"] == "qq_group:group-openid-real"
     assert "member" not in inserted["user_id"]
     assert "openid" not in inserted["user_id"]
     assert "member" not in inserted["session_id"]
-    assert "openid" not in inserted["session_id"]
     assert json.loads(inserted["request_context_json"]) == ctx.group_context_metadata
     assert db.update_session.await_count == 0
     assert memory.try_idle_encode.await_count == expected_encode_calls

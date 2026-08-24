@@ -171,6 +171,9 @@ class DatabaseManager(LegacyMigrationMixin, DDLMixin, ConversationLogMixin, Life
             logger.info("database.fat_fs_detected fs={} → 使用 DELETE journal_mode, 禁用 FTS5 触发器", fs_type)
         await self._setup_pragmas(self._is_fat_fs)
         self.memory = MemoryDB(self._conn)
+        # 数据库小任务B-1：注入事务守卫，MemoryDB 的 auto_commit 写点
+        # 与 write_transaction 共享连接级锁、感知外层事务
+        self.memory.attach_tx_guard(self._write_tx_active)
         await self._create_tables()
         self.reconciliation = ReconciliationRepository(
             self._conn, self.write_transaction
@@ -346,8 +349,22 @@ class DatabaseManager(LegacyMigrationMixin, DDLMixin, ConversationLogMixin, Life
                 if not committed:
                     await asyncio.shield(self._profile_conn.rollback())
 
-    async def get_conversations_readonly(self, start_ts: float, end_ts: float,
-                                          user_id: str = "", limit: int = 50) -> list[dict]:
+    async def execute_and_commit(self, sql: str, params: Any = ()) -> None:
+        """单语句受控写入口（数据库小任务B-1）：execute + commit 经连接级锁。
+
+        与 write_transaction 共享 transaction_lock_for(self._conn) 同一把锁：
+        auto_commit=True 的单语句写不再裸 commit——并发下不会把他人
+        write_transaction 中的半事务提前提交。多语句序列仍必须走
+        write_transaction()（锁不可重入，勿在事务体内调用本方法）。
+        """
+        async with transaction_lock_for(self._conn):
+            await self._conn.execute(sql, params)
+            await self._conn.commit()
+
+    async def get_conversations_readonly(
+        self, start_ts: float, end_ts: float,
+        user_id: str = "", limit: int = 50, scope: Any | None = None,
+    ) -> list[dict]:
         """用独立只读连接查询最近对话，供 restore_from_db 使用。
 
         根因修复：restore_from_db 原用主连接查询，当主连接被后台任务脏事务/长操作占用时
@@ -360,12 +377,24 @@ class DatabaseManager(LegacyMigrationMixin, DDLMixin, ConversationLogMixin, Life
         """
         params: list = [start_ts, end_ts]
         where = "WHERE timestamp >= ? AND timestamp <= ?"
-        if user_id:
+        if scope is not None:
+            from memory.scope import ScopeBoundary
+
+            if scope.boundary is ScopeBoundary.CONVERSATION:
+                where += " AND session_id = ?"
+                params.append(scope.session_id)
+            else:
+                if user_id:
+                    where += " AND user_id = ?"
+                    params.append(user_id)
+                where += " AND COALESCE(session_id, '') NOT LIKE ?"
+                params.append("qq_group:%")
+        elif user_id:
             where += " AND user_id = ?"
             params.append(user_id)
         params.append(limit)
         sql = (
-            f"SELECT timestamp, user_message, assistant_reply FROM conversation_logs "
+            f"SELECT timestamp, user_message, assistant_reply, user_id, session_id "
             f"{where} ORDER BY timestamp DESC LIMIT ?"
         )
         # 优先只读连接，失败回退主连接

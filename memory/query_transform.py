@@ -17,6 +17,32 @@ from utils.free_model_backend import call_local_model
 _CACHE_MISS = object()
 
 
+REWRITE_PROMPT = """将以下用户查询改写为更适合文档检索的关键词查询。
+要求：
+1. 保留核心语义，去除口语化表达
+2. 推断可能的关联关键词并补充（如"饮食偏好"补充"香菜 豆浆 川菜 咖啡"，"后端代码"补充"Python FastAPI SQLAlchemy Docker"）
+3. 只输出改写后的查询，不要解释
+
+原始查询: {original_query}
+对话上下文: {context_block}
+
+改写后的查询:"""
+
+EXPAND_PROMPT = """为以下查询生成 {n} 个不同视角的搜索查询，用于提高检索召回率。
+每行一个查询，不要编号，不要解释。
+
+原始查询: {query}"""
+
+HYDE_PROMPT = """请根据以下问题，写一段简短的假设性答案（50-100字）。
+不需要完全正确，只需要语义上与答案文档接近。
+只输出答案文本，不要解释。
+
+问题: {query}
+"""
+
+CLASSIFY_PROMPT = "请分类以下查询的意图类型（temporal/factual/chat/multi-hop），只输出类型名称：\n查询: {query}"
+
+
 class QueryTransformer:
     """查询变换器：改写/扩展/分解用户原始查询
 
@@ -202,16 +228,25 @@ class QueryTransformer:
         if cached is not _CACHE_MISS:
             return cached
 
-        prompt = f"""将以下用户查询改写为更适合文档检索的关键词查询。
-要求：
-1. 保留核心语义，去除口语化表达
-2. 推断可能的关联关键词并补充（如"饮食偏好"补充"香菜 豆浆 川菜 咖啡"，"后端代码"补充"Python FastAPI SQLAlchemy Docker"）
-3. 只输出改写后的查询，不要解释
+        context_block = context[-200:] if context else '无'
+        override = None
+        try:
+            from web.prompt_profile_repository import try_resolve
 
-原始查询: {original_query}
-对话上下文: {context[-200:] if context else '无'}
-
-改写后的查询:"""
+            override = try_resolve("query.rewrite", {
+                "original_query": original_query, "context_block": context_block,
+            })
+        except Exception:
+            override = None
+        if override is not None:
+            prompt = override[1]
+        else:
+            # 防御性加固：查询/上下文可能含 {} 字符，用 str.replace 替代 f-string
+            prompt = (
+                REWRITE_PROMPT
+                .replace("{original_query}", original_query)
+                .replace("{context_block}", context_block)
+            )
 
         # CodeRabbit #2: 加 asyncio 层超时防线（httpx 4s 之外的兜底，防止
         # 客户端重试/连接建立慢导致 retrieve_memories 整体超时）。与 hyde/classify 一致。
@@ -255,10 +290,23 @@ class QueryTransformer:
         if cached is not _CACHE_MISS:
             return list(cached)  # 返回副本，避免外部修改污染缓存
 
-        prompt = f"""为以下查询生成 {n} 个不同视角的搜索查询，用于提高检索召回率。
-每行一个查询，不要编号，不要解释。
+        override = None
+        try:
+            from web.prompt_profile_repository import try_resolve
 
-原始查询: {query}"""
+            override = try_resolve("query.expand", {
+                "n": str(n), "query": query,
+            })
+        except Exception:
+            override = None
+        if override is not None:
+            prompt = override[1]
+        else:
+            prompt = (
+                EXPAND_PROMPT
+                .replace("{n}", str(n))
+                .replace("{query}", query)
+            )
 
         # CodeRabbit #2: 加 asyncio 层超时防线，超时降级返回 [query]
         # CodeRabbit #D: 超时降级后继续走缓存流程（与 result=None 一致）
@@ -307,12 +355,17 @@ class QueryTransformer:
         if cached is not _CACHE_MISS:
             return cached
 
-        prompt = f"""请根据以下问题，写一段简短的假设性答案（50-100字）。
-不需要完全正确，只需要语义上与答案文档接近。
-只输出答案文本，不要解释。
+        override = None
+        try:
+            from web.prompt_profile_repository import try_resolve
 
-问题: {query}
-"""
+            override = try_resolve("query.hyde", {"query": query})
+        except Exception:
+            override = None
+        if override is not None:
+            prompt = override[1]
+        else:
+            prompt = HYDE_PROMPT.replace("{query}", query)
         try:
             result = await asyncio.wait_for(
                 self._call_free_model(prompt, temperature=0.3, max_tokens=100),
@@ -374,7 +427,17 @@ class QueryTransformer:
             llm_classify = False
 
         if llm_classify and self._available:
-            prompt = f"请分类以下查询的意图类型（temporal/factual/chat/multi-hop），只输出类型名称：\n查询: {query}"
+            override = None
+            try:
+                from web.prompt_profile_repository import try_resolve
+
+                override = try_resolve("query.classify", {"query": query})
+            except Exception:
+                override = None
+            if override is not None:
+                prompt = override[1]
+            else:
+                prompt = CLASSIFY_PROMPT.replace("{query}", query)
             try:
                 _cfg_timeout = getattr(_cfg, "INTENT_CLASSIFY_TIMEOUT", 5.0)
                 result = await asyncio.wait_for(

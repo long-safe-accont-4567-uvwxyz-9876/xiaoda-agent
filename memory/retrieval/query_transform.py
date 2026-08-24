@@ -9,6 +9,11 @@ from typing import Any
 from loguru import logger
 
 from local_ai.integration.errors import is_structured_local_unavailable
+from memory.retrieval.trace import (
+    ChannelOutcome,
+    capture_channel_trace,
+    merge_channel_outcomes,
+)
 
 
 class QueryTransformMixin:
@@ -241,14 +246,22 @@ class QueryTransformMixin:
         """并行执行各子查询的 hybrid 检索，去重合并候选池。"""
         all_results: list[dict] = []
         seen_ids: set[str] = set()
+        # B1: 每个子查询检索是独立 Task，其内部七路召回已把 degraded 打点合并进
+        # 该 Task 自己的上下文；再包一层捕获才能继续上抛到本次请求的父协程。
         hybrid_tasks = [
-            self._mm.retrieve_memories_hybrid(
-                q, k=k * 2, use_reranker=False, scope=scope,
-                query_vec=precomputed_vecs[i],
+            capture_channel_trace(
+                self._mm.retrieve_memories_hybrid(
+                    q, k=k * 2, use_reranker=False, scope=scope,
+                    query_vec=precomputed_vecs[i],
+                )
             )
             for i, q in enumerate(queries)
         ]
         hybrid_results = await asyncio.gather(*hybrid_tasks, return_exceptions=True)
+        merge_channel_outcomes(
+            outcome for outcome in hybrid_results
+            if isinstance(outcome, ChannelOutcome)
+        )
         for i, res in enumerate(hybrid_results):
             if isinstance(res, Exception):
                 if is_structured_local_unavailable(res):
@@ -256,7 +269,7 @@ class QueryTransformMixin:
                 logger.warning("memory.hybrid_search_failed",
                                query=queries[i][:50], error=str(res))
                 continue
-            for r in res:
+            for r in res.result:
                 rid = str(r.get("id", ""))
                 if rid and rid not in seen_ids:
                     seen_ids.add(rid)

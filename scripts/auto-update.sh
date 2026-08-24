@@ -67,21 +67,30 @@ fi
 echo "  发现新版本: $(bold "v${LATEST_VERSION}") (当前: v${CURRENT_VERSION:-未知})"
 
 # 检测平台
+# 2026-08-24 契约修复：uname -m 输出必须映射为「发布资产命名」平台名。
+# 发布矩阵产物是 linux-x86_64 / linux-arm64（build-release.yml matrix.platform），
+# 此前 aarch64 直接拼成 linux-aarch64，永远匹配不到资产——ARM 用户永远收不到更新。
+# resolve_release_platform: uname -s/-m → 发布资产平台名；不支持返回空。
+resolve_release_platform() {
+    local os_name="$1" arch="$2"
+    case "${os_name}-${arch}" in
+        Linux-x86_64)  echo "linux-x86_64" ;;
+        Linux-aarch64|Linux-armv8*) echo "linux-arm64" ;;
+        *)             echo "" ;;
+    esac
+}
+
 OS="$(uname -s)"
 ARCH="$(uname -m)"
+PLATFORM="$(resolve_release_platform "$OS" "$ARCH")"
 
-if [ "$OS" = "Linux" ] && [ "$ARCH" = "x86_64" ]; then
-    PLATFORM="linux-x86_64"
-    EXT="tar.gz"
-elif [ "$OS" = "Linux" ] && [ "$ARCH" = "aarch64" ]; then
-    PLATFORM="linux-aarch64"
-    EXT="tar.gz"
-else
+if [ -z "$PLATFORM" ]; then
     echo "  不支持的平台: ${OS}-${ARCH}，跳过自动更新"
     exit 0
 fi
 
 # 查找下载 URL
+EXT="tar.gz"
 PATTERN="xiaoda-agent-${PLATFORM}-v${LATEST_VERSION}.${EXT}"
 DOWNLOAD_URL=$(echo "$LATEST_JSON" | grep -o "\"browser_download_url\":\s*\"[^\"]*${PATTERN}[^\"]*\"" | sed -E 's/.*"browser_download_url":\s*"([^"]+)".*/\1/' | head -1)
 
@@ -109,22 +118,36 @@ if [ ! -f "${TMP_DIR}/${FILENAME}" ] || [ ! -s "${TMP_DIR}/${FILENAME}" ]; then
 fi
 
 # SHA256 校验
+# 2026-08-24 fail-closed：校验文件缺失 / 为空 / 格式非法一律中止更新。
+# 原实现缺失时仅告警并继续安装——攻击者篡改下载源即可绕过完整性校验。
 SHA256_URL="${DOWNLOAD_URL}.sha256"
 SHA256_FILE="${TMP_DIR}/${FILENAME}.sha256"
-if curl -sL --connect-timeout 5 --max-time 15 -o "$SHA256_FILE" "$SHA256_URL" 2>/dev/null && [ -s "$SHA256_FILE" ]; then
-    EXPECTED=$(awk '{print $1}' "$SHA256_FILE")
-    ACTUAL=$(sha256sum "${TMP_DIR}/${FILENAME}" | awk '{print $1}')
-    if [ "$EXPECTED" != "$ACTUAL" ]; then
-        echo "  $(red "SHA256 校验失败！中止更新")"
-        echo "  期望: $EXPECTED"
-        echo "  实际: $ACTUAL"
-        rm -rf "$TMP_DIR"
-        exit 1
+VERIFY_FAILED=0
+if curl -sfL --connect-timeout 5 --max-time 15 -o "$SHA256_FILE" "$SHA256_URL" && [ -s "$SHA256_FILE" ]; then
+    EXPECTED=$(awk 'NR==1{print tolower($1)}' "$SHA256_FILE")
+    # 合法 sha256 = 64 位十六进制；否则视为格式损坏，同样拒绝安装
+    if ! printf '%s' "$EXPECTED" | grep -qE '^[0-9a-f]{64}$'; then
+        echo "  $(red "SHA256 校验文件格式非法！中止更新")"
+        VERIFY_FAILED=1
+    else
+        ACTUAL=$(sha256sum "${TMP_DIR}/${FILENAME}" | awk '{print $1}')
+        if [ "$EXPECTED" != "$ACTUAL" ]; then
+            echo "  $(red "SHA256 校验失败！中止更新")"
+            echo "  期望: $EXPECTED"
+            echo "  实际: $ACTUAL"
+            VERIFY_FAILED=1
+        fi
     fi
-    echo "  $(green "SHA256 校验通过")"
 else
-    echo "  $(yellow "警告: 未找到 SHA256 校验文件，跳过校验")"
+    echo "  $(red "未找到 SHA256 校验文件，fail-closed 中止更新")"
+    echo "  发布资产不完整（缺 ${FILENAME}.sha256），请手动检查 release 或联系维护者"
+    VERIFY_FAILED=1
 fi
+if [ "$VERIFY_FAILED" != "0" ]; then
+    rm -rf "$TMP_DIR"
+    exit 1
+fi
+echo "  $(green "SHA256 校验通过")"
 
 echo "  下载完成，开始更新..."
 

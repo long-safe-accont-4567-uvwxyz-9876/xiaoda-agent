@@ -58,7 +58,8 @@ EMOTION_PAD_REFERENCE: dict[str, PADEmotion] = {
     "恐惧": PADEmotion(-0.8, 0.8, 0.1),
     "平静": PADEmotion(0.0, 0.0, 0.5),
     # 补齐缺失的 7 类（love/surprised/confused/playful/moved/pout/greeting）
-    "喜欢": PADEmotion(0.7, 0.5, 0.4),    # love：温和积极
+    # love 的键与 emotion_simple 规范输出对齐用"喜爱"（review #4：原"喜欢"导致 LOVE 检测查不到 PAD）
+    "喜爱": PADEmotion(0.7, 0.5, 0.4),    # love：温和积极
     "惊讶": PADEmotion(0.2, 0.7, 0.3),    # surprised：高唤醒、中性偏正
     "困惑": PADEmotion(-0.2, 0.5, 0.2),  # confused：中性偏负、中等唤醒、低支配
     "调皮": PADEmotion(0.6, 0.7, 0.5),    # playful：积极高唤醒

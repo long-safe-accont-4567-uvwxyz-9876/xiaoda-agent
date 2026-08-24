@@ -1,7 +1,10 @@
 """测试 WebUI 子 agent 路径的 XP 增加（修复 ws_hub.py:385）"""
 import os
+
 import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
+
+from agent_core._shared import ProcessResult
 from web.ws_hub import process_and_serialize
 
 
@@ -10,9 +13,10 @@ async def test_sub_agent_path_adds_xp():
     """子 agent 路径应触发 XP 增加（修复前：绕过 XP 逻辑）"""
     # Mock core 对象
     mock_core = MagicMock()
-    mock_core._resolve_identity.return_value = MagicMock(is_owner=True)
-    mock_core._dispatch_single_sub_agent = AsyncMock(
-        return_value=MagicMock(reply="test reply", emotion=None, sticker_path=None, audio_path=None, tts_pending=False, tts_text="")
+    mock_core.dispatch_web_sub_agent = AsyncMock(
+        return_value=MagicMock(reply="test reply", emotion=None, sticker_path=None,
+                               audio_path=None, image_paths=[], video_path=None,
+                               tts_pending=False, tts_text="")
     )
     
     # Mock agent registry
@@ -50,6 +54,62 @@ async def test_sub_agent_path_adds_xp():
         # 验证返回结果
         assert result is not None
         assert "reply" in result or "data" in result
+
+
+@pytest.mark.asyncio
+async def test_web_subagent_preserves_media_serialization(tmp_path, monkeypatch):
+    from web import ws_hub
+
+    monkeypatch.setattr(ws_hub, "MEDIA_ROOT", tmp_path / "media")
+    sticker = tmp_path / "sticker.png"
+    audio = tmp_path / "audio.wav"
+    image = tmp_path / "image.png"
+    video = tmp_path / "video.mp4"
+    for path in (sticker, audio, image, video):
+        path.write_bytes(b"media")
+
+    core = MagicMock()
+    core.dispatcher.get_agent.return_value = MagicMock()
+    core.dispatch_web_sub_agent = AsyncMock(return_value=ProcessResult(
+        reply="media reply",
+        emotion="happy",
+        sticker_path=sticker,
+        audio_path=audio,
+        image_paths=[image],
+        video_path=video,
+    ))
+
+    data = await process_and_serialize(
+        core,
+        "画一张图",
+        session_id="web-session",
+        agent="xiaolang",
+    )
+
+    core.dispatch_web_sub_agent.assert_awaited_once()
+    assert data["reply"] == "media reply"
+    assert data["sticker_url"].endswith("/sticker.png")
+    assert data["audio_url"].endswith("/audio.wav")
+    assert data["image_urls"][0].endswith("/image.png")
+    assert data["video_url"].endswith("/video.mp4")
+
+
+@pytest.mark.asyncio
+async def test_slash_command_with_subagent_selected_still_uses_main_process():
+    core = MagicMock()
+    core.process = AsyncMock(return_value=ProcessResult(reply="slash reply"))
+    core.dispatch_web_sub_agent = AsyncMock()
+
+    data = await process_and_serialize(
+        core,
+        "/help",
+        session_id="web-session",
+        agent="xiaolang",
+    )
+
+    core.process.assert_awaited_once()
+    core.dispatch_web_sub_agent.assert_not_awaited()
+    assert data["reply"] == "slash reply"
 
 
 @pytest.mark.asyncio

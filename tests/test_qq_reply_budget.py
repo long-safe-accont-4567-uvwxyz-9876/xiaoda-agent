@@ -149,3 +149,31 @@ async def test_group_pipeline_uses_one_shared_budget_for_ack_reply_and_media() -
     assert result.reply == "done"
     assert seen[0] is not None
     assert qq._qq_reply_budget_var.get() is None
+
+
+async def test_none_delivery_skips_current_segment_on_recovery() -> None:
+    """None（结果不明确）恢复时必须跳过当前段宁丢勿重，且配额照退。"""
+    consumed: list[bool] = []
+
+    class FakeBudget:
+        def consume(self):
+            consumed.append(True)
+
+        def refund(self):
+            consumed.append(False)
+
+    from qq_bot_adapter import QQAmbiguousDelivery, _qq_reply_budget_var
+    token = _qq_reply_budget_var.set(FakeBudget())
+    try:
+        async def factory(_msg_seq):
+            return None
+
+        with pytest.raises(QQAmbiguousDelivery):
+            await qq._budgeted_await(factory)
+        assert consumed == [True, False], "None 应消耗并退还配额"
+    finally:
+        _qq_reply_budget_var.reset(token)
+
+    segs = ["seg-a", "seg-b", "seg-c"]
+    remaining = qq.AIQQBot._remaining_segments_after_error(segs, 0, QQAmbiguousDelivery("x"))
+    assert remaining == "seg-bseg-c", "不得把当前段并入重发"

@@ -67,6 +67,27 @@ class ErrorRulePipeline:
     依赖 DatabaseManager + ModelRouter，二者均可为 None（降级为 no-op）。
     """
 
+    @staticmethod
+    def _render_extract_prompt(tool_name: str, args_str: str, error: str) -> str:
+        """渲染规则提取提示词：production override 优先，缺省回退内置模板。"""
+        try:
+            from web.prompt_profile_repository import try_resolve
+
+            override = try_resolve("error_rule.extract", {
+                "tool_name": tool_name, "args": args_str, "error": error,
+            })
+        except Exception:
+            override = None
+        if override is not None:
+            return override[1]
+        # 防御性加固：tool_name/args/error 可能含 {} 字符（如工具参数为 Python 代码）
+        return (
+            EXTRACT_PROMPT
+            .replace("{tool_name}", tool_name)
+            .replace("{args}", args_str)
+            .replace("{error}", error)
+        )
+
     # 内存级时间窗节流：记录每个 tool_name 的上次提取时间戳（类变量，跨实例共享）
     _last_extract_time: ClassVar[dict[str, float]] = {}
     _EXTRACT_THROTTLE_SECONDS = 60  # 同一 tool_name 在 60 秒内只允许一次提取
@@ -166,16 +187,31 @@ class ErrorRulePipeline:
             return None
         return cutoff
 
+    @staticmethod
+    def _render_extract_prompt(tool_name: str, args: str, error: str) -> str:
+        """渲染错误规则提取提示词：production override 优先，缺省回退内置模板。"""
+        try:
+            from web.prompt_profile_repository import try_resolve
+
+            override = try_resolve("error_rule.extract", {
+                "tool_name": tool_name, "args": args, "error": error,
+            })
+        except Exception:
+            override = None
+        if override is not None:
+            return override[1]
+        # 防御性加固：tool_name/args/error 可能含 {} 字符（如工具参数为 Python 代码）
+        return (
+            EXTRACT_PROMPT
+            .replace("{tool_name}", tool_name)
+            .replace("{args}", args)
+            .replace("{error}", error)
+        )
+
     async def _call_extract_llm(self, tool_name: str, args: dict, error: str, now: float) -> Any:
         """调用 LLM 提取规则文本。返回结果字符串或 None。"""
         args_str = json.dumps(args, ensure_ascii=False)[:500]
-        # 防御性加固：tool_name/args/error 可能含 {} 字符（如工具参数为 Python 代码）
-        prompt = (
-            EXTRACT_PROMPT
-            .replace("{tool_name}", tool_name)
-            .replace("{args}", args_str)
-            .replace("{error}", error[:500])
-        )
+        prompt = self._render_extract_prompt(tool_name, args_str, error[:500])
         messages = [{"role": "user", "content": prompt}]
 
         # 即将调用 LLM，记录节流时间点（即使后续失败也节流，防止重试风暴）
@@ -183,7 +219,7 @@ class ErrorRulePipeline:
 
         # 优先硅基流动免费模型，失败降级到 router
         result = await self._call_free_model(messages, temperature=0.3, max_tokens=512)
-        if result is None and self.router is not None:
+        if result is None and self.router is not None and self._free.backend == "api":
             try:
                 result = await self.router.route(
                     task_type="memory_encoding", messages=messages,

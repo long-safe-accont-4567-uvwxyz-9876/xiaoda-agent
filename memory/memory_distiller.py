@@ -104,6 +104,29 @@ class MemoryDistiller:
         self._free.set_backend(backend, local_model)
         logger.info("memory_distiller.backend_set backend={}", backend)
 
+    @staticmethod
+    def _render_recall_prompt(memories_text: str, agent_name: str) -> str:
+        """渲染回忆笔记提示词：production override 优先，缺省回退内置模板。"""
+        try:
+            from web.config_service import get_config_service
+            from web.prompt_profile_repository import PromptProfileRepository
+
+            override = PromptProfileRepository(get_config_service()).resolve(
+                "memory.build_recall_note",
+                {"n": agent_name, "memories_text": memories_text},
+            )
+        except (ImportError, ValueError) as exc:
+            logger.warning("memory_distiller.prompt_override_ignored error={}", str(exc))
+            override = None
+        if override is not None:
+            return override[1]
+        # 防御性加固：memories_text 含用户/LLM 内容，可能含 {} 字符
+        return (
+            RECALL_PROMPT_TEMPLATE
+            .replace("{n}", agent_name)
+            .replace("{memories_text}", memories_text)
+        )
+
     def set_free_model_client(self, api_key: str, base_url: str, model: str) -> None:
         """配置硅基流动免费模型客户端"""
         self._free.set_free_model_client(api_key, base_url, model)
@@ -112,6 +135,22 @@ class MemoryDistiller:
                                 max_tokens: int = 1500) -> str | None:
         """按后端调用：local=本地模型；api/auto=免费模型。失败返回 None 由调用方降级。"""
         return await self._free.call(messages, temperature=temperature, max_tokens=max_tokens)
+
+    @staticmethod
+    def _render_compress_prompt(memories_text: str) -> str:
+        """渲染记忆蒸馏提示词：production override 优先，缺省回退内置模板。"""
+        try:
+            from web.prompt_profile_repository import try_resolve
+
+            override = try_resolve(
+                "memory.compress_episode", {"memories_text": memories_text},
+            )
+        except Exception:
+            override = None
+        if override is not None:
+            return override[1]
+        # 防御性加固：memories_text 含用户/LLM 内容，可能含 {} 字符
+        return DISTILL_PROMPT.replace("{memories_text}", memories_text)
 
     async def distill(self, memories: list[dict]) -> str:
         """将旧记忆列表蒸馏为摘要。
@@ -146,15 +185,14 @@ class MemoryDistiller:
             return ""
 
         memories_text = "\n".join(lines)
-        # 防御性加固：memories_text 含用户/LLM 内容，可能含 {} 字符
-        prompt = DISTILL_PROMPT.replace("{memories_text}", memories_text)
+        prompt = self._render_compress_prompt(memories_text)
         messages = [{"role": "user", "content": prompt}]
 
         # 优先使用免费模型，失败降级到 router
         result = await self._call_free_model(
             messages, temperature=0.3, max_tokens=2048,
         )
-        if result is None and self.router:
+        if result is None and self.router and self._free.backend == "api":
             try:
                 result = await self.router.route(
                     task_type="memory_encoding",
@@ -228,11 +266,8 @@ class MemoryDistiller:
 
         memories_text = "\n".join(lines)
         from config import get_agent_display_name
-        # 防御性加固：memories_text 含用户/LLM 内容，可能含 {} 字符
-        prompt = (
-            RECALL_PROMPT_TEMPLATE
-            .replace("{n}", get_agent_display_name("xiaoda"))
-            .replace("{memories_text}", memories_text)
+        prompt = self._render_recall_prompt(
+            memories_text, get_agent_display_name("xiaoda"),
         )
         messages = [{"role": "user", "content": prompt}]
 
@@ -240,7 +275,7 @@ class MemoryDistiller:
         result = await self._call_free_model(
             messages, temperature=0.4, max_tokens=2048,
         )
-        if result is None and self.router:
+        if result is None and self.router and self._free.backend == "api":
             try:
                 result = await self.router.route(
                     task_type="memory_encoding",
@@ -305,7 +340,7 @@ class MemoryDistiller:
         result = await self._call_free_model(
             messages, temperature=0.3, max_tokens=2048,
         )
-        if result is None and self.router:
+        if result is None and self.router and self._free.backend == "api":
             try:
                 result = await self.router.route(
                     task_type="memory_encoding",

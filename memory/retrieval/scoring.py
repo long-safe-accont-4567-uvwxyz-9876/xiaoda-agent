@@ -17,6 +17,7 @@ from memory._memory_utils import (
     _normalize_score,
 )
 from memory.fsrs_model import S_INIT, MemoryPhase, MemoryState, ReinforcementSignal
+from memory.retrieval.trace import mark_retrieval_dropped
 
 
 class ScoringTouchMixin:
@@ -144,15 +145,19 @@ class ScoringTouchMixin:
                     k_is_distilled = k.get("is_raw", 1) == 0
                     if r_is_distilled and not k_is_distilled:
                         kept.remove(k)
+                        mark_retrieval_dropped(k.get("id"), "duplicate_similarity")
                         break
                     elif k_is_distilled and not r_is_distilled:
                         is_dup = True
+                        mark_retrieval_dropped(r.get("id"), "duplicate_similarity")
                         break
                     elif r.get("final_score", 0) <= k.get("final_score", 0):
                         is_dup = True
+                        mark_retrieval_dropped(r.get("id"), "duplicate_similarity")
                         break
                     else:
                         kept.remove(k)
+                        mark_retrieval_dropped(k.get("id"), "duplicate_similarity")
                         break
             if not is_dup:
                 kept.append(r)

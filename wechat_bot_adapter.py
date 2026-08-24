@@ -267,6 +267,13 @@ class WeChatBotAdapter(ChannelAdapterBase):
         # 消息处理任务集合：持有强引用避免被 GC 回收，stop() 时统一取消
         self._msg_tasks: set[asyncio.Task] = set()
 
+        # T1（cursor 先提交后处理）：
+        # - _batch_gathers：当前批次 gather 句柄，poll 被取消时一并取消；
+        # - _task_msg_ids：消息任务 → msg_id 映射，供 stop() 死信标记与
+        #   异常终态死信标记使用（重放去重的唯一依据）。
+        self._batch_gathers: set[asyncio.Future] = set()
+        self._task_msg_ids: dict[asyncio.Task, str] = {}
+
         # 长轮询游标（首次为空字符串，后续传入上次返回的 get_updates_buf）
         # 持久化到凭证同目录：进程重启后恢复游标，避免服务端重放历史消息。
         self._cursor: str = self._load_cursor()
@@ -438,14 +445,33 @@ class WeChatBotAdapter(ChannelAdapterBase):
     # 生命周期
     # ------------------------------------------------------------------
 
-    async def start(self) -> None:
-        """启动微信 Bot 适配器
+    async def start(self) -> "dict[str, Any]":
+        """启动微信 Bot 适配器，返回结构化 readiness 判定（T4）。
 
         - 检测凭证文件 ~/.ai-agent/wechat_credentials.json
         - 有凭证：用凭证初始化 ILinkClient，直接启动消息轮询
         - 无凭证：等待 WebUI 触发扫码流程（不自动启动轮询）
         - 设置 _ACTIVE_BOT = self（对齐 qq_bot_adapter 的模式）
+
+        Returns:
+            readiness dict：{"ok": bool, "connected": bool, "polling": bool,
+            "error": str}。ok=True 表示适配器已连接且轮询任务在跑；调用方
+            （/wechat/start 路由、server 自动恢复）必须仅在 ok=True 时把本
+            实例挂载为活跃 bot——旧实现吞掉初始化错误并回滚 disconnected 却
+            正常返回，导致路由层无条件挂载"僵尸实例"。
+
+        兼容性：内部状态口径（_connected/_running/is_polling 等）不变；
+        返回值由 None 变为 dict——旧调用方忽略返回值时行为不受影响。
         """
+
+        def _readiness(ok: bool, error: str = "") -> dict[str, Any]:
+            return {
+                "ok": bool(ok and self._connected and self.is_polling),
+                "connected": bool(self._connected),
+                "polling": bool(self.is_polling),
+                "error": str(error or ""),
+            }
+
         global _ACTIVE_BOT
         # 串行化活跃实例的 check→stop→assign 过渡：并发 start() 交错会产生
         # 多个 poll_task 或覆盖未停止的旧实例（"消息重复 N 次"根因之一）。
@@ -456,7 +482,7 @@ class WeChatBotAdapter(ChannelAdapterBase):
             # 幂等：同一实例已在运行则直接返回，避免重复建 poller / 覆盖 client
             if _ACTIVE_BOT is self and self._running and not self._closed:
                 logger.info("wechat_bot.start_already_running")
-                return
+                return _readiness(True)
             if _ACTIVE_BOT is not None and _ACTIVE_BOT is not self and not _ACTIVE_BOT.is_closed():
                 logger.info("wechat_bot.start_stopping_existing")
                 try:
@@ -474,7 +500,7 @@ class WeChatBotAdapter(ChannelAdapterBase):
             self._running = True
             self._closed = False
 
-        # 确保 AgentCore 已初始化（未注入时尝试自建）
+        # 确保 AgentCore 已初始化（未提供时尝试自建）
         if self._core is None:
             try:
                 from agent_core import AgentCore
@@ -507,7 +533,7 @@ class WeChatBotAdapter(ChannelAdapterBase):
         # 若已被停止则中断启动，绝不再拉起 poller。
         if self._closed:
             logger.info("wechat_bot.start_aborted_stopped_concurrently")
-            return
+            return _readiness(False, "adapter stopped concurrently during start")
 
         # m9：成功启动到此处即认为一次干净的生命周期开始，复位过期重试计数，
         # 避免上次会话遗留的退避计数让新会话过早判定"真过期"。
@@ -534,6 +560,7 @@ class WeChatBotAdapter(ChannelAdapterBase):
                 self._expired = False
                 logger.info("wechat_bot.credentials_loaded starting_poller")
                 self._start_polling()
+                return _readiness(True)
             except Exception as e:
                 logger.error(
                     "wechat_bot.ilink_init_failed error={}",
@@ -547,6 +574,8 @@ class WeChatBotAdapter(ChannelAdapterBase):
                     _ACTIVE_BOT = None
                 self._running = False
                 self._closed = True
+                # T4：不再吞错回滚后正常返回——如实上报失败详情
+                return _readiness(False, f"ILinkClient init failed: {e}")
         else:
             # 无凭证：等待 WebUI 触发扫码流程（不自动启动轮询）
             # R3-Major#2：回滚 start() 早期无条件设置的 _ACTIVE_BOT/_running，
@@ -558,6 +587,7 @@ class WeChatBotAdapter(ChannelAdapterBase):
                 _ACTIVE_BOT = None
             self._running = False
             self._closed = True
+            return _readiness(False, "no credentials (scan QR code to log in)")
 
     def _start_polling(self) -> None:
         """启动消息轮询任务（幂等：已运行时不重复创建）。"""
@@ -610,11 +640,20 @@ class WeChatBotAdapter(ChannelAdapterBase):
                 )
             self._poll_task = None
 
-        # 取消未完成的消息处理任务（best-effort，避免断开后仍跑 AgentCore 至 120s）
+        # T1：批次收尾 gather 若仍在等待（poll 已死但批次未终结），一并取消，
+        # 避免 stop 后仍有悬空 await 挂着"未提交游标"的批次。
+        for gather in list(self._batch_gathers):
+            gather.cancel()
+        self._batch_gathers.clear()
+
+        # 取消未完成的消息处理任务（best-effort，避免断开后仍跑 AgentCore 至 120s）。
+        # T1 契约：取消前先按 msg_id 记死信——这些消息的游标尚未推进，重启后服务端
+        # 会按旧游标重放本批；死信让重放被去重拦截，保证"不丢消息也不重复回复"。
         if self._msg_tasks:
             for task in list(self._msg_tasks):
                 if not task.done():
                     task.cancel()
+                    self._mark_task_msg_dead(task)
             try:
                 await asyncio.gather(*self._msg_tasks, return_exceptions=True)
             except Exception as e:
@@ -726,12 +765,8 @@ class WeChatBotAdapter(ChannelAdapterBase):
                 _backoff = min(_backoff * 2, _max_backoff)
                 continue
 
-            # 更新游标（get_updates_buf）：为空时保留原游标，避免重放历史消息。
-            # W1：持久化游标，进程重启后恢复，避免服务端按空游标重放历史消息。
+            # T1：先取新游标但**不提交**——等批次内全部消息终结后再推进。
             next_cursor = result.get("cursor", "") or ""
-            if next_cursor:
-                self._cursor = next_cursor
-                self._save_cursor()
 
             # m3：不在轮询批次层面绑定 context_token——一个批次可能包含多个用户的
             # 消息，批次级 token 绑到 _last_from_user_id 会 shadow per-user 的正确绑定
@@ -744,11 +779,47 @@ class WeChatBotAdapter(ChannelAdapterBase):
                     "wechat_bot.poll_received poll_count={} elapsed_ms={} msg_count={} cursor_len={}",
                     _poll_count, _elapsed_ms, len(msgs), len(next_cursor),
                 )
+                batch_tasks = []
                 for msg in msgs:
                     task = asyncio.create_task(self._process_message(msg))
                     self._msg_tasks.add(task)
+                    msg_id = str(msg.get("msg_id", "") or "") if isinstance(msg, dict) else ""
+                    if msg_id:
+                        self._task_msg_ids[task] = msg_id
                     task.add_done_callback(self._on_msg_task_done)
-            else:
+                    batch_tasks.append(task)
+                # T1（cursor 先提交后处理缺陷）：批次内全部消息终结（成功/异常/死信）
+                # 之后才推进游标。旧实现在创建任务前就持久化 cursor，崩溃/停机会把
+                # "已提交未处理"的整批消息永久丢失；新实现崩溃重启后服务端按旧游标
+                # 重放本批，stop() 路径取消的任务已记死信（去重拦截重复回复）。
+                gather = asyncio.gather(*batch_tasks, return_exceptions=True)
+                self._batch_gathers.add(gather)
+                try:
+                    outcomes = await asyncio.shield(gather)
+                except asyncio.CancelledError:
+                    # poll 被取消（stop/过期收敛）：取消批次收尾，游标不推进，
+                    # 未完成消息的死信标记由 stop() 统一处理。
+                    gather.cancel()
+                    raise
+                finally:
+                    self._batch_gathers.discard(gather)
+                # 单条异常视为该条终结：记死信（重放不重复处理），不卡整批游标。
+                for task, outcome in zip(batch_tasks, outcomes or []):
+                    if isinstance(outcome, BaseException) and not isinstance(outcome, asyncio.CancelledError):
+                        logger.error(
+                            "wechat_bot.msg_task_failed error={}",
+                            str(outcome)[:200],
+                        )
+                        self._mark_msg_dead_by_task(task)
+
+            # 推进游标（get_updates_buf）：为空时保留原游标，避免重放历史消息。
+            # W1：持久化游标，进程重启后恢复，避免服务端按空游标重放历史消息。
+            # T1：仅当本批次无消息、或批次内全部消息已终结时才会走到这里。
+            if next_cursor:
+                self._cursor = next_cursor
+                self._save_cursor()
+
+            if not msgs:
                 # 无消息时短暂 sleep，避免紧密循环
                 await asyncio.sleep(0.5)
 
@@ -1201,14 +1272,31 @@ class WeChatBotAdapter(ChannelAdapterBase):
         若任务被 GC 回收，异常会静默丢失；这里显式取出异常并记录。
         """
         self._msg_tasks.discard(task)
+        # T1：仅成功终结的任务清理 msg_id 映射；取消/异常终态的映射保留，
+        # 由 stop() 死信标记与批次收尾（异常死信）负责消费。
+        if not task.cancelled():
+            exc = task.exception()
+            if exc is None:
+                self._task_msg_ids.pop(task, None)
+            elif exc is not None:
+                logger.error(
+                    "wechat_bot.msg_task_failed error={}",
+                    str(exc)[:200],
+                )
         if task.cancelled():
             return
-        exc = task.exception()
-        if exc is not None:
-            logger.error(
-                "wechat_bot.msg_task_failed error={}",
-                str(exc)[:200],
-            )
+
+    def _mark_msg_dead_by_task(self, task: asyncio.Task) -> None:
+        """按任务取回 msg_id 并记入去重表（死信），幂等：无映射时静默跳过。"""
+        msg_id = self._task_msg_ids.get(task, "")
+        if msg_id:
+            # 记死信：该消息未完成处理即被取消/失败，重放时按去重拦截
+            self._processed_msg_ids.setdefault(msg_id, time.time())
+            self._task_msg_ids.pop(task, None)
+
+    def _mark_task_msg_dead(self, task: asyncio.Task) -> None:
+        """:meth:`_mark_msg_dead_by_task` 的 stop() 别名（同步、不取回任务结果）。"""
+        self._mark_msg_dead_by_task(task)
 
     # ------------------------------------------------------------------
     # 发送消息

@@ -49,6 +49,14 @@ class MemoryDB(ChildChunkMixin, EntityMixin, EpisodicMixin, SearchMixin, Distill
         self._read_pool: list[aiosqlite.Connection] = []
         self._read_idx = 0
         self.reconciliation: Any = None
+        # 数据库小任务B-1：事务守卫（DatabaseManager.init 经 attach_tx_guard
+        # 注入；未注入的独立实例保持历史裸 execute+commit 行为）
+        self._tx_guard: Any = None
+
+    def attach_tx_guard(self, tx_active: Any) -> None:
+        """注入事务守卫：感知外层 write_transaction 并共享连接级写锁。"""
+        from db.db_memory_utils import WriteTxGuard
+        self._tx_guard = WriteTxGuard(self._conn, tx_active)
 
     def _read_conn(self) -> aiosqlite.Connection:
         """取只读连接（round-robin），池空时回退主连接（保留原行为）。"""
@@ -57,6 +65,98 @@ class MemoryDB(ChildChunkMixin, EntityMixin, EpisodicMixin, SearchMixin, Distill
         conn = self._read_pool[self._read_idx % len(self._read_pool)]
         self._read_idx += 1
         return conn
+
+    async def get_visible_memory_id_page(
+        self,
+        scope: Any,
+        *,
+        before_id: int | None = None,
+        page_size: int = 1000,
+    ) -> dict[str, Any]:
+        """Return one recent-first keyset page inside a privacy boundary."""
+        bounded_size = max(1, min(int(page_size), 5000))
+        visibility = active_memory_visibility_sql("em")
+        scope_where, scope_params = _scope_where(
+            scope, table="em", include_archived_filter=True,
+        )
+        cursor_where = " AND em.id < ?" if before_id is not None else ""
+        cursor_params = [int(before_id)] if before_id is not None else []
+        cursor = await self._read_conn().execute(
+            f"SELECT em.id FROM episodic_memories em WHERE {visibility}"
+            f"{scope_where}{cursor_where} ORDER BY em.id DESC LIMIT ?",
+            [*scope_params, *cursor_params, bounded_size + 1],
+        )
+        rows = await cursor.fetchall()
+        ids = [int(row["id"]) for row in rows[:bounded_size]]
+        return {
+            "ids": ids,
+            "next_cursor": ids[-1] if ids else before_id,
+            "has_more": len(rows) > bounded_size,
+        }
+
+    async def get_visible_child_id_page(
+        self,
+        scope: Any,
+        *,
+        before_id: int | None = None,
+        page_size: int = 1000,
+    ) -> dict[str, Any]:
+        """Return child rowids whose parents are visible, recent-first by child id."""
+        bounded_size = max(1, min(int(page_size), 5000))
+        visibility = active_memory_visibility_sql("em")
+        scope_where, scope_params = _scope_where(
+            scope, table="em", include_archived_filter=True,
+        )
+        cursor_where = " AND mc.id < ?" if before_id is not None else ""
+        cursor_params = [int(before_id)] if before_id is not None else []
+        cursor = await self._read_conn().execute(
+            "SELECT mc.id FROM memory_child_chunks mc "
+            "JOIN episodic_memories em ON em.id=mc.parent_id "
+            f"WHERE {visibility}{scope_where}{cursor_where} "
+            "ORDER BY mc.id DESC LIMIT ?",
+            [*scope_params, *cursor_params, bounded_size + 1],
+        )
+        rows = await cursor.fetchall()
+        ids = [int(row["id"]) for row in rows[:bounded_size]]
+        return {
+            "ids": ids,
+            "next_cursor": ids[-1] if ids else before_id,
+            "has_more": len(rows) > bounded_size,
+        }
+
+    async def get_visible_memory_ids(
+        self, scope: Any, limit: int | None = None
+    ) -> list[int]:
+        """Compatibility collector over keyset pages; production recall streams pages."""
+        collected: list[int] = []
+        cursor: int | None = None
+        while limit is None or len(collected) < limit:
+            page_size = min(1000, limit - len(collected)) if limit else 1000
+            page = await self.get_visible_memory_id_page(
+                scope, before_id=cursor, page_size=page_size
+            )
+            collected.extend(page["ids"])
+            if not page["has_more"] or not page["ids"]:
+                break
+            cursor = page["next_cursor"]
+        return collected
+
+    async def get_visible_child_ids(
+        self, scope: Any, limit: int | None = None
+    ) -> list[int]:
+        """Compatibility collector over child keyset pages."""
+        collected: list[int] = []
+        cursor: int | None = None
+        while limit is None or len(collected) < limit:
+            page_size = min(1000, limit - len(collected)) if limit else 1000
+            page = await self.get_visible_child_id_page(
+                scope, before_id=cursor, page_size=page_size
+            )
+            collected.extend(page["ids"])
+            if not page["has_more"] or not page["ids"]:
+                break
+            cursor = page["next_cursor"]
+        return collected
 
     async def get_visible_memories_by_ids(
         self, ids: list[int], *, scope: Any | None = None
@@ -180,13 +280,24 @@ class MemoryDB(ChildChunkMixin, EntityMixin, EpisodicMixin, SearchMixin, Distill
             rows = [row for row in rows if row.get("is_raw") == is_raw]
         return rows[:limit]
 
-    async def search_child_fts(self, query: str, limit: int = 20) -> list[dict]:
+    async def search_child_fts(
+        self, query: str, limit: int = 20, scope: Any | None = None
+    ) -> list[dict]:
         from db.fts_utils import _build_fts_query
 
         fts_query = _build_fts_query(query)
         if not fts_query:
             return []
         visibility = active_memory_visibility_sql("em")
+        where = f"memory_child_chunks_fts MATCH ? AND {visibility}"
+        params: list[Any] = [fts_query]
+        if scope is not None:
+            scope_where, scope_params = _scope_where(
+                scope, table="em", include_archived_filter=True,
+            )
+            where += scope_where
+            params.extend(scope_params)
+        params.append(limit)
         try:
             cursor = await self._read_conn().execute(
                 f"""SELECT mc.id, mc.parent_id, mc.content, mc.chunk_type,
@@ -194,16 +305,16 @@ class MemoryDB(ChildChunkMixin, EntityMixin, EpisodicMixin, SearchMixin, Distill
                     FROM memory_child_chunks_fts fts
                     JOIN memory_child_chunks mc ON fts.rowid=mc.id
                     JOIN episodic_memories em ON em.id=mc.parent_id
-                    WHERE memory_child_chunks_fts MATCH ? AND {visibility}
+                    WHERE {where}
                     ORDER BY score LIMIT ?""",
-                (fts_query, limit),
+                params,
             )
             return [dict(row) for row in await cursor.fetchall()]
         except Exception as exc:
             if "no such table: memory_knowledge_sources" not in str(exc) and "no such column" not in str(exc):
                 logger.warning("db_memory.child_fts_search_failed", error=str(exc))
                 return []
-            return await super().search_child_fts(query, limit)
+            return await super().search_child_fts(query, limit, scope=scope)
 
     async def get_child_parent_ids(self, child_ids: list[int]) -> list[int]:
         if not child_ids:
@@ -260,16 +371,19 @@ class MemoryDB(ChildChunkMixin, EntityMixin, EpisodicMixin, SearchMixin, Distill
             )
 
     async def _search_entities_impl(self, entity_names: list[str], limit: int,
-                                    user_id: str | None, agent_id: str | None,
+                                    scope: Any | None,
                                     event_label: str) -> list[dict]:
         if not entity_names:
             return []
         conditions, params = _entity_like_conditions(entity_names)
         visibility = active_memory_visibility_sql("em")
         where = f"em.session_id!='archived' AND ({conditions}) AND {visibility}"
-        if user_id is not None and agent_id is not None:
-            where += " AND em.user_id=? AND em.agent_id=?"
-            params.extend([user_id, agent_id])
+        if scope is not None:
+            scope_where, scope_params = _scope_where(
+                scope, table="em", include_archived_filter=False,
+            )
+            where += scope_where
+            params.extend(scope_params)
         try:
             cursor = await self._read_conn().execute(
                 f"SELECT em.* FROM episodic_memories em WHERE {where} "
@@ -282,7 +396,7 @@ class MemoryDB(ChildChunkMixin, EntityMixin, EpisodicMixin, SearchMixin, Distill
                 logger.warning(event_label, error=str(exc))
                 return []
             return await super()._search_entities_impl(
-                entity_names, limit, user_id, agent_id, event_label
+                entity_names, limit, scope, event_label
             )
 
     async def _search_by_emotion_impl(self, emotion_labels: list[str], limit: int,

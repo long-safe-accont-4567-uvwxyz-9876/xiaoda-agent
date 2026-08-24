@@ -177,6 +177,8 @@ class SpontaneousRecall:
         result = await self._free.call(messages, temperature=0.7, max_tokens=512)
         if result is not None:
             return result.strip()
+        if self._free.backend != "api":
+            return ""
         try:
             result = await asyncio.wait_for(
                 self.core.router.route(

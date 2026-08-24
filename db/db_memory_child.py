@@ -10,7 +10,7 @@ import asyncio
 
 from loguru import logger
 
-from db.db_memory_utils import _sql_placeholders
+from db.db_memory_utils import _scope_where, _sql_placeholders
 
 
 class ChildChunkMixin:
@@ -80,7 +80,9 @@ class ChildChunkMixin:
                 await asyncio.shield(self._conn.rollback())
             raise
 
-    async def search_child_fts(self, query: str, limit: int = 20) -> list[dict]:
+    async def search_child_fts(
+        self, query: str, limit: int = 20, scope: object | None = None
+    ) -> list[dict]:
         """子chunk FTS5全文检索，返回包含 parent_id 的记录列表。
 
         2026-08-08 阻塞根因修复：原用主写连接 _conn 执行 SELECT，后台写事务
@@ -93,15 +95,27 @@ class ChildChunkMixin:
         if not fts_query:
             return []
         try:
+            where = "memory_child_chunks_fts MATCH ?"
+            params: list = [fts_query]
+            join = ""
+            if scope is not None:
+                join = " JOIN episodic_memories em ON em.id = mc.parent_id"
+                scope_where, scope_params = _scope_where(
+                    scope, table="em", include_archived_filter=True
+                )
+                where += scope_where
+                params.extend(scope_params)
+            params.append(limit)
             cursor = await self._read_conn().execute(
-                """SELECT mc.id, mc.parent_id, mc.content, mc.chunk_type, mc.importance,
+                f"""SELECT mc.id, mc.parent_id, mc.content, mc.chunk_type, mc.importance,
                           bm25(memory_child_chunks_fts) as score
                    FROM memory_child_chunks_fts fts
                    JOIN memory_child_chunks mc ON fts.rowid = mc.id
-                   WHERE memory_child_chunks_fts MATCH ?
+                   {join}
+                   WHERE {where}
                    ORDER BY score
                    LIMIT ?""",
-                (fts_query, limit),
+                params,
             )
             rows = await cursor.fetchall()
             return [dict(r) for r in rows]

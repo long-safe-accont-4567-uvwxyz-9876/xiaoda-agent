@@ -13,7 +13,7 @@ from loguru import logger
 
 from config import TTS_ASYNC_MODE, build_system_prompt, get_agent_display_name
 from emotion.emotion_simple import detect_emotion
-from emotion.emotion_enum import CN_TO_EN
+from emotion.emotion_enum import CN_TO_EN, EMOTION_TAG_GUIDE, VALID_EMOTION_TAGS
 from utils.text_utils import humanize, strip_dsml, strip_reasoning
 from core.degradation_strategy import get_degradation_strategy
 from core.event_bus import event_bus, AgentEvent, AgentEventType, gen_task_id
@@ -31,28 +31,29 @@ from agent_core._shared import (PARALLEL_WALL_TIMEOUT_S, ProcessResult, SUB_AGEN
 # 正常 delegate_task 工具调用不注入（子 Agent 人格文件保留"不要加情绪标签"）。
 # 标签会被 _finalize_reply 的 strip_emotion_tag 剥离，不会泄露给用户，
 # 但会触发子 Agent 专属表情包系统（pick strict 模式：无对应分类不发）。
-_SUB_AGENT_EMOTION_RULE = """## 情绪标签（必须遵守）
+# 文案从 emotion_enum.EMOTION_TAG_GUIDE 动态生成——枚举即唯一事实源，
+# 避免再出现提示词列表与表情包分类脱节的漂移（2026-08 review #1）。
+def _render_emotion_rule(tags: dict[str, str]) -> str:
+    """按给定的 标签→中文说明 表渲染情绪规则块。"""
+    return (
+        "## 情绪标签（必须遵守）\n"
+        "\n"
+        "⚠️ 这是一条硬性规则，每条回复都必须遵守：\n"
+        "\n"
+        "在每条回复的最末尾，附上一个情绪标签，格式为 [emotion:xxx]。xxx 为以下之一：\n"
+        + "\n".join(f"- {tag} — {desc}" for tag, desc in tags.items())
+        + "\n"
+        "\n"
+        "规则：\n"
+        "1. 每条回复必须有且仅有一个情绪标签\n"
+        "2. 标签放在回复文本的最末尾\n"
+        "3. 这个标签不会显示给用户，但会用来选择合适的表情包，没有标签就无法发送表情包\n"
+        "4. 不要用文字画表情包，表情包会根据情绪标签自动发送"
+    )
 
-⚠️ 这是一条硬性规则，每条回复都必须遵守：
 
-在每条回复的最末尾，附上一个情绪标签，格式为 [emotion:xxx]。xxx 为以下之一：
-- happy — 开心、高兴、兴奋、得意
-- sad — 难过、伤心、失落、遗憾
-- shy — 害羞、不好意思、脸红、撒娇
-- angry — 生气、不满、赌气
-- curious — 好奇、疑惑、惊讶
-- greeting — 问候、打招呼、道别
-- thinking — 思考、犹豫、琢磨
-- lonely — 孤独、怅然、思念
-- playful — 俏皮、调皮、恶作剧
-- surprised — 惊讶、吃惊
-- fear — 紧张、害怕、担忧
-
-规则：
-1. 每条回复必须有且仅有一个情绪标签
-2. 标签放在回复文本的最末尾
-3. 这个标签不会显示给用户，但会用来选择合适的表情包，没有标签就无法发送表情包
-4. 不要用文字画表情包，表情包会根据情绪标签自动发送"""
+# 全量规则（枚举全集）；实际注入时经 _sub_agent_emotion_rule 按代理表情包目录裁剪
+_SUB_AGENT_EMOTION_RULE = _render_emotion_rule(EMOTION_TAG_GUIDE)
 
 
 
@@ -60,6 +61,21 @@ _SUB_AGENT_EMOTION_RULE = """## 情绪标签（必须遵守）
 
 class SubAgentManagerMixin:
     """子代理管理相关方法的 Mixin，由 AgentCore 组合使用。"""
+
+    def _sub_agent_emotion_rule(self, target: str) -> str:
+        """按子代理专属表情包实际拥有的情绪分类生成标签规则。
+
+        strict pick 模式下，提示词教了目录里没有的分类只会白白降低出图率
+        （如 xiaoli 包仅有 6/17 类）。因此规则中的标签清单 =
+        该代理物理目录 ∩ 核心枚举；目录缺失/为空时退回全量枚举，
+        保证规则永远非空（2026-08 review 二轮 Fix C）。
+        """
+        mgr = self.get_sticker_manager(target)
+        allowed = (mgr.available_categories & VALID_EMOTION_TAGS) if mgr.available else set()
+        if not allowed:
+            return _SUB_AGENT_EMOTION_RULE
+        return _render_emotion_rule(
+            {t: d for t, d in EMOTION_TAG_GUIDE.items() if t in allowed})
 
     async def _notify_sub_outcome(self, agent: str, event_type: Any,
                                   task_id: str, data: dict,
@@ -81,6 +97,54 @@ class SubAgentManagerMixin:
             except Exception as e:
                 logger.debug("belief_router.update_failed agent={} error={}", agent, str(e)[:100])
 
+    @staticmethod
+    def _can_use_personal_context(source: str, ctx: RequestContext | None) -> bool:
+        if source == "qq_group":
+            principal = getattr(ctx, "principal", None) if ctx else None
+            return (
+                getattr(principal, "is_owner", False) is True
+                or getattr(ctx, "is_master", False) is True
+            )
+        return True
+
+    def _persist_sub_agent_reply(
+        self,
+        *,
+        user_input: str,
+        reply: str,
+        user_id: str,
+        source: str,
+        emotion: dict,
+        session_id: str,
+        model_used: str,
+        ctx: RequestContext | None,
+    ) -> None:
+        request_context = getattr(ctx, "group_context_metadata", None) if ctx else None
+        if self._can_use_personal_context(source, ctx):
+            self._bg_task_manager.run_background_tasks(
+                user_input,
+                reply,
+                user_id,
+                source,
+                emotion,
+                [],
+                session_id=session_id,
+                model_used=model_used,
+                request_context=request_context,
+                user_context_token=getattr(ctx, "user_context_token", None),
+            )
+            return
+        self._bg_task_manager.log_conversation_only(
+            user_input,
+            reply,
+            user_id,
+            source,
+            emotion,
+            session_id=session_id,
+            model_used=model_used,
+            request_context=request_context,
+        )
+
     async def _dispatch_single_sub_agent(self, target: str, clean_input: str,
                                           user_id: str, source: str, session_id: str, trace: Any,
                                           force_voice: bool = False,
@@ -99,7 +163,10 @@ class SubAgentManagerMixin:
             target, AgentEventType.SUB_STARTED, task_id,
             {"display_name": display_name, "input_preview": clean_input[:50]}, None)
         trace.info("agent.chat_target_sub", target=target, input_preview=clean_input[:50])
-        context_str = self._build_sub_agent_context()
+        allow_personal_context = self._can_use_personal_context(source, _ctx)
+        context_str = self._build_sub_agent_context(
+            include_personal=allow_personal_context,
+        )
         sub_reply = await self._dispatch_sub_agent_with_events(
             target, clean_input, display_name, context_str, _ctx, task_id)
 
@@ -112,12 +179,18 @@ class SubAgentManagerMixin:
         if is_degraded_reply(sub_reply):
             logger.info("sub_agent.skip_degraded_reply_not_in_history", reply_preview=sub_reply[:60])
         else:
-            await self.context.add_message("user", clean_input)
-            await self.context.add_message("assistant", sub_reply, agent=target)
-            self._bg_task_manager.run_background_tasks(
-                clean_input, sub_reply, user_id, source, emotion, [],
+            if allow_personal_context:
+                await self.context.add_message("user", clean_input)
+                await self.context.add_message("assistant", sub_reply, agent=target)
+            self._persist_sub_agent_reply(
+                user_input=clean_input,
+                reply=sub_reply,
+                user_id=user_id,
+                source=source,
+                emotion=emotion,
                 session_id=session_id,
                 model_used=self.router.get_current_chat_model().get("model_id", ""),
+                ctx=_ctx,
             )
 
         emotion_label = emotion.get("primary", "")
@@ -127,7 +200,12 @@ class SubAgentManagerMixin:
         clean_sub_reply = self._finalize_reply(sub_reply, style=target)
 
         # 子代理回复隐私扫描（与主 Agent 路径一致）
-        is_master = self.security.is_owner(user_id) if user_id else False
+        principal = getattr(_ctx, "principal", None) if _ctx else None
+        is_master = (
+            getattr(principal, "is_owner", False) is True
+            if principal is not None
+            else (self.security.is_owner(user_id) if user_id else False)
+        )
         if not is_master and clean_sub_reply:
             safe, alt_reply, _ = self.security.check_output_privacy(clean_sub_reply)
             if not safe:
@@ -156,7 +234,7 @@ class SubAgentManagerMixin:
         try:
             token.check()  # 检查是否已被主动取消
             sub_reply = await asyncio.wait_for(
-                self.dispatcher.dispatch(target, clean_input, context=context_str, status_callback=_ctx.status_callback if _ctx else None, address_term=self.context.current_address_term, extra_system_prompt=_SUB_AGENT_EMOTION_RULE),
+                self.dispatcher.dispatch(target, clean_input, context=context_str, status_callback=_ctx.status_callback if _ctx else None, address_term=self.context.current_address_term, extra_system_prompt=self._sub_agent_emotion_rule(target)),
                 timeout=SUB_AGENT_DISPATCH_TIMEOUT_S,
             )
             token.check()  # 检查是否在 dispatch 期间被主动取消
@@ -313,7 +391,9 @@ class SubAgentManagerMixin:
 
         # 构建子代理任务上下文与子任务列表
         agent_configs = self._agent_route_configs
-        sub_context = self._build_sub_agent_context()
+        sub_context = self._build_sub_agent_context(
+            include_personal=self._can_use_personal_context(source, _ctx),
+        )
         sub_tasks: dict[str, str] = {}
         for t in targets:
             desc = agent_configs.get(t, {}).get("route_description", t)
@@ -449,10 +529,15 @@ class SubAgentManagerMixin:
         emotion = detect_emotion(clean_input)
         if _ctx:
             _ctx.last_user_emotion = emotion.get("primary", "")
-        self._bg_task_manager.run_background_tasks(
-            clean_input, all_replies, user_id, source, emotion, [],
+        self._persist_sub_agent_reply(
+            user_input=clean_input,
+            reply=all_replies,
+            user_id=user_id,
+            source=source,
+            emotion=emotion,
             session_id=session_id,
             model_used=model_used,
+            ctx=_ctx,
         )
 
         emotion_label = emotion.get("primary", "")
@@ -825,9 +910,14 @@ class SubAgentManagerMixin:
             key += f":{suffix}"
         return key
 
-    def _build_sub_agent_context(self, task_hint: str = "") -> str:
+    def _build_sub_agent_context(
+        self,
+        task_hint: str = "",
+        *,
+        include_personal: bool = True,
+    ) -> str:
         parts = []
-        recent = self.context.get_last_n(12)
+        recent = self.context.get_last_n(12) if include_personal else []
         if recent:
             conv_lines = []
             for m in recent:
@@ -863,10 +953,10 @@ class SubAgentManagerMixin:
         if partner_lines:
             parts.append("[可用的伙伴]\n" + "\n".join(partner_lines) + "\n需要时可以通过 delegate_task 工具向她们求助")
 
-        if self.context.compressed_summary:
+        if include_personal and self.context.compressed_summary:
             parts.append(f"[早期对话摘要]\n{self.context.compressed_summary[:300]}")
 
-        portrait = self.context.user_portrait
+        portrait = self.context.user_portrait if include_personal else None
         if portrait:
             parts.append(f"[{self.context.current_address_term}画像]\n{portrait[:200]}")
 

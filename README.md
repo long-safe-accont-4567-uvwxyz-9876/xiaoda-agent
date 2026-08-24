@@ -220,7 +220,7 @@ plugins/
 - **三层映射机制**（定义于 `emotion/emotion_enum.py`，确保"输入宽容、输出细分、消费端降级"）：
   - **`EMOTION_ALIASES`**：中文词/英文变体 → 核心枚举（约 100 个别名，如"开心"→HAPPY、"greeting"→HAPPY、"lonely"→SAD），通过 `resolve_emotion()` 统一归并
   - **`TTS_STYLE_MAP`**：核心枚举 → TTS 细分风格（部分降级，如 EXCITED→happy、SURPRISED→fear、MOVED→caring、POUT→coquettish）
-  - **`STICKER_FALLBACK`**：核心枚举 → 贴纸类别（部分降级，如 CURIOUS→confused）
+  - **`STICKER_FALLBACK`**：核心枚举 → 贴纸类别（与物理目录一一对应，无降级）
 - **情绪→贴纸映射**：统一枚举 `Emotion` → `STICKER_FALLBACK` 字典
 - **情绪→语音映射**：统一枚举 `Emotion` → `TTS_STYLE_MAP` 字典
 - **TTS 缓存持久化**：合成结果缓存到磁盘，重复文本零延迟

@@ -83,6 +83,79 @@ async def test_single_fts_tiny_bm25_score_is_not_treated_as_reranker_score():
 
 
 @pytest.mark.asyncio
+async def test_reranker_subset_records_omitted_candidates():
+    from memory._retrieval_engine import RecallChannels, RetrievalEngine
+    from memory.retrieval.trace import begin_retrieval_trace, read_retrieval_dropped
+
+    reranker = MagicMock()
+    reranker.available = True
+    reranker.rerank = AsyncMock(return_value=[
+        {"index": 0, "relevance_score": 0.9}
+    ])
+    mm = MagicMock()
+    mm._reranker = reranker
+    mm._reranker_service = None
+    mm._apply_entity_boost = AsyncMock(side_effect=lambda _q, rows, _scope: rows)
+    engine = RetrievalEngine(mm)
+    # MagicMock 子属性默认同步，绑定真实实现让生产代码路径完整执行
+    mm._hybrid_rerank = engine._hybrid_rerank
+    channels = RecallChannels(
+        [{"id": 1, "summary": "one"}, {"id": 2, "summary": "two"}],
+        [], [], [], [], [], [],
+    )
+    begin_retrieval_trace()
+
+    results = await engine._fuse_and_rank(
+        "q", 1, True, "hot", False, 2, channels, None, 0.0
+    )
+
+    assert [row["id"] for row in results] == [1]
+    assert ("2", "reranker_omitted") in read_retrieval_dropped()
+
+
+@pytest.mark.asyncio
+async def test_fusion_records_rerank_limit_and_final_top_k_drops():
+    from memory._retrieval_engine import RecallChannels, RetrievalEngine
+    from memory.retrieval.trace import begin_retrieval_trace, read_retrieval_dropped
+
+    mm = MagicMock()
+    mm._reranker = None
+    mm._reranker_service = None
+    mm._apply_entity_boost = AsyncMock(side_effect=lambda _q, rows, _scope: rows)
+    engine = RetrievalEngine(mm)
+    channels = RecallChannels(
+        [{"id": 1, "summary": "one"}, {"id": 2, "summary": "two"}],
+        [{"id": 3, "summary": "three"}], [], [], [], [], [],
+    )
+    begin_retrieval_trace()
+
+    results = await engine._fuse_and_rank(
+        "q", 1, False, "hot", False, 2, channels, None, 0.0
+    )
+
+    assert len(results) == 1
+    reasons = set(read_retrieval_dropped())
+    assert any(reason == "rerank_limit" for _, reason in reasons)
+    assert any(reason == "top_k" for _, reason in reasons)
+
+
+@pytest.mark.asyncio
+async def test_single_channel_top_k_records_dropped_trace():
+    from memory.retrieval.trace import begin_retrieval_trace, read_retrieval_dropped
+
+    begin_retrieval_trace()
+    await _call_single_channel(
+        "fts",
+        [
+            {"id": 1, "score": 1.0, "summary": "first"},
+            {"id": 2, "score": 0.5, "summary": "second"},
+        ],
+        k=1,
+    )
+    assert read_retrieval_dropped() == (("2", "top_k"),)
+
+
+@pytest.mark.asyncio
 async def test_single_channel_truncates_to_k():
     """单路结果超过 k 条时截断到 k。"""
     items = [{"id": i, "score": 0.9, "summary": f"item {i}"} for i in range(10)]

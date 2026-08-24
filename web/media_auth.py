@@ -9,23 +9,19 @@ web.routers.auth._validate_token 校验；无效返回 401 JSONResponse，有效
 给父类。保留 follow_symlink（媒体符号链接到外置盘）与 no-cache 响应头
 （继承原 NoCacheMediaStaticFiles 行为）。
 
-VULN-29 扩展：凭据来源按序取三种之一（裸 <audio>/<img> 标签无法携带
-Authorization 头，故必须支持 cookie）：
+凭据来源按序取两种之一（裸 <audio>/<img> 标签无法携带 Authorization 头，
+故必须支持 cookie；token 一律不通过 URL 传递，避免出现在日志/Referer 中）：
     1. cookie ``x_media_token``（登录时下发，Path=/media，HttpOnly）
     2. Authorization: Bearer <token>
-    3. ``?token=`` 查询参数
 """
 from __future__ import annotations
-
-from typing import Any
-from urllib.parse import parse_qs
 
 from starlette.responses import JSONResponse, Response
 from starlette.staticfiles import StaticFiles
 
 
 def _token_from_scope(scope: dict) -> str:
-    """从 ASGI scope 提取媒体访问凭据（cookie → Bearer → query token）。"""
+    """从 ASGI scope 提取媒体访问凭据（cookie → Bearer）。不接受 query token。"""
     headers = scope.get("headers") or []
     # 1. cookie x_media_token
     try:
@@ -59,15 +55,7 @@ def _token_from_scope(scope: dict) -> str:
             token = auth[7:].strip()
             if token:
                 return token
-    # 3. query string ?token=
-    raw = scope.get("query_string") or b""
-    try:
-        qs = raw.decode("latin-1")
-        params = parse_qs(qs)
-    except (UnicodeDecodeError, ValueError):
-        return ""
-    tokens = params.get("token") or []
-    return tokens[0] if tokens else ""
+    return ""
 
 
 def _validate(token: str) -> bool:
@@ -82,7 +70,7 @@ def _validate(token: str) -> bool:
 
 
 class AuthStaticFiles(StaticFiles):
-    """带鉴权（cookie/Bearer/query token）+ no-cache 头的媒体静态文件服务。"""
+    """带鉴权（cookie/Bearer）+ no-cache 头的媒体静态文件服务。"""
 
     async def get_response(self, path: str, scope: dict) -> Response:
         # 壁纸为装饰性公开资源（public-wallpaper 端点供登录页无鉴权展示），

@@ -113,6 +113,7 @@ export default {
     tabInstalled: 'Installed',
     tabDevicesShort: 'Compute Devices',
     tabNodes: 'Feature Nodes',
+    tabPrompts: 'Prompt Governance',
     tabDownloads: 'Downloads',
     loadFailed: 'Failed to load local AI resources',
     unitInstances: 'running instances ·',

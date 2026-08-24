@@ -354,11 +354,9 @@ class MessageProcessorMixin(StreamingMixin, ChatTargetMixin, VisionMixin, Person
         _restore_t0 = time.time()
         logger.info("pipeline.restore.start proc_id={}", _proc_id)
 
-        # 群聊 session 按用户隔离：不同用户使用不同 session_id
-        # 保留原始 session_id 作为后缀，避免上层传入的值完全丢失
-        if source == "qq_group" and user_openid:
-            _orig_suffix = session_id.rsplit(":", 1)[-1] if session_id else ""
-            session_id = f"qq_group:{user_openid}:{_orig_suffix}" if _orig_suffix else f"qq_group:{user_openid}"
+        # QQ adapter 已把真实 group_openid 写入 qq_group:{group_openid}。
+        # 此处必须原样保留，不能拼入 member_openid，否则同一群会按成员裂成多个
+        # 隐私域，且检索侧无法从复合字符串可靠还原群边界。
 
         # portrait/notebook 仍是全局单主人表，个人资源必须严格 owner-only。
         identity = getattr(ctx, "identity", None)
@@ -367,12 +365,22 @@ class MessageProcessorMixin(StreamingMixin, ChatTargetMixin, VisionMixin, Person
             getattr(principal, "is_owner", False) is True
             or getattr(identity, "is_owner", False) is True
         )
-        _restore_id = user_id or user_openid
-        if _restore_id:
+        from agent_core.conversation_session import ConversationSession
+        from memory.scope import Scope
+
+        conversation_session = getattr(ctx, "conversation_session", None)
+        if isinstance(conversation_session, ConversationSession):
+            memory_scope = conversation_session.memory_scope()
+            activation_key = conversation_session.activation_key
+        else:
+            memory_scope = Scope.personal(user_id=user_id or user_openid)
+            activation_key = user_id or user_openid
+        if activation_key:
             address_term = getattr(identity, "address_term", "")
             ctx.user_context_token = await MessageProcessorMixin._restore_user_context(
                 self,
-                _restore_id,
+                activation_key,
+                scope=memory_scope,
                 address_term=address_term,
                 load_user_resources=is_owner,
                 token_callback=getattr(ctx, "user_context_token_callback", None),
@@ -384,8 +392,9 @@ class MessageProcessorMixin(StreamingMixin, ChatTargetMixin, VisionMixin, Person
 
     async def _restore_user_context(
         self,
-        _restore_id: str,
+        activation_key: str,
         *,
+        scope: Any | None = None,
         address_term: str = "",
         load_user_resources: bool = False,
         token_callback: Any = None,
@@ -394,13 +403,13 @@ class MessageProcessorMixin(StreamingMixin, ChatTargetMixin, VisionMixin, Person
         token = await MessageProcessorMixin._call_with_timeout(
             self,
             self.context.switch_user_context(
-                _restore_id,
+                activation_key,
                 address_term=address_term,
             ),
             timeout=5.0,
             timeout_log="agent.switch_user_context_timeout",
             error_log="agent.switch_user_context_failed",
-            timeout_kwargs={"user_id": _restore_id, "hint": "锁竞争或事件循环阻塞，跳过用户切换"},
+            timeout_kwargs={"user_id": activation_key, "hint": "锁竞争或事件循环阻塞，跳过用户切换"},
         )
         if token is None:
             return None
@@ -422,18 +431,21 @@ class MessageProcessorMixin(StreamingMixin, ChatTargetMixin, VisionMixin, Person
                     await self.context.fail_user_context_resources(token)
                     return token
                 if self.db:
+                    # 设计确认（2026-08-24）：restore_from_db 收进 claim 分支后，
+                    # DB 摘要每用户每进程生命周期只恢复一次（claim 幂等防重复加载），
+                    # 启动预恢复已删。会话内新鲜度由滚动摘要自身维护，属有意取舍。
                     restored = await MessageProcessorMixin._call_with_timeout(
                         self,
                         self.context.restore_from_db(
                             self.db,
-                            user_id=_restore_id,
+                            scope=scope,
                             address_term=address_term,
                             user_token=token,
                         ),
                         timeout=10.0,
                         timeout_log="agent.restore_from_db_timeout",
                         error_log="agent.restore_failed",
-                        timeout_kwargs={"user_id": _restore_id, "hint": "数据库查询阻塞，跳过历史摘要恢复"},
+                        timeout_kwargs={"user_id": activation_key, "hint": "数据库查询阻塞，跳过历史摘要恢复"},
                     )
                     if restored is not True:
                         await self.context.fail_user_context_resources(token)

@@ -8,6 +8,8 @@ import time
 
 import aiosqlite
 
+from db.db_local_ai import transaction_lock_for
+
 
 class KnowledgeDBV2:
     """KG v2 表的持久化操作。"""
@@ -15,6 +17,27 @@ class KnowledgeDBV2:
     def __init__(self, conn: aiosqlite.Connection) -> None:
         self._conn = conn
         conn.row_factory = aiosqlite.Row
+
+    async def _execute_and_commit(self, sql: str, params: tuple = ()) -> None:
+        """auto_commit=True 单语句写统一入口（数据库小任务B-1）。
+
+        锁内 BEGIN IMMEDIATE → execute → commit：与 write_transaction /
+        其他子仓库写点共享同一把连接级锁，且显式开启事务——BEGIN IMMEDIATE
+        失败（连接已处于他人未知事务）必须抛错回退，绝不降级为隐式事务
+        继续写入。
+        """
+        async with transaction_lock_for(self._conn):
+            await self._conn.execute("BEGIN IMMEDIATE")
+            try:
+                await self._conn.execute(sql, params)
+                await self._conn.commit()
+            except BaseException:
+                try:
+                    await self._conn.rollback()
+                except Exception as e:  # noqa: BLE001 —— 回滚失败仅记录
+                    from loguru import logger
+                    logger.warning("kg_v2.rollback_failed", error=str(e))
+                raise
 
     # ── Episode ──────────────────────────────────────────────
 
@@ -29,14 +52,21 @@ class KnowledgeDBV2:
         group_id: str = "default",
         auto_commit: bool = True,
     ) -> None:
+        if auto_commit:
+            await self._execute_and_commit(
+                """INSERT OR REPLACE INTO kg_episodes
+                   (id, content, source_type, source_description, valid_at, created_at, group_id)
+                   VALUES (?, ?, ?, ?, ?, ?, ?)""",
+                (episode_id, content, source_type, source_description,
+                 valid_at, created_at, group_id),
+            )
+            return
         await self._conn.execute(
             """INSERT OR REPLACE INTO kg_episodes
                (id, content, source_type, source_description, valid_at, created_at, group_id)
                VALUES (?, ?, ?, ?, ?, ?, ?)""",
             (episode_id, content, source_type, source_description, valid_at, created_at, group_id),
         )
-        if auto_commit:
-            await self._conn.commit()
 
     async def get_episode(self, episode_id: str) -> dict | None:
         cursor = await self._conn.execute(
@@ -160,27 +190,50 @@ class KnowledgeDBV2:
         return rowid
 
     async def get_active_relations_between(
-        self, from_entity: str, to_entity: str
+        self, from_entity: str, to_entity: str, group_id: str | None = None
     ) -> list[dict]:
-        """获取两个实体之间当前有效的关系（双向）。"""
-        cursor = await self._conn.execute(
-            """SELECT * FROM kg_relations_v2
-               WHERE ((from_entity=? AND to_entity=?) OR (from_entity=? AND to_entity=?))
-               AND is_current=1""",
-            (from_entity, to_entity, to_entity, from_entity),
-        )
+        """获取两个实体之间当前有效的关系（双向），可限定 episode scope。"""
+        if group_id is None:
+            cursor = await self._conn.execute(
+                """SELECT * FROM kg_relations_v2
+                   WHERE ((from_entity=? AND to_entity=?) OR (from_entity=? AND to_entity=?))
+                   AND is_current=1""",
+                (from_entity, to_entity, to_entity, from_entity),
+            )
+        else:
+            cursor = await self._conn.execute(
+                """SELECT DISTINCT r.* FROM kg_relations_v2 r
+                   JOIN kg_edge_episode_refs ref ON ref.edge_id = r.id
+                   JOIN kg_episodes e ON e.id = ref.episode_id
+                   WHERE ((r.from_entity=? AND r.to_entity=?) OR (r.from_entity=? AND r.to_entity=?))
+                   AND r.is_current=1 AND e.group_id=?""",
+                (from_entity, to_entity, to_entity, from_entity, group_id),
+            )
         rows = await cursor.fetchall()
         return [dict(r) for r in rows]
 
     async def get_active_relations_by_subject_and_type(
-        self, from_entity: str, relation_type: str
+        self,
+        from_entity: str,
+        relation_type: str,
+        group_id: str | None = None,
     ) -> list[dict]:
-        """获取同一主体 + 关系类型的当前有效关系（to_entity 可能不同，用于超驰检测）。"""
-        cursor = await self._conn.execute(
-            """SELECT * FROM kg_relations_v2
-               WHERE from_entity=? AND relation_type=? AND is_current=1""",
-            (from_entity, relation_type),
-        )
+        """获取同主体和类型的当前关系，可限定 episode scope。"""
+        if group_id is None:
+            cursor = await self._conn.execute(
+                """SELECT * FROM kg_relations_v2
+                   WHERE from_entity=? AND relation_type=? AND is_current=1""",
+                (from_entity, relation_type),
+            )
+        else:
+            cursor = await self._conn.execute(
+                """SELECT DISTINCT r.* FROM kg_relations_v2 r
+                   JOIN kg_edge_episode_refs ref ON ref.edge_id = r.id
+                   JOIN kg_episodes e ON e.id = ref.episode_id
+                   WHERE r.from_entity=? AND r.relation_type=? AND r.is_current=1
+                     AND e.group_id=?""",
+                (from_entity, relation_type, group_id),
+            )
         rows = await cursor.fetchall()
         return [dict(r) for r in rows]
 

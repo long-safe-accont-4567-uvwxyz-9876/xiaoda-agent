@@ -7,6 +7,34 @@ import pytest
 from db.database import DatabaseManager
 from db.db_kg_v2 import KnowledgeDBV2
 from memory.knowledge_graph_v2 import KnowledgeGraphV2
+from memory.scope import Scope
+
+
+@pytest.mark.asyncio
+async def test_duplicate_relation_failure_rolls_back_ensured_episode(tmp_path):
+    manager = DatabaseManager(tmp_path / "episode_txn.db")
+    await manager.init()
+    db = KnowledgeDBV2(manager._conn)
+    kg = KnowledgeGraphV2(db_v2=db, vector_store=None)
+    await db.insert_episode("EP-old", "old", "summary", 1000.0, time.time())
+    await db.insert_relation_v2(
+        "REL-old", "用户", "喜欢", "篮球", "用户喜欢篮球", "EP-old", 1000.0
+    )
+    original_append = db.append_episode_ref
+
+    async def fail_after_append(*args, **kwargs):
+        await original_append(*args, **kwargs)
+        raise RuntimeError("forced failure")
+
+    db.append_episode_ref = fail_after_append
+    with pytest.raises(RuntimeError, match="forced failure"):
+        await kg.merge_relation_v2({
+            "from_entity": "用户", "relation_type": "喜欢",
+            "to_entity": "篮球", "fact": "用户喜欢篮球",
+        }, "EP-new", 2000.0)
+
+    assert await db.get_episode("EP-new") is None
+    await manager.close()
 
 
 @pytest.mark.asyncio
@@ -143,6 +171,45 @@ async def test_merge_entities_v2_increments_summary_version(tmp_path):
     ent = await db.get_entity_v2("用户")
     assert ent["summary"] == "用户喜欢篮球，是篮球爱好者"
     assert ent["summary_version"] == 1
+    await manager.close()
+
+
+@pytest.mark.asyncio
+async def test_scoped_episode_does_not_invalidate_other_users_fact(tmp_path):
+    manager = DatabaseManager(tmp_path / "scoped_conflict.db")
+    await manager.init()
+    db = KnowledgeDBV2(manager._conn)
+    kg = KnowledgeGraphV2(db_v2=db, vector_store=None)
+    kg.extract_from_summary = AsyncMock(side_effect=[
+        {
+            "entities": [],
+            "relations": [{
+                "from_entity": "用户", "relation_type": "喜欢",
+                "to_entity": "篮球", "fact": "用户喜欢篮球",
+            }],
+        },
+        {
+            "entities": [],
+            "relations": [{
+                "from_entity": "用户", "relation_type": "喜欢",
+                "to_entity": "网球", "fact": "用户喜欢网球",
+            }],
+        },
+    ])
+    kg._detect_contradictions = AsyncMock(return_value=[0])
+
+    await kg.add_facts_from_episode(
+        "Bob 喜欢篮球", 1000.0, scope=Scope(user_id="bob", agent_id="xiaoda")
+    )
+    alice_result = await kg.add_facts_from_episode(
+        "Alice 喜欢网球", 2000.0, scope=Scope(user_id="alice", agent_id="xiaoda")
+    )
+
+    bob_relations = await db.get_active_relations_by_subject_and_type(
+        "用户", "喜欢", group_id="bob::xiaoda"
+    )
+    assert alice_result["invalidated"] == 0
+    assert [r["fact"] for r in bob_relations] == ["用户喜欢篮球"]
     await manager.close()
 
 

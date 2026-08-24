@@ -110,13 +110,15 @@ async def generate_reunion_message(
 
             async def _generate():
                 raw = await _free.call(messages, temperature=0.8, max_tokens=128)
-                if raw is None and router:
+                if raw is None and router and _free.backend == "api":
                     raw = await router.route("memory_encoding", messages, temperature=0.8)
                 return raw
 
             result = await asyncio.wait_for(_generate(), timeout=10)
+            if not result:
+                raise ValueError("empty reunion model response")
             text = result if isinstance(result, str) else (
-                result.choices[0].message.content if hasattr(result, 'choices') else str(result)
+                result.choices[0].message.content if hasattr(result, 'choices') else ""
             )
             # 清理
             text = text.strip()

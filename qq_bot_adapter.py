@@ -170,6 +170,14 @@ def _next_msg_seq() -> int:
         return _msg_seq_counter
 
 
+class QQAmbiguousDelivery(RuntimeError):
+    """平台返回 None：发送结果不明确（可能已送达）。
+
+    恢复路径必须按 TimeoutError 同款语义处理——跳过当前段宁丢勿重，
+    不得把该段并入重发文本（否则实际已送达时用户收到重复消息）。
+    """
+
+
 async def _budgeted_await(
     factory: Callable[[int], Awaitable[Any]],
     *,
@@ -184,8 +192,13 @@ async def _budgeted_await(
         if budget is not None:
             budget.refund()
         raise
-    if budget is not None and (result is False or (none_is_failure and result is None)):
-        budget.refund()
+    if result is False or (none_is_failure and result is None):
+        if budget is not None:
+            budget.refund()
+        if result is None:
+            # None 是"结果不明确"而非明确失败：配额照退（不能基于猜测补发配额），
+            # 但异常类型单独标记，供恢复路径跳过当前段防重复。
+            raise QQAmbiguousDelivery("QQ platform send returned no success result")
         raise RuntimeError("QQ platform send returned no success result")
     return result
 
@@ -284,6 +297,9 @@ async def run_qq_bot(agent: "AgentCore", *, sandbox: bool = False) -> None:
     """在现有事件循环中运行 QQ client（与 WebUI 同进程模式）。
 
     内部带指数退避重连；任务被取消时干净退出。
+    T2：每次迭代结束（正常断开 / 异常重连 / 取消）都经 client.close() 回收
+    当前实例——close() 会停止 on_ready 启动的 nudge engine 并关闭 SDK 连接，
+    保证凭证轮换重启时旧实例（含周期任务）全部被回收，不再泄漏。
     """
     redirect_bot_log()
     # P0 修复：实时从 env 读取 APP_ID/APP_SECRET，而非依赖模块级变量。
@@ -316,6 +332,15 @@ async def run_qq_bot(agent: "AgentCore", *, sandbox: bool = False) -> None:
             logger.error("qq_bot.crashed_retrying error={} delay={}", str(e)[:200], delay)
             await asyncio.sleep(delay)
             delay = min(delay * 2, 120)
+        finally:
+            # T2：无论正常断开还是异常重连，离开本次迭代前统一回收当前实例
+            # （幂等；CancelledError 分支已 close 过则此处为空操作）。
+            try:
+                await client.close()
+            except (OSError, RuntimeError, AttributeError) as e:
+                logger.warning(
+                    "qq_bot.reclaim_instance_failed error={}", str(e)[:200],
+                )
 
 
 class ParsedC2CMessage(NamedTuple):
@@ -367,6 +392,9 @@ class AIQQBot(ChannelAdapterBase, botpy.Client):
         self.agent = agent or AgentCore()
         self._agent_shared = agent is not None
         self.nudge_engine = None
+        # T2：close()/stop() 幂等标志（botpy Client._closed 只覆盖 ws 连接，
+        # 不覆盖 nudge engine 等适配器层资源）
+        self._adapter_closed = False
         # 消息去重缓存：msg_id → 时间戳，保留最近 1 小时（见 ChannelAdapterBase）
         self._init_dedup_state()
         # 注：用户明确要求"我发送的内容不需要去重"——
@@ -501,6 +529,38 @@ class AIQQBot(ChannelAdapterBase, botpy.Client):
 
         if self.nudge_engine:
             self.nudge_engine.poke()
+
+    async def close(self) -> None:
+        """统一生命周期回收入口（T2）：停止 nudge engine + 关闭 SDK client。
+
+        幂等：重复调用安全。重连循环（run_qq_bot）每次迭代结束、凭证轮换重启、
+        graceful shutdown 都必须经此回收旧实例，避免 on_ready 启动的 nudge
+        周期任务随实例被丢弃后永久泄漏（旧实现全仓无 stop 调用）。
+        """
+        await self._reclaim_adapter_resources()
+
+    async def stop(self) -> None:
+        """:meth:`close` 的别名——语义对齐 WeChatBotAdapter.stop()。"""
+        await self.close()
+
+    async def _reclaim_adapter_resources(self) -> None:
+        """实际回收逻辑；幂等由 _adapter_closed 标志保证。"""
+        if getattr(self, "_adapter_closed", False):
+            return
+        self._adapter_closed = True
+        # 1. 停止 nudge engine（NudgeEngine.stop 自身幂等：重复调用/未 start 均安全）
+        nudge = getattr(self, "nudge_engine", None)
+        if nudge is not None:
+            try:
+                await nudge.stop()
+            except Exception as e:  # noqa: BLE001 —— 回收失败不阻断 client 关闭
+                logger.warning("qq_bot.nudge_stop_failed error={}", str(e)[:200])
+            self.nudge_engine = None
+        # 2. 关闭 SDK client（botpy Client.close 自带 _closed 幂等保护）
+        try:
+            await super().close()
+        except (OSError, RuntimeError, AttributeError) as e:
+            logger.warning("qq_bot.client_close_failed error={}", str(e)[:200])
 
     async def on_error(self, event_name: Any, *args: Any, **kwargs: Any) -> None:
         """botpy 事件处理出错时的回调。
@@ -796,6 +856,13 @@ class AIQQBot(ChannelAdapterBase, botpy.Client):
         调用方（on_c2c_message_create / _handle_group_at_message）保留各自的
         解析/去重/锁时序，保证消息去重键与 HITL 触发条件不变。
         """
+        if is_group:
+            real_group_openid = str(getattr(message, "group_openid", "") or "")
+            if not real_group_openid:
+                raise ValueError("QQ group message missing group_openid")
+            group_key = real_group_openid
+            session_id = f"qq_group:{real_group_openid}"
+
         system_context = ""
         group_context_metadata = None
         group_buffer = None
@@ -1355,11 +1422,12 @@ class AIQQBot(ChannelAdapterBase, botpy.Client):
                                         exc: BaseException) -> str:
         """发送失败后计算需要合并的剩余文本。
 
-        TimeoutError 时请求可能已发出但响应超时，QQ 服务端可能已接收当前段，
-        重发会重复 → 跳过当前段（segments[index+1:]），宁可丢一段也不重复；
+        TimeoutError / QQAmbiguousDelivery 时请求可能已发出（响应超时或平台
+        返回 None），QQ 服务端可能已接收当前段，重发会重复 → 跳过当前段
+        （segments[index+1:]），宁可丢一段也不重复；
         其他异常（连接错误）当前段可能没发出 → 重发含当前段（segments[index:]）。
         """
-        if isinstance(exc, TimeoutError):
+        if isinstance(exc, (TimeoutError, QQAmbiguousDelivery)):
             return "".join(segments[index + 1:])
         return "".join(segments[index:])
 

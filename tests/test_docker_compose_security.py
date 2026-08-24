@@ -223,5 +223,35 @@ class TestDockerfileSecurity(unittest.TestCase):
         self.assertIn("/data/credentials", content, "应在 /data 下创建 credentials 目录")
 
 
+class TestDockerfileHealthcheckReadOnly(unittest.TestCase):
+    """Dockerfile HEALTHCHECK 必须是只读探针，不得触发破坏性自愈。
+
+    2026-08-24 安全修复：原实现失败时执行 doctor --fix（可 VACUUM 数据库、
+    删锁、删日志），健康检查成为数据销毁入口。现失败仅非零退出，
+    由 restart 策略接管。
+    """
+
+    @classmethod
+    def setUpClass(cls):
+        cls.content = DOCKERFILE.read_text(encoding="utf-8")
+
+    def test_healthcheck_exists(self):
+        self.assertIn("HEALTHCHECK", self.content, "Dockerfile 缺 HEALTHCHECK")
+
+    def test_healthcheck_has_no_doctor_fix(self):
+        """healthcheck 不得包含 doctor --fix（破坏性自愈）。"""
+        # 提取 HEALTHCHECK 指令段（从 HEALTHCHECK 到 CMD 结束的续行）
+        match = re.search(r"HEALTHCHECK.*?(?=\n\n|\n# |\nCMD )", self.content, re.DOTALL)
+        self.assertIsNotNone(match, "无法定位 HEALTHCHECK 段")
+        healthcheck = match.group(0)
+        self.assertNotIn("doctor", healthcheck, "HEALTHCHECK 不应调用 doctor")
+        self.assertNotIn("--fix", healthcheck, "HEALTHCHECK 不应包含 --fix")
+        self.assertNotIn("subprocess", healthcheck, "HEALTHCHECK 不应起子进程")
+
+    def test_healthcheck_failure_exits_nonzero_only(self):
+        """探针失败路径只应非零退出（交给 restart 策略），无修复动作。"""
+        self.assertIn("sys.exit(1)", self.content, "HEALTHCHECK 失败应 sys.exit(1)")
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

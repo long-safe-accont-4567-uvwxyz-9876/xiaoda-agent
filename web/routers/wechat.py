@@ -354,6 +354,11 @@ async def start_bot(request: Request) -> Any:
 
     从凭证文件加载凭证，创建 WeChatBotAdapter 并调用 start()。
     start() 内部会加载凭证、初始化 ILinkClient、启动长轮询任务。
+
+    T4（僵尸 adapter 修复）：start() 返回结构化 readiness dict
+    {ok, connected, polling, error}；仅在 readiness.ok 时才把 adapter 挂载到
+    app.state.wechat_bot——失败时如实返回失败详情，绝不挂载未就绪实例
+    （旧实现无条件挂载并返回 success=True，产生 /wechat/stop 无法停止的僵尸）。
     """
     async with _get_lifecycle_lock():
         # 先停止已有的 bot 实例（避免重复轮询）
@@ -389,19 +394,33 @@ async def start_bot(request: Request) -> Any:
             )
 
         try:
-            await adapter.start()
-            request.app.state.wechat_bot = adapter
-            logger.info("wechat.bot.started")
-            return Envelope(data={"success": True})
+            readiness = await adapter.start() or {}
         except Exception as e:
             logger.error(
                 "wechat.start.failed error={} type={}",
                 str(e)[:200], type(e).__name__, exc_info=True,
             )
+            request.app.state.wechat_bot = None
             return Envelope(
                 ok=False,
                 error={"code": "START_FAILED", "message": f"启动失败: {e}"},
             )
+        # T4：以结构化 readiness 判定成败；失败不挂载、如实返回详情
+        if not readiness.get("ok"):
+            detail = readiness.get("error") or "适配器未就绪（connected/polling 未达成）"
+            logger.warning(
+                "wechat.start.not_ready connected={} polling={} error={}",
+                bool(readiness.get("connected")), bool(readiness.get("polling")),
+                str(detail)[:200],
+            )
+            request.app.state.wechat_bot = None
+            return Envelope(
+                ok=False,
+                error={"code": "START_FAILED", "message": f"启动失败: {detail}"},
+            )
+        request.app.state.wechat_bot = adapter
+        logger.info("wechat.bot.started")
+        return Envelope(data={"success": True})
 
 
 @router.post("/wechat/stop", response_model=Envelope[dict])

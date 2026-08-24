@@ -343,7 +343,8 @@ class AgentCore(MessageProcessorMixin, ToolExecutorMixin, SubAgentManagerMixin):
                       status_callback: Any=None,
                       image_data: list[dict] | None = None,
                       is_master: bool = True,
-                      system_context: str = "") -> ProcessResult:
+                      system_context: str = "",
+                      user_context_token_callback: Any = None) -> ProcessResult:
         """处理用户输入并返回回复结果 (统一入口, 含身份解析与上下文管理).
 
         Args:
@@ -385,8 +386,6 @@ class AgentCore(MessageProcessorMixin, ToolExecutorMixin, SubAgentManagerMixin):
                          original=is_master, resolved=identity.is_owner,
                          source=source, user_id=user_id)
         is_master = identity.is_owner
-        # 设置上下文的动态称谓
-        self.context.current_address_term = identity.address_term
         # 跨平台共用上下文：若当前 source 平台被配置为共享上下文且非"群聊非主人"，
         # 将 user_id 重映射为统一共享键，使该平台与其他共享平台读/写同一份历史。
         # 身份(is_master/称谓)已在上面用原始 user_id 解析完成，不受重映射影响。
@@ -426,6 +425,7 @@ class AgentCore(MessageProcessorMixin, ToolExecutorMixin, SubAgentManagerMixin):
         ctx.principal = principal
         ctx.conversation_session = conversation_session
         ctx.system_context = system_context  # P0 新增：系统上下文（不入库）
+        ctx.user_context_token_callback = user_context_token_callback
         _ctx_token = _current_request_ctx.set(ctx)
         from memory.scope import bind_scope, reset_scope
         _scope_token = bind_scope(memory_scope)
@@ -477,9 +477,90 @@ class AgentCore(MessageProcessorMixin, ToolExecutorMixin, SubAgentManagerMixin):
         不同用户并发场景罕见，串行处理 LLM 调用不会比并发慢太多）。
         """
         async with self._context_lock:
+            identity = getattr(ctx, "identity", None)
+            address_term = getattr(identity, "address_term", "")
+            await self.context.switch_user_context(
+                ctx.conversation_session.activation_key,
+                address_term=address_term,
+            )
             return await self._process_impl(ctx, user_input, user_id, source, user_openid, session_id,
                                             status_callback, image_data, is_master,
                                             system_context=system_context)
+
+    async def dispatch_web_sub_agent(
+        self,
+        agent: str,
+        user_input: str,
+        *,
+        session_id: str = "",
+        status_callback: Any = None,
+        user_id: str = "webui",
+    ) -> ProcessResult:
+        """在统一上下文锁内执行 Web 直达子代理完整生命周期。"""
+        async with self._context_lock:
+            principal = self._resolve_principal(user_id, source="web")
+            context_id = self._resolve_shared_context_id(
+                user_id,
+                "web",
+                principal.is_owner,
+            )
+            identity = UserIdentity(
+                is_owner=principal.is_owner,
+                display_name=principal.display_name,
+                address_term=principal.address_term,
+            )
+            conversation_session = self._build_conversation_session(
+                principal=principal,
+                context_id=context_id,
+                session_id=session_id,
+                source="web",
+                channel_subject_id=principal.principal_id,
+            )
+            token = await self.context.switch_user_context(
+                context_id,
+                address_term=identity.address_term,
+            )
+            if token is None:
+                raise RuntimeError("web user context activation failed")
+
+            ctx = RequestContext(
+                session_id=session_id,
+                user_id=context_id,
+                user_input=user_input,
+                status_callback=status_callback,
+                is_master=principal.is_owner,
+            )
+            ctx.identity = identity
+            ctx.principal = principal
+            ctx.conversation_session = conversation_session
+            ctx.user_context_token = token
+
+            import uuid
+            from memory.scope import bind_scope, reset_scope
+            request_ctx_token = _current_request_ctx.set(ctx)
+            scope_token = bind_scope(
+                conversation_session.memory_scope(uuid.uuid4().hex)
+            )
+            try:
+                trace = logger.bind(
+                    trace_id=uuid.uuid4().hex[:12],
+                    principal_id=principal.principal_id,
+                    context_id=context_id,
+                    source="web",
+                    agent=agent,
+                )
+                return await self._dispatch_single_sub_agent(
+                    agent,
+                    user_input,
+                    user_id=context_id,
+                    source="web",
+                    session_id=session_id,
+                    trace=trace,
+                    ctx=ctx,
+                )
+            finally:
+                reset_scope(scope_token)
+                _current_request_ctx.reset(request_ctx_token)
 
     async def process_text(self, user_input: str, user_openid: str = "cli", session_id: str = "cli") -> str:
         """处理纯文本输入并直接返回回复字符串 (CLI/Web 便捷入口)."""

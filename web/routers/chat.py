@@ -205,13 +205,11 @@ async def delete_session(session_id: str, request: Request) -> Any:
 
 @router.post("/sessions/{session_id}/export")
 async def export_session(session_id: str, request: Request) -> Any:
-    # POST + Authorization header 安全下载（token 不再通过 URL 暴露）
-    # 兼容历史 <a href> 调用：仍允许 query token
-    token = request.query_params.get("token") or ""
-    if not token:
-        auth = request.headers.get("Authorization", "")
-        if auth.startswith("Bearer "):
-            token = auth[7:]
+    # POST + Authorization header 安全下载（token 不经 URL 传递）
+    auth = request.headers.get("Authorization", "")
+    if not auth.startswith("Bearer "):
+        raise HTTPException(401, "Missing or invalid Authorization header")
+    token = auth[7:]
     if not token:
         raise HTTPException(401, "Missing or invalid Authorization header")
     # 验证 token

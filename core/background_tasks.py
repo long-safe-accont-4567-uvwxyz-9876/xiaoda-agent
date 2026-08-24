@@ -297,9 +297,13 @@ class BackgroundTaskManager:
             ensure_ascii=False,
         )
         is_group_audit = source == "qq_group"
+        # 设计确认（2026-08-24）：群聊落库用哈希 user_id + 不 update_session，
+        # WebUI 会话列表因此看不到群聊会话（审计行仍完整入 conversation_logs），
+        # 群隐私边界见 memory/scope.py，属有意设计。
         if is_group_audit:
             group_key = str(effective_request_context.get("group_key") or "unknown")
-            audit_user_id = audit_session_id = f"qq_group:{group_key}"
+            audit_user_id = f"qq_group:{group_key}"
+            audit_session_id = session_id
         else:
             audit_user_id = user_id
             audit_session_id = session_id

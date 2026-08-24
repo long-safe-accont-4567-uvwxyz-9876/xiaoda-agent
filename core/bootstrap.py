@@ -194,8 +194,9 @@ class AgentCoreBootstrapper:
         h = self.health
         # J-Space 架构优化初始化（非阻塞，失败不影响主流程）
         try:
-            from core.j_space_bootstrap import init_j_space
+            from core.j_space_bootstrap import get_intent_decomposer, init_j_space
             init_j_space()
+            get_intent_decomposer(router=getattr(self.core, "router", None))
             h.record_ok("j_space")
         except Exception as e:
             logger.warning(f"j_space.bootstrap_failed (non-blocking): {e}")
@@ -462,6 +463,8 @@ class AgentCoreBootstrapper:
         from emotion.portrait_manager import PortraitManager
         from memory.knowledge_graph import KnowledgeGraph
         from memory.learning_manager import LearningManager
+        from memory.entity_extractor import EntityExtractor
+        from memory.entity_store import EntityStore
         from memory.memory_manager import MemoryManager
         from memory.notebook_manager import NotebookManager
 
@@ -501,6 +504,12 @@ class AgentCoreBootstrapper:
                 else None
             ),
             query_transformer=query_transformer,
+            # R1-1 修复（2026-08-24）：实体召回第 6 路 + Entity Boost 此前因未注入
+            # 恒空（调研文档 P0 清单）。extractor 不传 router = 纯 jieba 规则快抽，
+            # 读路 <10ms、写路后台 fire-and-forget，零新增 LLM 成本；
+            # 后续要启用 LLM 精抽时再传 router。
+            entity_extractor=EntityExtractor(router=None),
+            entity_store=EntityStore(core.db.memory),
         )
         # 启动时对账：检测主表已落盘但向量索引缺失的记忆（fire-and-forget，不阻塞启动）
         try:
@@ -992,12 +1001,6 @@ class AgentCoreBootstrapper:
             instinct_prompt = await core.instinct_manager.build_instinct_prompt()
             if instinct_prompt:
                 core.context.instinct_prompt = instinct_prompt
-        portrait = await core.portrait_manager.get_current_portrait()
-        if portrait and portrait.get("content"):
-            core.context.user_portrait = portrait["content"]
-            logger.info("portrait.loaded", version=portrait.get("version"))
-        await core._load_notebook_context()
-        await core.context.restore_from_db(core.db)
         core.slash_handler = SlashCommandHandler(
             db=core.db,
             router=core.router,

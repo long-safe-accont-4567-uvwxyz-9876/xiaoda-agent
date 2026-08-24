@@ -119,7 +119,7 @@ xiaoda-agent 是一个多模态 AI Agent 平台，支持多 Agent 协作、记�
 
 - **`EMOTION_ALIASES`**：中文词/英文变体 → 核心枚举（约 100 个别名），输入端宽容归并
 - **`TTS_STYLE_MAP`**：核心枚举 → TTS 细分风格（部分降级，如 EXCITED→happy、SURPRISED→fear）
-- **`STICKER_FALLBACK`**：核心枚举 → 贴纸类别（部分降级，如 CURIOUS→confused）
+- **`STICKER_FALLBACK`**：核心枚举 → 贴纸类别（与物理目录一一对应，无降级）
 
 | 模块 | 文件 | 职责 |
 |------|------|------|

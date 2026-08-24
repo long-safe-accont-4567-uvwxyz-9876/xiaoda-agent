@@ -20,7 +20,7 @@ from typing import Any, Protocol, runtime_checkable
 from loguru import logger
 
 from config import get_agent_display_name
-from agent_core._shared import TIRED_MSG
+from agent_core._shared import TIRED_MSG, _current_request_ctx
 from core.message import AgentMessage
 from emotion.emoji_config import get_status_msg
 from emotion.tts_engine import TTSEngine
@@ -221,9 +221,30 @@ class SubAgent:
         """降级模式：探活失败但仍注册，实际调用时回退到主体 agent。"""
         return self._degraded
 
+    @staticmethod
+    def _memory_submission_scope() -> Any | None:
+        request = _current_request_ctx.get()
+        principal = getattr(request, "principal", None)
+        is_owner = (
+            getattr(principal, "is_owner", False) is True
+            or (principal is None and getattr(request, "is_master", False) is True)
+        )
+        if not is_owner:
+            return None
+        try:
+            from memory.scope import current_scope
+
+            return current_scope()
+        except RuntimeError:
+            return None
+
     def _excluded_tool_names(self) -> set[str]:
         """子代理过滤工具时排除的集合：配置排除项 + 画像工具（实例方法拦截）。"""
-        return self.config.excluded_tools | SUB_AGENT_PROFILE_TOOLS
+        return (
+            self.config.excluded_tools
+            | SUB_AGENT_PROFILE_TOOLS
+            | {SUB_AGENT_MEMORY_TOOL}
+        )
 
     def _filtered_tools(self) -> list[dict] | None:
         if not self._tool_executor:
@@ -232,8 +253,8 @@ class SubAgent:
         excluded = self._excluded_tool_names()
         tools = [t for t in all_tools if t["function"]["name"] not in excluded]
 
-        # 子代理专属工具：submit_memory（受控记忆提交，实例方法拦截执行）
-        tools.append({
+        if self._memory_submission_scope() is not None:
+            tools.append({
             "type": "function",
             "function": {
                 "name": SUB_AGENT_MEMORY_TOOL,
@@ -256,7 +277,7 @@ class SubAgent:
                     "required": ["key_points"],
                 },
             },
-        })
+            })
 
         # 子代理专属工具：send_message_to_agent（子代理间直接通信，实例方法拦截执行）
         tools.append({
@@ -295,7 +316,9 @@ class SubAgent:
             return set()
         excluded = self._excluded_tool_names()
         names = {t["function"]["name"] for t in to_openai_tools() if t["function"]["name"] not in excluded}
-        names.update(SUB_AGENT_EXTRA_TOOLS)  # 子代理专属工具
+        names.update({SUB_AGENT_MESSAGE_TOOL})
+        if self._memory_submission_scope() is not None:
+            names.add(SUB_AGENT_MEMORY_TOOL)
         return names
 
     async def chat(self, message: str, context: str = "", status_callback: Any | None=None, address_term: str = "爸爸", extra_system_prompt: str = "", invocation: Any | None = None) -> str:
@@ -877,6 +900,18 @@ class SubAgent:
             return f"{self.config.display_name}{TIRED_MSG}"
     async def submit_memory(self, key_points: list[str], importance: int = 3) -> str:
         """子代理向主记忆提交关键信息（受控写入）"""
+        scope = self._memory_submission_scope()
+        request = _current_request_ctx.get()
+        principal = getattr(request, "principal", None)
+        is_owner = (
+            getattr(principal, "is_owner", False) is True
+            or (principal is None and getattr(request, "is_master", False) is True)
+        )
+        if not is_owner:
+            return "（拒绝：访客不能提交个人记忆）"
+        if scope is None:
+            return "（拒绝：记忆作用域未绑定）"
+
         # 频率限制：单次任务最多 3 次
         if self._memory_submit_count >= 3:
             return "已达本次任务记忆提交上限（3次）"
@@ -901,6 +936,7 @@ class SubAgent:
                 importance=importance_float,
                 emotion_label="",
                 source="sub_agent",
+                scope=scope,
             )
             # 同步写入向量索引（与 remember 工具保持一致）
             if getattr(mm, "vec", None) and memory_text:
@@ -908,6 +944,10 @@ class SubAgent:
                     await mm.vec.upsert(mem_id, memory_text)
                 except (OSError, RuntimeError, ValueError) as ve:
                     logger.warning("sub_agent.submit_memory.vec_failed", error=str(ve)[:200])
+
+            invalidate = getattr(mm, "invalidate_read_caches", None)
+            if callable(invalidate):
+                invalidate()
 
             self._memory_submit_count += 1
             logger.info("sub_agent.submit_memory", name=self.config.name, count=self._memory_submit_count)

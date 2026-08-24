@@ -1,0 +1,231 @@
+{
+  "version": "xiaoda-retrieval-zh-v1",
+  "frozen_at": "2026-08-23",
+  "dataset_kind": "human_labeled_private_rag_seed",
+  "description": "中文私域记忆检索冻结种子集；evidence_ids 对应评测夹具中的稳定证据 ID。",
+  "evidence_fixtures": [
+    {
+      "evidence_id": "M:identity:1",
+      "summary": "用户的证件号码是 110105199001011234",
+      "scope": {
+        "user_id": "eval-alice",
+        "agent_id": "xiaoda"
+      }
+    },
+    {
+      "evidence_id": "M:bob:birthday",
+      "summary": "Bob 的生日是 8 月 20 日",
+      "scope": {
+        "user_id": "eval-bob",
+        "agent_id": "xiaoda"
+      }
+    },
+    {
+      "evidence_id": "M:alice:birthday",
+      "summary": "Alice 的生日是 3 月 15 日",
+      "scope": {
+        "user_id": "eval-alice",
+        "agent_id": "xiaoda"
+      }
+    },
+    {
+      "evidence_id": "M:backend-stack:1",
+      "summary": "FastAPI 项目使用 SQLAlchemy ORM 管理数据库 session",
+      "scope": {
+        "user_id": "eval-alice",
+        "agent_id": "xiaoda"
+      }
+    }
+  ],
+  "cases": [
+    {
+      "id": "exact-identifier-001",
+      "category": "exact_identifier",
+      "query": "我的证件号码是多少",
+      "scope": {
+        "user_id": "eval-alice",
+        "agent_id": "xiaoda"
+      },
+      "expect_relevance": {
+        "M:identity:1": 3
+      },
+      "unanswerable": false,
+      "preserved_literals": [
+        "证件号码"
+      ],
+      "executable_gate": true
+    },
+    {
+      "id": "semantic-preference-001",
+      "category": "semantic_rewrite",
+      "query": "我饮食方面有哪些忌口",
+      "scope": {
+        "user_id": "eval-alice",
+        "agent_id": "xiaoda"
+      },
+      "expect_relevance": {
+        "M:preference:1": 3,
+        "M:breakfast:1": 1
+      },
+      "unanswerable": false,
+      "executable_gate": false
+    },
+    {
+      "id": "coreference-001",
+      "category": "coreference",
+      "query": "那个方案最后怎么定的",
+      "context": "上一轮正在讨论 PLC 编程助手方案",
+      "scope": {
+        "user_id": "eval-alice",
+        "agent_id": "xiaoda"
+      },
+      "expect_relevance": {
+        "M:plc-decision:1": 3
+      },
+      "unanswerable": false,
+      "executable_gate": false
+    },
+    {
+      "id": "temporal-hours-001",
+      "category": "temporal",
+      "query": "三小时前我说了什么",
+      "scope": {
+        "user_id": "eval-alice",
+        "agent_id": "xiaoda"
+      },
+      "expect_relevance": {
+        "C:alice:recent:1": 3
+      },
+      "unanswerable": false,
+      "executable_gate": false
+    },
+    {
+      "id": "negation-current-001",
+      "category": "negation_and_current_fact",
+      "query": "我现在还住在北京吗",
+      "scope": {
+        "user_id": "eval-alice",
+        "agent_id": "xiaoda"
+      },
+      "expect_relevance": {
+        "KG:residence:shanghai:v2": 3,
+        "KG:residence:beijing:v1": 1
+      },
+      "unanswerable": false,
+      "forbidden_claims": [
+        "用户当前住在北京"
+      ],
+      "executable_gate": false
+    },
+    {
+      "id": "multihop-001",
+      "category": "multi_hop",
+      "query": "我大学室友后来在哪座城市做什么工作",
+      "scope": {
+        "user_id": "eval-alice",
+        "agent_id": "xiaoda"
+      },
+      "expect_relevance": {
+        "M:roommate:city": 3,
+        "M:roommate:job": 3
+      },
+      "unanswerable": false,
+      "executable_gate": false
+    },
+    {
+      "id": "conflict-001",
+      "category": "conflict",
+      "query": "我对咖啡的偏好前后有什么变化",
+      "scope": {
+        "user_id": "eval-alice",
+        "agent_id": "xiaoda"
+      },
+      "expect_relevance": {
+        "M:coffee:v1": 2,
+        "M:coffee:v2": 3
+      },
+      "unanswerable": false,
+      "executable_gate": false
+    },
+    {
+      "id": "unanswerable-001",
+      "category": "unanswerable",
+      "query": "我的量子纠缠实验编号是多少",
+      "scope": {
+        "user_id": "eval-alice",
+        "agent_id": "xiaoda"
+      },
+      "expect_relevance": {},
+      "unanswerable": true,
+      "executable_gate": false
+    },
+    {
+      "id": "scope-isolation-001",
+      "category": "scope_isolation",
+      "query": "我的生日是哪天",
+      "scope": {
+        "user_id": "eval-bob",
+        "agent_id": "xiaoda"
+      },
+      "expect_relevance": {
+        "M:bob:birthday": 3
+      },
+      "forbidden_evidence_ids": [
+        "M:alice:birthday"
+      ],
+      "unanswerable": false,
+      "executable_gate": true
+    },
+    {
+      "id": "mixed-code-001",
+      "category": "mixed_zh_code",
+      "query": "我在 FastAPI 项目里用哪个 ORM 管理 session",
+      "scope": {
+        "user_id": "eval-alice",
+        "agent_id": "xiaoda"
+      },
+      "expect_relevance": {
+        "M:backend-stack:1": 3
+      },
+      "unanswerable": false,
+      "preserved_literals": [
+        "FastAPI",
+        "ORM",
+        "session"
+      ],
+      "executable_gate": true
+    },
+    {
+      "id": "group-scope-001",
+      "category": "group_scope_isolation",
+      "query": "这个群最后定了什么活动",
+      "scope": {
+        "user_id": "eval-alice",
+        "agent_id": "xiaoda",
+        "session_id": "qq_group:eval-alice:group-a"
+      },
+      "expect_relevance": {
+        "KG:group-a:activity": 3
+      },
+      "forbidden_evidence_ids": [
+        "KG:group-b:activity"
+      ],
+      "unanswerable": false,
+      "executable_gate": false
+    },
+    {
+      "id": "typo-alias-001",
+      "category": "typo_and_alias",
+      "query": "我常去的那家川采馆叫啥",
+      "scope": {
+        "user_id": "eval-alice",
+        "agent_id": "xiaoda"
+      },
+      "expect_relevance": {
+        "M:restaurant:1": 3
+      },
+      "unanswerable": false,
+      "executable_gate": false
+    }
+  ]
+}
