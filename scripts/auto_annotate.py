@@ -27,6 +27,7 @@ SKIP_DIRS = {'.git', '__pycache__', '.venv', 'dist', 'build', 'node_modules', 't
 # 需要处理的目录与文件 (优先级目录)
 TARGET_DIRS = [
     'agent_core', 'core', 'tool_engine', 'web', 'memory', 'db',
+    'prompt_builder',
     'security', 'utils', 'emotion', 'tools', 'plugins', 'transports',
     'doctor', 'quality', 'chaos', 'scripts',
 ]
@@ -35,8 +36,9 @@ TARGET_ROOT_FILES = [
     'agent.py', 'agent_context.py', 'agent_dispatcher.py', 'belief_router.py',
     'cli.py', 'cli_client.py', 'config.py', 'hooks.py', 'instinct_manager.py',
     'xiaoli_agent.py', 'model_router.py', 'qq_bot_adapter.py', 'setup_wizard.py',
-    'slash_commands.py', 'prompt_builder.py',
+    'slash_commands.py',
 ]
+# prompt_builder.py 已包化为 prompt_builder/（2026-08-25 P2 拆分），目录处理见 TARGET_DIRS
 # scripts/ 目录下需要处理的文件 (排除已加入 TARGET_DIRS 后重复)
 SCRIPTS_FILES = {'generate_requirements_lock.py'}
 
