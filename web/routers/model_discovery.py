@@ -383,6 +383,7 @@ async def _build_local_ort_group(request: Request) -> dict:
             installed = []
         except Exception:
             logger.exception("model_discovery._build_local_ort_group.unexpected_error")
+            installed = []
         for item in installed:
             purpose = getattr(item, "purpose", None)
             if purpose is None or str(purpose) != "chat":
@@ -472,6 +473,10 @@ async def discover_models(request: Request) -> Any:
             _cache["refreshing"] = True
             spawn_refresh = True
     if fresh or stale:
+        # 先 spawn 再做任何可失败 await：确保 refreshing 标志的复位
+        # 始终由后台任务的 finally 兜底，不会因后续异常被搁浅成永久卡死
+        if spawn_refresh:
+            asyncio.get_running_loop().create_task(_refresh_cache_background(request))
         # 本地 ORT chat 组实时注入（不进缓存）：安装/删除后立即生效，
         # 与冷路径 _fetch_and_cache_discovered 尾部行为保持一致。
         # list() 拷贝防止把 local 组污染进 _cache["data"]。
@@ -479,8 +484,6 @@ async def discover_models(request: Request) -> Any:
         local_group = await _build_local_ort_group(request)
         if local_group["models"]:
             result.append(local_group)
-        if spawn_refresh:
-            asyncio.get_running_loop().create_task(_refresh_cache_background(request))
         return Envelope(data=result)
 
     return await _fetch_and_cache_discovered(request)

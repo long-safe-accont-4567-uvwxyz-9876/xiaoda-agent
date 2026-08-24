@@ -16,7 +16,13 @@ _cache_lock = asyncio.Lock()
 
 
 async def invalidate_discovery_cache() -> None:
-    """清除模型发现缓存，使下次请求重新获取。"""
+    """清除模型发现缓存，使下次请求重新获取。
+
+    refreshing 一并复位：失效语义 = "现有数据与在途刷新结果都不可信"。
+    若恰有刷新在飞，复位后最坏情形是多一次并发抓取（幂等覆盖），代价远小于
+    标志被异常路径搁浅后 SWR 永久静默失效。
+    """
     async with _cache_lock:
         _cache["data"] = None
         _cache["ts"] = 0.0
+        _cache["refreshing"] = False
