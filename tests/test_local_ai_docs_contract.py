@@ -100,7 +100,8 @@ def test_docs_tabs_match_local_deploy_view():
     # 从 zh 字典把键解析回中文名再与文档对齐
     key_to_name = {
         "tabDeploy": "部署", "tabMarket": "模型广场", "tabInstalled": "已安装",
-        "tabDevicesShort": "算力设备", "tabNodes": "功能节点", "tabDownloads": "下载任务",
+        "tabDevicesShort": "算力设备", "tabNodes": "功能节点",
+        "tabPrompts": "提示词治理", "tabDownloads": "下载任务",
     }
     view_keys = set(re.findall(r"t\('localDeployView\.(tab[A-Za-z]+)'\)", view))
     assert view_keys == set(key_to_name)
