@@ -1,11 +1,13 @@
 """测试 hooks.py 的 HookEngine"""
 import sys
 from pathlib import Path
+
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-import unittest
 import asyncio
-from hooks import HookEngine, BaseHook, HookType, HookResult
+import unittest
+
+from hooks import BaseHook, HookEngine, HookResult, HookType
 
 
 class AllowHook(BaseHook):

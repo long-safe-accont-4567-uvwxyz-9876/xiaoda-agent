@@ -15,7 +15,7 @@ argv[0]（程序名），argparse 收到的 sys.argv[1:] 丢掉 --desktop →
 import logging
 import subprocess
 
-from utils.watchdog_runner import Watchdog, DEFAULTS
+from utils.watchdog_runner import DEFAULTS, Watchdog
 
 
 def _silent_log():
@@ -85,6 +85,7 @@ def test_list2cmdline_quotes_exe_path_with_spaces():
 def test_build_cmd_keeps_mode_flag():
     """build_watchdog_config 构造的 cmd 必须包含 --desktop 模式参数。"""
     import argparse
+
     from utils.watchdog_runner import build_watchdog_config
 
     p = argparse.ArgumentParser(prog="watchdog")

@@ -32,10 +32,9 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 os.environ.setdefault("TEST_MODE", "true")
 
+from db.database import DatabaseManager
 from memory.memory_manager import MemoryManager
 from memory.scope import Scope
-from db.database import DatabaseManager
-
 
 # ── 合成数据集 ──────────────────────────────────────────────
 # (summary, importance, is_fact)  —— is_fact 用于标记事实类（应被永久）

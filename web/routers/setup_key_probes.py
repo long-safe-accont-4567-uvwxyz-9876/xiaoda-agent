@@ -12,8 +12,9 @@ from __future__ import annotations
 from types import SimpleNamespace
 
 import httpx
-from config_providers import get_base_url_for_provider, get_default_model_for_provider
 from loguru import logger
+
+from config_providers import get_base_url_for_provider, get_default_model_for_provider
 
 # 探针超时（随块搬移，原 setup.py 模块常量）
 _TIMEOUT = 10.0
@@ -289,7 +290,7 @@ async def _test_ollama(base_url: str) -> tuple[bool, str]:
         base_url = f"{base_url.rstrip('/')}/v1"
     # SSRF 防护：校验 URL 不指向内网/元数据服务。
     # Ollama 是本地/容器内部署，允许 localhost / 127.0.0.1 / host.docker.internal
-    from security.ssrf_guard import validate_url, is_local_host
+    from security.ssrf_guard import is_local_host, validate_url
     if not is_local_host(base_url):
         allowed, reason = validate_url(base_url)
         if not allowed:
@@ -322,7 +323,7 @@ async def _test_llama_cpp(base_url: str) -> tuple[bool, str]:
     if not _path.endswith("/v1"):
         base_url = f"{base_url.rstrip('/')}/v1"
     # SSRF 防护：llama.cpp 是本地部署，允许 localhost / 127.0.0.1 / host.docker.internal
-    from security.ssrf_guard import validate_url, is_local_host
+    from security.ssrf_guard import is_local_host, validate_url
     if not is_local_host(base_url):
         allowed, reason = validate_url(base_url)
         if not allowed:

@@ -2,12 +2,10 @@
 from __future__ import annotations
 
 from abc import ABC
-from typing import Any, ClassVar
 from collections.abc import Callable
-
+from typing import Any, ClassVar
 
 from plugins.context import PluginContext
-
 
 # ── 装饰器元数据标记 ──
 

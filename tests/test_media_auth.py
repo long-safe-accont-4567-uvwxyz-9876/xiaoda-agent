@@ -203,8 +203,8 @@ class _FakeStickerRequest:
 @pytest.mark.asyncio
 async def test_sticker_serves_with_media_cookie(monkeypatch, tmp_path):
     """裸 <img> 场景：x_media_token cookie 必须可通过（Path=/api/v1/agents）。"""
+
     import web.routers.agents as agents_router
-    from fastapi import HTTPException
 
     monkeypatch.setattr("web.routers.auth._validate_token", lambda t: t == "good")
     emo_dir = tmp_path / "happy"
@@ -234,8 +234,9 @@ async def test_sticker_serves_with_bearer_header(monkeypatch, tmp_path):
 
 @pytest.mark.asyncio
 async def test_sticker_without_credentials_401(monkeypatch):
-    import web.routers.agents as agents_router
     from fastapi import HTTPException
+
+    import web.routers.agents as agents_router
 
     monkeypatch.setattr("web.routers.auth._validate_token", lambda t: False)
     with pytest.raises(HTTPException) as exc:
@@ -246,7 +247,6 @@ async def test_sticker_without_credentials_401(monkeypatch):
 
 def test_media_cookie_dual_path_issuance_and_clear():
     """登录/登出必须在 /media 与 /api/v1/agents 双路径下发/清除 cookie。"""
-    from http.cookies import SimpleCookie
 
     class _Resp:
         def __init__(self):

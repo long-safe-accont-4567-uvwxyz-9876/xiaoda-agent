@@ -9,9 +9,9 @@ import pytest
 from agent_context import AgentContext
 from agent_core._shared import ProcessResult, RequestContext, UserIdentity
 from agent_core.core import AgentCore
-from agent_core.principal import Principal
 from agent_core.message_processor import MessageProcessorMixin
 from agent_core.mixins.main_path import MainPathMixin
+from agent_core.principal import Principal
 from agent_core.tool_executor_mixin import ToolExecutorMixin
 from core.background_tasks import BackgroundTaskManager
 from core.bootstrap import AgentCoreBootstrapper

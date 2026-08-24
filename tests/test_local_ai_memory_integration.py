@@ -1328,6 +1328,7 @@ async def test_insight_rest_propagates_structured_local_unavailable():
 def test_real_http_response_preserves_local_unavailable_error(error, code, purpose):
     from fastapi import FastAPI
     from fastapi.testclient import TestClient
+
     from web.error_handler import register_error_handlers
 
     app = FastAPI()

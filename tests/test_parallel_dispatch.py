@@ -5,9 +5,9 @@
 """
 import asyncio
 import time
+from unittest.mock import AsyncMock
 
 import pytest
-from unittest.mock import AsyncMock
 
 from agent_core._shared import ProcessResult, RequestContext
 from agent_core.sub_agent_manager import SubAgentManagerMixin

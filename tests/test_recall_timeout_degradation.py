@@ -20,8 +20,8 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from tools.memory_tool import recall
 from tool_engine.tool_executor import ToolExecutor
+from tools.memory_tool import recall
 
 
 class TestRecallTimeoutDegradation:

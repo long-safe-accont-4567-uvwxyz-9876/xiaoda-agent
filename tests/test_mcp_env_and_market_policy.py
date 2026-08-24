@@ -19,7 +19,6 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 
 import pytest
 
-
 # ── 1. env 注入键补漏 ─────────────────────────────────────────────
 
 @pytest.mark.parametrize("key", [
@@ -71,8 +70,8 @@ def test_pure_validate_command():
 
 def test_webui_router_uses_shared_policy():
     """web/routers/mcp.py 的校验应委托共享策略（防两处漂移）"""
-    from web.routers import mcp as mcp_router
     from security import mcp_command_policy
+    from web.routers import mcp as mcp_router
     assert (mcp_router._ALLOWED_MCP_BINARIES
             == mcp_command_policy._ALLOWED_MCP_BINARIES)
 
@@ -90,7 +89,7 @@ def _make_item(**kw):
 @pytest.mark.asyncio
 async def test_market_mcp_shell_command_rejected(tmp_path):
     """远端 manifest connections 携带 bash 命令必须拒绝安装"""
-    from market.installer import MarketInstaller, InstallError
+    from market.installer import InstallError, MarketInstaller
     installer = MarketInstaller(plugins_dir=tmp_path / "p",
                                 skills_dir=tmp_path / "s",
                                 mcp_config_dir=tmp_path / "m")
@@ -103,7 +102,8 @@ async def test_market_mcp_shell_command_rejected(tmp_path):
 async def test_market_mcp_env_injection_rejected(tmp_path):
     """connections 携带 NODE_OPTIONS 注入必须拒绝"""
     import json
-    from market.installer import MarketInstaller, InstallError
+
+    from market.installer import InstallError, MarketInstaller
     installer = MarketInstaller(plugins_dir=tmp_path / "p",
                                 skills_dir=tmp_path / "s",
                                 mcp_config_dir=tmp_path / "m")
@@ -118,6 +118,7 @@ async def test_market_mcp_env_injection_rejected(tmp_path):
 async def test_market_mcp_valid_connections_accepted(tmp_path):
     """合法 command/env 的 MCP 条目正常安装"""
     import json
+
     from market.installer import MarketInstaller
     installer = MarketInstaller(plugins_dir=tmp_path / "p",
                                 skills_dir=tmp_path / "s",

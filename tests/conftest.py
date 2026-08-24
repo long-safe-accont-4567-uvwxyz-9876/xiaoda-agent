@@ -133,6 +133,7 @@ def _stop_leaked_aiosqlite_connections():
     """
     yield
     import gc
+
     import aiosqlite as _aiosqlite
     gc.collect()  # 打破引用循环，让可回收对象先走 __del__（自带 stop）
     for obj in gc.get_objects():

@@ -12,7 +12,6 @@ import pytest
 
 from web.routers import auth
 
-
 GRACE = 30.0  # 与 auth._RENEWAL_GRACE_SECONDS 保持一致
 
 

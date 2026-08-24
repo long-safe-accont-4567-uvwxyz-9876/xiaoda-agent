@@ -8,7 +8,6 @@ GrowthNarrative / MailPoller）通过 asyncio.gather 并行初始化，且单点
 from __future__ import annotations
 
 import asyncio
-import os
 import sys
 import time
 import types

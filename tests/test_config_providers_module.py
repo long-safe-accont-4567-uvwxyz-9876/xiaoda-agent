@@ -22,7 +22,6 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 
 import pytest
 
-
 # ── 1/2. 独立导入 + re-export 同对象 ─────────────────────────────
 
 def test_config_providers_imports_standalone():

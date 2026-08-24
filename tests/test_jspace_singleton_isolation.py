@@ -63,10 +63,9 @@ def test_subsequent_default_request_still_gets_llm_singleton(monkeypatch):
 
 
 def test_use_llm_false_reuses_singleton_already_in_rule_mode(monkeypatch):
+    from core import j_space_bootstrap
     from core.intent_decomposition import IntentDecomposer
     from web.routers.jspace import _get_decomposer
-
-    from core import j_space_bootstrap
 
     rule_singleton = IntentDecomposer(use_llm_decomposition=False)
     rule_singleton.set_backend("off")

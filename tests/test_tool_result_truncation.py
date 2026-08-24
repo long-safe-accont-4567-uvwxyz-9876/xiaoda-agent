@@ -12,9 +12,10 @@ from unittest.mock import AsyncMock, patch
 
 import pytest
 
-from tools.web_browse_enhanced import _truncate as _truncate_web
-from tools.mail_tools import _truncate as _truncate_mail, _truncate_mail_data
+from tools.mail_tools import _truncate as _truncate_mail
+from tools.mail_tools import _truncate_mail_data
 from tools.system_tools import _truncate as _truncate_sys
+from tools.web_browse_enhanced import _truncate as _truncate_web
 
 _TRUNCATION_MARKER = "\n...(内容过长已截断)"
 

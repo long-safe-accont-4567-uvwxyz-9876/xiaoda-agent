@@ -1,5 +1,6 @@
 """WebUser 测试 — 每个事件通过 WebSocket 推送。"""
 import pytest
+
 from agent_core.user_web import WebUser
 from core.event_bus import AgentEvent, AgentEventType
 

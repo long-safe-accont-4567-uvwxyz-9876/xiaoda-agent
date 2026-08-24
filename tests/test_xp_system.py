@@ -232,6 +232,7 @@ def test_persistence(tmp_path):
 def test_persistence_valid_json(tmp_path):
     """持久化文件应是合法 JSON 且结构完整"""
     import json
+
     import core.xp_system as mod
     sys1 = mod.XPSystem(data_dir=tmp_path)
     sys1.add_xp("u1", 50, "chat", "")

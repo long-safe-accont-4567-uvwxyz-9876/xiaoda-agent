@@ -23,6 +23,8 @@ from typing import Any, Optional
 
 from loguru import logger
 
+from config_constants import env_flag
+
 try:
     from utils.atomic_write import _restrict_file_permissions_windows, atomic_write
 except Exception:  # pragma: no cover
@@ -1566,7 +1568,7 @@ def create_wechat_bot(
     Returns:
         WeChatBotAdapter 实例
     """
-    enabled = os.getenv("WECHAT_ILINK_ENABLED", "false").lower() in ("true", "1", "yes")
+    enabled = env_flag("WECHAT_ILINK_ENABLED", False)
     if not enabled:
         logger.info(
             "wechat_bot.skeleton_mode set WECHAT_ILINK_ENABLED=true to enable"

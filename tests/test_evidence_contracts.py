@@ -251,7 +251,6 @@ def test_citation_validation_rejects_unknown_and_reports_missing_claims():
 
 def test_bundle_renders_into_memory_retrieval_block():
     """闭环回归：context.evidence_bundle 必须渲染进 _format_memory_retrieval 输出。"""
-    import asyncio
 
     from memory.evidence import EvidenceBundle, RetrievalPlan
     from memory.scope import Scope

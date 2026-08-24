@@ -29,7 +29,6 @@ from security.credential_vault import (
     migrate_env_file,
 )
 
-
 # DPAPI 环境下 (Windows + pywin32 可用)，encrypt 走内核级 DPAPI 加密，
 # mock getpass/socket 无法模拟机器身份变化，以下测试仅在 v1 路径有效。
 _DPAPI_ACTIVE = sys.platform == "win32" and HAS_WIN32CRYPT

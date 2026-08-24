@@ -263,6 +263,7 @@ class TestEndToEndMemoryFlow:
 async def test_bootstrap_injects_entity_components():
     """R1-1 回归：生产 bootstrap 必须注入 entity_store/extractor（否则实体路恒空）。"""
     import inspect
+
     from core import bootstrap
     src = inspect.getsource(bootstrap)
     assert "EntityExtractor(router=None)" in src, "bootstrap 应注入规则模式 EntityExtractor"

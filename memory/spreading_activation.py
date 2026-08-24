@@ -15,17 +15,17 @@ import heapq
 import json
 import math
 import time
-from math import sqrt
 from collections import OrderedDict, defaultdict
 from collections.abc import Mapping
 from dataclasses import dataclass, field
+from math import sqrt
 from typing import Any
-from utils.similarity import ratio as text_ratio
 
 import networkx as nx
 from loguru import logger
 
 from memory import rust_hybrid
+from utils.similarity import ratio as text_ratio
 
 
 class SpreadingActivationEngine:
@@ -476,7 +476,6 @@ class SpreadingActivationEngine:
 
         # 逐个检查是否与已选结果过于相似
         selected = []
-        selected_texts = []
 
         for item in items:
             if len(selected) >= top_k:

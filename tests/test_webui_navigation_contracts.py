@@ -1,6 +1,5 @@
 from pathlib import Path
 
-
 ROOT = Path(__file__).parents[1]
 
 
@@ -81,7 +80,7 @@ def test_chat_view_drives_combobox_state_from_palette():
 def test_palette_escape_stops_propagation_so_sidebar_is_not_also_closed():
     view = source("web/frontend/src/views/ChatView.vue")
     handler = view[view.index("function handleKeydown"):view.index("function selectCommand")]
-    escape_line = next(l for l in handler.splitlines() if "Escape" in l)
+    escape_line = next(ln for ln in handler.splitlines() if "Escape" in ln)
     # 面板 Escape 必须同时阻止默认与冒泡，避免同一次 Escape 冒泡到 shell 关闭移动侧栏
     assert "e.preventDefault()" in escape_line
     assert "e.stopPropagation()" in escape_line

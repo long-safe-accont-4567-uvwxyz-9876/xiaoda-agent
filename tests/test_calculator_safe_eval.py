@@ -9,8 +9,8 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 import pytest
-from tools.code_tools_v2 import calculator
 
+from tools.code_tools_v2 import calculator
 
 # ── 源码文件路径，用于静态检查 eval( 是否已被移除 ──
 _SOURCE_FILE = Path(__file__).parent.parent / "tools" / "code_tools_v2.py"

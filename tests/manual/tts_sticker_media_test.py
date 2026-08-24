@@ -1,10 +1,11 @@
 #!/usr/bin/env python3
 """TTS + 表情包 + 图片生成 + 视频生成 综合测试"""
 import asyncio
-import sys
 import os
+import sys
 import tempfile
 from pathlib import Path
+
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."))
 
 # 项目根目录 (基于当前文件位置计算，避免硬编码绝对路径)
@@ -23,7 +24,7 @@ async def test_tts():
     print("Part 1: TTS 语音合成")
     print("=" * 60)
 
-    from emotion.tts_engine import TTSEngine, EMOTION_STYLE_MAP, VOICE_REFERENCES, VOICE_STYLES
+    from emotion.tts_engine import EMOTION_STYLE_MAP, VOICE_REFERENCES, VOICE_STYLES, TTSEngine
 
     # 1.1 引擎初始化
     print("\n[1.1] TTSEngine 初始化:")
@@ -239,8 +240,8 @@ async def test_agnes_image():
     print("Part 3: Agnes 图片生成")
     print("=" * 60)
 
-    from tools.agnes_tools import agnes_image_generate
     from config import AGNES_API_KEY, AGNES_BASE_URL, AGNES_IMAGE_MODEL
+    from tools.agnes_tools import agnes_image_generate
 
     print("\n[3.1] 配置检查:")
     print(f"    INFO: AGNES_API_KEY = {'***' + AGNES_API_KEY[-4:] if AGNES_API_KEY else '(未设置)'}")
@@ -307,8 +308,8 @@ async def test_agnes_video():
     print("Part 4: Agnes 视频生成")
     print("=" * 60)
 
-    from tools.agnes_tools import agnes_video_generate
     from config import AGNES_API_KEY, AGNES_VIDEO_MODEL
+    from tools.agnes_tools import agnes_video_generate
 
     print("\n[4.1] 配置检查:")
     print(f"    INFO: AGNES_VIDEO_MODEL = {AGNES_VIDEO_MODEL}")

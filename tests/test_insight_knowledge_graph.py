@@ -50,7 +50,9 @@ class _FakeKnowledgeDB:
 def client():
     """真实内存 sqlite + KnowledgeDB：覆盖逐层 BFS 的真实 SQL 路径。"""
     import asyncio
+
     import aiosqlite
+
     from db.db_knowledge import KnowledgeDB
 
     loop = asyncio.new_event_loop()

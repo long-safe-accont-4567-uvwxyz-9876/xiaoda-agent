@@ -17,11 +17,9 @@ bug：群聊被动回复配额超限时，仅 logger.debug 记录就返回，外
 """
 from __future__ import annotations
 
-import asyncio
-import os
 import sys
 from pathlib import Path
-from unittest.mock import patch, AsyncMock, MagicMock
+from unittest.mock import patch
 
 import pytest
 
@@ -29,8 +27,8 @@ PROJECT_ROOT = Path(__file__).parent.parent
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
+
 from qq_bot_adapter import AIQQBot
-from botpy.message import GroupMessage
 
 
 class FakeMessage:

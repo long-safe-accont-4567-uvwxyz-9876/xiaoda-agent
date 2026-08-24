@@ -72,6 +72,7 @@ from config import (  # noqa: E402
     GROUP_CHAT_BUFFER_ENABLED,
     get_agent_display_name,
 )
+from config_constants import env_flag  # noqa: E402
 from core.background_tasks import (  # noqa: E402
     reset_current_request_context,
     set_current_request_context,
@@ -418,7 +419,7 @@ class AIQQBot(ChannelAdapterBase, botpy.Client):
         # P1-1: 缓存上限，超过时按 FIFO 淘汰最旧条目（防多用户长期运行内存泄漏）
         self._C2C_SESSION_CACHE_MAX_SIZE = 1000
         # HITL: 高危操作两段式确认（默认开启，QQ_HITL_ENABLED=false 关闭）
-        self.hitl_enabled = os.getenv("QQ_HITL_ENABLED", "true").lower() in ("1", "true", "yes", "on")
+        self.hitl_enabled = env_flag("QQ_HITL_ENABLED", True)
         self.im_approval = IMApprovalChannel(
             send_callback=self._send_approval_message,
             timeout=_safe_float(os.getenv("QQ_HITL_TIMEOUT", "60"), 60),
@@ -494,7 +495,7 @@ class AIQQBot(ChannelAdapterBase, botpy.Client):
             logger.error("qq_bot.agent_init_failed", error=str(e)[:300], exc_info=True)
             # 不重抛，避免 botpy 将此视为 on_ready 异常而断开 WebSocket
 
-        nudge_enabled = os.getenv("NUDGE_ENABLED", "false").lower() == "true"
+        nudge_enabled = env_flag("NUDGE_ENABLED", False)
         if nudge_enabled and self.nudge_engine is None:
             user_openid = os.getenv("NUDGE_USER_OPENID", "")
             if user_openid:

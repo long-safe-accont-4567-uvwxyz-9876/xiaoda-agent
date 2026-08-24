@@ -1,11 +1,11 @@
 """Scope 三级隔离测试：user_id/session_id/agent_id 过滤逻辑"""
-import asyncio
+import sys
 import time
 from dataclasses import FrozenInstanceError
-import pytest
 from pathlib import Path
 
-import sys
+import pytest
+
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from memory.scope import Scope

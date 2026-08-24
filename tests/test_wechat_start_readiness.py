@@ -16,7 +16,6 @@
 from __future__ import annotations
 
 import asyncio
-import contextlib
 import json
 from types import SimpleNamespace
 
@@ -24,7 +23,6 @@ import pytest
 
 import wechat_bot_adapter as wba
 from wechat_bot_adapter import WeChatBotAdapter
-
 
 # ---------------------------------------------------------------------------
 # 公共替身

@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
 """第八轮深度测试 - 真实对话 + 数据库CRUD + Transport + Thompson Sampling"""
 import asyncio
-import sys
 import os
+import sys
 import tempfile
+
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."))
 
 
@@ -352,7 +353,7 @@ async def test_hook_engine_deep():
     print("=" * 60)
     bugs = []
 
-    from hooks import HookEngine, HookType, BaseHook, HookResult
+    from hooks import BaseHook, HookEngine, HookResult, HookType
 
     engine = HookEngine()
 

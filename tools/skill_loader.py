@@ -12,7 +12,6 @@
 """
 from __future__ import annotations
 
-import os
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Optional
@@ -121,13 +120,11 @@ class SkillLoader:
         name = md_path.parent.name
         description = ""
         keywords: list[str] = []
-        body = text
 
         if text.startswith("---"):
             end = text.find("\n---", 3)
             if end != -1:
                 frontmatter = text[3:end]
-                body = text[end + 4:].lstrip("\n")
                 for line in frontmatter.splitlines():
                     if ":" not in line:
                         continue

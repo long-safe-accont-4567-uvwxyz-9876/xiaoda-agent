@@ -25,7 +25,6 @@ from local_ai.devices.registry import (
 )
 from memory import local_embed
 
-
 # local_embed._create_session 会对单 CUDA EP 自动注入默认 provider_options
 # （session_tuning.auto_provider_options：cudnn_conv_algo_search=HEURISTIC，
 # 比 ORT 默认 EXHAUSTIVE 建图更快）；显式传入的键（device_id 等）保留。

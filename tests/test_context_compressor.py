@@ -1,14 +1,16 @@
 """测试 context_compressor.py 的 ContextCompressor"""
 import sys
 from pathlib import Path
+
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-import unittest
-import tempfile
 import shutil
+import tempfile
+import unittest
 from pathlib import Path
 from unittest.mock import patch
-from memory.context_compressor import ContextCompressor, SUMMARY_PREFIX, CompressionResult
+
+from memory.context_compressor import SUMMARY_PREFIX, CompressionResult, ContextCompressor
 
 
 class TestContextCompressor(unittest.TestCase):

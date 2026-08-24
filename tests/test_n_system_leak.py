@@ -10,13 +10,10 @@
 - N3: Constraints & Guidelines / Identity / Persona 系统提示词结构化块泄漏（3 条）
 - N4: 根据系统指示中的"最高原则" 系统指示措辞泄漏（1 条，最新 07-22）
 """
-import re
 
-import pytest
 
-from utils.text_utils import strip_dsml
 from utils.llm_cleanup import strip_system_leak
-
+from utils.text_utils import strip_dsml
 
 # ── N1: <answer> 裸标签 ──────────────────────────────────────
 

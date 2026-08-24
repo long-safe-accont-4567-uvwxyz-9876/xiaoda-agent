@@ -1,5 +1,6 @@
 """QQUser 测试 — 仅 SUB_STARTED 通知，其余静默。"""
 import pytest
+
 from agent_core.user_qq import QQUser
 from core.event_bus import AgentEvent, AgentEventType
 

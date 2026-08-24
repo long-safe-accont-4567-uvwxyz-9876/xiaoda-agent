@@ -5,7 +5,7 @@
 2. 端口被占用时，异步等待调用 asyncio.sleep 重试（而非 time.sleep）
 3. 桌面模式同步 _wait_for_port_available 使用 0.5s 间隔（而非 2s）
 """
-from unittest.mock import patch, MagicMock, AsyncMock
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 

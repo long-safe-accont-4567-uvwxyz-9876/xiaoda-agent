@@ -289,7 +289,6 @@ class LegacyMigrationMixin:
                 # 迁移内部 commit 会释放 savepoint（no such savepoint），
                 # 此时部分写入已被提交、无法回滚——记录告警供运维排查；
                 # 未被释放时正常回滚到 savepoint。
-                rolled_back = True
                 try:
                     await self._conn.execute(
                         f"ROLLBACK TO SAVEPOINT {sp_name}")
@@ -297,7 +296,6 @@ class LegacyMigrationMixin:
                         f"RELEASE SAVEPOINT {sp_name}")
                 except (OSError, RuntimeError, ValueError) as rb_err:
                     if "no such savepoint" in str(rb_err).lower():
-                        rolled_back = False
                         logger.warning(
                             "database.migration_partial_commit_not_recoverable "
                             "v={} hint=迁移函数内部 commit 释放了 savepoint",

@@ -17,7 +17,6 @@ if str(PROJECT_ROOT) not in sys.path:
 import qq_bot_adapter as qba
 from qq_bot_adapter import _next_msg_seq
 
-
 # ---------------------------------------------------------------------------
 # R3-1: _next_msg_seq 单调递增且对齐当前毫秒时间戳
 # ---------------------------------------------------------------------------

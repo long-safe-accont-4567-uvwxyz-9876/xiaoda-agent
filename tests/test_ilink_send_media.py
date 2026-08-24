@@ -45,8 +45,8 @@ class FakeAsyncClient:
 
 def test_aes_ecb_encrypt_roundtrip():
     """AES-128-ECB 加密后可用同一 key 解密还原。"""
-    from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
     from cryptography.hazmat.primitives import padding
+    from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
 
     key = bytes(range(16))
     client = ILinkClient(bot_token="tok", client=FakeAsyncClient([]))

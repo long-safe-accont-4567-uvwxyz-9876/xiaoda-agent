@@ -16,14 +16,12 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
-import os
 from types import SimpleNamespace
 
 import pytest
 
 import qq_bot_adapter as qba
 from emotion.nudge_engine import NudgeEngine
-
 
 # ---------------------------------------------------------------------------
 # 测试替身

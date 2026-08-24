@@ -3,14 +3,12 @@
 使用硅基流动免费模型（THUDM/GLM-4-9B-0414）进行蒸馏，不占用主模型配额。
 失败时降级到 ModelRouter.route。
 """
+import time
 from typing import Any
 
-import os
-import time
 from loguru import logger
 
 from utils.free_model_backend import FreeModelBackend
-
 
 DISTILL_PROMPT = """你是记忆蒸馏助手。将以下旧对话记忆压缩为一段纯文本摘要。
 
@@ -62,6 +60,7 @@ RECALL_PROMPT_TEMPLATE = """你是{n}的回忆整理助手。把最近这段时�
 # 根因：旧版 prompt 鼓励"结构化摘要"，LLM 输出大量 "### 结构化摘要" / "## 摘要" / "- xxx" 开头，
 # 污染 reranker 评分（前缀 token 占用相关性权重，且 489 条蒸馏记忆开头雷同）。
 import re as _re_module
+
 _DISTILL_HEADER_PATTERNS = [
     _re_module.compile(r'^\s*#{1,6}\s*(结构化摘要|摘要|总结|回忆笔记|记忆摘要|Distilled|Summary)\s*\n*', _re_module.IGNORECASE),
     _re_module.compile(r'^\s*#{1,6}\s*[^\n]*\n+', _re_module.IGNORECASE),  # 任何 markdown 标题

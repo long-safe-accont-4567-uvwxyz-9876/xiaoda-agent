@@ -1,11 +1,13 @@
 # tests/test_dream_engine_v2.py
 """6阶段梦境引擎测试"""
-import asyncio
 import time
+
 import numpy as np
 import pytest
+
 from core.dream_engine_v2 import DreamEngineV2
 from memory.cognitive_memory import CognitiveMemory, MemoryEntry
+
 
 @pytest.fixture
 def dream():

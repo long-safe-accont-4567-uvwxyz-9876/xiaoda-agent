@@ -9,9 +9,8 @@ from __future__ import annotations
 
 import asyncio
 import functools
-from typing import Any
 from collections.abc import Callable, Iterable
-
+from typing import Any
 
 
 async def async_sleep(seconds: float) -> None:
@@ -89,6 +88,7 @@ async def http_get_json(url: str, timeout: float = 10.0,
     """
     try:
         import httpx
+
         from utils.http_pool import get_shared_client
         client = get_shared_client()
         r = await client.get(url, headers=headers,
@@ -110,6 +110,7 @@ async def http_post_json(url: str, json: dict | None = None,
     """
     try:
         import httpx
+
         from utils.http_pool import get_shared_client
         client = get_shared_client()
         r = await client.post(url, json=json, headers=headers,

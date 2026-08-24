@@ -8,10 +8,12 @@
 - UserIdentity 身份解析
 - humanize 对 Markdown 的处理
 """
+from unittest.mock import AsyncMock, MagicMock
+
 import pytest
-from unittest.mock import MagicMock, AsyncMock
-from security.security import SecurityFilter
+
 from agent_core import UserIdentity
+from security.security import SecurityFilter
 
 
 class TestIsOwner:
@@ -64,6 +66,7 @@ class TestIsOwner:
         is_owner 才能正确识别主人，避免所有人被误判为主人。
         """
         import os
+
         from security.security import SecurityFilter
 
         # 模拟环境变量

@@ -17,7 +17,6 @@ import pytest
 
 from agent_core._shared import RequestContext
 from agent_core.message_processor import MessageProcessorMixin, _system_context_var
-from agent_core._shared import _stream_finish_reason_var
 
 
 class TestNudgeTimeout:

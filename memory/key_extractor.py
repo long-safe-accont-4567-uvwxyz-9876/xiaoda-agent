@@ -2,12 +2,10 @@
 
 基于 mind v6.2.8 的 key 提取策略，适配中文场景。
 """
-from typing import ClassVar
 import re
+from typing import ClassVar
 
 import jieba
-
-from loguru import logger
 
 # 停用词表（与项目现有 _TOPIC_STOPWORDS 保持一致 + 扩展）
 _STOPWORDS = {

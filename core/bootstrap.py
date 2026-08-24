@@ -461,10 +461,10 @@ class AgentCoreBootstrapper:
         """初始化认知系统：Reranker、QueryTransformer、Memory、KG、Instinct、ErrorPipeline。"""
         import config
         from emotion.portrait_manager import PortraitManager
-        from memory.knowledge_graph import KnowledgeGraph
-        from memory.learning_manager import LearningManager
         from memory.entity_extractor import EntityExtractor
         from memory.entity_store import EntityStore
+        from memory.knowledge_graph import KnowledgeGraph
+        from memory.learning_manager import LearningManager
         from memory.memory_manager import MemoryManager
         from memory.notebook_manager import NotebookManager
 

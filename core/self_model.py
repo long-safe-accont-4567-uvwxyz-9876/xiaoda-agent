@@ -13,7 +13,6 @@ from pathlib import Path
 
 from loguru import logger
 
-
 _SELF_MODEL_PATH = Path(
     os.getenv("SELF_MODEL_PATH", str(Path.home() / ".ai-agent" / "self_model.md"))
 )

@@ -10,9 +10,7 @@ crash 日志证据:
 
 修复目标: 文件 sink 创建失败时降级到本地目录，stderr sink 不受影响。
 """
-import os
 from pathlib import Path
-from unittest.mock import patch, MagicMock
 
 import pytest
 

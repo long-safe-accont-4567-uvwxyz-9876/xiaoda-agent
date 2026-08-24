@@ -1,9 +1,9 @@
 """memory_entities + entity_memory_links 表 CRUD 测试"""
-import asyncio
-import time
-import pytest
 import sys
+import time
 from pathlib import Path
+
+import pytest
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
@@ -129,7 +129,7 @@ class TestEntityMemoryLinksCRUD:
 
         links = await entity_db.memory.get_entity_memory_links(entity_id)
         assert len(links) == 2
-        memory_ids = [l["memory_id"] for l in links]
+        memory_ids = [link["memory_id"] for link in links]
         assert mem1 in memory_ids
         assert mem2 in memory_ids
 
