@@ -30,3 +30,8 @@ tests/test_terminal_output_coalescing.py
 tests/test_bootstrap_degraded_isolation.py
 tests/test_dangerous_targets_consistency.py
 tests/test_adapter_pipeline_contracts.py
+# ── QQ 流式/投递语义守卫（2026-08-25 补充：QQAmbiguousDelivery 契约变更曾致 6 测
+#    红灯在 HEAD 上滞留一天无人发现——这些文件不在 critical 门禁内）──
+tests/test_qq_streaming.py
+tests/test_p1_6_c2c_stream_byte_resplit.py
+tests/test_transport_user_binding.py

@@ -43,8 +43,10 @@ async def test_qq_adapter_binds_qq_user_during_process():
     bot.agent.process = AsyncMock(side_effect=fake_process)
 
     class FakeMessage:
-        async def reply(self, content: str = "", msg_seq: int = 0) -> None:
-            pass
+        async def reply(self, content: str = "", msg_seq: int = 0) -> dict:
+            # 模拟真实 botpy：成功返回消息 dict（None 会被判为投递不明确，
+            # 导致 ACK 路径在 agent.process 之前中断）
+            return {"id": "fake_msg"}
 
     message = FakeMessage()
 

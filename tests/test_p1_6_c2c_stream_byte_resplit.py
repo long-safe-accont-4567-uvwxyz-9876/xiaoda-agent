@@ -49,9 +49,10 @@ class FakeC2CMessage:
         self.author.user_openid = "test_user_openid"
         self.id = "test_msg_id"
 
-    async def reply(self, content: str = "", msg_seq: int = 0) -> None:
+    async def reply(self, content: str = "", msg_seq: int = 0) -> dict:
         self.call_count += 1
         self.replies.append(content)
+        return {"id": "fake_msg"}  # 模拟真实 botpy：成功返回消息 dict
 
 
 class FlakyC2CMessage:
@@ -65,11 +66,12 @@ class FlakyC2CMessage:
         self.author.user_openid = "test_user_openid"
         self.id = "test_msg_id"
 
-    async def reply(self, content: str = "", msg_seq: int = 0) -> None:
+    async def reply(self, content: str = "", msg_seq: int = 0) -> dict:
         self.call_count += 1
         if self.call_count == self.fail_on_call:
             raise RuntimeError("模拟发送失败")
         self.replies.append(content)
+        return {"id": "fake_msg"}
 
 
 class FakeAgent:
