@@ -2,6 +2,7 @@
 
 > 创建日期：2026-07-19（Task 7 / P1-2）
 > 最近更新：2026-07-19（Task 13 / SubTask 13.4 — 全局排查补充 3 项遗漏：`memory/fluid_memory.py`、`core/degradation.py`、`security/security.py::_is_dev_mode`）
+> 2026-08-25 对账刷新：`memory/fluid_memory.py` 与 `core/degradation.py` 均已 REMOVED（详见各节），`security/security.py::_is_dev_mode` 仍未动
 > 维护者：xiaoda-agent 项目组
 > 目的：记录仓库中所有带 DEPRECATED 标记的模块，明确其真实使用情况、风险评估与迁移计划，避免误删导致生产故障。
 
@@ -228,31 +229,12 @@
 
 ---
 
-## 6. `memory/fluid_memory.py` — DEPRECATED（兼容层，已迁移至 FSRS-DSR）
+## 6. `memory/fluid_memory.py` — REMOVED
 
 ### 状态
-**DEPRECATED** — `FluidMemory` 类保留为兼容层，内部委托给 `memory.fsrs_model.FSRSModel`。新代码应直接使用 `FSRSModel`。
-
-### 真实使用情况
-
-**生产代码：** 无（仅模块自身定义）
-
-**测试代码（2 个文件）：**
-- `tests/test_fluid_memory.py` — 直接测试 `FluidMemory` 兼容接口
-- `tests/test_audit_batch_fixes.py` — 审计修复测试中引用
-
-### 风险评估
-
-**直接删除会破坏：**
-- 2 个测试文件 collect 阶段失败
-
-**结论：** 可以删除，但需要先迁移测试。本批次不处理（仅记录）。
-
-### 迁移计划
-
-1. 将 `tests/test_fluid_memory.py` 中 `FluidMemory` 引用改为 `FSRSModel`
-2. 评估 `tests/test_audit_batch_fixes.py` 中对 `FluidMemory` 的依赖是否能去除
-3. 删除 `memory/fluid_memory.py`
+**REMOVED** — 2026-08-25 对账核验：文件与 `tests/test_fluid_memory.py` 均已删除，
+`tests/test_audit_batch_fixes.py` 中的 `FluidMemory` 引用也已清零（全仓 grep 实证）。
+迁移计划三步已在此前的清坟批次中完成，本节仅存档。
 
 ### 文件内部标记
 
@@ -261,42 +243,24 @@
 
 ---
 
-## 7. `core/degradation.py` — DEPRECATED（兼容层，已迁移至 degradation_strategy）
+## 7. `core/degradation.py` — REMOVED（2026-08-25）
 
 ### 状态
-**DEPRECATED** — 4 级降级兼容层，所有逻辑委托给 `core.degradation_strategy.DegradationStrategy`。新代码应直接使用 `core.degradation_strategy`。
+**REMOVED** — 2026-08-25 技术债对账会话删除。
 
-### 真实使用情况
+### 删除依据（核验记录）
 
-⚠️ **被广泛使用（10 个生产文件）：**
-- `core/agent_introspection.py`
-- `core/j_space_bootstrap.py`
-- `core/degradation_strategy.py`（反向引用，定义新实现）
-- `tools/web_browse_enhanced.py`
-- `agent_core/tool_executor.py`
-- `agent_core/sub_agent_manager.py`
-- `agent_core/message_processor.py`
-- `chaos/tnr_protocol.py`
-- `chaos/tnr_scenarios.py`
-- `chaos/verify_degradation.py`
-
-### 风险评估
-
-**直接删除会破坏：** 上述 10 个生产文件的 import 链，导致大面积生产故障。
-
-**结论：** 不能删除。**虽然模块自身标记为 DEPRECATED，但生产代码仍大量依赖。** 需要先迁移调用方再删除模块。
-
-### 迁移计划
-
-1. 逐个将上述 10 个生产文件的 `from core.degradation import ...` 改为 `from core.degradation_strategy import ...`
-2. 验证 DegradationLevel 别名（FULL/DEGRADED/MINIMAL/EMERGENCY）的等价性
-3. 删除 `core/degradation.py`
-4. 在 `core/__init__.py` 中确认无残留导出
-
-### 文件内部标记
-
-- 第 1-7 行：模块 docstring 明确"⚠️ 本模块已弃用，仅保留向后兼容接口"
-- 提供旧名别名：`DegradationLevel = _NewLevel`、`FULL/DEGRADED/MINIMAL/EMERGENCY` 常量
+- 本清单 07-19 记载的"10 个生产文件依赖"已在此前批次全部迁移至
+  `core.degradation_strategy`（agent_introspection / j_space_bootstrap /
+  web_browse_enhanced / tool_executor / sub_agent_manager / message_processor /
+  chaos/tnr_* 等，逐文件 grep 实证零残留）。
+- 删除时全仓仅剩 `tests/test_phase1_5_modules.py::TestDegradationManager`
+  4 个用例供养（"测试供养死代码"模式），已连同删除；
+  真实现 `DegradationStrategy` 在 `tests/test_degradation_strategy.py`
+  有 25 个用例独立覆盖，语义防线不丢。
+- 验证：删除后 test_phase1_5_modules + test_degradation_strategy 共
+  **69 passed**；`from core.degradation import` / `core.degradation\b` /
+  相对导入 `from .degradation import` 全仓零命中；`core/__init__.py` 无残留导出。
 
 ---
 
@@ -343,8 +307,8 @@
 | `tools/web_browse_enhanced.py::_is_private_ip_async` | DEPRECATED（函数级） | 仅 1 测试文件 | 删除会破坏部分测试 | 迁移测试后即可删除 |
 | `emotion/emoji_config.py` | ACTIVE（误判） | 活跃使用 | 无 | 无需迁移 |
 | `config.py` | ACTIVE（误判） | 活跃使用 | 无 | 无需迁移 |
-| `memory/fluid_memory.py` | DEPRECATED（兼容层） | 仅 2 测试文件 | 删除会破坏 2 个测试 | 迁移测试后即可删除 |
-| `core/degradation.py` | DEPRECATED（兼容层） | 10 个生产文件 | 删除会破坏生产代码 | 迁移 10 个调用方后可删除 |
+| `memory/fluid_memory.py` | REMOVED | — | — | ✅ 已删除（测试同步清理，2026-08-25 核验） |
+| `core/degradation.py` | REMOVED | — | — | ✅ 已删除（2026-08-25，10 调用方此前已迁移，供养测试同删） |
 | `security/security.py::_is_dev_mode` | DEPRECATED（函数级） | 无调用方 | 无 | 可直接删除 |
 
 ---

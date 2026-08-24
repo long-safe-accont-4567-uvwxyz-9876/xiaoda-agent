@@ -1,8 +1,9 @@
 """Phase 1-5 新增模块的单元测试"""
-import pytest
+import asyncio
 import os
 import sys
-import asyncio
+
+import pytest
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
@@ -136,14 +137,14 @@ class TestErrorCodes:
                 assert len(parts) == 3, f"{attr}={val} not 3-part"
 
     def test_make_error(self):
-        from core.error_codes import make_error, ErrorCode
+        from core.error_codes import ErrorCode, make_error
         err = make_error(ErrorCode.LLM_TIMEOUT, "LLM call timed out", provider="mimo")
         assert err.code == "01_2_001"
         assert err.recoverable is True
         assert err.context["provider"] == "mimo"
 
     def test_critical_not_recoverable(self):
-        from core.error_codes import make_error, ErrorCode
+        from core.error_codes import ErrorCode, make_error
         err = make_error(ErrorCode.LLM_CONTENT_FILTER, "blocked")
         assert err.recoverable is False
 
@@ -152,7 +153,7 @@ class TestTripleAxisDegradation:
     """Q2: 三轴退化模型"""
 
     def test_healthy_state(self):
-        from quality.triple_axis_degradation import TripleAxisState, QualityProxy
+        from quality.triple_axis_degradation import QualityProxy, TripleAxisState
         state = TripleAxisState(
             availability=True,
             latency_p95=500,
@@ -166,9 +167,7 @@ class TestTripleAxisDegradation:
         assert state.overall_health == 0.0
 
     def test_quality_degradation_detected(self):
-        from quality.triple_axis_degradation import (
-            TripleAxisState, QualityProxy, SilentDegradationDetector
-        )
+        from quality.triple_axis_degradation import QualityProxy, SilentDegradationDetector, TripleAxisState
         baseline = TripleAxisState(
             availability=True,
             latency_p95=500,
@@ -184,50 +183,12 @@ class TestTripleAxisDegradation:
         assert any("静默退化" in a for a in alerts)
 
     def test_latency_degradation(self):
-        from quality.triple_axis_degradation import (
-            TripleAxisState, SilentDegradationDetector
-        )
+        from quality.triple_axis_degradation import SilentDegradationDetector, TripleAxisState
         baseline = TripleAxisState(availability=True, latency_p95=500)
         current = TripleAxisState(availability=True, latency_p95=2000)
         detector = SilentDegradationDetector(baseline)
         alerts = detector.check(current)
         assert any("延迟退化" in a for a in alerts)
-
-
-class TestDegradationManager:
-    """Q4: 降级策略"""
-
-    def test_initial_full(self):
-        from core.degradation import DegradationManager
-        from core.degradation_strategy import DegradationLevel
-        mgr = DegradationManager()
-        assert mgr.level == DegradationLevel.L0_NORMAL
-        assert mgr.is_feature_available("tools")
-
-    def test_escalate(self):
-        from core.degradation import DegradationManager
-        from core.degradation_strategy import DegradationLevel
-        mgr = DegradationManager()
-        mgr.escalate("LLM down")
-        assert mgr.level == DegradationLevel.L1_DEGRADED
-        assert not mgr.is_feature_available("image")
-
-    def test_recover(self):
-        from core.degradation import DegradationManager
-        from core.degradation_strategy import DegradationLevel
-        mgr = DegradationManager()
-        mgr.escalate("test")
-        mgr.escalate("test2")
-        mgr.recover()
-        assert mgr.level == DegradationLevel.L2_MINIMAL
-
-    def test_emergency_disables_all(self):
-        from core.degradation import DegradationManager
-        from core.degradation_strategy import DegradationLevel
-        mgr = DegradationManager()
-        mgr.set_level(DegradationLevel.L3_EMERGENCY, "critical")
-        assert not mgr.is_feature_available("tools")
-        assert not mgr.is_feature_available("memory")
 
 
 class TestLazyLoader:
@@ -382,7 +343,7 @@ class TestFaultInjection:
 
     @pytest.mark.asyncio
     async def test_timeout_injection(self):
-        from tests.fault_injection import FaultInjectingLLMClient, FaultConfig, FaultType
+        from tests.fault_injection import FaultConfig, FaultInjectingLLMClient, FaultType
 
         class MockClient:
             async def complete(self, messages, **kwargs):
@@ -396,7 +357,7 @@ class TestFaultInjection:
 
     @pytest.mark.asyncio
     async def test_empty_response_injection(self):
-        from tests.fault_injection import FaultInjectingLLMClient, FaultConfig, FaultType
+        from tests.fault_injection import FaultConfig, FaultInjectingLLMClient, FaultType
 
         class MockClient:
             async def complete(self, messages, **kwargs):

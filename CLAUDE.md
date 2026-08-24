@@ -20,7 +20,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 # lint（ruff 已在 pyproject.toml 配置）
 .venv/bin/python -m ruff check .
 
-# 测试（pytest.ini 已配置 markers/timeout；500+ 自动化用例）
+# 测试（pytest.ini 已配置 markers/timeout；5700+ 自动化用例，08-25 实测收集 5716；全集绿基线记录见 docs/tech_debt_audit_*.md）
 .venv/bin/python -m pytest tests/ -m "not slow and not e2e_real" -q
 
 # pre-push 门禁（每个 clone 一次性启用。仓库在 Gitee，.github/workflows 不会执行，
