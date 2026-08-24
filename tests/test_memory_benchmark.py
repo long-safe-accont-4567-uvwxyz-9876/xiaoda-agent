@@ -86,3 +86,9 @@ def test_benchmark_runner_reports_metrics_and_is_deterministic() -> None:
     assert first["irrelevant_spread_rate"] == 0.5
     assert first["rankings"] == second["rankings"] == [["seed", "answer", "noise"]]
     assert set(first["latency_ms"]) == {"p50_ms", "p95_ms", "p99_ms"}
+
+
+def test_ndcg_empty_relevant_set_scores_zero_not_vacuous_full():
+    from evaluation.memory_benchmark import ndcg_at_k
+
+    assert ndcg_at_k(["a", "b", "c"], set(), 3) == 0.0

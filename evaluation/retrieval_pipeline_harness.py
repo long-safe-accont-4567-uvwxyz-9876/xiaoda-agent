@@ -380,7 +380,8 @@ def _gate_ranked_before(first_id: str, second_id: str) -> Gate:
 def _gate_ndcg(expected: float) -> Gate:
     def gate(payload: dict, rows: dict[str, int], case: dict) -> str | None:
         actual = payload["metrics"]["ndcg"]
-        _require(actual == expected,
+        # 浮点容差：完美排序的理论 1.0 经均值计算后可能带尾差
+        _require(abs(actual - expected) < 1e-9,
                  f"{case['id']}: 期望 ndcg={expected}，实际 {actual}")
         return f"ndcg={actual}"
     return gate

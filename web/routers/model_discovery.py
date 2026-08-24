@@ -464,12 +464,12 @@ async def discover_models(request: Request) -> Any:
         fresh = _cache["data"] is not None and (now - _cache["ts"]) < _CACHE_TTL
         stale = _cache["data"] is not None  # 过期但存在的旧数据
     if fresh:
-        return _cache["data"]
+        return Envelope(data=_cache["data"])
     if stale:
         # stale-while-revalidate：旧数据立即返回（页面秒开），
         # 后台静默刷新。模型页首次打开后不再被外部 API 拖慢 2.6s。
         asyncio.get_running_loop().create_task(_refresh_cache_background(request))
-        return _cache["data"]
+        return Envelope(data=_cache["data"])
 
     return await _fetch_and_cache_discovered(request)
 

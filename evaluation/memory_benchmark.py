@@ -26,11 +26,12 @@ def mean_reciprocal_rank(ranked: Sequence[str], relevant: set[str]) -> float:
 
 
 def ndcg_at_k(ranked: Sequence[str], relevant: set[str], k: int) -> float:
+    # 空 relevant 集返回 0.0（与 web/routers/retrieval._ndcg 语义一致）：
+    # unanswerable 查询不存在"检索完美"的 vacuous 满分
+    if not relevant:
+        return 0.0
     dcg = sum(1.0 / log2(rank + 1) for rank, item in enumerate(ranked[:k], 1) if item in relevant)
-    ideal_count = min(len(relevant), k)
-    if ideal_count == 0:
-        return 1.0
-    ideal = sum(1.0 / log2(rank + 1) for rank in range(1, ideal_count + 1))
+    ideal = sum(1.0 / log2(rank + 1) for rank in range(1, len(relevant) + 1))
     return dcg / ideal
 
 
