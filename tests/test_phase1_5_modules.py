@@ -209,42 +209,8 @@ class TestLazyLoader:
 
 
 # ── Phase 3: 自我意识+Doctor ──────────────────────────────
-
-class TestMetaCognition:
-    """A1: 元认知引擎"""
-
-    def test_initial_state(self):
-        from core.meta_cognition import MetaCognition
-        mc = MetaCognition()
-        report = mc.get_status_report()
-        assert report["health_score"] > 0.5
-        assert report["diagnosis"] == "状态良好"
-
-    def test_record_success(self):
-        from core.meta_cognition import MetaCognition
-        mc = MetaCognition()
-        mc.record_success(500.0, 0.9)
-        mc.record_success(600.0, 0.95)
-        report = mc.get_status_report()
-        assert report["total_turns"] == 2
-        assert report["avg_response_ms"] > 0
-
-    def test_record_failure(self):
-        from core.meta_cognition import MetaCognition
-        mc = MetaCognition()
-        mc.record_success(500.0)
-        mc.record_failure(5000.0)
-        report = mc.get_status_report()
-        assert report["error_rate"] > 0
-
-    def test_fatigue_increases(self):
-        from core.meta_cognition import MetaCognition
-        mc = MetaCognition()
-        for _ in range(100):
-            mc.record_success(100.0)
-        report = mc.get_status_report()
-        assert report["fatigue"] > 0.3
-
+# （TestMetaCognition 已随 core/meta_cognition.py 死模块删除移除，
+#   见 docs/core_twin_modules_audit_2026-08-25.md 第二节）
 
 class TestLearningLoop:
     """A4: 学习反馈闭环"""

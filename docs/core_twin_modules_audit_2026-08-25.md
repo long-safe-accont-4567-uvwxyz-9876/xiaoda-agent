@@ -26,18 +26,10 @@ detector(检测) 与 strategy(响应) 是感知-决策分层而非重复实现�
 
 ### 处置建议（P3 优先级）
 
-`meta_cognition.py` 与 degradation.py 同批产生（Phase 1.5 期实验模块），
-命运应相同——删除：
-
-```bash
-git rm core/meta_cognition.py
-# 同步删除 tests/test_phase1_5_modules.py 中 4 处引用块
-# 并在 docs/DEPRECATED_MODULES.md 台账登记
-```
-
-其健康分思路若仍有价值，agent_introspection 已有更完整的实现可承接。
-本次审计不动手删除（该文件属 Phase 1.5 考古批次，留给下一轮清坟会话统一处理，
-避免与进行中的多会话改造冲突）。
+~~本次审计不动手删除~~ → **已删除**（2026-08-25 下一轮清坟执行：
+`git rm core/meta_cognition.py` + 移除 tests/test_phase1_5_modules.py 的
+TestMetaCognition 四用例）。其健康分思路若仍有价值，
+agent_introspection 已有更完整的实现可承接。
 
 ## 三、顺带发现
 

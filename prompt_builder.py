@@ -10,10 +10,10 @@ config 的循环导入已于 2026-08-22 用 PEP 562 模块级 __getattr__ 打破
 按需取用可让纯工具场景（脚本/单测）绕开环境初始化。
 """
 import os
-import time
 import platform
 import socket
 import threading
+import time
 from pathlib import Path
 
 from loguru import logger
@@ -287,6 +287,7 @@ _BUCKET_LRU_LEVEL: dict[str, str] = {
 #     * emotional:   USER.md=7 (用户偏好, 个性化情感)
 #     * learning:    USER.md=6 (个性化教学)
 import re as _re
+
 _MODULE_SCENE_PRIORITY: dict[str, dict[str, int]] = {
     # Scene-Aware Middle 模块 (场景感知重排)
     "AGENTS.md":   {"default": 5, "greeting": 2, "task": 8,  "emotional": 3, "identity": 4,  "tool": 7,
@@ -662,8 +663,9 @@ def _replace_placeholders(content: str, address_term: str, agent_name: str = "")
     # 支持用户昵称/姓名占位符 {name}
     if "{name}" in content:
         try:
-            from config import WORKSPACE_DIR
             import re as _re_inner
+
+            from config import WORKSPACE_DIR
             user_md = WORKSPACE_DIR / "USER.md"
             if user_md.exists():
                 user_content = user_md.read_text(encoding="utf-8-sig")
@@ -687,14 +689,14 @@ def _annotate_user_profile(content: str, address_term: str) -> str:
     # 标注称呼行：强调这是唯一的对话称谓
     content = _re.sub(
         r'^(-\s*称呼[：:]\s*.+)$',
-        rf'\1（对话中对用户的唯一称呼，所有场景都用这个）',
+        r'\1（对话中对用户的唯一称呼，所有场景都用这个）',
         content,
         flags=_re.MULTILINE,
     )
     # 标注姓名行：明确这是背景知识，不用于称呼
     content = _re.sub(
         r'^(-\s*姓名[：:]\s*.+)$',
-        rf'\1（背景信息，不要用来称呼用户）',
+        r'\1（背景信息，不要用来称呼用户）',
         content,
         flags=_re.MULTILINE,
     )
@@ -1278,7 +1280,7 @@ def _build_xp_segment(user_id: str | None, address_term: str = "爸爸") -> str:
         return ""
 
     try:
-        from core.xp_system import get_xp_system, XPLevel
+        from core.xp_system import XPLevel, get_xp_system
         xp_sys = get_xp_system()
         state = xp_sys.get_state(user_id)
         config = xp_sys.get_intimacy_config(state.level)
@@ -1398,8 +1400,8 @@ def _inject_dynamic_segments(system_prompt: str, user_id: str | None, user_input
     # 3. 情感记忆召回段落（需要 user_input）
     if user_input:
         try:
-            from memory.emotional_memory import get_emotional_memory_manager
             from core.xp_system import get_xp_system
+            from memory.emotional_memory import get_emotional_memory_manager
             xp_sys = get_xp_system()
             xp_state = xp_sys.get_state(user_id)
             em_mgr = get_emotional_memory_manager()
