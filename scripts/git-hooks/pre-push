@@ -53,6 +53,10 @@ fi
 # ── 宽口径 except 棘轮（毫秒级）：存量 1136 冻结，增量拦截（技术债专项 #2）
 bash "$PWD/scripts/check_broad_except.sh"
 
+# ── ruff lint 棘轮（秒级）：存量冻结，增量拦截（2026-08-25 技术债第二轮；
+#    当日批量清理前曾积累至 1446 条——import 排序/未用导入等无人拦）
+bash "$PWD/scripts/check_ruff.sh"
+
 # ── 函数内延迟 import 棘轮（秒级）：存量冻结，增量拦截（技术债 P1-3 专项）
 "$PYTHON" "$PWD/scripts/check_lazy_imports.py"
 

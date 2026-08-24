@@ -75,7 +75,7 @@ def bench_sqlite_vec(path: Path, n: int, k: int, queries: int, dims: int) -> tup
             vecs = _rand_vecs(min(BATCH, n - i), dims, seed=1000 + i)
             rows = [(i + j + 1, serialize_float32(vecs[j])) for j in range(len(vecs))]
             conn.executemany(
-                f"INSERT INTO items(rowid, embedding) VALUES (?, vec_f32(?))", rows
+                "INSERT INTO items(rowid, embedding) VALUES (?, vec_f32(?))", rows
             )
             conn.commit()
         build_s = time.perf_counter() - t0
