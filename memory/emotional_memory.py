@@ -12,7 +12,6 @@
 from __future__ import annotations
 
 import json
-import os
 import re
 import time
 from dataclasses import dataclass, field
@@ -20,6 +19,7 @@ from pathlib import Path
 
 from loguru import logger
 
+from config_constants import env_optout_flag
 from emotion.emotion_enum import CN_TO_EN as _ENUM_CN_TO_EN
 from utils.atomic_write import atomic_json_write
 
@@ -138,8 +138,7 @@ class EmotionalMemoryManager:
     @staticmethod
     def is_enabled() -> bool:
         """是否启用情感记忆（默认开启，可通过 EMOTIONAL_MEMORY_ENABLED 关闭）"""
-        val = os.environ.get("EMOTIONAL_MEMORY_ENABLED", "1").strip().lower()
-        return val not in ("0", "false", "off", "no", "")
+        return env_optout_flag("EMOTIONAL_MEMORY_ENABLED", True)
 
     # === Anchoring ===
     def anchor(self, user_id: str, event: str, emotion: str, context: str,
@@ -177,7 +176,6 @@ class EmotionalMemoryManager:
         # 联动：同步更新 emotion_state
         try:
             from emotion.emotion_state import get_emotion_state
-            from emotion.pad_model import from_emotion as pad_from_emotion
             _intensity_map = {
                 "喜悦": 0.6, "兴奋": 0.8, "悲伤": 0.7, "愤怒": 0.8,
                 "焦虑": 0.6, "害羞": 0.5, "好奇": 0.5, "思考": 0.3,

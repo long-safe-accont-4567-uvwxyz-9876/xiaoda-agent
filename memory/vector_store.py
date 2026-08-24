@@ -1,14 +1,15 @@
-from typing import Any
-import json
-import os
-import sys
 import asyncio
 import hashlib
+import json
 import math
+import os
 import struct
+import sys
 import threading
 from collections import OrderedDict
 from pathlib import Path
+from typing import Any
+
 from loguru import logger
 
 try:
@@ -35,7 +36,7 @@ except (ImportError, AttributeError):
     HAS_SQLITE_VEC = False
 
 try:
-    from openai import AsyncOpenAI, APITimeoutError, APIConnectionError, APIStatusError
+    from openai import APIConnectionError, APIStatusError, APITimeoutError, AsyncOpenAI
     HAS_OPENAI = True
 except ImportError:
     HAS_OPENAI = False
@@ -64,8 +65,11 @@ except ImportError:  # pragma: no cover
 #   占用连接池资源 → 后续请求也慢 → 向量检索 1.2-8s 波动（日志铁证）。
 # read=5s 治本：embed 正常 0.5-2s，5s 覆盖+3s 余量；偶发慢 5s 快速失败，
 #   不依赖外层 cancel，从源头消除连接池污染。
-from utils.http_pool import get_shared_client as _get_embed_shared_client
 import httpx as _httpx_embed
+
+from config_constants import env_flag
+from utils.http_pool import get_shared_client as _get_embed_shared_client
+
 _EMBED_HTTP_TIMEOUT = _httpx_embed.Timeout(connect=15.0, read=5.0, write=10.0, pool=10.0)
 
 
@@ -267,7 +271,7 @@ class VectorStore:
         # 13761×512 仅 23MB 常驻内存，4.5ms/次（SQLite 暴力 33.5ms）。
         # SQLite 仍是唯一数据源，本索引是加速副本，失败自动回退 SQLite。
         self._brute: Any = None
-        self._brute_enabled = os.getenv("VECTOR_BRUTE_ENABLED", "0") == "1"
+        self._brute_enabled = env_flag("VECTOR_BRUTE_ENABLED", False)
         self._brute_base_dir = ""
         # 单飞（single-flight）：同一文本并发调用 embed 时只发一次 API 请求，
         # 其余协程共享结果，避免 7 路检索通道并发时重复 embed 放大延迟/限流
@@ -712,6 +716,7 @@ class VectorStore:
 
                 # 检测文件系统类型，vfat/exfat 不支持 WAL
                 from pathlib import Path
+
                 from db.database import _detect_fs_type
                 fs_type = _detect_fs_type(Path(self._db_path))
                 is_fat = fs_type in ("vfat", "fat", "msdos", "exfat", "fat32")

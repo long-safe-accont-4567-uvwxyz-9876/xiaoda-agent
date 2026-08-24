@@ -16,13 +16,14 @@
 """
 from __future__ import annotations
 
-import os
 import re
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
 
 from loguru import logger
+
+from config_constants import env_optout_flag
 
 # 使用相对导入避免循环依赖
 try:
@@ -37,8 +38,7 @@ def _is_enabled() -> bool:
 
     设为 "0" / "false" / "off" 时关闭.
     """
-    val = os.getenv("PERSONA_CRITIC_ENABLED", "1").strip().lower()
-    return val not in ("0", "false", "off", "no", "")
+    return env_optout_flag("PERSONA_CRITIC_ENABLED", True)
 
 
 @dataclass

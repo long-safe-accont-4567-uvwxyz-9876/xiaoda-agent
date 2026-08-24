@@ -15,7 +15,6 @@
 """
 from __future__ import annotations
 
-import os
 import threading
 import time
 from dataclasses import dataclass, field
@@ -24,6 +23,7 @@ from typing import Any
 
 from loguru import logger
 
+from config_constants import env_optout_flag
 from utils.common import safe_float as _safe_float
 
 # 使用相对导入避免循环依赖
@@ -42,8 +42,7 @@ def _is_enabled() -> bool:
 
     设为 "0" / "false" / "off" 时关闭.
     """
-    val = os.getenv("MENTAL_STATE_ENABLED", "1").strip().lower()
-    return val not in ("0", "false", "off", "no", "")
+    return env_optout_flag("MENTAL_STATE_ENABLED", True)
 
 
 def _safe_str_list(val: Any) -> list[str]:
