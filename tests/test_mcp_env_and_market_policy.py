@@ -69,11 +69,28 @@ def test_pure_validate_command():
 
 
 def test_webui_router_uses_shared_policy():
-    """web/routers/mcp.py 的校验应委托共享策略（防两处漂移）"""
+    """web/routers/mcp.py 的校验应委托共享策略（防两处漂移）
+
+    2026-08-25 更新：路由已从"镜像 _ALLOWED_MCP_BINARIES 属性"改为
+    "import 委托"（危险目标三清单合一），守卫断言随契约升级——
+    校验路由内部别名确实绑定到共享策略的同一函数对象，且行为真实穿透。
+    """
     from security import mcp_command_policy
     from web.routers import mcp as mcp_router
-    assert (mcp_router._ALLOWED_MCP_BINARIES
-            == mcp_command_policy._ALLOWED_MCP_BINARIES)
+
+    # 身份断言：委托别名指向共享策略同一函数（而非本地复制）
+    assert (mcp_router._validate_mcp_command_policy
+            is mcp_command_policy.validate_mcp_command)
+    assert (mcp_router._validate_mcp_env_policy
+            is mcp_command_policy.validate_mcp_env)
+
+    # 行为断言：经路由包装后的校验真实执行共享策略——
+    # 策略 ValueError 被包装为 HTTPException(400)，证明调用链穿透而非本地复制
+    from fastapi import HTTPException
+    mcp_router._validate_mcp_command("npx")
+    with pytest.raises(HTTPException) as ei:
+        mcp_router._validate_mcp_command("bash")
+    assert ei.value.status_code == 400
 
 
 # ── 3. 市场安装器 MCP command 校验 ────────────────────────────────
