@@ -35,3 +35,6 @@ tests/test_adapter_pipeline_contracts.py
 tests/test_qq_streaming.py
 tests/test_p1_6_c2c_stream_byte_resplit.py
 tests/test_transport_user_binding.py
+# ── 巨型文件止血棘轮（2026-08-25：qq_bot_adapter 基类沉淀后反涨 354 行，
+#    结构性拆分挡不住日常堆肥；四个热点只许拆小不许变大，见审计 §二）──
+tests/test_giant_file_ratchet.py
