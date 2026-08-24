@@ -193,14 +193,17 @@ class IntentDecomposer:
             logger.debug("intent_decomposition.backend_disabled")
             return self._rule_encode(output, context)
 
-        # production override 优先（intent.decompose），缺省回退内置 system prompt
+        # production override 优先（intent.decompose 治理对象是 system 模板），
+        # 空白/异常回退内置；system 槽禁含未信任变量（渲染层强制）
         try:
             from web.prompt_profile_repository import try_resolve
 
             override = try_resolve("intent.decompose", {"text": output})
         except Exception:
             override = None
-        system_prompt = override[1] if override is not None else self._SYSTEM_PROMPT
+        system_prompt = (
+            override[0].strip() if override and override[0].strip() else self._SYSTEM_PROMPT
+        )
         messages = [
             {"role": "system", "content": system_prompt},
             {"role": "user", "content": f"分析以下文本的意图成分：\n\n{output}"},

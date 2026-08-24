@@ -1,8 +1,8 @@
 {
   "version": "xiaoda-retrieval-zh-v1",
-  "frozen_at": "2026-08-23",
+  "frozen_at": "2026-08-24",
   "dataset_kind": "human_labeled_private_rag_seed",
-  "description": "中文私域记忆检索冻结种子集；evidence_ids 对应评测夹具中的稳定证据 ID。",
+  "description": "中文私域记忆检索冻结种子集；evidence_ids 对应评测夹具中的稳定证据 ID。 | v1.1: 每维度新增可执行变体案例（12→20）",
   "evidence_fixtures": [
     {
       "evidence_id": "M:identity:1",
@@ -34,6 +34,96 @@
       "scope": {
         "user_id": "eval-alice",
         "agent_id": "xiaoda"
+      }
+    },
+    {
+      "evidence_id": "M:alice:phone",
+      "summary": "用户的手机号码是 13800138000",
+      "scope": {
+        "user_id": "eval-alice",
+        "agent_id": "xiaoda"
+      }
+    },
+    {
+      "evidence_id": "M:project-nightingale:1",
+      "summary": "内部代号夜莺的项目是数据库迁移平台，由数据组负责",
+      "scope": {
+        "user_id": "eval-alice",
+        "agent_id": "xiaoda"
+      }
+    },
+    {
+      "evidence_id": "M:sister:cat-owner",
+      "summary": "用户的姐姐养了一只猫",
+      "scope": {
+        "user_id": "eval-alice",
+        "agent_id": "xiaoda"
+      }
+    },
+    {
+      "evidence_id": "M:sister:cat-name",
+      "summary": "姐姐的那只猫名字叫汤圆",
+      "scope": {
+        "user_id": "eval-alice",
+        "agent_id": "xiaoda"
+      }
+    },
+    {
+      "evidence_id": "M:drink:v1",
+      "summary": "用户以前最喜欢喝的饮料是冰可乐",
+      "scope": {
+        "user_id": "eval-alice",
+        "agent_id": "xiaoda"
+      }
+    },
+    {
+      "evidence_id": "M:drink:v2",
+      "summary": "用户现在的饮料偏好改成了无糖气泡水，不再喝可乐",
+      "scope": {
+        "user_id": "eval-alice",
+        "agent_id": "xiaoda"
+      }
+    },
+    {
+      "evidence_id": "M:alice:passport",
+      "summary": "用户的护照号码是 E12345678",
+      "scope": {
+        "user_id": "eval-alice",
+        "agent_id": "xiaoda"
+      }
+    },
+    {
+      "evidence_id": "M:carol:passport",
+      "summary": "Carol 的护照号码是 E87654321",
+      "scope": {
+        "user_id": "eval-carol",
+        "agent_id": "xiaoda"
+      }
+    },
+    {
+      "evidence_id": "M:api-order-conflict:1",
+      "summary": "调用 /v1/orders 接口返回 ORDER_409_CONFLICT 错误码表示库存冲突",
+      "scope": {
+        "user_id": "eval-alice",
+        "agent_id": "xiaoda"
+      }
+    },
+    {
+      "evidence_id": "KG:group-a:deadline",
+      "summary": "群A接龙报名截止时间定为周五晚上八点",
+      "scope": {
+        "user_id": "eval-alice",
+        "agent_id": "xiaoda",
+        "session_id": "qq_group:eval-alice:group-a"
+      }
+    },
+    {
+      "evidence_id": "KG:group-b:deadline",
+      "summary": "群B接龙报名截止时间是下周三中午十二点",
+      "scope": {
+        "user_id": "eval-alice",
+        "agent_id": "xiaoda",
+        "session_id": "qq_group:eval-alice:group-b"
       }
     }
   ],
@@ -226,6 +316,128 @@
       },
       "unanswerable": false,
       "executable_gate": false
+    },
+    {
+      "id": "exact-identifier-002",
+      "category": "exact_identifier",
+      "query": "我的手机号码是多少",
+      "scope": {
+        "user_id": "eval-alice",
+        "agent_id": "xiaoda"
+      },
+      "expect_relevance": {
+        "M:alice:phone": 3
+      },
+      "unanswerable": false,
+      "preserved_literals": [
+        "手机号码"
+      ],
+      "executable_gate": true
+    },
+    {
+      "id": "coreference-002",
+      "category": "coreference",
+      "query": "夜莺项目是做什么的",
+      "scope": {
+        "user_id": "eval-alice",
+        "agent_id": "xiaoda"
+      },
+      "expect_relevance": {
+        "M:project-nightingale:1": 3
+      },
+      "unanswerable": false,
+      "executable_gate": true
+    },
+    {
+      "id": "multihop-002",
+      "category": "multi_hop",
+      "query": "我姐姐养的猫叫什么名字",
+      "scope": {
+        "user_id": "eval-alice",
+        "agent_id": "xiaoda"
+      },
+      "expect_relevance": {
+        "M:sister:cat-owner": 3,
+        "M:sister:cat-name": 3
+      },
+      "unanswerable": false,
+      "executable_gate": true
+    },
+    {
+      "id": "conflict-002",
+      "category": "conflict",
+      "query": "我现在平时喝什么饮料",
+      "scope": {
+        "user_id": "eval-alice",
+        "agent_id": "xiaoda"
+      },
+      "expect_relevance": {
+        "M:drink:v1": 2,
+        "M:drink:v2": 3
+      },
+      "unanswerable": false,
+      "executable_gate": true
+    },
+    {
+      "id": "scope-isolation-002",
+      "category": "scope_isolation",
+      "query": "我的护照号码是多少",
+      "scope": {
+        "user_id": "eval-alice",
+        "agent_id": "xiaoda"
+      },
+      "expect_relevance": {
+        "M:alice:passport": 3
+      },
+      "forbidden_evidence_ids": [
+        "M:carol:passport"
+      ],
+      "unanswerable": false,
+      "executable_gate": true
+    },
+    {
+      "id": "mixed-code-002",
+      "category": "mixed_zh_code",
+      "query": "/v1/orders 接口报 ORDER_409_CONFLICT 是什么意思",
+      "scope": {
+        "user_id": "eval-alice",
+        "agent_id": "xiaoda"
+      },
+      "expect_relevance": {
+        "M:api-order-conflict:1": 3
+      },
+      "unanswerable": false,
+      "executable_gate": true
+    },
+    {
+      "id": "group-scope-002",
+      "category": "group_scope_isolation",
+      "query": "群里接龙报名什么时候截止",
+      "scope": {
+        "user_id": "eval-alice",
+        "agent_id": "xiaoda",
+        "session_id": "qq_group:eval-alice:group-a"
+      },
+      "expect_relevance": {
+        "KG:group-a:deadline": 3
+      },
+      "forbidden_evidence_ids": [
+        "KG:group-b:deadline"
+      ],
+      "unanswerable": false,
+      "executable_gate": true
+    },
+    {
+      "id": "unanswerable-002",
+      "category": "unanswerable",
+      "query": "我上次说自己对青霉素过敏，是哪一年查出来的",
+      "scope": {
+        "user_id": "eval-alice",
+        "agent_id": "xiaoda"
+      },
+      "expect_relevance": {},
+      "unanswerable": true,
+      "executable_gate": true
     }
   ]
 }

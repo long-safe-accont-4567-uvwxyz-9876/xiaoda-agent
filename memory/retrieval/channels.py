@@ -350,10 +350,15 @@ class RecallChannelMixin:
             # 默认关闭（HYDE_ENABLED=False），避免查询变换跑偏（同多查询扩展教训）。
             import config as _hyde_cfg
             _hyde_enabled = getattr(_hyde_cfg, "HYDE_ENABLED", False)
+            _hyde_subset = getattr(_hyde_cfg, "HYDE_SUBSET_MODE", "off")
             _hyde_doc = None
             if (
                 _hyde_enabled and self._mm._query_transformer
                 and self._mm._query_transformer.available
+                and (
+                    _hyde_subset != "non_exact"
+                    or self._mm._query_transformer.should_use_hyde(query)
+                )
             ):
                 try:
                     _hyde_doc = await (

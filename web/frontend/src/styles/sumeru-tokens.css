@@ -27,7 +27,7 @@
   --line-strong: rgba(145, 232, 102, 0.3);
 
   /* Glass and elevation */
-  --glass-bg: rgba(13, 28, 21, 0.72);
+  --glass-bg: rgba(20, 40, 28, 0.45);
   --glass-border: var(--line);
   --glass-blur: 16px;
   --glass-radius: 8px;

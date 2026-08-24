@@ -172,6 +172,11 @@ QUERY_EXPAND_COUNT = _safe_int(os.getenv("QUERY_EXPAND_COUNT"), 0)  # 默认关�
 # 假设文档噪声大于收益，与多查询扩展结论一致。
 # 环境变量 HYDE_ENABLED=true 可重新启用，后续换更贴合数据/调参(alpha)可再量化。
 HYDE_ENABLED = os.getenv("HYDE_ENABLED", "false").lower() in ("1", "true", "yes")
+# HyDE 子集门控（Phase 5 实验卡 hyde-subset-gate，研究文档 §5.2「exact 类禁 HyDE」）：
+#   off       = 仅由 HYDE_ENABLED 总开关决定（默认，保持历史行为）
+#   non_exact = 含精确标识符/数字串/时间词/多跳连接词的查询跳过 HyDE，
+#               仅语义型查询生成假设文档（先验证据：全局开启 Recall@5 -25%）
+HYDE_SUBSET_MODE = os.getenv("HYDE_SUBSET_MODE", "off")
 # 检索扩散开关：False=精准检索（搜什么就是什么，跳过 expand_query 和 _spreading_recall）
 # True=扩散检索（向后兼容，生成额外查询目标 + 概念图扩散）
 # 默认开启：配合 Reranker 精排兜底，扩散召回的结果可被交叉编码器过滤，

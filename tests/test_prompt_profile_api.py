@@ -253,6 +253,15 @@ def test_rollback_chain_preserves_intermediate_versions(api):
     assert note_profile["overridden"] is True
 
 
+def test_ab_run_rejects_runs_with_multi_backend_combination(api):
+    resp = api.post(
+        "/local-deploy/prompt-profiles/memory.build_recall_note/ab-run",
+        json={"backends": ["api", "local"], "runs": 3},
+    )
+    assert resp.status_code == 422
+    assert "not supported" in resp.json()["detail"]
+
+
 def test_promote_without_report_remits_legacy_behavior(api):
     stage = api.post(
         "/local-deploy/prompt-profiles/memory.compress_episode/stage",

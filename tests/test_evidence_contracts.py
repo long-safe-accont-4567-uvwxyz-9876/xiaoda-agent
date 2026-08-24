@@ -256,11 +256,8 @@ def test_bundle_renders_into_memory_retrieval_block():
     from memory.evidence import EvidenceBundle, RetrievalPlan
     from memory.scope import Scope
     plan = RetrievalPlan.from_query("测试问题", scope=Scope(), top_k=5)
-    bundle = EvidenceBundle.from_results(plan, [{
-        "content": "用户住在杭州", "source_channel": "vector",
-        "score": 0.9, "user_id": "default", "agent_id": "xiaoda",
-        "session_id": "user", "timestamp": 1.0,
-    }])
+    bundle = EvidenceBundle.from_results(
+        plan, [_result(7, "用户住在杭州", 0.9, source="vector", score_kind="source")])
     from agent_context import AgentContext
     ctx = AgentContext.__new__(AgentContext)
     ctx.memory_retrieval = [{"type": "distilled", "content": "用户住在杭州"}]

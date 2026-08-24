@@ -201,6 +201,12 @@ def try_resolve(prompt_id: str, variables: dict[str, Any]) -> tuple[str, str] | 
 
         repo = PromptProfileRepository(get_config_service())
         return repo.resolve(prompt_id, variables)
+    except ValueError as exc:
+        # 有 production 记录但渲染失败：配置错误必须显性可见，
+        # 否则运营者会看到"已晋级却仍走旧提示词"的假象
+        logger.warning("prompt_profile.override_render_failed prompt={} error={}",
+                       prompt_id, exc)
+        return None
     except Exception as exc:
         logger.debug("prompt_profile.resolve_fallback prompt={} error={}",
                      prompt_id, exc)

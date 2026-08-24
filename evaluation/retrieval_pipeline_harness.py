@@ -108,6 +108,22 @@ EXECUTION_PLAN: dict[str, CaseExecutionPlan] = {
         "typo-alias-001", "typo_and_alias", False,
         "『川采馆』错别字与目标词无共享 jieba 词元、字符 bigram 也不相交，FTS 与哈希"
         "向量均无模糊匹配能力，需 LLM 别名归一化。仅保留 schema 校验。"),
+    "exact-identifier-002": CaseExecutionPlan(
+        "exact-identifier-002", "exact_identifier", True),
+    "coreference-002": CaseExecutionPlan(
+        "coreference-002", "coreference", True),
+    "multihop-002": CaseExecutionPlan(
+        "multihop-002", "multi_hop", True),
+    "conflict-002": CaseExecutionPlan(
+        "conflict-002", "conflict", True),
+    "scope-isolation-002": CaseExecutionPlan(
+        "scope-isolation-002", "scope_isolation", True),
+    "mixed-code-002": CaseExecutionPlan(
+        "mixed-code-002", "mixed_zh_code", True),
+    "group-scope-002": CaseExecutionPlan(
+        "group-scope-002", "group_scope_isolation", True),
+    "unanswerable-002": CaseExecutionPlan(
+        "unanswerable-002", "unanswerable", True),
 }
 
 EXECUTED_CASE_IDS: list[str] = [
@@ -339,6 +355,16 @@ def _gate_present(*evidence_ids: str) -> Gate:
     return gate
 
 
+def _gate_absent(evidence_id: str) -> Gate:
+    def gate(payload: dict, rows: dict[str, int], case: dict) -> str | None:
+        leaked = [rid for rid in _result_ids(payload) if rid == rows[evidence_id]]
+        _require(not leaked,
+                 f"{case['id']}: 禁止出现的证据进入了结果 {evidence_id}"
+                 f"(row={rows[evidence_id]})，实际顺序={_result_ids(payload)}")
+        return None
+    return gate
+
+
 def _gate_ranked_before(first_id: str, second_id: str) -> Gate:
     def gate(payload: dict, rows: dict[str, int], case: dict) -> str | None:
         ids = _result_ids(payload)
@@ -392,6 +418,25 @@ CASE_BEHAVIOR_GATES: dict[str, list[Gate]] = {
     "scope-isolation-001": [_gate_top1("M:bob:birthday"), _gate_ndcg(1.0)],
     "mixed-code-001": [_gate_top1("M:backend-stack:1")],
     "group-scope-001": [_gate_top1("KG:group-a:activity")],
+    "exact-identifier-002": [_gate_top1("M:alice:phone"), _gate_ndcg(1.0)],
+    "coreference-002": [_gate_top1("M:project-nightingale:1")],
+    "multihop-002": [
+        _gate_present("M:sister:cat-owner", "M:sister:cat-name"),
+        _gate_ndcg(1.0),
+    ],
+    "conflict-002": [
+        _gate_present("M:drink:v1", "M:drink:v2"),
+        _gate_ranked_before("M:drink:v2", "M:drink:v1"),
+    ],
+    "scope-isolation-002": [
+        _gate_top1("M:alice:passport"),
+        _gate_absent("M:carol:passport"),
+    ],
+    "mixed-code-002": [_gate_top1("M:api-order-conflict:1")],
+    "group-scope-002": [
+        _gate_top1("KG:group-a:deadline"),
+        _gate_absent("KG:group-b:deadline"),
+    ],
 }
 
 

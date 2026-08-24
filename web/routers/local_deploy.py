@@ -846,6 +846,12 @@ async def ab_run_prompt_profile(request: Request, prompt_id: str, body: dict | N
         raise HTTPException(status_code=422, detail="runs must be an integer") from e
     if runs < 1 or runs > 5:
         raise HTTPException(status_code=422, detail="runs must be within 1..5")
+    if len(backends) > 1 and runs > 1:
+        raise HTTPException(
+            status_code=422,
+            detail="runs>1 with multiple backends is not supported yet; "
+                   "run each backend separately",
+        )
     core = getattr(request.app.state, "core", None)
     node_local_model = None
     if "current" in backends or "local" in backends:
@@ -876,6 +882,13 @@ async def ab_run_prompt_profile(request: Request, prompt_id: str, body: dict | N
     except ValueError as e:
         raise HTTPException(status_code=422, detail=str(e)) from e
     except RuntimeError as e:
+        _prompt_audit().append({
+            "event": "ab_run_infra_failure",
+            "prompt_id": prompt_id,
+            "backends": backends,
+            "runs": runs,
+            "error": str(e),
+        })
         raise HTTPException(status_code=409, detail=str(e)) from e
     _prompt_audit().append({
         "event": "ab_run",
