@@ -567,7 +567,7 @@ class RetrievalEngine(RecallChannelMixin, FusionRerankMixin, QueryTransformMixin
             # B1: vec 通道的 scope_scan_partial 打点同样产生于独立 Task，需捕获合并。
             raw_fts_outcome, raw_vec_outcome = await asyncio.gather(
                 capture_channel_trace(
-                    self._mm._hybrid_fts_search_scoped(query, recall_limit, scope, is_raw_filter=None)),
+                    self._mm._hybrid_fts_search_scoped(query, recall_limit, scope, is_raw=None)),
                 capture_channel_trace(
                     self._mm._hybrid_vec_search(query, recall_limit, candidate_ids=candidate_ids, is_raw=None, scope=scope, query_vec=query_vec)),
             )
@@ -661,7 +661,8 @@ class RetrievalEngine(RecallChannelMixin, FusionRerankMixin, QueryTransformMixin
                                  _retry_attempted: bool = False,
                                  scope: Any | None = None,
                                  conv_user_id: str = "",
-                                 apply_min_score: bool = True) -> list[dict]:
+                                 apply_min_score: bool = True,
+                                 record_access: bool = True) -> list[dict]:
         """检索记忆。
 
         P0 修复（上下文污染根因）：新增 conv_user_id 参数。
@@ -678,6 +679,10 @@ class RetrievalEngine(RecallChannelMixin, FusionRerankMixin, QueryTransformMixin
         工具是用户显式发起的回忆请求，应返回检索到的记忆由模型判断相关性，
         不应被该过滤清空。故新增 apply_min_score：默认 True（主动注入保持
         去噪），recall 工具传 False 跳过该过滤。
+
+        record_access=False 为只读模式：跳过命中后的 FSRS/touch 写副作用
+        （access_count/reinforcement_count/last_review 迁移），供健康探针等
+        非真实使用场景调用，避免污染记忆的生命周期状态。
         """
         import config
         from utils.metrics import metrics
@@ -763,7 +768,7 @@ class RetrievalEngine(RecallChannelMixin, FusionRerankMixin, QueryTransformMixin
                         query=query[:50])
             # 时间检索命中也递增 access_count（与常规检索路径一致）
             hit_ids = [r.get("id") for r in temporal_results if r.get("id")]
-            if hit_ids:
+            if hit_ids and record_access:
                 _spawn(self._mm._batch_touch_memories(hit_ids))
             return temporal_results
 
@@ -805,7 +810,7 @@ class RetrievalEngine(RecallChannelMixin, FusionRerankMixin, QueryTransformMixin
         # 这里使用 fire-and-forget 方式，不阻塞检索返回
         if results:
             hit_ids = [r.get("id") for r in results if r.get("id")]
-            if hit_ids:
+            if hit_ids and record_access:
                 _spawn(self._mm._batch_touch_memories(hit_ids))
         return results
 

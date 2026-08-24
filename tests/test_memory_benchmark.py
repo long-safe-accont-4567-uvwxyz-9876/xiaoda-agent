@@ -92,3 +92,25 @@ def test_ndcg_empty_relevant_set_scores_zero_not_vacuous_full():
     from evaluation.memory_benchmark import ndcg_at_k
 
     assert ndcg_at_k(["a", "b", "c"], set(), 3) == 0.0
+
+
+def test_ndcg_perfect_topk_scores_full_even_when_relevant_exceeds_k():
+    """|relevant|>k 时 ideal 按 min(len(relevant), k) 截断（对齐 web._ndcg）。
+
+    守卫 4a7721d4 曾顺带引入的截断语义回退：不截断会导致 top-k 全命中
+    也拿不到 1.0（被 k 截不到的 relevant 项拖累分母）。
+    """
+    import math
+
+    from evaluation.memory_benchmark import ndcg_at_k
+
+    # top-k 全为相关且 |relevant|>k：截断后满分（回归守卫核心，
+    # 未截断的旧公式此处只得 ~0.879）
+    assert ndcg_at_k(["a", "b"], {"a", "b", "c"}, 2) == 1.0
+    assert ndcg_at_k(["b", "c", "a", "x"], {"a", "b", "c", "d"}, 3) == 1.0
+    # 部分命中：分母同样只按前 k 个理想位累计
+    expected = (1.0 / math.log2(3)) / (1.0 + 1.0 / math.log2(3))
+    assert ndcg_at_k(["x", "a"], {"a", "b"}, 2) == pytest.approx(expected)
+    # k 容得下全部 relevant 但漏检一项：标准语义下受罚
+    assert ndcg_at_k(["a"], {"a", "b"}, 5) == pytest.approx(
+        1.0 / (1.0 + 1.0 / math.log2(3)))

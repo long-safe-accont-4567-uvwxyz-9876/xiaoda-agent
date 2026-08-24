@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
-from collections.abc import Sequence
 import json
+from collections.abc import Sequence
 from math import ceil, log2
 from pathlib import Path
 from time import perf_counter
@@ -31,7 +31,9 @@ def ndcg_at_k(ranked: Sequence[str], relevant: set[str], k: int) -> float:
     if not relevant:
         return 0.0
     dcg = sum(1.0 / log2(rank + 1) for rank, item in enumerate(ranked[:k], 1) if item in relevant)
-    ideal = sum(1.0 / log2(rank + 1) for rank in range(1, len(relevant) + 1))
+    # ideal 按 min(len(relevant), k) 截断：对齐 web._ndcg 的 [:k] 截断与标准
+    # NDCG@k，保证 |relevant|>k 时 top-k 完美排序仍可得满分 1.0
+    ideal = sum(1.0 / log2(rank + 1) for rank in range(1, min(len(relevant), k) + 1))
     return dcg / ideal
 
 
@@ -129,7 +131,10 @@ def run_benchmark(
         irrelevant_rates.append(irrelevant_spread_rate(ranked, relevant, seeds))
 
     count = len(cases)
-    mean = lambda values: sum(values) / count if count else 0.0
+
+    def mean(values: Sequence[float]) -> float:
+        return sum(values) / count if count else 0.0
+
     return {
         "case_count": count,
         "recall_at_k": mean(recalls),

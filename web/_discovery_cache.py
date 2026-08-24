@@ -10,7 +10,7 @@
 
 import asyncio
 
-_cache: dict = {"data": None, "ts": 0.0}
+_cache: dict = {"data": None, "ts": 0.0, "refreshing": False}
 _CACHE_TTL = 30 * 60
 _cache_lock = asyncio.Lock()
 

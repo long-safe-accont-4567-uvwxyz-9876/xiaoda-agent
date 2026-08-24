@@ -318,11 +318,12 @@ class MemoryManager:
                                  _retry_attempted: bool = False,
                                  scope: Any | None = None,
                                  conv_user_id: str = "",
-                                 apply_min_score: bool = True) -> list[dict]:
+                                 apply_min_score: bool = True,
+                                 record_access: bool = True) -> list[dict]:
         results = await self._retrieval.retrieve_memories(
             query, k=k, context=context, _retry_attempted=_retry_attempted,
             scope=scope, conv_user_id=conv_user_id,
-            apply_min_score=apply_min_score)
+            apply_min_score=apply_min_score, record_access=record_access)
         if results:
             from memory.retrieval.trace import (
                 read_retrieval_dropped,
