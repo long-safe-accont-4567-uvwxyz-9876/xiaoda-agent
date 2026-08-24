@@ -26,7 +26,7 @@
 
 body.low-gpu .glass-panel {
   /* 低配降档只降模糊半径，保住半透明翠绿玻璃效果（不透明深墨底 = 玻璃感尽失） */
-  background: rgba(20, 40, 28, 0.55) !important;
+  background: rgba(26, 48, 34, 0.6) !important;
   backdrop-filter: blur(4px) !important;
   -webkit-backdrop-filter: blur(4px) !important;
 }
@@ -48,7 +48,7 @@ body.low-gpu .n-modal-mask {
 body.low-gpu .n-modal,
 body.low-gpu .n-dialog,
 body.low-gpu .n-message {
-  background: rgba(18, 36, 26, 0.98) !important;
+  background: rgba(22, 42, 31, 0.98) !important;
   backdrop-filter: blur(4px) !important;
   -webkit-backdrop-filter: blur(4px) !important;
 }

@@ -12,12 +12,12 @@
   --warning: #efbd64;
 
   /* Surfaces and text */
-  --forest: #152b22;
-  --forest-deep: #09130f;
-  --surface-0: rgba(7, 16, 12, 0.92);
-  --surface-1: rgba(14, 29, 22, 0.82);
-  --surface-2: rgba(20, 39, 30, 0.72);
-  --surface-3: rgba(28, 49, 39, 0.74);
+  --forest: #1d3b2a;
+  --forest-deep: #0f1f17;
+  --surface-0: rgba(16, 33, 24, 0.92);
+  --surface-1: rgba(22, 42, 31, 0.82);
+  --surface-2: rgba(28, 50, 38, 0.72);
+  --surface-3: rgba(36, 58, 46, 0.74);
   --moon: #f4f8f3;
   --moon-soft: rgba(244, 248, 243, 0.84);
   --moon-dim: rgba(222, 233, 225, 0.66);
@@ -27,7 +27,7 @@
   --line-strong: rgba(145, 232, 102, 0.3);
 
   /* Glass and elevation */
-  --glass-bg: rgba(20, 40, 28, 0.45);
+  --glass-bg: rgba(26, 48, 34, 0.45);
   --glass-border: var(--line);
   --glass-blur: 16px;
   --glass-radius: 8px;
@@ -45,7 +45,7 @@
   --gradient-dendro: linear-gradient(135deg, var(--dendro-bright), var(--dendro) 52%, var(--jade));
   --gradient-aurora: linear-gradient(120deg, rgba(145, 232, 102, 0.1), rgba(85, 217, 178, 0.06) 52%, rgba(112, 199, 220, 0.06));
   --gradient-glass-sheen: linear-gradient(180deg, rgba(255, 255, 255, 0.04), transparent 34%);
-  --backdrop-tint: linear-gradient(180deg, rgba(5, 14, 10, 0.35), rgba(5, 14, 10, 0.68));
+  --backdrop-tint: linear-gradient(180deg, rgba(8, 20, 13, 0.26), rgba(8, 20, 13, 0.55));
 
   /* Motion and layout */
   --ease-out: cubic-bezier(0.16, 1, 0.3, 1);

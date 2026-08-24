@@ -119,7 +119,7 @@ const stageText: Record<string, string> = {
   gap: 12px;
   padding: 0 clamp(12px, 1.5vw, 22px);
   border-bottom: 1px solid var(--line);
-  background: linear-gradient(90deg, rgba(8, 19, 13, 0.9), rgba(12, 27, 20, 0.78));
+  background: linear-gradient(90deg, rgba(20, 40, 28, 0.55), rgba(18, 36, 26, 0.45));
   box-shadow: 0 8px 28px rgba(0, 0, 0, 0.14);
   backdrop-filter: blur(18px) saturate(1.08);
   -webkit-backdrop-filter: blur(18px) saturate(1.08);
@@ -147,14 +147,14 @@ const stageText: Record<string, string> = {
   padding: 9px;
   border: 1px solid var(--line);
   border-radius: var(--control-radius);
-  background: rgba(18, 38, 28, 0.7);
+  background: rgba(26, 48, 36, 0.7);
   cursor: pointer;
   transition: border-color var(--motion-fast), background-color var(--motion-fast);
 }
 
 .menu-toggle:hover {
   border-color: var(--line-strong);
-  background: rgba(28, 50, 38, 0.82);
+  background: rgba(36, 60, 46, 0.82);
 }
 
 .menu-toggle:focus-visible {
@@ -191,7 +191,7 @@ const stageText: Record<string, string> = {
   padding: 4px 11px 4px 4px;
   border: 1px solid var(--line-soft);
   border-radius: 8px;
-  background: rgba(17, 36, 27, 0.58);
+  background: rgba(24, 44, 33, 0.58);
   color: var(--moon-dim);
   cursor: pointer;
   white-space: nowrap;
@@ -200,7 +200,7 @@ const stageText: Record<string, string> = {
 
 .agent-chip:hover {
   border-color: rgba(145, 232, 102, 0.24);
-  background: rgba(25, 47, 36, 0.7);
+  background: rgba(32, 54, 42, 0.7);
   color: var(--moon);
   transform: translateY(-1px);
 }

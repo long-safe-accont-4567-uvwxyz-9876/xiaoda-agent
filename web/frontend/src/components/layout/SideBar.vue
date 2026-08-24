@@ -128,7 +128,7 @@ function onLeave() {
   overflow: hidden;
   flex-shrink: 0;
   border-right: 1px solid var(--line);
-  background: linear-gradient(180deg, rgba(9, 21, 15, 0.94), rgba(7, 17, 12, 0.88));
+  background: linear-gradient(180deg, rgba(20, 40, 28, 0.55), rgba(16, 33, 24, 0.48));
   box-shadow: 10px 0 34px rgba(0, 0, 0, 0.18);
   backdrop-filter: blur(18px) saturate(1.08);
   -webkit-backdrop-filter: blur(18px) saturate(1.08);
@@ -163,7 +163,7 @@ function onLeave() {
   place-items: center;
   border: 1px solid var(--line);
   border-radius: var(--control-radius);
-  background: rgba(16, 34, 25, 0.72);
+  background: rgba(26, 48, 36, 0.72);
   color: var(--moon-dim);
   cursor: pointer;
   font-size: 14px;
@@ -172,7 +172,7 @@ function onLeave() {
 
 .mobile-close:hover {
   border-color: var(--line-strong);
-  background: rgba(28, 50, 38, 0.82);
+  background: rgba(36, 60, 46, 0.82);
   color: var(--moon);
 }
 

@@ -306,9 +306,9 @@ const emotionColors: Record<string, string> = {
            @click="exportSessionDownload(chat.sessionId).catch(e => message.error(e.message))">
           <template #icon><SumeruIcon name="download" :size="15" variant="duo" tone="add" interactive /></template>{{ t('chatView.export') }}
         </n-button>
+        <ModelSelector @change="onModelChange" />
       </div>
       <div class="toolbar-meta">
-        <ModelSelector @change="onModelChange" />
         <span v-if="chat.sessionId" class="session-label" :title="chat.sessionId">{{ chat.sessionId }}</span>
       </div>
     </div>
