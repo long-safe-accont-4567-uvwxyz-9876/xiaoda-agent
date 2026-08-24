@@ -21,13 +21,16 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 
-# 基线 = 2026-08-25 止血守卫落地时实测值（wc -l）。
+# 基线 = 各文件止血液轮落地时实测值（wc -l）。
 # 下调流程：拆分/删码合入后，把这里改成新的实测值并在提交说明注明。
+# 2026-08-25 P2 拆分：prompt_builder.py(1669) → 包(门面148/common50/
+#   scene781/assembly661/workspace215)，原条目替换为包内两大子模块。
 BASELINES: dict[str, int] = {
     "qq_bot_adapter.py": 2174,
     "wechat_bot_adapter.py": 1584,
     "web/ws_hub.py": 1591,
-    "prompt_builder.py": 1669,
+    "prompt_builder/_prompt_scene.py": 781,
+    "prompt_builder/_prompt_assembly.py": 661,
 }
 
 
