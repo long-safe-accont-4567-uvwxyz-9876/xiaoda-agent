@@ -285,3 +285,50 @@ class TestTemporalParsing:
         assert result is not None
         start_ts, end_ts = result
         assert start_ts < end_ts
+
+
+# ── record_access 只读开关行为验证（a900a97c 引入，2026-08-25 review 补行为级测试）──
+
+class TestRecordAccessReadOnly:
+    """record_access=False 应跳过命中后的 touch 写副作用（健康探针防污染）。
+
+    走 temporal 命中路径（pipeline.py :771 门控；主路径 :813 同型）。
+    """
+
+    def _make_pipeline(self, temporal_results):
+        """构造真实 RetrievalEngine(pipeline)，mm 重依赖全部 mock。"""
+        mm = _make_memory_manager()
+        mm._query_cache.get = AsyncMock(return_value=None)
+        mm._query_transformer = None
+        mm._try_temporal_search = AsyncMock(return_value=temporal_results)
+        mm._batch_touch_memories = MagicMock()
+        from memory._retrieval_engine import RetrievalEngine
+        eng = RetrievalEngine(mm)
+        eng._get_retrieval_epoch = AsyncMock(return_value=1)
+        return mm, eng
+
+    @pytest.mark.asyncio
+    async def test_record_access_true_touches_memories(self):
+        """默认（True）：时间检索命中后应触发批量 touch。"""
+        import memory.retrieval.pipeline as pl
+        results = [{"id": 7, "summary": "x", "final_score": 0.9}]
+        mm, eng = self._make_pipeline(results)
+        with patch.object(pl, "_spawn") as sp:
+            got = await eng.retrieve_memories(
+                "探针", k=3, scope=Scope(session_id="t"), record_access=True)
+        assert got == results
+        mm._batch_touch_memories.assert_called_once_with([7])
+        sp.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_record_access_false_skips_touch(self):
+        """False：同样命中但完全不产生 touch 副作用。"""
+        import memory.retrieval.pipeline as pl
+        results = [{"id": 7, "summary": "x", "final_score": 0.9}]
+        mm, eng = self._make_pipeline(results)
+        with patch.object(pl, "_spawn") as sp:
+            got = await eng.retrieve_memories(
+                "探针", k=3, scope=Scope(session_id="t"), record_access=False)
+        assert got == results
+        mm._batch_touch_memories.assert_not_called()
+        sp.assert_not_called()
