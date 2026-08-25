@@ -66,8 +66,9 @@ def _save_master_wechat_id(user_id: str) -> None:
             core = getattr(_web_app, "state", None) and getattr(_web_app.state, "core", None)
             if core is not None and getattr(core, "security", None) is not None:
                 core.security.add_owner_id(user_id)
-        except Exception as e:  # noqa: BLE001
-            logger.debug("wechat.refresh_runtime_owner_failed error={}", str(e)[:120])
+        except (ImportError, AttributeError, RuntimeError) as e:
+            # 配置已持久化但运行时未生效——重启前行为不一致，必须可见（批次 B）
+            logger.warning("wechat.refresh_runtime_owner_failed error={}", str(e)[:120])
     except Exception as e:  # noqa: BLE001
         logger.warning("wechat.save_master_wechat_id_failed error={}", str(e)[:200])
 

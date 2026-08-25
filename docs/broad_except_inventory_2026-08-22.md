@@ -1,5 +1,11 @@
 # 宽口径 except 存量清单与棘轮防线（2026-08-22）
 
+> **2026-08-25 收口批**：routers 全域 debug 静默点清零——wechat.py 运行时
+> 刷新失败 debug→warning+收窄(ImportError/AttributeError/RuntimeError)，
+> 基线 1158→1157；health.py gpu 探测 debug 为合理常态（本机无 GPU）保留。
+> jspace 8 处经批次 A 治理后均为「读路径降级+warning 可见」合规形态。
+> routers 域假成功/debug 静默清单至此清零。
+
 > 技术债四大专项 #2 配套文档。存量：**1136 处** `except Exception`（非测试源码，
 > 225 个文件）；裸 `except:` 语法 0 处；`except Exception: pass` 纯吞没仅 2 处
 > 且均为合理形态（窄类型捕获 / asyncio.CancelledError 惯例）。
