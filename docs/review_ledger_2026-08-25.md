@@ -173,3 +173,17 @@ ilink 长轮询循环正常（getupdates 18s 周期，0 错误）；mail.run_age
 ### 浏览器运行时冒烟
 
 headless chromium 加载 WebUI：1280×800 非空白渲染（33 万色）、DOM 含登录标记 ✓。前端运行时层首次纳入实证。
+
+## 十二、后台委托 v2（按用户定稿模型重做交付形态）
+
+`0fe17c3e`：废除 v1 的受理回执措辞与 delegate_result 专用帧。定稿形态：
+- 受理后主代理照常流式输出（中性受理语由模型自然措辞）；
+- 子代理完成后结果交回**主代理本人**：router.route 转述成主代理口吻
+  （20s 超时降级模板保底），走标准 final 帧 / QQ 微信主动消息发出；
+- 新增 sub_agent_control 工具：status 进度一览 / abort 终止（CancelledError
+  捕获+自然告知）/ interject 插话（共享列表→_chat_loop 每轮消费；未消费的
+  剩余插话并入转述提示保证必达）。透传链 process→ctx→dispatch→chat→loop。
+
+活体验收 PASS：受理 final 15.4s → sub_completed 27.9s → 转述 final 30.1s。
+已知边界：route LLM 30s 超时抖动会偶发降级当轮回复（存量特性）；子代理自身
+回答质量受 flash 模型影响波动，与投递管道无关。
