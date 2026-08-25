@@ -133,6 +133,22 @@ agent.db(210MB)+agent_vec.db(73MB) 位于消费级 U 盘且**无任何定时备�
 
 ilink 长轮询循环正常（getupdates 18s 周期，0 错误）；mail.run_agently 38 次 0 错误。
 
+## 十一、子代理"后台执行+主动推送"模型落地（review 直接转化）
+
+审查确认原实现为同步工具调用（当轮阻塞等待、超时取消丢工作），用户期望的
+"分配→后台执行→结果返回→主动推送"四环节中后两环缺失但投递基建已存在。
+已实现 `c811c148`：
+
+- delegate_task 新增 background=true：spawn 脱离当轮 + 受理回执即时返回
+- core/async_delegation.py：注册表 + 按通道投递路由（qq/wechat/web/ws/cli）
+- RequestContext.channel 打标贯通；无外层超时（修复超时丢工作缺陷）
+- 健壮性顺带：显示名别名归一 + task 缺省回退用户原话
+
+**活体验收 PASS**：受理回执 10.3s → delegate_result 主动推送 12.5s。
+调试期间顺带发现并处理三个既有问题：①error_rule 自学习规则会把参数缺失失败
+固化成预拦截（已清 rule#39；task 回退从根因消除复发）；②route LLM 30s 超时在
+大上下文+51 工具下偶发触发降级（存量特性，备案）；③黑板缓存使重复任务秒回。
+
 ## 十、扩围第六轮（能力面活体 + X-Confirm 矩阵 + 浏览器冒烟）+ 一次误伤事故披露
 
 ### 主链路未测能力活体验证：4/4 PASS
