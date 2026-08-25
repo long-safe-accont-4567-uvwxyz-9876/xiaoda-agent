@@ -3,6 +3,8 @@
 本模块仅依赖标准库与 ``tool_engine.tool_registry.ToolPermission``，**不得** import
 任何 ``tools.*`` 子模块或其它重依赖（httpx/selenium/PIL/primp 等），以保证冷启动
 时 ``register_builtin_tools_lazy()`` 登记元数据不触发重依赖加载。
+例外：``emotion.emotion_enum`` 为零重依赖的单一事实源模块（词表派生用），
+其导入不触发任何工具/模型栈加载。
 
 每条目字段对应 ``register_lazy_tool`` 的入参，元数据从各 tools 模块 ``@register_tool``
 装饰器参数原样复制。``web_browse`` 在 ``web_browse_tools`` 与 ``web_browse_enhanced``
@@ -13,6 +15,7 @@ from __future__ import annotations
 from typing import Any
 
 from config import get_agent_display_name
+from emotion.emotion_enum import EMOTION_VOCAB_SLASH
 from tool_engine.tool_registry import ToolPermission
 
 _NAHIDA_DN = get_agent_display_name('xiaoda')
@@ -968,8 +971,8 @@ BUILTIN_TOOLS: list[dict[str, Any]] = [
                 },
                 "emotion": {
                     "type": "string",
-                    "description": "情绪风格（可选）：happy/excited/sad/angry/anxious/shy/surprised/"
-                                   "neutral/greeting/caring/playful/lonely/curious/thinking/coquettish",
+                    "description": f"情绪风格（可选）：{EMOTION_VOCAB_SLASH}。"
+                                   "运行时会自动归一到语音风格，传枚举值即可。",
                 },
             },
             "required": ["text"],

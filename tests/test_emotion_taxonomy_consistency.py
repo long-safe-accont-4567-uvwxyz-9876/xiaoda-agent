@@ -13,6 +13,7 @@ import pytest
 from emotion.emotion_enum import (
     CN_TO_EN,
     EMOTION_TAG_GUIDE,
+    EMOTION_VOCAB_SLASH,
     TTS_STYLE_VALUES,
     VALID_EMOTION_TAGS,
 )
@@ -158,3 +159,45 @@ class TestStickerTaxonomy:
             pytest.skip("小妲表情包目录不存在")
         dirs = {d.name for d in sticker_dir.iterdir() if d.is_dir()}
         assert dirs == VALID_EMOTION_TAGS, dirs ^ VALID_EMOTION_TAGS
+
+
+# ── 5. 工具 schema / 工作区提示词词表对齐（2026-08 review 尾巴收口）──
+
+
+class TestToolSchemaVocabAlignment:
+    """对 LLM 宣传的情绪词表必须与枚举单一事实源（EMOTION_VOCAB_SLASH）一致。
+
+    根因：tts_tools/_builtin_manifest/TOOLS.md 三处硬编码 15 种旧词表
+    （含已废 lonely、缺 love/moved/pout 等），LLM 按旧词表传参只能靠
+    运行时别名兜底。现三处全部派生自 EMOTION_VOCAB_SLASH，本组测试
+    防回退到字面量。
+    """
+
+    def test_tts_tool_schema_uses_enum_vocab(self):
+        import tools.tts_tools as tt
+
+        desc = tt._emotion_param_description()
+        assert EMOTION_VOCAB_SLASH in desc
+        for banned in ("lonely", "caring/playful"):
+            assert banned not in desc
+
+    def test_builtin_manifest_entry_matches_enum_vocab(self):
+        from tools._builtin_manifest import BUILTIN_TOOLS
+
+        entry = next(t for t in BUILTIN_TOOLS if t["name"] == "synthesize_voice")
+        desc = entry["schema"]["properties"]["emotion"]["description"]
+        assert EMOTION_VOCAB_SLASH in desc
+        assert "lonely" not in desc
+
+    def test_workspace_tools_md_matches_enum_vocab(self):
+        md = (_REPO / "config" / "workspace" / "TOOLS.md").read_text(
+            encoding="utf-8")
+        assert EMOTION_VOCAB_SLASH in md
+        # 旧行的"15种"计数与废弃标签不得回流
+        assert "15种情绪风格" not in md and "lonely" not in md
+
+    def test_runtime_workspace_md_matches_enum_vocab(self):
+        runtime_md = _HOME_CFG / "workspace" / "TOOLS.md"
+        if not runtime_md.exists():
+            pytest.skip("运行时 TOOLS.md 不存在")
+        assert EMOTION_VOCAB_SLASH in runtime_md.read_text(encoding="utf-8")

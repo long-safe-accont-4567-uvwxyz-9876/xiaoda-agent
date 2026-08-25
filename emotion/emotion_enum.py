@@ -152,6 +152,11 @@ STICKER_FALLBACK: dict[Emotion, str] = {
 # 合法标签值集合（用于 _ensure_emotion_tag 校验）
 VALID_EMOTION_TAGS: set[str] = {e.value for e in Emotion}
 
+# 工具 schema / 工作区提示词对外宣传用词表（斜杠串联）。
+# 单一事实源派生：新增枚举值自动跟进，杜绝 2026-08 review 发现的
+# "枚举 17 种 vs 工具宣传 15 种旧词表" 文档漂移。
+EMOTION_VOCAB_SLASH: str = "/".join(e.value for e in Emotion)
+
 # 标签中文说明（提示词用）：动态生成情绪规则块的唯一事实源，
 # 与 EMOTION_ALIASES 同步维护；新增枚举值时必须在此补一行
 EMOTION_TAG_GUIDE: dict[str, str] = {
