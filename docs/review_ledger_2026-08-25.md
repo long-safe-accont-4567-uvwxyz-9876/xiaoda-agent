@@ -88,3 +88,27 @@ agent.db 与 agent_vec.db 双库 `integrity_check=ok`、WAL 模式、103/21 张�
 ### 安全控制活体抽测
 
 X-Confirm 守卫接口无确认头一律 HTTP 400 强制拒绝 ✓；/metrics 无 token 401 ✓；错误密码 401 且正确密码立即可登录（无误锁）✓。
+
+## 八、扩围第四轮（缺口补码 + 并发隔离 + 门禁自检 + 后台巡检）
+
+### rust_hybrid 最大缺口收口
+
+新增 `test_engine_recall_full_pipeline_ab_equivalence`（`8211fce7`）：链式图夹具上开关两侧 recall() 终榜 id 序+分数逐位一致，覆盖 direct→spreading→RRF 完整链路。此前仅单通道对比的审计缺口关闭，21/21 绿。
+
+### 并发会话隔离活体对抗
+
+3 路独立 WS 连接同时聊天（要求只回指定代号）：苹果/香蕉/樱桃**零串扰精确路由**，wall≈max 单路耗时=真并发无串行化。
+
+### 仓库门禁全量自检（AGENTS.md push 前预跑）
+
+| 门禁 | 结果 |
+|---|---|
+| ruff | ✅ 145/146 |
+| broad-except | ✅ 1157/1157（贴线无余量） |
+| todo-ratchet / lazy-imports | ✅ 3/3、1418/1418 |
+| i18n | ✅ zh=en=1488 完全一致，CJK 棘轮在基线内 |
+| **giant-file** | **✗ FAIL：universe/engine.ts 917 行 >900 且未登记赦免**——并行会话活跃文件，此刻 push 必被拦；须拆分或进 allowlist+ratchet |
+
+### 后台子系统 journal 巡检（09:54 起 ~2h）
+
+mail 轮询 38 次、问候/蒸馏/梦境/nudge 有活性证据（14 hits）；53 条 WARNING 集中于已知慢检索通道（kg/spreading/child）与 stage_slow，另有 2 次 heartbeat_timeout 系本轮测试客户端未应答心跳所致，非产品缺陷。
