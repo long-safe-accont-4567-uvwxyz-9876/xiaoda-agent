@@ -132,3 +132,28 @@ agent.db(210MB)+agent_vec.db(73MB) 位于消费级 U 盘且**无任何定时备�
 ### 微信/邮件子系统细查
 
 ilink 长轮询循环正常（getupdates 18s 周期，0 错误）；mail.run_agently 38 次 0 错误。
+
+## 十、扩围第六轮（能力面活体 + X-Confirm 矩阵 + 浏览器冒烟）+ 一次误伤事故披露
+
+### 主链路未测能力活体验证：4/4 PASS
+
+| 能力 | 实测 |
+|---|---|
+| 工具调用链 | get_current_time 真实触发，回复含准确日期时间；calculator 验证 17×23=391 |
+| **多代理委托** | delegate_task 生产端到端首证：委托小莉后以其人格原声返回，4 次 status 帧 |
+| 斜杠命令 | /help 经主进程直通返回完整命令表，零延迟 |
+
+### 全路由 DELETE 确认头矩阵（22 条实测）
+
+12 条明确 X-Confirm 守卫(400)、5×422、3×404、**2×200 无守卫**：
+- `DELETE /workspace`（撤销授权的设置开关，非数据删除）
+- `DELETE /workspace/whitelist/{command}`（对不存在键幂等 no-op）
+建议：按 CLAUDE.md"删除类接口一律 X-Confirm"契约补守卫，或在文档明示豁免清单。[低]
+
+### ⚠️ 误伤事故披露
+
+本轮扫描对 `DELETE /workspace` 的无确认头调用**真实执行了撤销工作目录授权**（生产 workspace.cwd 被清空）。原值经多源追溯不可恢复（loguru 文本日志不渲染 extra 字段），已按最强证据恢复为项目根目录 `/home/orangepi/ai-agent` 并验证持久化生效。教训：破坏性端点矩阵扫描前应先静态读 handler 判定副作用级别，设置开关类也需先备份持久化文件。
+
+### 浏览器运行时冒烟
+
+headless chromium 加载 WebUI：1280×800 非空白渲染（33 万色）、DOM 含登录标记 ✓。前端运行时层首次纳入实证。
