@@ -157,8 +157,11 @@ class ConceptDB:
         now = time.monotonic()
         if (self._alive_cache is not None
                 and now - self._alive_cache_ts < self._ALIVE_NODES_TTL_S):
+            logger.debug("concept.alive_cache_hit rows={}",
+                         len(self._alive_cache))
             return {nid: dict(node) for nid, node in self._alive_cache.items()}
 
+        _t0 = time.monotonic()
         async with self._conn.execute(
             "SELECT * FROM concept_nodes WHERE valid_to IS NULL"
         ) as cur:
@@ -166,6 +169,8 @@ class ConceptDB:
         result = {row["id"]: dict(row) for row in rows}
         self._alive_cache = result
         self._alive_cache_ts = now
+        logger.debug("concept.alive_cache_miss rows={} took_ms={}",
+                     len(result), int((time.monotonic() - _t0) * 1000))
         return {nid: dict(node) for nid, node in result.items()}
 
     async def get_node_count(self) -> int:
