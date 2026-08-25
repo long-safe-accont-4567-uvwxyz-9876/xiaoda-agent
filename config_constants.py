@@ -304,6 +304,19 @@ MEMORY_RECONCILIATION_WORKER_INTERVAL = _safe_float(
 # Task 12: 熔断器智能恢复配置（P2）
 # COOLDOWN 从 60→30：熔断后恢复更快，避免长时间快速失败拖累用户体验
 CIRCUIT_BREAKER_COOLDOWN = _safe_int(os.getenv("CIRCUIT_BREAKER_COOLDOWN"), 30)
+
+# ── 工具分层注入（2026-08-25 精炼：常驻 48→35，长尾经 search_tools 按需检索）──
+# 依据近 7 天文件日志调用频次画像：mail 七件套/wolfram/视觉摄像/dev_assist 等
+# 零调用且占注入开销 ~41%。延迟工具仍可被模型直接调用（executor 查全量 _tools），
+# 或经 search_tools 元工具按需取回定义。TOOL_TIERING_ENABLED=false 一键回退全量。
+TOOL_TIERING_ENABLED = env_flag("TOOL_TIERING_ENABLED", True)
+TOOL_DEFERRED_NAMES = frozenset({
+    "mail_search", "mail_forward", "mail_send", "mail_reply",
+    "mail_list", "mail_download_attachment",
+    "wolfram_query", "camera_capture", "vision_analyze",
+    "document_reader", "dev_assist", "network_diag",
+    "agnes_video_generate", "echo__echo", "retrieve_context",
+})
 CIRCUIT_BREAKER_HALF_OPEN_PROBES = _safe_int(os.getenv("CIRCUIT_BREAKER_HALF_OPEN_PROBES"), 2)
 CIRCUIT_BREAKER_MAX_COOLDOWN = _safe_int(os.getenv("CIRCUIT_BREAKER_MAX_COOLDOWN"), 300)
 
