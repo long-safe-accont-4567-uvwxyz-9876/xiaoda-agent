@@ -9,3 +9,6 @@ Type=oneshot
 User=orangepi
 WorkingDirectory=/home/orangepi/ai-agent
 ExecStart=/bin/bash /home/orangepi/ai-agent/scripts/debt_audit.sh
+
+# 通知通路:审计失败时脚本自身以 daemon.err 级别写 journal(logger -t debt-audit),
+# journalctl -t debt-audit -p err 即可见;后续接入发信/IM通道时在此追加 OnFailure=。

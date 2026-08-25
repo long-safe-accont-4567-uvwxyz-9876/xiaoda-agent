@@ -97,7 +97,13 @@ else
     fail=1
 fi
 
-{
-    [ "$fail" = "0" ] && echo "── 结论:全绿 ──" || echo "── 结论:存在违规,见上 ──"
-} >> "$LOG"
+if [ "$fail" != "0" ]; then
+    summary=$(tail -20 "$LOG" | grep -E "✗" | head -5 | tr '\n' ';')
+    # 醒目告警:err 级别进 journal(journalctl -p err 可见),供运维面板/巡检捕获;
+    # systemd 层面另有 OnFailure 钩子(deploy/debt-audit.service)。
+    logger -t debt-audit -p daemon.err "技术债周审计存在违规: ${summary}"
+    echo "── 结论:存在违规,已上报告警 ──" >> "$LOG"
+else
+    echo "── 结论:全绿 ──" >> "$LOG"
+fi
 exit "$fail"
