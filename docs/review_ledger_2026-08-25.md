@@ -212,3 +212,12 @@ headless chromium 加载 WebUI：1280×800 非空白渲染（33 万色）、DOM 
 - 全量套件（not slow/e2e_real）由并行会话持续运行中
 
 遗留观察：该文件属并行会话 WIP 未提交，本侧仅做验证不代提交。
+
+## 十四、DB 自动备份落地（关闭第五轮[中]发现）
+
+`scripts/db_backup.sh` + `deploy/systemd/nahida-db-backup.{service,timer}`：
+sqlite3 backup API 热备（在线一致性快照，不锁写）、双库 integrity 校验、
+7 天轮转、每日 04:30 触发（Persistent 补跑）。
+已部署启用：手动首备 281MB 校验 ok；timer NEXT=明日 04:32；
+恢复演练 PASS——备份副本 integrity ok 且 episodic_memories/conversation_logs/
+knowledge_relations/schema_version 与生产逐项一致（2442/2560/2499/v32）。
