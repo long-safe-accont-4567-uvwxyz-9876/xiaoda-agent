@@ -221,3 +221,19 @@ sqlite3 backup API 热备（在线一致性快照，不锁写）、双库 integr
 已部署启用：手动首备 281MB 校验 ok；timer NEXT=明日 04:32；
 恢复演练 PASS——备份副本 integrity ok 且 episodic_memories/conversation_logs/
 knowledge_relations/schema_version 与生产逐项一致（2442/2560/2499/v32）。
+
+## 十五、性能基线与专项立项（数据修正）
+
+全天检索通道耗时分布（agent.log，_stage_log >50ms 采样）：
+- channel_kg avg=3673ms/max=20354 · channel_spreading avg=3635/max=24742
+- channel_child avg=2536/max=6337 · channel_vec avg=2124/max=7957
+- llm_call n=58 avg=4502ms，其中 **24 次 >30s**（route 超时降级的主因，
+  agnes-flash 在 51→38 工具+记忆上下文下仍间歇逼近/超出 route timeout=30）
+
+**事实修正**：七路召回为 asyncio.gather 并行（pipeline.py:_run_multi_recall），
+此前"串行累加"的口头判断有误。单轮记忆延迟 = 最慢通道（kg/spreading 峰值
+7.8~20s）而非各通道之和；`memory.retrieve.done` 实测 6.5~6.8s 常态。
+
+专项立项（下一工作包）：对 kg/spreading 两通道做单轮 trace 级 profiling——
+重点核查 rust_hybrid 激活后 spreading 仍 3.6s 均值的成因（embed 是否重复计算、
+索引重建时机）、channel_kg 的 KG v2 查询形态。目标：最慢通道压入 2s 内。
