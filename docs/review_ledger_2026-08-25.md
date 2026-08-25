@@ -237,3 +237,21 @@ knowledge_relations/schema_version 与生产逐项一致（2442/2560/2499/v32）
 专项立项（下一工作包）：对 kg/spreading 两通道做单轮 trace 级 profiling——
 重点核查 rust_hybrid 激活后 spreading 仍 3.6s 均值的成因（embed 是否重复计算、
 索引重建时机）、channel_kg 的 KG v2 查询形态。目标：最慢通道压入 2s 内。
+
+### 专项第一轮结论（py-spy 45s 活体采样，350 样本）
+
+采样窗口覆盖一次真实聊天轮（含完整记忆检索+LLM 回复）。叶子自时间揭示：
+**CPU 无热点**——top 项全部是等待类（do_handshake/write/_send = httpx 与 LLM
+网络 await ≈25%；dictcomp/iterencode = JSON 序列化；loguru 格式化 ~4%）。
+结合通道级数据修正归因链：
+
+1. kg/spreading "慢" = await 链上 IO：kg 含免费模型实体抽取(0.4~6s)，
+   spreading 含 get_alive_nodes 全量读与图快照（USB SQLite）
+2. vec/fts 的秒级耗时 = scoped keyset 分页 × USB 盘读 + embed IPC；
+   主连接 PRAGMA 已调优（WAL/NORMAL/20MB cache/64MB mmap），排除配置问题
+3. route LLM 30s 超时 24 次/58 调用 = agnes-flash 服务端波动，客户端无法消除，
+   只能靠超时预算与降级策略兜底（现状已具备）
+
+下一步建议（独立工作包）：①IO 轮次合并审计——alive_nodes 全量读改 TTL 快照、
+keyset 分页批量化；②embed IPC 常驻协议替代 sudo probe；③实体抽取结果与
+intent_decompose 共享。原始采样归档 docs/perf_pyspy_20260825.speedscope。
