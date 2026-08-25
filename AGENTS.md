@@ -18,7 +18,7 @@
 | `check_ruff.sh` | 146 冻结 | 先 `.venv/bin/python -m ruff check --fix .`;确属必要新增才上调基线+提交说明给理由 |
 | `check_broad_except.sh` | 1157 | 新增宽捕获须收窄异常类型;确需宽捕获则上调基线+说明 |
 | `check_lazy_imports.py` | 1418 | import 上提模块顶;确属打破循环/副作用的延迟导入→上调基线+说明 |
-| `check_giant_files.sh` | 900 行通用阈值 | 新文件别超 900 行;超了就拆分,或登记 `giant_file_allowlist.txt`(须同步在 test_giant_file_ratchet.py 钉基线)+说明 |
+| `check_giant_files.sh` | 后端 py 900 / 前端 TS·Vue 900 / 测试 py 1500 | 超阈值即拆分;确属合理(i18n 键值表等)登记 `giant_file_allowlist.txt`——进清单就必须在 test_giant_file_ratchet.py 钉基线,否则周审计一致性检查会红 |
 | `check_todo_ratchet.sh` | 3 冻结 | 别留 TODO/FIXME/HACK——当场还债,或上调基线+登记是什么债为何不还 |
 | i18n key 一致性 | — | `npm run check:i18n` 查明细,补齐两侧字典 |
 
@@ -39,6 +39,13 @@
   其中 qq_bot_adapter/wechat/setup 优先级最高(拆分蓝图见
   docs/giant_files_split_plan_2026-08-22.md 与 docs/tech_debt_audit_2026-08-25.md)。
 - TODO 基线 3 处:wechat CDN 上传 / conflict_supersession v0.7 接线 / (1 处为正则关键词非真债)。
+
+## 门禁自身也在看守之下
+
+`scripts/gate_integrity.txt` 锁定全部门禁脚本与基线文件的 sha256,
+每周审计比对:篡改门禁(放宽阈值/清空基线)会被 hash 比对暴露。
+正当修改门禁后运行 `bash scripts/update_gate_hashes.sh` 重生成台账,
+并在提交说明注明理由。
 
 ## 周审计(绕过提交门禁也会被发现)
 

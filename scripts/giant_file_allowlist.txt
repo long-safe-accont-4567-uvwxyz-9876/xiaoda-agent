@@ -33,3 +33,14 @@ core/background_tasks.py
 web/agent_registry.py
 web/routers/local_deploy.py
 cli.py
+
+# ── 前端(2026-08-25 门禁扩展入册)──
+# i18n 双字典:键值对数据表,与 tools/_builtin_manifest.py 同理天然合理
+web/frontend/src/i18n/zh.ts
+web/frontend/src/i18n/en.ts
+# 视图组件:600+ 行 SFC 拆分按 boy-scout 触碰随治理(docs/tech_debt_audit §二)
+web/frontend/src/views/ChatView.vue
+web/frontend/src/views/RetrievalView.vue
+# ── 测试(阈值1500,超限入册)──
+tests/test_local_ai_device_registry.py
+tests/test_provider_onboarding.py

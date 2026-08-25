@@ -39,7 +39,7 @@ ratchet = Path("tests/test_giant_file_ratchet.py").read_text(encoding="utf-8")
 baselines = dict(re.findall(r'"([^"]+)":\s*(\d+)', ratchet))
 problems = []
 for f, base in baselines.items():
-    actual = len(Path(f).read_text(encoding="utf-8").splitlines())
+    actual = Path(f).read_text(encoding="utf-8").count("\n")  # wc同口径
     if actual != int(base):
         problems.append(f"{f}: ratchet基线{base} vs 实际{actual}")
 print("; ".join(problems) if problems else "OK")
@@ -47,6 +47,46 @@ EOF
 ) || drift="检测脚本异常"
 echo "$drift" | grep -q "^OK" && echo "  ✓ 棘轮基线对齐: $drift" >> "$LOG" || {
     echo "  ✗ 棘轮基线漂移: $drift" >> "$LOG"; fail=1; }
+
+# 门禁自身完整性:关键脚本与基线文件的 sha256 比对台账。
+# hash 不符 = 门禁被篡改/绕过的强信号;正当修改后须重跑 update_gate_hashes.sh。
+if integ=$(python3 - <<'EOF'
+import hashlib
+from pathlib import Path
+problems, checked = [], 0
+for line in Path("scripts/gate_integrity.txt").read_text(encoding="utf-8").splitlines():
+    if not line.strip() or line.lstrip().startswith("#"):
+        continue
+    expected, f = line.split(None, 1)
+    f = f.strip()
+    checked += 1
+    actual = hashlib.sha256(Path(f).read_bytes()).hexdigest()
+    if actual != expected:
+        problems.append(f"{f} 已被修改(台账hash不符)")
+missing = []
+print(f"{checked} 项锁定" if not problems else "; ".join(problems))
+EOF
+); then
+    echo "  ✓ 门禁完整性: $integ" >> "$LOG"
+else
+    echo "  ✗ 门禁完整性: $integ" >> "$LOG"; fail=1
+fi
+
+# 赦免清单↔ratchet 一致性:allowlist 每一项都应在 ratchet 钉基线(防清单变成
+# 无看守的逃逸通道——进了赦免清单却没人盯行数 = 白名单制盲区复现)
+if cons=$(python3 - <<'EOF'
+from pathlib import Path
+allow = [l.strip() for l in Path("scripts/giant_file_allowlist.txt").read_text(encoding="utf-8").splitlines()
+         if l.strip() and not l.lstrip().startswith("#")]
+ratchet = Path("tests/test_giant_file_ratchet.py").read_text(encoding="utf-8")
+unpinned = [f for f in allow if f'"{f}"' not in ratchet]
+print("OK" if not unpinned else "赦免未钉基线: " + ", ".join(unpinned))
+EOF
+); then
+    echo "  ✓ 赦免清单一致性: $cons" >> "$LOG"
+else
+    echo "  ✗ 赦免清单一致性: $cons" >> "$LOG"; fail=1
+fi
 
 # 全集测试(慢,约6分钟;审计窗口无所谓)
 if pytest_out=$(.venv/bin/python -m pytest tests/ -q --timeout=120 \

@@ -36,15 +36,54 @@ BASELINES: dict[str, int] = {
     "prompt_builder/_prompt_assembly.py": 661,
 }
 
+# 门禁扩展(2026-08-25)入册文件的基线:与 allowlist 同步维护
+WEB_TEST_BASELINES: dict[str, int] = {
+    "web/frontend/src/i18n/zh.ts": 1534,
+    "web/frontend/src/i18n/en.ts": 1533,
+    "web/frontend/src/views/ChatView.vue": 962,
+    "web/frontend/src/views/RetrievalView.vue": 915,
+    "tests/test_local_ai_device_registry.py": 2260,
+    "tests/test_provider_onboarding.py": 1715,
+}
+
 
 def _line_count(rel: str) -> int:
-    return len((ROOT / rel).read_text(encoding="utf-8").splitlines())
+    # 与 wc -l 同口径(数换行符):避免无尾换行文件在两套口径间差 1 行
+    return (ROOT / rel).read_text(encoding="utf-8").count("\n")
 
+
+
+# 赦免清单其余成员的基线(2026-08-25 一致性收口:进清单必被看守,
+# 由 debt_audit.sh 的"赦免清单一致性"检查强制)
+ALLOWLIST_BASELINES: dict[str, int] = {
+    "memory/vector_store.py": 1619,
+    "web/server.py": 1397,
+    "agent_context.py": 1345,
+    "web/routers/setup.py": 1322,
+    "db/legacy_migrations.py": 1289,
+    "core/bootstrap.py": 1171,
+    "utils/text_utils.py": 1151,
+    "memory/_memory_encoder.py": 1134,
+    "db/db_memory_reconciliation.py": 1102,
+    "llm_gateway/router_execution.py": 1097,
+    "tool_engine/mcp_client.py": 1090,
+    "memory/retrieval/pipeline.py": 1069,
+    "ilink_client.py": 1039,
+    "agent_core/sub_agent_manager.py": 1032,
+    "agent_core/sub_agent.py": 1004,
+    "tools/_builtin_manifest.py": 1001,
+    "web/routers/insight.py": 923,
+    "core/background_tasks.py": 920,
+    "web/agent_registry.py": 912,
+    "web/routers/local_deploy.py": 911,
+    "cli.py": 908,
+}
 
 def test_hotspot_files_do_not_grow():
+    all_baselines = {**BASELINES, **WEB_TEST_BASELINES, **ALLOWLIST_BASELINES}
     overgrown = [
         f"{rel}: {_line_count(rel)} > baseline {limit}"
-        for rel, limit in BASELINES.items()
+        for rel, limit in all_baselines.items()
         if _line_count(rel) > limit
     ]
     assert not overgrown, (
@@ -60,7 +99,7 @@ def test_baseline_matches_reality_when_smaller():
     """基线若大于现状（文件已被拆小），提示下调基线但不失败——保持棘轮单调向下。"""
     stale = [
         f"{rel}: baseline {limit} > actual {_line_count(rel)}"
-        for rel, limit in BASELINES.items()
+        for rel, limit in {**BASELINES, **WEB_TEST_BASELINES}.items()
         if _line_count(rel) < limit - 50  # 容忍 ±50 行内的自然波动噪音
     ]
     # 不 fail：仅当明显缩小时打印提醒。真正的棘轮下调由人工在拆分提交里完成。
