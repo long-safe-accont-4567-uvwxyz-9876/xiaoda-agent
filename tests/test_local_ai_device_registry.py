@@ -25,6 +25,14 @@ from local_ai.devices.registry import (
 )
 from memory import local_embed
 
+
+def _seed_fake_model(tmp_path):
+    """写入最小假模型目录(onnx+tokenizer),供注册表/嵌入加载探测。"""
+    (tmp_path / "model.onnx").write_bytes(b"model")
+    (tmp_path / "tokenizer.json").write_text("{}", encoding="utf-8")
+    return tmp_path
+
+
 # local_embed._create_session 会对单 CUDA EP 自动注入默认 provider_options
 # （session_tuning.auto_provider_options：cudnn_conv_algo_search=HEURISTIC，
 # 比 ORT 默认 EXHAUSTIVE 建图更快）；显式传入的键（device_id 等）保留。
@@ -1528,8 +1536,7 @@ def test_recommend_uses_healthy_binding_on_available_shared_hardware():
 
 
 def test_local_embedding_forwards_registry_provider_configuration(monkeypatch, tmp_path):
-    (tmp_path / "model.onnx").write_bytes(b"model")
-    (tmp_path / "tokenizer.json").write_text("{}", encoding="utf-8")
+    _seed_fake_model(tmp_path)
     session_calls = []
 
     class FakeSession:
@@ -1577,8 +1584,7 @@ def test_local_embedding_forwards_registry_provider_configuration(monkeypatch, t
 def test_legacy_local_embedding_disable_fallback_requires_exact_provider_chain(
     monkeypatch, tmp_path
 ):
-    (tmp_path / "model.onnx").write_bytes(b"model")
-    (tmp_path / "tokenizer.json").write_text("{}", encoding="utf-8")
+    _seed_fake_model(tmp_path)
     session_options = []
 
     class FakeSessionOptions:
@@ -1815,8 +1821,7 @@ def test_runtime_profile_fallback_bindings_exclude_unhealthy_incompatible_and_sm
 
 
 def test_local_embedding_consumes_runtime_profile_provider_chain(monkeypatch, tmp_path):
-    (tmp_path / "model.onnx").write_bytes(b"model")
-    (tmp_path / "tokenizer.json").write_text("{}", encoding="utf-8")
+    _seed_fake_model(tmp_path)
     session_calls = []
 
     class FakeSession:
@@ -1884,8 +1889,7 @@ def test_local_embedding_consumes_runtime_profile_provider_chain(monkeypatch, tm
 
 
 def test_local_embedding_builds_provider_chain_from_fallback_bindings(monkeypatch, tmp_path):
-    (tmp_path / "model.onnx").write_bytes(b"model")
-    (tmp_path / "tokenizer.json").write_text("{}", encoding="utf-8")
+    _seed_fake_model(tmp_path)
     session_calls = []
 
     class FakeSession:
@@ -1950,8 +1954,7 @@ def test_local_embedding_builds_provider_chain_from_fallback_bindings(monkeypatc
 
 
 def test_local_embedding_creates_one_session_per_manifest_binding(monkeypatch, tmp_path):
-    (tmp_path / "model.onnx").write_bytes(b"model")
-    (tmp_path / "tokenizer.json").write_text("{}", encoding="utf-8")
+    _seed_fake_model(tmp_path)
     session_calls = []
 
     class FakeSession:
@@ -2018,8 +2021,7 @@ def test_local_embedding_creates_one_session_per_manifest_binding(monkeypatch, t
 def test_local_embedding_load_is_transactional_and_retry_does_not_duplicate_sessions(
     monkeypatch, tmp_path
 ):
-    (tmp_path / "model.onnx").write_bytes(b"model")
-    (tmp_path / "tokenizer.json").write_text("{}", encoding="utf-8")
+    _seed_fake_model(tmp_path)
     session_calls = []
     tokenizer_calls = []
 
@@ -2089,8 +2091,7 @@ def test_local_embedding_load_is_transactional_and_retry_does_not_duplicate_sess
 def test_local_embedding_retries_next_session_and_promotes_successful_binding(
     monkeypatch, tmp_path
 ):
-    (tmp_path / "model.onnx").write_bytes(b"model")
-    (tmp_path / "tokenizer.json").write_text("{}", encoding="utf-8")
+    _seed_fake_model(tmp_path)
     run_order = []
 
     class FakeSession:
@@ -2156,8 +2157,7 @@ def test_local_embedding_retries_next_session_and_promotes_successful_binding(
 
 
 def test_local_embedding_ignores_non_manifest_provider_chain(monkeypatch, tmp_path):
-    (tmp_path / "model.onnx").write_bytes(b"model")
-    (tmp_path / "tokenizer.json").write_text("{}", encoding="utf-8")
+    _seed_fake_model(tmp_path)
     session_calls = []
 
     class FakeSession:
@@ -2205,8 +2205,7 @@ def test_local_embedding_ignores_non_manifest_provider_chain(monkeypatch, tmp_pa
 
 
 def test_local_embedding_directml_load_uses_supported_session_options(monkeypatch, tmp_path):
-    (tmp_path / "model.onnx").write_bytes(b"model")
-    (tmp_path / "tokenizer.json").write_text("{}", encoding="utf-8")
+    _seed_fake_model(tmp_path)
     session_options = []
     session_calls = []
 
