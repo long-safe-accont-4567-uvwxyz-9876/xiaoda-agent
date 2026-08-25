@@ -65,3 +65,26 @@ journal 观察：四检索通道全跑但 kg 通道 ~7.8s 偏慢（延迟主源�
 - **[中·有意]** server.py 补回启动时 .env→凭证存储同步（修 915023d6 误删的真病）；语义须知：每次启动以 .env 覆盖凭证层，仅在 WebUI 轮换过凭证未回写 .env 的 key 会被覆盖
 - **[中·修复但零测试]** insight.py create_memory 迁移（旧代码传不存在参数必然 500，属修复）；建议补一条 API 用例
 - 安全面无松动：auth/metrics/X-Confirm/SSRF 全部原样，纯 isort 化
+
+## 七、扩围第三轮（Rust POC + 协议对抗 + DB/安全活体）
+
+### Rust hybrid POC —— 前提被推翻的关键发现
+
+**`.env` 已设 `RUST_HYBRID_ENABLED=true`（05:13），POC 正在 2437 节点生产库上实际服役**（>MIN_NODES=500 门控），推翻此前所有轮次的"默认未启用"纸面前提。
+
+质量实测：lib.rs 零 unsafe、无跨 FFI panic 路径、契约门（v2 版本+符号表双校验）有效、20 项等价测试全绿、纯计算子进程实测开关两侧输出一致（含坏 JSON/负 IDF/剪枝/空输入）、.so 非陈旧产物。
+
+放行前置清单：①补 recall() 全链路开关 A/B 终榜等价测试（最大缺口，现有仅单通道对比）；②键序依赖（Rust HashMap 序 vs Python dict 序）目前靠下游 `(-score,id)` 排序兜底，无回归钉；③重复种子语义怪点（已知种子后者覆盖前者，与注释"合并累积"不符）；④二进制新鲜度自证（编译期嵌 git hash）；⑤ImportError 兜底分支与 env_flag 白名单漂移（只认 "1"）。
+
+### WS 协议对抗活体（6/6 实质通过）
+
+重放同 msg_id → `DUPLICATE_IN_FLIGHT` 拦截 ✓；畸形 JSON 不炸连接 ✓；未知类型静默 ✓；abort 中止生效（error 帧替代 final，任务真取消）✓；幽灵 abort 不炸 ✓；中止后新消息正常走完 ✓。
+注意点：服务端有**应用层心跳**（JSON ping/pong，~40s 超时踢线），自研客户端必须应答；abort 后以 error 帧而非 final 收束是当前契约。
+
+### 生产 DB 活体体检
+
+agent.db 与 agent_vec.db 双库 `integrity_check=ok`、WAL 模式、103/21 张表；`migration_state` 显示 **v32 已落生产**（P0-1/P0-2 schema 生效中）；episodic_memories=2437、conversation_logs=2546。
+
+### 安全控制活体抽测
+
+X-Confirm 守卫接口无确认头一律 HTTP 400 强制拒绝 ✓；/metrics 无 token 401 ✓；错误密码 401 且正确密码立即可登录（无误锁）✓。
