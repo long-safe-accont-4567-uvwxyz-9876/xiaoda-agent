@@ -11,19 +11,25 @@ from typing import Any
 
 from loguru import logger
 
-from config import TTS_ASYNC_MODE, build_system_prompt, get_agent_display_name
-from emotion.emotion_simple import detect_emotion
-from emotion.emotion_enum import CN_TO_EN, EMOTION_TAG_GUIDE, VALID_EMOTION_TAGS
-from utils.text_utils import humanize, strip_dsml, strip_reasoning
-from core.degradation_strategy import get_degradation_strategy
-from core.event_bus import event_bus, AgentEvent, AgentEventType, gen_task_id
-from core.cancel_token import CancelToken, CancellationError
+from agent_core._shared import (
+    PARALLEL_WALL_TIMEOUT_S,
+    SUB_AGENT_DISPATCH_TIMEOUT_S,
+    TIRED_MSG,
+    ProcessResult,
+    RequestContext,
+    _current_request_ctx,
+    is_degraded_reply,
+)
 
 # TTS 时机控制 v2：统一触发决策（避免子 agent 路径漏守卫导致 voice_mode 开启后"失控"）
 from agent_core.message_processor import _decide_tts_trigger
-
-from agent_core._shared import (PARALLEL_WALL_TIMEOUT_S, ProcessResult, SUB_AGENT_DISPATCH_TIMEOUT_S,
-                               TIRED_MSG, _current_request_ctx, RequestContext, is_degraded_reply)
+from config import TTS_ASYNC_MODE, build_system_prompt, get_agent_display_name
+from core.cancel_token import CancellationError, CancelToken
+from core.degradation_strategy import get_degradation_strategy
+from core.event_bus import AgentEvent, AgentEventType, event_bus, gen_task_id
+from emotion.emotion_enum import CN_TO_EN, EMOTION_TAG_GUIDE, VALID_EMOTION_TAGS
+from emotion.emotion_simple import detect_emotion
+from utils.text_utils import humanize, strip_dsml, strip_reasoning
 
 
 # ── 子 Agent @ 对话模式专用：情绪标签规则（注入 system prompt）──────────────
@@ -682,8 +688,14 @@ class SubAgentManagerMixin:
         return None
 
     async def _dispatch_and_record(self, name: str, task: str, context: Any,
-                                   _ctx: Any, agent: Any) -> tuple[str | None, float]:
-        """dispatch 子代理 + 事件 emit + BeliefRouter 反馈；失败重新抛出。"""
+                                   _ctx: Any, agent: Any,
+                                   timeout_s: float | None = SUB_AGENT_DISPATCH_TIMEOUT_S
+                                   ) -> tuple[str | None, float]:
+        """dispatch 子代理 + 事件 emit + BeliefRouter 反馈；失败重新抛出。
+
+        timeout_s=None 表示不设外层超时（后台委托模式：长任务跑到底，
+        不再"超时即取消丢工作"；卡死防护由 dispatcher 内部 LLM 超时承担）。
+        """
         import time as _time_mod
         _t0 = _time_mod.time()
         task_id = gen_task_id(name)
@@ -693,7 +705,7 @@ class SubAgentManagerMixin:
         try:
             result = await asyncio.wait_for(self.dispatcher.dispatch(
                 name, task, context=context,
-                status_callback=_ctx.status_callback if _ctx else None, address_term=self.context.current_address_term), timeout=SUB_AGENT_DISPATCH_TIMEOUT_S)
+                status_callback=_ctx.status_callback if _ctx else None, address_term=self.context.current_address_term), timeout=timeout_s)
             _duration = _time_mod.time() - _t0
             await self._notify_sub_outcome(
                 name, AgentEventType.SUB_COMPLETED, task_id,
@@ -706,6 +718,64 @@ class SubAgentManagerMixin:
                 {"error": str(dispatch_err)[:200]}, False)
             raise
         return result, _duration
+
+    async def run_background_delegation(self, job: Any) -> None:
+        """后台委托执行体（delegate_task background=true 的落地端）。
+
+        与同步路径的差异：
+        - 无 wait_for 外层超时——长任务跑到底，修复"超时即取消丢工作"；
+        - 完成/失败后经 core.async_delegation.deliver 按来源通道主动投递。
+        contextvar 随 create_task 捕获进本协程，belief 反馈 / 黑板缓存 /
+        status_callback 语义与当轮委托完全一致。
+        """
+        from core import async_delegation as ad
+
+        agent = self.dispatcher.get_agent(job.agent)
+        if agent is None:
+            ad.mark_done(job.task_id, ok=False,
+                               preview=f"unknown agent {job.agent}")
+            await ad.deliver(job, f"找不到名为 {job.agent} 的子代理", failed=True)
+            return
+
+        _ctx = _current_request_ctx.get()
+        context = self._build_sub_agent_context(task_hint=job.task_text)
+        try:
+            result, _duration = await self._dispatch_and_record(
+                job.agent, job.task_text, context, _ctx, agent, timeout_s=None)
+        except Exception as e:  # noqa: BLE001 —— 失败也要主动告知用户
+            logger.warning("async_delegation.dispatch_failed agent={} error={}",
+                           job.agent, str(e)[:150])
+            ad.mark_done(job.task_id, ok=False, preview=str(e)[:120])
+            await ad.deliver(job, f"执行出错了：{str(e)[:300]}", failed=True)
+            return
+
+        if not (result and result.strip()):
+            ad.mark_done(job.task_id, ok=False, preview="empty reply")
+            await ad.deliver(job, "子代理已执行，但没有返回有效结果。", failed=True)
+            return
+
+        try:
+            from core.agent_work_record import get_work_recorder
+            get_work_recorder().record(
+                job.agent, task_type=job.mode, success=True, duration=_duration)
+        except Exception as e:  # noqa: BLE001
+            logger.debug("sub_agent.work_record_failed error={}", str(e))
+
+        result = await self._verify_result(
+            job.agent, job.task_text, result, job.mode, job.verifier)
+
+        # 黑板缓存：与同步路径同键规则，供后续委托复用（黑板为 None 时内部跳过）
+        try:
+            bb = getattr(getattr(self, "context", None), "shared_blackboard", None)
+            key = self._bb_task_key(
+                job.agent, job.task_text,
+                user_id=_ctx.user_id if _ctx else "")
+            await self._write_blackboard_cache(bb, key, result, job.agent)
+        except Exception as e:  # noqa: BLE001
+            logger.debug("async_delegation.blackboard_write_failed error={}", str(e)[:120])
+
+        ad.mark_done(job.task_id, ok=True, preview=result[:120])
+        await ad.deliver(job, result)
 
     async def _verify_result(self, name: str, task: str, result: str,
                              mode: str, verifier: str) -> str:

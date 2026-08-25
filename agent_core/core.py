@@ -416,6 +416,7 @@ class AgentCore(MessageProcessorMixin, ToolExecutorMixin, SubAgentManagerMixin):
         ctx = RequestContext(
             session_id=session_id,
             user_openid=user_openid,
+            channel=source,
             user_id=user_id,
             user_input=user_input,
             status_callback=status_callback,
@@ -526,6 +527,7 @@ class AgentCore(MessageProcessorMixin, ToolExecutorMixin, SubAgentManagerMixin):
             ctx = RequestContext(
                 session_id=session_id,
                 user_id=context_id,
+                channel="ws",
                 user_input=user_input,
                 status_callback=status_callback,
                 is_master=principal.is_owner,

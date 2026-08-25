@@ -172,6 +172,7 @@ class RequestContext:
     """请求级临时状态，每次 process() 调用创建一个新实例，避免并发请求时状态互相污染。"""
     session_id: str = ""
     user_openid: str = ""
+    channel: str = ""  # 来源通道快照（qq/wechat/ws/cli）：后台委托完成后按此路由主动投递
     user_id: str = ""
     user_input: str = ""
     status_callback: Any = None

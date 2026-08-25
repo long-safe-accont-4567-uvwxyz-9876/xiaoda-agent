@@ -881,16 +881,76 @@ class AgentCoreBootstrapper:
             for name, cfg in core._agent_route_configs.items()
             if cfg.get("route_description"))
 
-        async def delegate_task(agent: str, task: str,
-                                 mode: str = "single", verifier: str = "") -> Any:
+        async def delegate_task(agent: str, task: str = "",
+                                 mode: str = "single", verifier: str = "",
+                                 background: bool = False) -> Any:
             """将任务委托给指定子代理完成并返回结果。
 
             mode=generate_verify 时，verifier 指定的子代理会独立审查结果。
+            background=true 时立即返回受理回执，子代理脱离当轮在后台执行，
+            完成后按用户来源渠道（QQ/微信/WebUI）主动推送结果——适合长任务
+            （搜索汇总、代码分析、多代理协作）。默认 false 同步等待结果。
             """
             from tool_engine.tool_executor import ToolResult
-            reply = await core.delegate_to_agent(
-                agent.strip().lower(), task, mode=mode, verifier=verifier)
-            return ToolResult.ok(reply)
+            name = agent.strip().lower()
+            # 健壮性：LLM 偶尔传显示名（如"小莉"）而非标识名——别名归一
+            route_cfgs = core._agent_route_configs or {}
+            if name not in route_cfgs:
+                for key, cfg in route_cfgs.items():
+                    if cfg.get("display_name", "").lower() == name:
+                        name = key
+                        break
+            display = (route_cfgs.get(name, {}) or {}).get("display_name", name)
+
+            # 健壮性：LLM 反复漏传 task（实测 agnes-flash 高发）——回退到
+            # 用户原话。委托语义下"当前请求"就是任务本身，等价且不丢工作。
+            if not task.strip():
+                from agent_core._shared import _current_request_ctx as _crc
+                _ctx0 = _crc.get()
+                task = (getattr(_ctx0, "user_input", "") or "").strip()
+            if not task.strip():
+                return ToolResult.fail(
+                    f"调用 delegate_task 缺少 task 参数，请补全要委托给{display}的任务内容")
+
+            if not background:
+                reply = await core.delegate_to_agent(name, task, mode=mode, verifier=verifier)
+                return ToolResult.ok(reply)
+
+            # ---- 后台模式：登记 → spawn → 立即回执 --------------------
+            import uuid as _uuid
+
+            from agent_core._shared import _current_request_ctx
+            from core import async_delegation as ad
+
+            ctx = _current_request_ctx.get()
+            job = ad.BackgroundDelegation(
+                task_id=f"bg-{name}-{_uuid.uuid4().hex[:8]}",
+                agent=name,
+                display_name=display,
+                mode=mode,
+                verifier=verifier,
+                task_text=task[:500],
+                channel=getattr(ctx, "channel", "") if ctx else "",
+                session_id=getattr(ctx, "session_id", "") if ctx else "",
+                user_openid=getattr(ctx, "user_openid", "") if ctx else "",
+                user_id=getattr(ctx, "user_id", "") if ctx else "",
+            )
+            ad.register(job)
+
+            async def _runner() -> None:
+                try:
+                    await core.run_background_delegation(job)
+                except Exception as e:  # noqa: BLE001 —— 兜底：执行体自身异常也要告知
+                    logger.exception("async_delegation.runner_crashed task={}", job.task_id)
+                    ad.mark_done(job.task_id, ok=False, preview=str(e)[:120])
+                    await ad.deliver(job, f"后台任务内部错误：{str(e)[:300]}", failed=True)
+
+            _spawn(_runner())
+
+            return ToolResult.ok(
+                f"已将任务交给{display}在后台处理（编号 {job.task_id}），"
+                "完成后会主动把结果推送给用户。请立即向用户转达任务已受理，"
+                "不要等待结果。")
 
         register_tool_direct(
             name="delegate_task",
@@ -908,6 +968,9 @@ class AgentCoreBootstrapper:
                 "失败自动降级到下一个，适用于高可靠性任务）；"
                 "mode=debate（辩论模式，agent 填两个辩论方，verifier 填综合者，"
                 "正反方独立论证后综合，适用于分析/决策任务）。"
+                "【background 后台模式】background=true 适合耗时任务（搜索汇总/"
+                "代码分析/多代理协作）：立即返回受理回执，完成后按用户来源渠道"
+                "主动推送结果；闲聊与短问答禁止用后台模式。"
                 "【严格规则】以下情况绝对不要委托，必须自己回答："
                 "1. 日常闲聊、问候、寒暄（如'你好'、'在吗'、'今天怎么样'）；"
                 "2. 表情包、情感表达、陪伴对话；"
@@ -932,6 +995,9 @@ class AgentCoreBootstrapper:
                                  "description": "验证子代理名（仅 mode=generate_verify 时使用）",
                                  "enum": list(core._agent_route_configs.keys()),
                                  "default": ""},
+                    "background": {"type": "boolean",
+                                   "description": "true=后台执行：立即返回受理回执，完成后按用户来源渠道主动推送结果（适合长任务）；false=同步等待结果（默认）",
+                                   "default": False},
                 },
                 "required": ["agent", "task"],
             },
