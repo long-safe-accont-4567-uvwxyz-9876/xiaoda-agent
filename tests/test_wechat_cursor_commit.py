@@ -228,7 +228,7 @@ async def test_batch_with_failed_message_still_advances_cursor_after_dead_letter
     不因单条失败而卡住整批游标。"""
     bot = _make_adapter()
     monkeypatch.setattr(wba, "CREDENTIALS_PATH", tmp_path / "wechat_credentials.json")
-    monkeypatch.setattr(bot, "_save_cursor", lambda: None)  # 落盘逻辑单独测过
+    monkeypatch.setattr(bot, "_save_cursor_sync", lambda: None)  # 落盘逻辑单独测过;轮询路径已改走 _save_cursor_async
 
     client = _FakeClient([
         {"cursor": "CUR-F", "msgs": [_msg("bad"), _msg("good")]},

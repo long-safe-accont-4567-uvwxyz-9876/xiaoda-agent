@@ -379,7 +379,7 @@ class WeChatBotAdapter(ChannelAdapterBase):
             logger.warning("wechat_bot.cursor_load_failed error={}", str(e)[:120])
         return ""
 
-    def _save_cursor(self) -> None:
+    def _save_cursor_sync(self) -> None:
         if not self._cursor:
             return
         # R3-Major#1：写入前校验 token 归属——若凭证文件已被重新扫码更新为
@@ -407,6 +407,13 @@ class WeChatBotAdapter(ChannelAdapterBase):
                 tmp.replace(path)
         except Exception as e:
             logger.warning("wechat_bot.cursor_save_failed error={}", str(e)[:120])
+
+    async def _save_cursor_async(self) -> None:
+        """游标落盘下放线程池：atomic_write 内含 fsync，USB 盘可能卡数十秒，
+        同步执行会冻结事件循环（2026-08-25 实测 lag=36s，栈定位于
+        atomic_write→os.fsync）。轮询循环是异步上下文，直接 await 即可。"""
+        await asyncio.to_thread(self._save_cursor_sync)
+
 
     def _client_owns_credentials(self) -> bool:
         """校验凭证文件中的 bot_token 与当前 client 的 token 是否一致。
@@ -819,7 +826,7 @@ class WeChatBotAdapter(ChannelAdapterBase):
             # T1：仅当本批次无消息、或批次内全部消息已终结时才会走到这里。
             if next_cursor:
                 self._cursor = next_cursor
-                self._save_cursor()
+                await self._save_cursor_async()
 
             if not msgs:
                 # 无消息时短暂 sleep，避免紧密循环

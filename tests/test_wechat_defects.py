@@ -340,7 +340,7 @@ def test_save_cursor_skips_when_token_changed(tmp_path, monkeypatch):
     bot._ilink_client = _FakeILinkClient(bot_token="T1")
     bot._cursor = "OLD-CURSOR-FROM-T1-SESSION"
 
-    bot._save_cursor()
+    bot._save_cursor_sync()
     assert not cursor_path.exists(), "token 已被更新时旧 poller 不得回写旧游标"
 
 
@@ -360,7 +360,7 @@ def test_save_cursor_writes_when_token_matches(tmp_path, monkeypatch):
     bot._ilink_client = _FakeILinkClient(bot_token="T1")
     bot._cursor = "CURSOR-T1"
 
-    bot._save_cursor()
+    bot._save_cursor_sync()
     assert cursor_path.exists(), "token 归属一致时应正常持久化游标"
 
 
