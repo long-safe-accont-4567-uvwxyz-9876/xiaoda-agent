@@ -279,6 +279,7 @@ async def _run_retrieval(memory: Any, query: str, top_k: int,
         k=top_k,
         scope=scope,
         conv_user_id=scope.user_id,
+        record_access=False,  # 评测端点只读：不污染真实记忆的 FSRS/touch 生命周期
     )
 
 
