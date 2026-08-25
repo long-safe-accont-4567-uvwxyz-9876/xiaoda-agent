@@ -112,3 +112,23 @@ X-Confirm 守卫接口无确认头一律 HTTP 400 强制拒绝 ✓；/metrics �
 ### 后台子系统 journal 巡检（09:54 起 ~2h）
 
 mail 轮询 38 次、问候/蒸馏/梦境/nudge 有活性证据（14 hits）；53 条 WARNING 集中于已知慢检索通道（kg/spreading/child）与 stage_slow，另有 2 次 heartbeat_timeout 系本轮测试客户端未应答心跳所致，非产品缺陷。
+
+## 九、扩围第五轮（鉴权全扫 + 崩溃演练 + 备份审计 + 子系统细查）
+
+### 未鉴权路由全量扫描（OpenAPI 292 操作实测）
+
+282 个操作无 token 一律 401，**零漏网**；8 个 200 全属设计内公开面（login/first-run/version/ping/brand/公共壁纸/system-os/wechat-status）。甄别结论：
+- `/auth/recover-question` 未鉴权可见密保问题文本=设计取舍（注释声明与 login 同级）；当前未配置问题故零泄露；`/auth/recover` 答案尝试有 `_check_recover_rate_limit`+失败记录，实测连错 3 次 400 拒绝 ✓
+- [低] `openapi.json` 无鉴权可读（292 接口形状全暴露）+ `/system/os`、`/wechat/status` pre-auth 指纹——信息面收敛可议
+
+### SIGKILL 崩溃恢复演练 ✅
+
+kill -9 主进程 → systemd `Restart=always` 自动拉起 → **t+9s 新 PID active、t+18s startup.health all_ok total=11** → 双库 integrity ok（WAL 干净恢复）→ 聊天链路 14.3s 内正常出回复。韧性证据完整。
+
+### 备份就绪审计 —— **[中·新发现] 生产 DB 零自动备份**
+
+agent.db(210MB)+agent_vec.db(73MB) 位于消费级 U 盘且**无任何定时备份**（无 cron/timer/script）；唯一 .bak 为 08-16 手工件（9 天前），auto-update.sh 的 backup 仅覆盖代码目录。建议：systemd timer 每日 `sqlite3 .backup` 至异盘+保留 N 份轮转。
+
+### 微信/邮件子系统细查
+
+ilink 长轮询循环正常（getupdates 18s 周期，0 错误）；mail.run_agently 38 次 0 错误。
