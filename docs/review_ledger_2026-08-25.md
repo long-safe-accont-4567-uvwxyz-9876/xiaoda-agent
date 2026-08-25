@@ -255,3 +255,14 @@ knowledge_relations/schema_version 与生产逐项一致（2442/2560/2499/v32）
 下一步建议（独立工作包）：①IO 轮次合并审计——alive_nodes 全量读改 TTL 快照、
 keyset 分页批量化；②embed IPC 常驻协议替代 sudo probe；③实体抽取结果与
 intent_decompose 共享。原始采样归档 docs/perf_pyspy_20260825.speedscope。
+
+### 专项第二轮实测：get_alive_nodes TTL 快照生效（`83cf3d3c`/`aeb99bc7`）
+
+实现于 ConceptDB：全量读取走 60s TTL 快照+浅拷贝防污染；结构性写入即时失效、
+touch 批量统计容忍 ≤60s 陈旧（与图边快照同取舍）；分页路径不缓存。
+并行会话收尾了停笔时的半成品测试（engine fixture 修正），28 passed。
+
+**journald DEBUG 实证**：生产冷读 641ms（离线全冷页 1728ms）、TTL 内命中
+零回库、过期后热页重读 280ms。**channel_spreading 实测 avg 3635ms →
+226~460ms（约 -90%）**，记忆检索最慢通道消除。route 超时降级与 kg 免费模型
+实体抽取（4.5s，含失败被吞）仍在备案。
