@@ -30,11 +30,22 @@ push 前必须全集绿 + critical 328 绿。
 | 项 | 计划时 | 现状 | 判定 |
 |---|---|---|---|
 | P1 web/routers/setup.py | 1630 | 1322 | 🔶 探针库已拆（`774608b7`），按向导阶段再切仍可行 |
-| P2 prompt_builder.py | 1640 | 1669 | ❌ 唯一未动且微涨；Stable/Dynamic/Scene 接缝仍清晰 |
+| ~~P2 prompt_builder.py~~ | 1640 | — | ✅ 包化四子模块+门面（`ed22cc88`），契约测试守护 |
 | P3 memory/_retrieval_engine.py | 2153 | — | ✅ retrieval 包六模块（`eba85d81`），pipeline.py 1069 |
-| P4 qq_bot_adapter | 1819 | **2173** | 🔶 模板方法已沉基类，但文件反涨 354 行——止血未生效 |
+| P4 qq_bot_adapter | 1819 | **2173** | 🔶 模板方法已沉基类，但文件反涨 354 行——止血棘轮已就位 |
 | P4 wechat_bot_adapter | 1494 | 1582 | 🔶 同上 |
-| P5 vector_store / ws_hub / text_utils | 1677/1228/1198 | 1618/**1591**/1151 | ws_hub 涨 363 行，P5 增幅最大者 |
+| ~~P5 ws_hub~~ | 1228 | — | ✅ 拆出 ws_terminal 534 行（`050bebd5`），hub 本体降至 1118 |
+| P5 vector_store / text_utils | 1677/1198 | 1618/1151 | 维持触碰随治理 |
+
+**08-25 晚追加拆分**：web/ws_hub.py(1591) → hub(1118)+ws_terminal(534)，
+终端状态单一事实源内聚子模块，manager 反向依赖延迟导入零环；
+兼容面(hub._X 引用面 tests 64 处)re-export 保持。
+
+**测试侧肥大评估结论（§二 local_ai 四文件）**：**不合并**。域划分清晰
+(device_registry=provider探测 / provider_onboarding=接入凭证 /
+memory_integration=嵌入向量集成 / instances=运行时生命周期)，
+跨文件重复仅假模型目录 9 处且集中单文件；合并会造出 3000+ 行真巨型文件。
+轻量收尾：device_registry 内 9 处两行式提为 `_seed_fake_model` helper（`f7eb92bc`）。
 
 **新入榜（计划外，≥1000 行）**：web/server.py 1397、agent_context.py 1345、
 db/legacy_migrations.py 1289（假阳性，append-only 注册表）、core/bootstrap.py 1171、
@@ -93,8 +104,8 @@ v1 写路径冻结时点 → 存量数据迁移 → v1 路由下线，避免双�
 
 - **P0**（在途会话收尾门禁）：全集 5716 收集基线绿 + critical 328 绿 + F401 删除未破
   re-export 契约 + broad_except 棘轮复核（新增 env_flag 统一可能小幅波动计数）
-- **P1**：prompt_builder.py 拆分提级（拆分计划中唯一未动项，接缝清晰）
-- **P1**：qq_bot_adapter 止血规约——新 PR 进适配器本体前先过"该进基类还是子模块"判断
+- **P1**：~~prompt_builder.py 拆分提级~~ ✅ `ed22cc88`；~~ws_hub 拆分评估~~ ✅ `050bebd5`（全集 5717 全绿）
+- ~~**P1**：qq_bot_adapter 止血规约~~ ✅ AST 棘轮 `beaf6fd4` 入 critical
 - ~~**P2**：core/degradation.py + 供养测试删除；DEPRECATED_MODULES.md 刷新；CLAUDE.md
   用例数修正~~ ✅ 本轮已偿（见 §八）
 - ~~**P2**：workflow v1/v2 双轨收敛 checklist~~ ✅ 已产出
