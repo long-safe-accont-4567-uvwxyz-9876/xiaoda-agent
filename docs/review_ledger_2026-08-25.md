@@ -43,3 +43,25 @@ perf/rust-hybrid-poc 领先 origin 27 提交的多轮审查收束记录。
 
 - 双工作流并行时，**未跟踪文件不设防**：a900a97c 的守卫测试在被 git add 前被对方覆盖，导致提交信息与内容失实。教训：提交前 `git diff --cached` 逐文件过目，未跟踪新文件的归属要先约定
 - 机械 lint 大批次的风险面 = F841 删除副作用 / F811 删错层 / E712 numpy 语义 / import 重排破坏 config 导入链；本次经 AST 对比法全部排除，该验证套路可复用
+
+## 六、扩围第二轮（WIP 活体审查 + 真实聊天 E2E）
+
+对象：并行会话 428 个未提交文件（实质改动 152 文件 966+/466-，已随 09:54 重启跑在生产）。
+
+### 活体 E2E（真实 WS 聊天，非探针）
+
+两条真实消息走完整主链路：人设语气回复 ✓、情绪标签落在**新 17 枚举**（greeting/love）且表情包目录映射正确 ✓、记忆检索诚实答"没有记录"无幻觉 ✓、单帧 final 模式与"结构化流默认关闭"灰度结论互证 ✓。
+journal 观察：四检索通道全跑但 kg 通道 ~7.8s 偏慢（延迟主源）；emotion_llm 超时兜底按设计；`label_parse_failed fallback_to_alias` 归一链生效；`ws.close_failed` 双关闭小瑕疵[低]。
+
+### WIP 审查裁决
+
+| 域 | 裁决 | 关键发现 |
+|---|---|---|
+| core/memory/db/agent_core | **自洽可提交态** | 93 测试绿；字节冻结守卫成立；config 零纪律违规；唯一实质变更是 override 双槽重构（窄边界行为差异已识别） |
+| web/security/emotion/tools/gateway | **自洽可提交态，两个提交时注意点** | 见下 |
+
+- **[高·时点性]** `universe/engine.ts` 审查窗口内仍活跃编辑（09:52→10:15），dist 落后 src——此刻提交会入库半改源码+过期 dist；vite 构建不做类型检查，未定义标识符能过构建只在运行时炸。须等其收敛后重新 build 再提交
+- **[低→必炸]** web/dist 新旧资产分裂（旧删未暂存/新未跟踪）：只 `git add -u` 会产出坏 dist，须全量 add+重新构建
+- **[中·有意]** server.py 补回启动时 .env→凭证存储同步（修 915023d6 误删的真病）；语义须知：每次启动以 .env 覆盖凭证层，仅在 WebUI 轮换过凭证未回写 .env 的 key 会被覆盖
+- **[中·修复但零测试]** insight.py create_memory 迁移（旧代码传不存在参数必然 500，属修复）；建议补一条 API 用例
+- 安全面无松动：auth/metrics/X-Confirm/SSRF 全部原样，纯 isort 化
