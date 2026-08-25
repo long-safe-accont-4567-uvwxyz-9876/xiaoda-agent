@@ -1,0 +1,10 @@
+[Unit]
+Description=每日 04:30 触发 nahida 生产库备份
+
+[Timer]
+OnCalendar=*-*-* 04:30:00
+Persistent=true
+RandomizedDelaySec=300
+
+[Install]
+WantedBy=timers.target
