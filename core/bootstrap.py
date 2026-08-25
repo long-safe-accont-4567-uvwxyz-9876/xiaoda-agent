@@ -947,10 +947,11 @@ class AgentCoreBootstrapper:
 
             _spawn(_runner())
 
+            # 中性受理语：不搞机械回执，模型自然带过即可；结果完成后
+            # 主代理会以自己的口吻主动转述（async_delegation.compose_and_deliver）
             return ToolResult.ok(
-                f"已将任务交给{display}在后台处理（编号 {job.task_id}），"
-                "完成后会主动把结果推送给用户。请立即向用户转达任务已受理，"
-                "不要等待结果。")
+                f"任务已转交{display}在后台执行。请自然继续当前回复，"
+                "无需强调受理细节；完成后你会收到结果，届时以自己的口吻转述给用户。")
 
         register_tool_direct(
             name="delegate_task",
@@ -1006,6 +1007,92 @@ class AgentCoreBootstrapper:
         )
 
         self._register_sticker_tool()
+        self._register_sub_agent_control_tool()
+
+    def _register_sub_agent_control_tool(self) -> None:
+        """注册 sub_agent_control：主代理查看后台委托进度 / 终止 / 插话。"""
+        from tool_engine.tool_registry import ToolPermission, register_tool_direct
+
+        async def sub_agent_control(action: str, target: str = "",
+                                    message: str = "") -> Any:
+            from core import async_delegation as ad
+            from tool_engine.tool_executor import ToolResult
+            action = action.strip().lower()
+
+            if action == "status":
+                jobs = ad.snapshot()
+                if not jobs:
+                    return ToolResult.ok("当前没有任何后台委托任务。")
+                lines = []
+                for j in jobs[:8]:
+                    lines.append(
+                        f"· {j['display_name']}（{j['task_id']}）[{j['status']}] "
+                        f"已运行 {j['elapsed_s']}s"
+                        + (f" · 进度：{j['last_progress']}" if j["last_progress"] else "")
+                        + (f" · 待处理插话 {j['pending_interjections']} 条"
+                           if j["pending_interjections"] else "")
+                        + f"\n  任务：{j['result_preview'] or '—'}")
+                return ToolResult.ok("后台委托任务一览：\n" + "\n".join(lines))
+
+            job = ad.find_running(agent=target.strip().lower() or None,
+                                  task_id_prefix=target.strip() or None)
+            if job is None and target.strip():
+                # 容错：允许用显示名匹配
+                for j in ad._JOBS.values():
+                    if j.status == "running" and (
+                            j.display_name.lower() == target.strip().lower()):
+                        job = j
+                        break
+
+            if action == "abort":
+                if job is None:
+                    return ToolResult.fail("没有找到运行中的对应后台任务。")
+                task = job.asyncio_task
+                if task is not None and not task.done():
+                    task.cancel()
+                    return ToolResult.ok(
+                        f"已终止{job.display_name}的后台任务，并会向用户确认终止。")
+                return ToolResult.fail("该任务已经结束了。")
+
+            if action == "interject":
+                if job is None:
+                    return ToolResult.fail(
+                        "没有找到运行中的对应后台任务，无法插话。")
+                if not message.strip():
+                    return ToolResult.fail("插话内容不能为空。")
+                job.interjections.append(message.strip()[:600])
+                return ToolResult.ok(
+                    f"已把你的补充递交给{job.display_name}，她会在下一轮处理时纳入。")
+
+            return ToolResult.fail(
+                f"未知操作 {action}，可用：status / abort / interject")
+
+        register_tool_direct(
+            name="sub_agent_control",
+            description=(
+                "查看/控制正在后台执行的子代理任务。action=status 查看全部后台任务的进度与状态；"
+                "action=abort 终止某个运行中的任务（target 填子代理名或任务编号）；"
+                "action=interject 向运行中的任务插话补充指示（message 填要说的话），"
+                "子代理会在下一轮处理时纳入。用户问'进度怎么样/停掉它/跟它说…'时使用。"),
+            func=sub_agent_control,
+            parameters={
+                "type": "object",
+                "properties": {
+                    "action": {"type": "string",
+                               "description": "操作类型",
+                               "enum": ["status", "abort", "interject"]},
+                    "target": {"type": "string",
+                               "description": "目标子代理名或任务编号（status 可省略）",
+                               "default": ""},
+                    "message": {"type": "string",
+                                "description": "插话内容（仅 interject 需要）",
+                                "default": ""},
+                },
+                "required": ["action"],
+            },
+            permission=ToolPermission.READ_ONLY,
+            category="fun",
+        )
 
     def _register_sticker_tool(self) -> None:
         """注册 list_stickers 工具，让 LLM 可以查看可用表情包及描述，从而精准选择。"""

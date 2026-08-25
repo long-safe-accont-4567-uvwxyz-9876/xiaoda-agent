@@ -665,7 +665,7 @@ async def process_and_serialize(core: Any, text: str, session_id: str,
                 session_id=session_id,
                 status_callback=status_callback,
                 user_id=os.getenv("MASTER_QQ_OPENID", "webui"),
-            )
+            )  # Web 直达子代理路径当前不涉及后台委托插话，保持默认 None
             data = serialize_result(result)
             # XP 自动加成：子 agent 路径也需触发 XP（与主路径一致）
             # 根因修复：add_chat_xp 内部 json.dump 同步写文件，原直接调用阻塞事件循环。

@@ -3,23 +3,32 @@ from typing import Any
 
 from loguru import logger
 
-from emotion.tts_engine import TTSEngine
-from tool_engine.tool_executor import ToolExecutor
-from tool_engine.tool_repair import ToolCallRepair
+from agent_core.sub_agent import (  # noqa: F401
+    _RESOURCE_PATH_TOOLS,
+    DELEGATE_BLOCKED_TOOLS,
+    SUB_AGENT_EXTRA_TOOLS,
+    SUB_AGENT_MEMORY_TOOL,
+    SUB_AGENT_MESSAGE_TOOL,
+    SUB_AGENT_PROFILE_TOOLS,
+    SubAgent,
+    SubAgentConfig,
+    _is_tool_unsupported_error,
+    _read_env_key,
+    _safe_log_path,
+)
 
 # ── 拆分：tool_call_extractors + sub_agent 抽出（逐字节搬移）──
 # 同名 re-export 保持兼容（契约见 tests/test_dispatcher_split.py）。
 from agent_core.tool_call_extractors import (  # noqa: F401
-    ExtractedToolCall, ToolCallExtractor, StandardExtractor,
-    DsmlExtractor, ResourceBackend,
+    DsmlExtractor,
+    ExtractedToolCall,
+    ResourceBackend,
+    StandardExtractor,
+    ToolCallExtractor,
 )
-from agent_core.sub_agent import (  # noqa: F401
-    SubAgent, SubAgentConfig,
-    DELEGATE_BLOCKED_TOOLS, _RESOURCE_PATH_TOOLS,
-    SUB_AGENT_PROFILE_TOOLS, SUB_AGENT_MEMORY_TOOL,
-    SUB_AGENT_MESSAGE_TOOL, SUB_AGENT_EXTRA_TOOLS,
-    _safe_log_path, _read_env_key, _is_tool_unsupported_error,
-)
+from emotion.tts_engine import TTSEngine
+from tool_engine.tool_executor import ToolExecutor
+from tool_engine.tool_repair import ToolCallRepair
 
 # RouterEngine agent name → task_type 反向映射
 # 用于 classify_task 委托 RouterEngine 后保持返回格式一致（task_type 字符串）
@@ -104,7 +113,7 @@ class AgentDispatcher:
                 except (OSError, RuntimeError):
                     logger.debug("agent_dispatcher.close_sub_agent_error", exc_info=True)
 
-    async def dispatch_single(self, name: str, task: str, context: str = "", status_callback: Any | None=None, address_term: str = "爸爸", extra_system_prompt: str = "") -> str | None:
+    async def dispatch_single(self, name: str, task: str, context: str = "", status_callback: Any | None=None, address_term: str = "爸爸", extra_system_prompt: str = "", interjections: list | None = None) -> str | None:
         """单子代理调度（原 dispatch 方法）。
 
         保留为独立方法以与并行调度（SubAgentManagerMixin.parallel_dispatch）区分；
@@ -124,6 +133,7 @@ class AgentDispatcher:
             status_callback=status_callback,
             address_term=address_term,
             extra_system_prompt=extra_system_prompt,
+            interjections=interjections,
         )
 
     async def _chat_with_scope(self, agent: SubAgent, message: str, **kwargs: Any) -> str:

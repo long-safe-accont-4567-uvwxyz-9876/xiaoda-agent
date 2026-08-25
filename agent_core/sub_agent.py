@@ -15,12 +15,16 @@ import json
 from dataclasses import dataclass, field
 from pathlib import Path
 from types import SimpleNamespace
-from typing import Any, Protocol, runtime_checkable
+from typing import Any
 
 from loguru import logger
 
-from config import get_agent_display_name
 from agent_core._shared import TIRED_MSG, _current_request_ctx
+from agent_core.tool_call_extractors import (
+    DsmlExtractor,
+    StandardExtractor,
+)
+from config import get_agent_display_name
 from core.message import AgentMessage
 from emotion.emoji_config import get_status_msg
 from emotion.tts_engine import TTSEngine
@@ -31,15 +35,7 @@ from tool_engine.tool_registry import to_openai_tools
 from tool_engine.tool_repair import ToolCallRepair
 from utils.credential_pool import CredentialPool
 from utils.llm_cleanup import deduplicate_multi_reply
-from utils.text_utils import has_dsml_tool_calls, humanize, parse_dsml_tool_calls, strip_dsml, strip_reasoning
-
-from agent_core.tool_call_extractors import (
-    ExtractedToolCall,
-    ResourceBackend,
-    StandardExtractor,
-    DsmlExtractor,
-)
-
+from utils.text_utils import humanize, strip_dsml, strip_reasoning
 
 # J-Space Hook: 干预闭环
 try:
@@ -321,7 +317,7 @@ class SubAgent:
             names.add(SUB_AGENT_MEMORY_TOOL)
         return names
 
-    async def chat(self, message: str, context: str = "", status_callback: Any | None=None, address_term: str = "爸爸", extra_system_prompt: str = "", invocation: Any | None = None) -> str:
+    async def chat(self, message: str, context: str = "", status_callback: Any | None=None, address_term: str = "爸爸", extra_system_prompt: str = "", invocation: Any | None = None, interjections: list | None = None) -> str:
         if self._degraded:
             self._router = getattr(self._core, "router", None)
             if self._router is not None:
@@ -378,13 +374,15 @@ class SubAgent:
         response: str | None = None
         success = False
         try:
-            response = await self._chat_loop(messages, tools, invocation=invocation)
+            response = await self._chat_loop(messages, tools, invocation=invocation,
+                                             interjections=interjections)
             success = True
         except (TimeoutError, OSError, RuntimeError, ValueError) as e:
             logger.warning("sub_agent.chat_failed name={} error={}", self.config.name, str(e))
             if tools and _is_tool_unsupported_error(str(e)):
                 try:
-                    response = await self._chat_loop(messages, None, invocation=invocation)
+                    response = await self._chat_loop(messages, None, invocation=invocation,
+                                                     interjections=interjections)
                     success = True
                 except (TimeoutError, OSError, RuntimeError, ValueError) as e2:
                     logger.warning("sub_agent.fallback_failed name={} error={}", self.config.name, str(e2))
@@ -481,7 +479,11 @@ class SubAgent:
 重要：需要调用工具时必须使用上述DSML格式，不要用其他格式。不需要调用工具时直接回复即可。""")
         return "\n".join(lines)
 
-    async def _chat_loop(self, messages: list[dict], tools: list[dict] | None, invocation: Any | None = None) -> str:
+    @staticmethod
+    def _drain_interjections(interjections: list | None) -> list[dict]:
+        return _drain_interjections(interjections)
+
+    async def _chat_loop(self, messages: list[dict], tools: list[dict] | None, invocation: Any | None = None, interjections: list | None = None) -> list | str:
         """主循环：调用 LLM → 提取工具调用 → 执行 → 反馈，最多 max_rounds 轮。"""
         max_rounds = self.config.max_turns if self.config.max_turns is not None else 5
         working = list(messages)
@@ -502,6 +504,11 @@ class SubAgent:
         tools = self._inject_dsml_if_needed(working, tools, is_reasoning, tool_names)
 
         for round_idx in range(max_rounds):
+            # 后台委托：用户/主代理在执行期插入的指示，下一轮 LLM 前生效
+            for note_msg in _drain_interjections(interjections):
+                working.append(note_msg)
+                logger.info("sub_agent.interjected name={}", self.config.name)
+
             if asyncio.get_running_loop().time() > total_deadline:
                 logger.warning("sub_agent.total_timeout", name=self.config.name)
                 return f"{self.config.display_name}处理超时了，请稍后再试吧～"
@@ -1006,3 +1013,15 @@ class SubAgent:
         if not self.config.voice_ref:
             return None
         return await self._tts.synthesize(text, voice=self.config.voice_ref, style=style, emotion=emotion)
+
+
+def _drain_interjections(queue: list | None) -> list[dict]:
+    """出队全部待消费插话并转为 user 消息（后台委托执行期注入用）。"""
+    if not queue:
+        return []
+    out = []
+    while queue:
+        note = str(queue.pop(0))[:600]
+        out.append({"role": "user",
+                    "content": f"【用户插话】{note}\n请把这条补充纳入接下来的处理。"})
+    return out

@@ -344,7 +344,8 @@ class AgentCore(MessageProcessorMixin, ToolExecutorMixin, SubAgentManagerMixin):
                       image_data: list[dict] | None = None,
                       is_master: bool = True,
                       system_context: str = "",
-                      user_context_token_callback: Any = None) -> ProcessResult:
+                      user_context_token_callback: Any = None,
+                      interjections: list | None = None) -> ProcessResult:
         """处理用户输入并返回回复结果 (统一入口, 含身份解析与上下文管理).
 
         Args:
@@ -421,6 +422,7 @@ class AgentCore(MessageProcessorMixin, ToolExecutorMixin, SubAgentManagerMixin):
             user_input=user_input,
             status_callback=status_callback,
             is_master=is_master,
+            interjections=interjections,
         )
         ctx.identity = identity
         ctx.principal = principal
@@ -496,6 +498,7 @@ class AgentCore(MessageProcessorMixin, ToolExecutorMixin, SubAgentManagerMixin):
         session_id: str = "",
         status_callback: Any = None,
         user_id: str = "webui",
+        interjections: list | None = None,
     ) -> ProcessResult:
         """在统一上下文锁内执行 Web 直达子代理完整生命周期。"""
         async with self._context_lock:
@@ -531,6 +534,7 @@ class AgentCore(MessageProcessorMixin, ToolExecutorMixin, SubAgentManagerMixin):
                 user_input=user_input,
                 status_callback=status_callback,
                 is_master=principal.is_owner,
+                interjections=interjections,
             )
             ctx.identity = identity
             ctx.principal = principal

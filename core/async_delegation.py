@@ -1,32 +1,26 @@
-"""后台委托任务：注册表 + 结果主动投递路由。
+"""后台委托任务：注册表 + 主代理口吻转述投递 + 进度/终止支持。
 
-用户模型（2026-08-25 review 提出）：
-    主代理分配任务 → 子代理后台执行 → 完成后把结果主动推送给用户。
-本模块承接"后台"与"主动推送"两环：
+用户模型（2026-08-25 review 迭代定稿）：
+    不需要受理回执与专用推送帧。主代理当轮流式输出正常回复的同时任务在
+    后台跑；子代理完成后把结果交回**主代理本人**，由主代理用自己的口吻
+    转述要点，经普通消息通道主动发给用户——对用户而言就是主 Agent 又
+    说了一句话。
 
-- delegate_task(background=true) 时，主代理当轮立即返回受理回执，
-  子代理脱离当轮在后台执行（run_background_delegation）；
-- 完成后按委托时刻的来源通道（qq/wechat/ws/cli）选择出口，
-  经各通道既有的 send_proactive_message / ws 会话帧主动投递。
+通道出口：
+- qq/wechat → 各适配器 send_proactive_message（普通消息语义）
+- ws/web   → send_to_session 发送标准 final 帧（前端按普通回复渲染）
+- cli/未知 → 日志留痕
 
-平台约束备忘：
-- QQ/微信主动消息依赖 bot 活跃实例（微信还需 context_token），
-  未就绪时投递失败仅记日志——结果保留在注册表（snapshot() 可查），
-  不重试不丢弃告警。
-- ws 通道若用户已断开连接，send_to_session 找不到连接同样静默；
-  前端当前对未知帧类型忽略，delegate_result 帧的消费属后续前端工作。
-
-通道判定：RequestContext.channel 由 AgentCore.process(source=...) 打标
-（qq/wechat/ws/cli），随 contextvar 被 create_task 捕获进后台任务。
+插话：job.interjections 列表由控制工具写入、被 SubAgent._chat_loop 每轮
+消费；未消费完的剩余插话会并入转述提示，保证用户的话一定被回应。
 """
 from __future__ import annotations
 
 import time
 from dataclasses import dataclass, field
+from typing import Any
 
 from loguru import logger
-
-_TERMINAL_STATUSES = ("delivered", "deliver_failed")
 
 
 @dataclass
@@ -39,16 +33,21 @@ class BackgroundDelegation:
     mode: str = "single"
     verifier: str = ""
     task_text: str = ""
-    channel: str = ""          # qq / wechat / ws / cli
+    channel: str = ""          # qq / wechat / web(ws) / cli
     session_id: str = ""       # ws 通道投递目标
     user_openid: str = ""      # qq 通道投递目标（空则适配器回退最近私聊用户）
     user_id: str = ""
+    address_term: str = ""     # 称谓（转述措辞用）
     started_at: float = field(default_factory=time.time)
-    status: str = "running"    # running / completed / failed / delivered / deliver_failed
+    status: str = "running"    # running/completed/failed/cancelled/delivered/deliver_failed
     finished_at: float | None = None
     result_preview: str = ""
+    last_progress: str = ""    # 最近一次执行阶段描述
+    interjections: list = field(default_factory=list)  # 共享引用：控制工具写、_chat_loop 消费
+    asyncio_task: Any = None   # 执行体句柄（终止用；不进 snapshot）
 
     def to_snapshot(self) -> dict:
+        elapsed = round((self.finished_at or time.time()) - self.started_at, 1)
         return {
             "task_id": self.task_id,
             "agent": self.agent,
@@ -57,8 +56,10 @@ class BackgroundDelegation:
             "channel": self.channel,
             "session_id": self.session_id,
             "status": self.status,
+            "elapsed_s": elapsed,
             "started_at": self.started_at,
-            "finished_at": self.finished_at,
+            "last_progress": self.last_progress,
+            "pending_interjections": len(self.interjections),
             "result_preview": self.result_preview,
         }
 
@@ -84,6 +85,30 @@ def mark_done(task_id: str, ok: bool, preview: str = "") -> None:
     job.result_preview = preview
 
 
+def mark_cancelled(task_id: str) -> None:
+    job = _JOBS.get(task_id)
+    if job is None:
+        return
+    job.status = "cancelled"
+    job.finished_at = time.time()
+
+
+def note_progress(job: BackgroundDelegation, text: str) -> None:
+    job.last_progress = (text or "")[:80]
+
+
+def find_running(agent: str | None = None,
+                 task_id_prefix: str | None = None) -> BackgroundDelegation | None:
+    """取最近一条运行中的任务（可按 agent 名/编号前缀过滤）。"""
+    candidates = [
+        j for j in _JOBS.values()
+        if j.status == "running"
+        and (agent is None or j.agent == agent.lower())
+        and (task_id_prefix is None or j.task_id.startswith(task_id_prefix))
+    ]
+    return max(candidates, key=lambda j: j.started_at, default=None)
+
+
 def snapshot(status: str | None = None) -> list[dict]:
     jobs = [
         j.to_snapshot() for j in _JOBS.values()
@@ -92,52 +117,108 @@ def snapshot(status: str | None = None) -> list[dict]:
     return sorted(jobs, key=lambda x: x["started_at"], reverse=True)
 
 
-async def deliver(job: BackgroundDelegation, content: str,
-                  failed: bool = False) -> bool:
-    """按 job.channel 路由主动投递。content 应为可直接阅读的结果文本。"""
-    header = (f"📌 你委托的{job.display_name}后台任务"
-              f"{'失败了' if failed else '已完成'}：")
-    text = f"{header}\n{content}"
+# ── 投递 ─────────────────────────────────────────────────────
+
+
+async def _send_channel(job: BackgroundDelegation, text: str) -> bool:
     channel = (job.channel or "").lower()
-    if channel == "web":  # RequestContext.source 的 web 与 WS 同一投递出口
-        channel = "ws"
-    ok = False
+    if channel == "web":
+        channel = "ws"  # RequestContext.source 的 web 与 WS 同一投递出口
     try:
         if channel == "qq":
             from qq_bot_adapter import send_proactive_message
-            ok = await send_proactive_message(text, openid=job.user_openid or None)
-        elif channel == "wechat":
+            return await send_proactive_message(text, openid=job.user_openid or None)
+        if channel == "wechat":
             from wechat_bot_adapter import send_proactive_message
-            ok = await send_proactive_message(text)
-        elif channel == "ws":
+            return await send_proactive_message(text)
+        if channel == "ws":
             from web.ws_hub import manager
             if not job.session_id:
-                raise RuntimeError("ws 通道缺少 session_id，无法定位投递目标")
+                raise RuntimeError("ws 通道缺少 session_id")
             await manager.send_to_session(job.session_id, {
-                "type": "delegate_result",
-                "task_id": job.task_id,
-                "agent": job.agent,
-                "ok": not failed,
-                "header": header,
-                "reply": content,
+                "type": "final",           # 标准 final 帧：前端按普通回复渲染
+                "msg_id": job.task_id,
+                "reply": text,
+                "emotion": "",
+                "sticker_url": "",
+                "audio_url": None,
+                "image_urls": [],
+                "video_url": None,
+                "agent": "xiaoda",
+                "elapsed_ms": int((time.time() - job.started_at) * 1000),
             })
-            ok = True
-        else:
-            # cli / 未识别通道：落日志留痕（结果仍在 snapshot 中可查）
-            logger.info("async_delegation.cli_deliver channel={} text={}",
-                        channel or "?", text[:200])
-            ok = True
-    except Exception as e:  # noqa: BLE001 —— 投递失败绝不向上炸后台任务
-        logger.warning("async_delegation.deliver_failed channel={} error={}",
+            return True
+        logger.info("async_delegation.cli_deliver channel={} text={}",
+                    channel or "?", text[:200])
+        return True
+    except Exception as e:  # noqa: BLE001 —— 投递失败不炸后台任务
+        logger.warning("async_delegation.send_failed channel={} error={}",
                        channel or "?", str(e)[:150])
-        ok = False
+        return False
 
+
+async def deliver_text(job: BackgroundDelegation, text: str,
+                       *, failed: bool = False) -> bool:
+    """不经转述直接以主代理口吻发送（终止通知等短消息用）。"""
+    ok = await _send_channel(job, text)
+    job.status = ("delivered" if ok and not failed
+                  else "failed" if failed
+                  else "deliver_failed")
+    if job.finished_at is None:
+        job.finished_at = time.time()
+    logger.info("async_delegation.delivered task_id={} agent={} ok={}",
+                job.task_id, job.agent, ok)
+    return ok
+
+
+async def compose_and_deliver(core: Any, job: BackgroundDelegation,
+                              result: str, *, failed: bool = False) -> bool:
+    """结果先经主代理 LLM 转述成自然口吻，再走普通通道发出。
+
+    LLM 转述失败/超时（20s）时降级为模板拼接——保证结果必达。
+    未消费的用户插话会并入转述要求，确保一定被回应。
+    """
+    address = job.address_term or "爸爸"
+    interject_block = ""
+    if job.interjections:
+        notes = "; ".join(str(n)[:200] for n in job.interjections)
+        interject_block = (f"\n\n用户在任务执行期间补充了以下指示，请务必一并回应：\n{notes}")
+
+    composed = ""
+    if not failed:
+        try:
+            sys_prompt = (
+                f"你是小妲。你之前把一项任务交给助手{job.display_name}处理，现在她做完了，"
+                f"你要用自己自然的口吻向{address}汇报结果要点。"
+                "要求：简洁（不超过 6 句）；保留关键结论与数据；"
+                "可以自然说明是谁协助完成的；不要出现'后台''委托''任务编号'这类机制词汇。"
+            )
+            messages = [
+                {"role": "system", "content": sys_prompt},
+                {"role": "user", "content":
+                    f"原任务：{job.task_text}\n\n执行输出：\n{result[:3000]}{interject_block}"},
+            ]
+            composed = await core.router.route("chat", messages,
+                                               max_tokens=700, timeout=20)
+        except Exception as e:  # noqa: BLE001 —— 转述失败降级模板
+            logger.warning("async_delegation.compose_failed error={}", str(e)[:120])
+            composed = ""
+
+    if not (composed and composed.strip()):
+        verb = "出错了" if failed else "有结果了"
+        composed = (f"{address}，{job.display_name}{verb}：\n{result[:1500]}"
+                    + (f"\n\n另外，你之前补充的指示我记着呢：{interject_block.strip()}"
+                       if interject_block else ""))
+    if failed:
+        composed = f"{address}，{job.display_name}那边没能完成：\n{result[:1500]}"
+
+    ok = await _send_channel(job, composed)
     job.status = ("delivered" if ok and not failed
                   else "failed" if failed and not ok
                   else "delivered" if ok
                   else "deliver_failed")
     if job.finished_at is None:
         job.finished_at = time.time()
-    logger.info("async_delegation.delivered task_id={} agent={} channel={} "
-                "ok={}", job.task_id, job.agent, channel or "?", ok)
+    logger.info("async_delegation.delivered task_id={} agent={} ok={}",
+                job.task_id, job.agent, ok)
     return ok

@@ -689,7 +689,8 @@ class SubAgentManagerMixin:
 
     async def _dispatch_and_record(self, name: str, task: str, context: Any,
                                    _ctx: Any, agent: Any,
-                                   timeout_s: float | None = SUB_AGENT_DISPATCH_TIMEOUT_S
+                                   timeout_s: float | None = SUB_AGENT_DISPATCH_TIMEOUT_S,
+                                   interjections: list | None = None
                                    ) -> tuple[str | None, float]:
         """dispatch 子代理 + 事件 emit + BeliefRouter 反馈；失败重新抛出。
 
@@ -705,7 +706,8 @@ class SubAgentManagerMixin:
         try:
             result = await asyncio.wait_for(self.dispatcher.dispatch(
                 name, task, context=context,
-                status_callback=_ctx.status_callback if _ctx else None, address_term=self.context.current_address_term), timeout=timeout_s)
+                status_callback=_ctx.status_callback if _ctx else None, address_term=self.context.current_address_term,
+                interjections=interjections), timeout=timeout_s)
             _duration = _time_mod.time() - _t0
             await self._notify_sub_outcome(
                 name, AgentEventType.SUB_COMPLETED, task_id,
@@ -724,34 +726,67 @@ class SubAgentManagerMixin:
 
         与同步路径的差异：
         - 无 wait_for 外层超时——长任务跑到底，修复"超时即取消丢工作"；
-        - 完成/失败后经 core.async_delegation.deliver 按来源通道主动投递。
-        contextvar 随 create_task 捕获进本协程，belief 反馈 / 黑板缓存 /
-        status_callback 语义与当轮委托完全一致。
+        - 完成后结果交回主代理：经 router 转述成主代理口吻，走普通消息
+          通道主动发出（无专用帧、无机械回执，对用户就是主代理又说了话）；
+        - 用户/主代理可通过 sub_agent_control 查看进度、终止（cancel）、
+          插话（job.interjections 由 _chat_loop 每轮消费）。
         """
         from core import async_delegation as ad
 
         agent = self.dispatcher.get_agent(job.agent)
         if agent is None:
             ad.mark_done(job.task_id, ok=False,
-                               preview=f"unknown agent {job.agent}")
-            await ad.deliver(job, f"找不到名为 {job.agent} 的子代理", failed=True)
+                         preview=f"unknown agent {job.agent}")
+            await ad.deliver_text(
+                job, f"找不到名为 {job.agent} 的子代理，这项任务没法安排下去。", failed=True)
             return
 
         _ctx = _current_request_ctx.get()
         context = self._build_sub_agent_context(task_hint=job.task_text)
+
+        # 进度采集：包一层回调写进 job.last_progress，供 sub_agent_control 查询
+        base_cb = _ctx.status_callback if _ctx else None
+
+        async def progress_cb(msg: Any) -> None:
+            ad.note_progress(job, str(msg))
+            if base_cb is not None:
+                try:
+                    await base_cb(msg)
+                except Exception:  # noqa: BLE001 —— 原通道展示失败不影响执行
+                    pass
+
+        class _CtxShim:
+            """透传原 ctx 关键字段 + 替换 status_callback 的轻量壳。"""
+
+            def __init__(self, inner: Any, cb: Any) -> None:
+                self._inner = inner
+                self.status_callback = cb
+
+            def __getattr__(self, item: str) -> Any:
+                return getattr(self._inner, item)
+
         try:
             result, _duration = await self._dispatch_and_record(
-                job.agent, job.task_text, context, _ctx, agent, timeout_s=None)
+                job.agent, job.task_text, context,
+                _CtxShim(_ctx, progress_cb) if _ctx else None,
+                agent, timeout_s=None, interjections=job.interjections)
+        except asyncio.CancelledError:
+            ad.mark_cancelled(job.task_id)
+            await ad.deliver_text(
+                job, f"收到收到～{job.display_name}的那个任务已经按你说的停下来了。")
+            return
         except Exception as e:  # noqa: BLE001 —— 失败也要主动告知用户
             logger.warning("async_delegation.dispatch_failed agent={} error={}",
                            job.agent, str(e)[:150])
             ad.mark_done(job.task_id, ok=False, preview=str(e)[:120])
-            await ad.deliver(job, f"执行出错了：{str(e)[:300]}", failed=True)
+            await ad.compose_and_deliver(self, job, f"执行出错了：{str(e)[:300]}",
+                                         failed=True)
             return
 
         if not (result and result.strip()):
             ad.mark_done(job.task_id, ok=False, preview="empty reply")
-            await ad.deliver(job, "子代理已执行，但没有返回有效结果。", failed=True)
+            await ad.compose_and_deliver(
+                self, job, "子代理已执行，但没有返回有效内容。", failed=True)
             return
 
         try:
@@ -775,7 +810,7 @@ class SubAgentManagerMixin:
             logger.debug("async_delegation.blackboard_write_failed error={}", str(e)[:120])
 
         ad.mark_done(job.task_id, ok=True, preview=result[:120])
-        await ad.deliver(job, result)
+        await ad.compose_and_deliver(self, job, result)
 
     async def _verify_result(self, name: str, task: str, result: str,
                              mode: str, verifier: str) -> str:

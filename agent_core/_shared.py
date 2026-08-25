@@ -173,6 +173,7 @@ class RequestContext:
     session_id: str = ""
     user_openid: str = ""
     channel: str = ""  # 来源通道快照（qq/wechat/ws/cli）：后台委托完成后按此路由主动投递
+    interjections: list | None = None  # 后台委托的运行中插话队列（引用共享，消费即出队）
     user_id: str = ""
     user_input: str = ""
     status_callback: Any = None
