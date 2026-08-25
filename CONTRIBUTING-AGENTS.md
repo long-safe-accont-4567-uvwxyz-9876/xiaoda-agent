@@ -1,6 +1,9 @@
-# AGENTS.md — 维护者贡献规则(对人类与编码 agent 一体适用)
+# CONTRIBUTING-AGENTS.md — 维护者贡献规则(对人类与编码 agent 一体适用)
 
-> 本文件面向所有在本仓库工作的编码代理(Claude Code / Codex / Cursor / Copilot 等)
+> 本文件面向所有在本仓库工作的编码代理(Claude Code / Codex / Cursor / Copilot 等)。
+> **命名说明**:刻意不占用根目录 AGENTS.md 文件名——项目运行时在
+> `config/workspace/AGENTS.md` 有同名业务文件(小妲的团队规则,注入 system prompt),
+> 两者用途无关,重名是长期混淆源。
 > 与人类贡献者。规则由仓库内门禁**自动执行**,不依赖阅读自觉;此处解释规则
 > 存在的原因和被拦时的正确处置。Claude 系另见 CLAUDE.md(项目知识)。
 
