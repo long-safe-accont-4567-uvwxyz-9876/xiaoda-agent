@@ -31,8 +31,10 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 # 完整重建校验（约 +1 分钟）；--no-verify 紧急跳过
 git config core.hooksPath scripts/git-hooks
 
-# 贡献行为契约（对所有编码 agent 与人类一体适用）：AGENTS.md——六道门禁的
-# 处置方式、基线上调规则、债务台账入口。被 pre-push 拦住时先读它，别绕过。
+# 贡献行为契约（对所有编码 agent 与人类一体适用）：CONTRIBUTING-AGENTS.md——
+# 六道门禁处置方式、基线上调规则、债务台账入口。被 pre-push 拦住时先读它，别绕过。
+# 注意：config/workspace/AGENTS.md 是运行时 Agent 业务文件（注入 system prompt），
+# 与开发契约无关，两者只是历史同名，勿混淆。
 
 # 生产服务：nahida-web 单进程承载 WebUI + QQ Bot + WS（共享 AgentCore，需 sudo）
 sudo systemctl restart nahida-web && journalctl -u nahida-web -f

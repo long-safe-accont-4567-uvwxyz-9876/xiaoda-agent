@@ -1,3 +1,6 @@
 # GitHub Copilot 指引
 
-本仓库的编码 agent 行为契约统一维护在 **AGENTS.md**(六道门禁、基线上调规则、债务台账、三条红线),请先阅读并遵守。
+本仓库的编码 agent 行为契约统一维护在 **CONTRIBUTING-AGENTS.md**(六道门禁、基线上调规则、债务台账、三条红线),请先阅读并遵守。
+
+注意:根目录没有 AGENTS.md;`config/workspace/AGENTS.md` 是运行时 Agent 的业务文件,
+与开发者工具无关。

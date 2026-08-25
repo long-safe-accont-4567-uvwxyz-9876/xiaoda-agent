@@ -99,7 +99,7 @@ X-Confirm 守卫接口无确认头一律 HTTP 400 强制拒绝 ✓；/metrics �
 
 3 路独立 WS 连接同时聊天（要求只回指定代号）：苹果/香蕉/樱桃**零串扰精确路由**，wall≈max 单路耗时=真并发无串行化。
 
-### 仓库门禁全量自检（AGENTS.md push 前预跑）
+### 仓库门禁全量自检（CONTRIBUTING-AGENTS.md push 前预跑）
 
 | 门禁 | 结果 |
 |---|---|
