@@ -1,0 +1,11 @@
+# 技术债周审计——oneshot 服务,由 debt-audit.timer 每周一 09:00 触发
+# 安装: sudo cp deploy/debt-audit.{service,timer} /etc/systemd/system/ && sudo systemctl enable --now debt-audit.timer
+# 台账: data/debt_audit.log(外挂盘);手动触发: sudo systemctl start debt-audit.service
+[Unit]
+Description=Xiaoda Agent 技术债周审计(棘轮全量重跑+全集测试)
+
+[Service]
+Type=oneshot
+User=orangepi
+WorkingDirectory=/home/orangepi/ai-agent
+ExecStart=/bin/bash /home/orangepi/ai-agent/scripts/debt_audit.sh

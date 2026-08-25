@@ -1,0 +1,35 @@
+# giant_file_allowlist.txt — 巨型文件赦免清单(通用门禁的例外台账)
+#
+# 规则:
+#   - scripts/check_giant_files.sh 对全部非测试生产 .py 执行 900 行阈值;
+#     本清单中的文件豁免通用阈值,但必须在 tests/test_giant_file_ratchet.py
+#     钉死当前行数基线(只许拆小,不许变大)。
+#   - 新增条目 = 登记一笔具名债务:提交说明必须注明理由
+#     (正当形态示例:纯数据清单 / append-only 迁移注册表)。
+#   - 拆分完成后应从本清单移除并同步下调 ratchet 基线。
+#
+# 格式:每行一个仓库相对路径,# 开头为注释
+qq_bot_adapter.py
+wechat_bot_adapter.py
+memory/vector_store.py
+web/server.py
+agent_context.py
+web/routers/setup.py
+db/legacy_migrations.py
+core/bootstrap.py
+utils/text_utils.py
+memory/_memory_encoder.py
+web/ws_hub.py
+db/db_memory_reconciliation.py
+llm_gateway/router_execution.py
+tool_engine/mcp_client.py
+memory/retrieval/pipeline.py
+ilink_client.py
+agent_core/sub_agent_manager.py
+agent_core/sub_agent.py
+tools/_builtin_manifest.py
+web/routers/insight.py
+core/background_tasks.py
+web/agent_registry.py
+web/routers/local_deploy.py
+cli.py

@@ -60,6 +60,14 @@ bash "$PWD/scripts/check_ruff.sh"
 # ── 函数内延迟 import 棘轮（秒级）：存量冻结，增量拦截（技术债 P1-3 专项）
 "$PYTHON" "$PWD/scripts/check_lazy_imports.py"
 
+# ── 通用巨型文件门禁（秒级）：900 行阈值 + 赦免清单（2026-08-25 防复发体系；
+#    白名单制 ratchet 只盯存量热点，本门禁抓"新造巨型文件"）
+bash "$PWD/scripts/check_giant_files.sh"
+
+# ── TODO/FIXME/HACK 棘轮（毫秒级）：存量冻结，新增即拦——把"以后再说"
+#    变成显式登记的已知债务（2026-08-25 防复发体系；规则见 AGENTS.md）
+bash "$PWD/scripts/check_todo_ratchet.sh"
+
 # ── i18n 双字典 key 一致性（秒级；review 补漏——原只接了不运行的 GH workflow）
 if [ -d "$PWD/web/frontend/node_modules" ]; then
     (cd "$PWD/web/frontend" && npm run --silent check:i18n) || {
