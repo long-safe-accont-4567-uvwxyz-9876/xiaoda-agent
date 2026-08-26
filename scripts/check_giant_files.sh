@@ -37,6 +37,7 @@ scan() {  # scan <描述> <find参数...> -- <阈值>
 
 mapfile -t py_files < <(find . -name "*.py" \
     -not -path "./.venv/*" -not -path "./.git/*" -not -path "*/__pycache__/*" \
+    -not -path "./build/*" -not -path "./dist/*" -not -path "./dist-wheel/*" \
     -not -path "./web/*" -not -path "./vendor/*" \
     -not -path "./tests/*" -not -path "./chaos/*" -not -path "./scripts/*" \
     -not -path "./evaluation/*" -not -path "./*.egg-info*" -not -path "./xiaoda-agent/*" \
