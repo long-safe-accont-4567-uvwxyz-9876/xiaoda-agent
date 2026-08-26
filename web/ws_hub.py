@@ -1032,7 +1032,7 @@ async def _handle_chat(conn_id: str, msg: dict, msg_id: str, ws: WebSocket) -> N
             "type": "error", "msg_id": msg_id,
             "code": "ABORTED", "message": "已中断生成"})
         raise
-    except (RuntimeError, OSError, ValueError) as e:
+    except (RuntimeError, OSError, ValueError):
         # 异常原文不回传客户端（可能带内部路径/模型细节），完整信息进日志
         logger.exception("ws.chat.failed conn_id={} msg_id={}", conn_id, msg_id)
         await manager.send_to(conn_id, {
