@@ -118,3 +118,6 @@ vendor/ffmpeg/**/ffprobe.exe
 # 手动下载还原：https://huggingface.co/BAAI/bge-small-zh-v1.5 或 scripts 内工具
 models/bge-small-zh-v1.5/onnx/model.onnx
 vite.config.ts.timestamp-*.mjs
+
+# === EmbedCache 磁盘持久化产物（运行时生成，路径见 memory/vector_store.py）===
+embed_cache_*.npz
