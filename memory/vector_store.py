@@ -112,14 +112,13 @@ class EmbedCache:
                 data = np.load(self._persist_path, allow_pickle=False)
                 keys = data["keys"]
                 vecs = data["vecs"]
-                if len(keys) > 0:
-                    for k, v in zip(keys, vecs):
-                        if len(self._cache) >= self._max_size:
-                            break
-                        # tolist() 一次 C 层转换整行，替代逐元素 float()
-                        # （512 维 × 数百条启动加载，实测省百毫秒级冷启动）
-                        self._cache[str(k)] = v.tolist() if hasattr(v, "tolist") \
-                            else [float(x) for x in v]
+                # 整矩阵一次 C 层 tolist()：N 行 × 512 维从 N 次行级转换收敛为
+                # 1 次（npz 的 vecs 恒为 float32 ndarray，tolist 逐元素提升为
+                # Python float，与旧逐行 v.tolist() 值语义逐位一致）
+                n = min(len(keys), len(vecs), self._max_size)
+                if n > 0:
+                    for k, row in zip(keys[:n], vecs[:n].tolist()):
+                        self._cache[str(k)] = row
             else:
                 import pickle
                 with open(self._persist_path, "rb") as f:
@@ -265,6 +264,9 @@ class VectorStore:
         self._rebuild_from_dims = 0
         self._rebuild_to_dims = 0
         self._rebuild_in_progress = False
+        # 裸 create_task 的返回值若无强引用会被 GC 中途回收（emotion_state.save
+        # 同款已知问题）——_auto_rebuild 任务挂到实例属性上保活
+        self._rebuild_task: asyncio.Task | None = None
         self._lock = threading.Lock()
         self._embed_client = None
         self._vec_conn = None
@@ -465,7 +467,7 @@ class VectorStore:
                 )
                 # 尝试异步触发重建（有事件循环时）
                 try:
-                    asyncio.create_task(self._auto_rebuild())
+                    self._spawn_auto_rebuild()
                 except RuntimeError:
                     # 无事件循环（同步上下文），由下次 init() 触发
                     logger.debug("vector_store.rebuild_deferred_no_loop")
@@ -586,7 +588,30 @@ class VectorStore:
         # 维度不匹配自动重建：_init_db_sync 检测到表维度≠模型维度时置 _needs_rebuild
         # 异步触发重建（不阻塞 init 返回），重建完成后重新初始化向量库连接。
         if self._needs_rebuild and not self._rebuild_in_progress:
-            asyncio.create_task(self._auto_rebuild())
+            self._spawn_auto_rebuild()
+
+    def _spawn_auto_rebuild(self) -> None:
+        """强引用持有地启动 _auto_rebuild（裸 create_task 会被 GC 中途回收）。
+
+        防重入双保险：本方法的在途任务检查 + _auto_rebuild 入口的
+        _rebuild_in_progress 标志。两个触发点（init / _check_dimension_after_switch）
+        统一经由此处收口，判断口径一致。
+        """
+        if self._rebuild_task is not None and not self._rebuild_task.done():
+            return
+        task = asyncio.create_task(self._auto_rebuild())
+        self._rebuild_task = task
+        task.add_done_callback(self._on_rebuild_done)
+
+    def _on_rebuild_done(self, task: asyncio.Task) -> None:
+        """重建任务收尾：清引用；异常不静默（CancelledError 属正常取消不算）。"""
+        if self._rebuild_task is task:
+            self._rebuild_task = None
+        if task.cancelled():
+            return
+        exc = task.exception()
+        if exc is not None:
+            logger.error("vector_store.auto_rebuild_task_failed error={}", str(exc))
 
     async def _auto_rebuild(self) -> None:
         """维度不匹配时自动重建向量库（异步后台执行）。

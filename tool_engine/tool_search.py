@@ -33,6 +33,10 @@ from typing import Any
 
 from loguru import logger
 
+# RRF 融合实现统一走 utils.rank_fusion（与 memory 共用 canonical 版本，
+# rank 从 1 起；tool_engine→utils 方向无环依赖）
+from utils.rank_fusion import reciprocal_rank_fusion
+
 
 @dataclass
 class ToolDef:
@@ -279,30 +283,6 @@ class VectorIndex:
         if norm_a == 0 or norm_b == 0:
             return 0.0
         return dot / (norm_a * norm_b)
-
-
-def reciprocal_rank_fusion(
-    ranked_lists: list[list[str]],
-    k: int = 60,
-    limit: int = 10,
-) -> list[tuple[str, float]]:
-    """Reciprocal Rank Fusion: 多路排序融合算法 (Cormack 2009).
-
-    无需分数标定, 只用排名, 适合融合 BM25 (词法) + Vector (语义).
-
-    Args:
-        ranked_lists: 多路排序结果 (每路是 tool name 列表, 按相关性降序)
-        k: 平滑常数 (标准值 60), 防止排名 1 的项压倒一切
-        limit: 返回前 N 个
-
-    Returns:
-        [(name, fused_score), ...] 按融合分数降序
-    """
-    scores: dict[str, float] = {}
-    for ranked in ranked_lists:
-        for rank, name in enumerate(ranked, start=1):
-            scores[name] = scores.get(name, 0.0) + 1.0 / (k + rank)
-    return sorted(scores.items(), key=lambda x: x[1], reverse=True)[:limit]
 
 
 class ToolSearchEngine:

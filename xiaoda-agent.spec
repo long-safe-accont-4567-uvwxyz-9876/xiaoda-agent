@@ -510,15 +510,46 @@ for pkg in ('pilk', 'sqlite_vec', 'onnxruntime', 'onnxruntime_genai', 'tokenizer
     except Exception:
         pass
 
-# rust_core（Rust 混合加速扩展）：memory/rust_hybrid.py 惰性导入，
-# 静态分析必然漏掉。构建产物存在于 rust_core/target/release/ 时收集
-# （需先在目标平台跑 bash rust_core/build.sh；缺失时跳过，
-# 运行时自动回退纯 Python，检索功能不受影响，仅失去 3.1x 加速）。
-for _so_name in ('rust_core.so', 'rust_core.pyd'):
-    _so = os.path.join(SPECPATH, 'rust_core', 'target', 'release', _so_name)
-    if os.path.isfile(_so):
-        binaries.append((_so, '.'))
-        break
+# ---------------------------------------------------------------------------
+# rust_core 条件收集（2026-08-26 政策翻转，同步 tests/test_windows_package_reliability.py）
+# 旧政策：rust_core 整体视为「非分发目录」不进包 → Windows 打包静默回退
+# 纯 Python，~3x 检索加速归零且用户无感知。新政策：产物存在则必须进包，
+# 全部落空才允许跳过（打印显式回退提示）。memory/rust_hybrid.py 惰性导入
+# 且 dev 树上 `import rust_core` 会被同名源码目录劫持成 namespace 包，
+# 静态分析既看不见也收不对，必须按文件系统探测。搜索顺序：
+#   1) rust_core/target/release/ —— 开发流产物（bash rust_core/build.sh）；
+#      PyO3 文件名带 ABI 标记（如 rust_core.abi3.so），必须 glob 不能精确名
+#   2) site-packages —— wheel 化路线（maturin 产 wheel 经 pip 装入 venv）
+# 只取扩展本体：librust_core.so（cdylib 原名）与 deps/ 中间产物不进包。
+# ---------------------------------------------------------------------------
+def _pick_rust_core_binary(dirs):
+    import glob as _glob
+
+    for _d in dirs:
+        for _pattern in ('rust_core*.so', 'rust_core*.pyd'):
+            _hits = sorted(_glob.glob(os.path.join(_d, _pattern)))
+            if _hits:
+                return _hits[0], '.'
+    return None
+
+
+def _collect_rust_core_binary():
+    import sysconfig as _sysconfig
+
+    _dirs = [os.path.join(SPECPATH, 'rust_core', 'target', 'release')]
+    _purelib = _sysconfig.get_paths().get('purelib')
+    if _purelib:
+        _dirs.append(_purelib)
+    return _pick_rust_core_binary(_dirs)
+
+
+_rc_binary = _collect_rust_core_binary()
+if _rc_binary is not None:
+    binaries.append(_rc_binary)
+    print(f'[spec] rust_core hybrid extension bundled: {_rc_binary[0]}')
+else:
+    print('[spec] rust_core: 构建产物缺失 — 打包版检索将回退纯 Python '
+          '(bash rust_core/build.sh 或安装 rust_core wheel 可获得)')
 
 # ---------------------------------------------------------------------------
 # Excludes – trim the bundle by removing unused heavy modules

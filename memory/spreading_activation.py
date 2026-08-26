@@ -409,7 +409,17 @@ class SpreadingActivationEngine:
         return dict(spread)
 
     def _rrf_fusion(self, direct: dict, spread: dict) -> dict:
-        """Reciprocal Rank Fusion: 双通道排名融合"""
+        """Reciprocal Rank Fusion: 双通道排名融合
+
+        刻意不合并到 utils.rank_fusion.reciprocal_rank_fusion（canonical），
+        差异点（均为特性，防止未来误合并）：
+        - rank 起点：本函数排名从 0 起；canonical 从 1 起。
+        - 缺席项兜底：某通道缺席的节点按 rank=len(该通道)+1 计入
+          （保证双通道并集都有非零分数，且"只在单通道出现"弱于"双通道都出现"）；
+          canonical 无此语义（缺席项自然不得分，等价于跳过）。
+        - 形态特化：输入/输出均为 {node_id: score} 双通道 dict，
+          canonical 是 list[list[str]] → list[(id, score)]。
+        """
         dr = {n: i for i, (n, _) in enumerate(
             sorted(direct.items(), key=lambda x: (-x[1], x[0])))}
         sr = {n: i for i, (n, _) in enumerate(

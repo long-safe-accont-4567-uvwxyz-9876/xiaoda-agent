@@ -8,6 +8,7 @@ from loguru import logger
 
 from db.db_kg_v2 import KnowledgeDBV2
 from db.fts_utils import _build_fts_query
+from utils.rank_fusion import reciprocal_rank_fusion
 
 # KG v2 分区键改为 <user_id>::<agent_id> 之前的旧分区名。线上库存量行挂在
 # 该分区下但无归属信息（无法证明属于任何当前用户）。
@@ -442,14 +443,22 @@ class KGSearchEngine:
         return {t.strip() for t in tokens if len(t.strip()) >= 2}
 
     def _rrf_fuse(self, ranked_lists: list[list[dict]], k: int = 60) -> list[dict]:
-        """Reciprocal Rank Fusion: score = Σ 1/(k + rank)。"""
-        scores: dict[str, float] = {}
+        """Reciprocal Rank Fusion: score = Σ 1/(k + rank)。
+
+        内部委托 utils.rank_fusion.reciprocal_rank_fusion（canonical，rank 从 1 起）。
+        dict 候选先转 "type:id" 键列表融合，再回填 rrf_score。
+        注意：rank 起点已从历史的 0 修正为标准 1，融合分数整体微降
+        （如单路 rank1：1/60 → 1/61），相对排序不变（k=60 平滑）。
+        """
         items: dict[str, dict] = {}
+        key_lists: list[list[str]] = []
         for ranked in ranked_lists:
-            for rank, item in enumerate(ranked):
+            keys: list[str] = []
+            for item in ranked:
                 key = f"{item.get('type', '')}:{item.get('id', '')}"
-                scores[key] = scores.get(key, 0) + 1.0 / (k + rank)
                 if key not in items:
                     items[key] = item
-        sorted_keys = sorted(scores.keys(), key=lambda x: -scores[x])
-        return [{**items[key], "rrf_score": scores[key]} for key in sorted_keys]
+                keys.append(key)
+            key_lists.append(keys)
+        fused = reciprocal_rank_fusion(key_lists, k=k, limit=len(items) or 1)
+        return [{**items[key], "rrf_score": score} for key, score in fused]
