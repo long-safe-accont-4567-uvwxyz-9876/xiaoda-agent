@@ -73,7 +73,10 @@ def _line_count(rel: str) -> int:
 #   agent_core/sub_agent.py 1027→1036 —— refresh_router():路由热更新后
 #     子代理重抓 router 并刷新降级态；
 #   web/routers/insight.py 923→926 —— 向量检索分页语义对齐 DB 分页 + 空实体
-#     全图模式自动选根(原固定最近 80 条忽略 depth)。
+#     全图模式自动选根(原固定最近 80 条忽略 depth)；
+#   llm_gateway/router_execution.py 1097→1099 —— 凭证池错误归因精确化:
+#     report_error/report_success 传实际出错客户端 api_key(多凭证并发在途
+#     时旧启发式误伤健康凭证), 两处调用点各拆两行；
 ALLOWLIST_BASELINES: dict[str, int] = {
     "memory/vector_store.py": 1619,
     "web/server.py": 1404,
@@ -84,7 +87,7 @@ ALLOWLIST_BASELINES: dict[str, int] = {
     "utils/text_utils.py": 1151,
     "memory/_memory_encoder.py": 1134,
     "db/db_memory_reconciliation.py": 1102,
-    "llm_gateway/router_execution.py": 1097,
+    "llm_gateway/router_execution.py": 1099,
     "tool_engine/mcp_client.py": 1090,
     "memory/retrieval/pipeline.py": 1075,
     "ilink_client.py": 1039,
