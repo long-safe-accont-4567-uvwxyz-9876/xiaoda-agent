@@ -912,12 +912,50 @@ class VectorStore:
             vector = await self._embed_one(batch[0])
             return vector if legacy_single else [vector]
         if self._embed_mode == "local":
-            vectors = await self._do_embed_batch(batch)
+            vectors = await self._embed_batch_cached(batch)
         else:
             vectors = await asyncio.gather(*(self._embed_one(text) for text in batch))
         for vector in vectors:
             self._validate_dimension(vector)
         return vectors
+
+    async def _embed_batch_cached(self, texts: list[str]) -> list[list[float]]:
+        """批量嵌入（local 模式）：先逐条查 EmbedCache，仅 miss 子集送本地推理。
+
+        原实现整批直通 _do_embed_batch 绕过缓存——重建索引/多查询改写场景下
+        重复文本也全量打 NPU/CPU 推理（单条秒级，批量线性放大）。改为与
+        _embed_one 同款的"缓存优先 + provider 只算 miss"，selection_key 漂移时
+        先清缓存再取值，保证维度切换后不会命中旧维度向量。
+        """
+        if not texts:
+            return []
+        selection_key = await self._current_selection_key()
+        if (
+            self._embedding_selection_key is not None
+            and selection_key != self._embedding_selection_key
+        ):
+            self._cache.clear()
+        if selection_key is not None:
+            self._embedding_selection_key = selection_key
+
+        results: list[list[float] | None] = [None] * len(texts)
+        miss_idx: list[int] = []
+        for i, text in enumerate(texts):
+            cached = self._cache.get(text)
+            if cached:
+                results[i] = cached
+            else:
+                miss_idx.append(i)
+
+        if miss_idx:
+            miss_texts = [texts[i] for i in miss_idx]
+            fresh = await self._do_embed_batch(miss_texts)
+            for i, vec in zip(miss_idx, fresh):
+                results[i] = vec
+                if vec and await self._current_selection_key() == selection_key:
+                    self._cache.put(texts[i], vec)
+        # _do_embed_batch 已校验返回条数；此处兜底避免 None 下漏
+        return [v or [] for v in results]
 
     async def _do_embed_batch(self, texts: list[str]) -> list[list[float]]:
         if self._local_provider is None:
