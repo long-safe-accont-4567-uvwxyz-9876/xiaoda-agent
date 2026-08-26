@@ -81,7 +81,7 @@ export const useChatStore = defineStore('chat', () => {
   const streamStates = new Map<string, { lastSeq: number; terminal: boolean }>()
   // 终态流记录上限：只置 terminal flag 从不删除会让长会话缓慢增长，
   // 超限淘汰最旧记录（与后端 _MAX_STREAM_SESSIONS=256 同策略）
-  const STREAM_STATES_MAX = 256()
+  const STREAM_STATES_MAX = 256
 
   const pendingTimers: ReturnType<typeof setTimeout>[] = []
 
