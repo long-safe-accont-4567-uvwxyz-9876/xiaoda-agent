@@ -795,8 +795,9 @@ class ExecutionMixin:
         await self._record_usage(task_type, model, response, user_openid, session_id, provider)
         self._check_cache_health()
 
-        # 报告凭证成功
-        await self._credential_pool.report_success(provider)
+        # 报告凭证成功（按当前客户端实际 Key 精确归因）
+        await self._credential_pool.report_success(
+            provider, api_key=self._active_api_key(provider))
 
         if tools and response.choices[0].message.tool_calls:
             _reasoning_content_var.set(getattr(response.choices[0].message, "reasoning_content", None) or "")
@@ -966,7 +967,8 @@ class ExecutionMixin:
         对于 ABORT 或不可重试错误，直接 raise 传播给调用方。
         """
         classified = self._error_classifier.classify(e)
-        await self._credential_pool.report_error(provider, classified)
+        await self._credential_pool.report_error(
+            provider, classified, api_key=self._active_api_key(provider))
 
         # 根据恢复策略执行不同操作
         if classified.action == RecoveryAction.ROTATE_CREDENTIAL:
