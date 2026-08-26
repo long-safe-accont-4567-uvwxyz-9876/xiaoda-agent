@@ -740,8 +740,10 @@ async def promote_prompt_profile(request: Request, prompt_id: str, body: dict) -
     report = (body or {}).get("ab_report")
     if report is not None and not isinstance(report, dict):
         raise HTTPException(status_code=422, detail="ab_report must be an object")
+    force = bool((body or {}).get("force"))
     try:
-        promoted = _get_prompt_repository().promote(prompt_id, ab_report=report)
+        promoted = _get_prompt_repository().promote(
+            prompt_id, ab_report=report, force=force)
     except ValueError as e:
         raise HTTPException(status_code=422, detail=str(e)) from e
     _prompt_audit().append({
@@ -750,9 +752,11 @@ async def promote_prompt_profile(request: Request, prompt_id: str, body: dict) -
         "version": promoted.get("version"),
         "template_hash": promoted.get("template_hash"),
         "gated": report is not None,
+        "forced": force,
     })
     logger.info("prompt_profile.promoted", prompt_id=prompt_id,
-                version=promoted.get("version"), gated=report is not None)
+                version=promoted.get("version"), gated=report is not None,
+                forced=force)
     return Envelope(data=promoted)
 
 

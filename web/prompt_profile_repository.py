@@ -100,15 +100,25 @@ class PromptProfileRepository:
         except ValueError as exc:
             raise ValueError(f"prompt template failed trial render: {exc}") from exc
 
-    def promote(self, prompt_id: str, ab_report: dict[str, Any] | None = None) -> dict[str, Any]:
+    def promote(self, prompt_id: str, ab_report: dict[str, Any] | None = None,
+                force: bool = False) -> dict[str, Any]:
         staged = self._config.get(f"prompt_profiles.staging.{prompt_id}")
         if not isinstance(staged, dict):
             raise ValueError(f"no staged prompt profile: {prompt_id}")
+        # 门禁强制：所有生成节点均已具备 golden cases 与 ab-run 通道，
+        # 未评测候选不得进入 production。force=True 为运维逃生舱
+        # （快速版本翻转/回滚链演练），必须显式传递且被审计记录。
+        if ab_report is None and not force:
+            raise ValueError(
+                f"promotion of {prompt_id} requires a passing prompt AB gate report "
+                "(run ab-run first); pass force=true to override deliberately"
+            )
         if ab_report is not None:
             passed, reasons = promote_gate(ab_report)
             if not passed:
                 raise ValueError(
-                    f"prompt AB gate rejected promotion of {prompt_id}: {'; '.join(reasons)}"
+                    f"prompt AB gate rejected promotion of {prompt_id}: "
+                    f"{'; '.join(reasons)}"
                 )
         current = self._config.get(f"prompt_profiles.production.{prompt_id}")
         history = self._config.get(f"prompt_profiles.history.{prompt_id}", [])

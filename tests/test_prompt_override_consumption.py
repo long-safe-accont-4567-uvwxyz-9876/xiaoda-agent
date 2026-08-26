@@ -10,12 +10,17 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 from web.config_service import ConfigService
 from web.prompt_profile_repository import PromptProfileRepository
 
+PASSING_AB_REPORT = {
+    "candidate": {"schema_rate": 1.0, "golden_rate": 1.0, "violation_count": 0},
+    "regressions": [],
+}
+
 
 def _promote_override(tmp_path, prompt_id: str, record: dict):
     config = ConfigService(tmp_path / "webui_overrides.json")
     repository = PromptProfileRepository(config)
     repository.stage(record)
-    repository.promote(prompt_id)
+    repository.promote(prompt_id, ab_report=dict(PASSING_AB_REPORT))
     return config
 
 

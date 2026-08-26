@@ -101,7 +101,9 @@ def test_prompt_profile_repository_stage_promote_and_rollback(tmp_path):
             "properties": {"primary": {"type": "string"}},
         },
     })
-    promoted_v2 = repository.promote("emotion.analyze")
+    promoted_v2 = repository.promote("emotion.analyze", ab_report={
+        "candidate": {"schema_rate": 1.0, "golden_rate": 1.0,
+                      "violation_count": 0}, "regressions": []})
     assert v2["status"] == "staging"
     assert promoted_v2["status"] == "production"
 
@@ -115,7 +117,9 @@ def test_prompt_profile_repository_stage_promote_and_rollback(tmp_path):
             "properties": {"primary": {"type": "string"}},
         },
     })
-    repository.promote("emotion.analyze")
+    repository.promote("emotion.analyze", ab_report={
+        "candidate": {"schema_rate": 1.0, "golden_rate": 1.0,
+                      "violation_count": 0}, "regressions": []})
     rolled_back = repository.rollback("emotion.analyze")
     assert rolled_back["version"] == "2.0.0"
     assert config.get("prompt_profiles.production.emotion.analyze.version") == "2.0.0"
@@ -142,7 +146,9 @@ def test_prompt_promote_failure_keeps_old_production_and_staging(tmp_path):
         "system_template": "v1", "user_template": "{input}",
         "variables": {"input": {"required": True}}, "output_schema": schema,
     })
-    repository.promote("emotion.analyze")
+    repository.promote("emotion.analyze", ab_report={
+        "candidate": {"schema_rate": 1.0, "golden_rate": 1.0,
+                      "violation_count": 0}, "regressions": []})
     staged = repository.stage({
         "prompt_id": "emotion.analyze", "version": "2.0.0",
         "system_template": "v2", "user_template": "{input}",
@@ -151,7 +157,9 @@ def test_prompt_promote_failure_keeps_old_production_and_staging(tmp_path):
     config.fail_next = True
 
     with pytest.raises(OSError, match="disk failed"):
-        repository.promote("emotion.analyze")
+        repository.promote("emotion.analyze", ab_report={
+        "candidate": {"schema_rate": 1.0, "golden_rate": 1.0,
+                      "violation_count": 0}, "regressions": []})
 
     assert config.get("prompt_profiles.production.emotion.analyze.version") == "1.0.0"
     assert config.get("prompt_profiles.staging.emotion.analyze") == staged

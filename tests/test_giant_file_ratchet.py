@@ -97,7 +97,7 @@ ALLOWLIST_BASELINES: dict[str, int] = {
     "web/routers/insight.py": 926,
     "core/background_tasks.py": 950,
     "web/agent_registry.py": 912,
-    "web/routers/local_deploy.py": 915,
+    "web/routers/local_deploy.py": 919,
     "cli.py": 908,
 }
 

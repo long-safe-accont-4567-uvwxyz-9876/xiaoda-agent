@@ -201,7 +201,12 @@ def test_staged_template_roundtrip_feeds_harness(tmp_path):
         "output_schema": {"type": "string"},
     })
     assert staged["status"] == "staging"
-    promoted = repository.promote("memory.compress_episode")
+    promoted = repository.promote(
+        "memory.compress_episode",
+        ab_report={"candidate": {"schema_rate": 1.0, "golden_rate": 1.0,
+                                 "violation_count": 0},
+                   "regressions": []},
+    )
     assert promoted["status"] == "production"
     rendered = repository.resolve(
         "memory.compress_episode",
@@ -222,7 +227,8 @@ def _promote(repository, version: str, template: str = "{memories_text}") -> Non
         "variables": {"memories_text": {"required": True}},
         "output_schema": {"type": "string"},
     })
-    repository.promote("memory.compress_episode")
+    # 回滚链演练属运维翻转流程：走 force 逃生舱，不构造评测报告
+    repository.promote("memory.compress_episode", force=True)
 
 
 def test_rollback_chain_preserves_every_replaced_version(tmp_path):

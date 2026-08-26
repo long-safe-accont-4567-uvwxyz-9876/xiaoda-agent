@@ -237,7 +237,8 @@ def test_rollback_chain_preserves_intermediate_versions(api):
             },
         )
         assert stage.status_code == 200
-        promoted = api.post(f"{base}/promote", json={}, headers=hdr)
+        promoted = api.post(
+            f"{base}/promote", json={"force": True}, headers=hdr)
         assert promoted.status_code == 200
 
     seen_versions = [
@@ -262,7 +263,7 @@ def test_ab_run_rejects_runs_with_multi_backend_combination(api):
     assert "not supported" in resp.json()["detail"]
 
 
-def test_promote_without_report_remits_legacy_behavior(api):
+def test_promote_without_report_or_force_is_rejected(api):
     stage = api.post(
         "/local-deploy/prompt-profiles/memory.compress_episode/stage",
         json={
@@ -278,8 +279,16 @@ def test_promote_without_report_remits_legacy_behavior(api):
         json={},
         headers={"X-Confirm": "yes"},
     )
-    assert promoted.status_code == 200
-    assert promoted.json()["data"]["status"] == "production"
+    assert promoted.status_code == 422
+    assert "requires a passing prompt AB gate report" in promoted.json()["detail"]
+
+    forced = api.post(
+        "/local-deploy/prompt-profiles/memory.compress_episode/promote",
+        json={"force": True},
+        headers={"X-Confirm": "yes"},
+    )
+    assert forced.status_code == 200
+    assert forced.json()["data"]["status"] == "production"
 
 
 def test_audit_log_records_governance_events(tmp_path, monkeypatch):
