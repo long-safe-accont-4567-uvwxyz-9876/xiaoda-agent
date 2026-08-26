@@ -59,8 +59,8 @@ datas += _tree_datas(os.path.join(SPECPATH, 'web', 'splash'), os.path.join('web'
 # web/routers/__init__.py (required for package imports in PyInstaller)
 datas.append((os.path.join(SPECPATH, 'web', 'routers', '__init__.py'), os.path.join('web', 'routers')))
 
-# db/schema.sql
-datas.append((os.path.join(SPECPATH, 'db', 'schema.sql'), 'db'))
+# db/schema.sql 已随 fc353d75 删除（孤儿 SQL，迁移收敛于 legacy_migrations），
+# 打包引用同步移除——2026-08-26 定位：此残留导致三平台 CI PyInstaller 全红。
 
 # .env.example
 datas.append((os.path.join(SPECPATH, '.env.example'), '.'))
