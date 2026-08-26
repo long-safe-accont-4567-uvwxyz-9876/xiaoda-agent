@@ -237,7 +237,9 @@ class DatabaseManager(LegacyMigrationMixin, DDLMixin, ConversationLogMixin, Life
         ]
         if not is_fat_fs:
             pragmas.append("PRAGMA mmap_size=67108864")
-            pragmas.append("PRAGMA wal_autocheckpoint=10000")
+            # 10000(40MB)→2000(8MB)：USB 盘上大 WAL 周期性 checkpoint 一次回写
+            # 几十 MB，撞上用户请求即整批查询卡顿；小阈值摊平 I/O 尖峰
+            pragmas.append("PRAGMA wal_autocheckpoint=2000")
         for pragma_sql in pragmas:
             try:
                 await self._conn.execute(pragma_sql)

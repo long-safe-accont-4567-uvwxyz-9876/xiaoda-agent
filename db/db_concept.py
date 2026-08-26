@@ -24,15 +24,49 @@ class ConceptDB:
     # 否则每次检索后的 touch 批量更新会把命中率打没（与图快照 TTL 同一取舍）
     _STRUCTURAL_NODE_FIELDS = frozenset(
         {"text", "keys", "valid_to", "superseded_by", "layer"})
+    # 建边 key 的文档频率（DF）上限：存活节点中占比超过该值的 key 视为
+    # 无区分度的高扩散词（如会话角色词"爸爸/小妲/用户"，实测 DF 59%~77%，
+    # 曾致 2463 节点互连出 100 万条 co-occurrence 边）。与
+    # scripts/prune_concept_edges.py 的剪枝阈值保持一致。
+    MAX_KEY_DF_RATIO = 0.05
 
     def __init__(self, conn):
         self._conn = conn
         self._alive_cache: dict[str, dict] | None = None
         self._alive_cache_ts: float = 0.0
+        self._stopkey_cache: set[str] | None = None
 
     def _invalidate_alive_nodes_cache(self) -> None:
         self._alive_cache = None
         self._alive_cache_ts = 0.0
+        self._stopkey_cache = None
+
+    async def _get_stopkeys(self) -> set[str]:
+        """计算高扩散 key 集合（DF > MAX_KEY_DF_RATIO 的存活节点 key）。
+
+        结果随 alive_nodes 缓存生命周期失效；alive 快照为空（冷启动/测试）
+        时返回空集——节点数少时 DF 天然高，不应拦建边。
+        """
+        if self._stopkey_cache is not None:
+            return self._stopkey_cache
+        alive = await self.get_alive_nodes()
+        if len(alive) < 50:
+            self._stopkey_cache = set()
+            return self._stopkey_cache
+        df: dict[str, int] = {}
+        for node in alive.values():
+            try:
+                for k in set(json.loads(node.get("keys", "[]"))):
+                    df[k] = df.get(k, 0) + 1
+            except (json.JSONDecodeError, TypeError):
+                continue
+        threshold = max(1, int(len(alive) * self.MAX_KEY_DF_RATIO))
+        self._stopkey_cache = {k for k, v in df.items() if v > threshold}
+        if self._stopkey_cache:
+            logger.info("concept_db.stopkeys_computed",
+                        count=len(self._stopkey_cache),
+                        sample=sorted(self._stopkey_cache)[:8])
+        return self._stopkey_cache
 
     async def insert_node(self, id: str, text: str, keys: str,
                           weight: float = 1.0, peak_weight: float = 1.0,
@@ -267,6 +301,11 @@ class ConceptDB:
         alive = await self.get_alive_nodes()
         # CPU 匹配逻辑移至线程池，避免 json.loads x N 阻塞事件循环
         key_set = set(keys)
+        # 高扩散 key 过滤（防复发 2026-08-27）：角色词等 DF>5% 的 key 无区分度，
+        # 不过滤会退化为近稠密图（历史事故：100 万条 co-occurrence 边占库 3/4）
+        key_set = key_set - await self._get_stopkeys()
+        if not key_set:
+            return 0
         match_pairs = await asyncio.to_thread(
             self._compute_link_pairs, alive, node_id, key_set, min_shared)
         if not match_pairs:
@@ -351,6 +390,16 @@ class ConceptDB:
         # 3. CPU 匹配移至线程池
         target_list = [(r["id"], r["keys"]) for r in rows]
         all_keys_map = {r["id"]: r["keys"] for r in all_rows}
+        # 高扩散 key 过滤（防复发 2026-08-27）：与 auto_link 同一阈值，
+        # 防止角色词让 curator 把图再次推向稠密
+        stopkeys = await self._get_stopkeys()
+        if stopkeys:
+            all_keys_map = {
+                nid: json.dumps(sorted(
+                    (set(json.loads(ks or "[]")) - stopkeys)
+                    if ks else set()))
+                for nid, ks in all_keys_map.items()
+            }
         edge_pairs = await asyncio.to_thread(
             self._compute_batch_links, target_list, all_keys_map, min_shared,
             max_per_node)
