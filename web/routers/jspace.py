@@ -61,6 +61,7 @@ async def jspace_status(request: Request) -> Any:
         from core.j_space_bootstrap import (
             get_direction_registry,
             get_enhanced_router,
+            get_intent_decomposer,
             get_intervention_loop,
             get_signal_stream,
             get_structured_blackboard,
@@ -84,6 +85,16 @@ async def jspace_status(request: Request) -> Any:
         er = get_enhanced_router()
         if er is not None:
             status["enhanced_router"] = {"active": True}
+
+        # 修复（2026-08-26 运行时实测）：分解器单例惰性创建，此前未纳入探测，
+        # status 里 intent_decomposer.active 恒为 False（与 /jspace/decompose
+        # 实际可用相矛盾）。现与其它组件同口径：单例存在即 active。
+        decomposer = get_intent_decomposer()
+        if decomposer is not None:
+            status["intent_decomposer"] = {
+                "active": True,
+                "use_llm": bool(decomposer.use_llm),
+            }
     except Exception as e:
         logger.warning("jspace.status_partial error={}", e)
 
