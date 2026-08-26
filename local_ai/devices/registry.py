@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import os
 import platform
 import sys
+import time
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import replace
 from typing import Any
@@ -191,10 +193,27 @@ class DeviceRegistry:
         self._system_probe = system_probe
         self._devices: tuple[ComputeDevice, ...] | None = None
         self._backends: dict[tuple[Any, ...], ExecutionBackend] = {}
+        # TTL 缓存：设备探测含 sudo 子进程 + onnxruntime 真实推理验证，单次
+        # 可达数秒且曾被观测挂死 18h（manager.refresh_health 注释）。健康环
+        # 每 60s 强扫会把这份开销变成常驻负载；默认 TTL 内直接复用上次结果，
+        # env DEVICE_SCAN_TTL_SECONDS 覆盖，<=0 表示禁用缓存。
+        try:
+            self._scan_ttl = float(os.getenv("DEVICE_SCAN_TTL_SECONDS", "300"))
+        except ValueError:
+            self._scan_ttl = 300.0
+        self._scanned_at: float = 0.0
 
     def scan(self, force: bool = False) -> list[ComputeDevice]:
+        # 未强扫且已有结果时：
+        # - _devices 为 None（从未扫过）→ 必须探测；
+        # - TTL>0 且未过期 → 复用上次结果（健康环高频调用走此分支）；
+        # - TTL<=0 或已过期 → 真实重探。
         if self._devices is not None and not force:
-            return list(self._devices)
+            if (
+                self._scan_ttl > 0
+                and (time.monotonic() - self._scanned_at) < self._scan_ttl
+            ):
+                return list(self._devices)
         previous_devices = self._devices or ()
         previous_backends = self._backends
         system_devices, available_providers, cpu = self._probe()
@@ -224,6 +243,7 @@ class DeviceRegistry:
         self._preserve_disappeared_provider_backends(devices, previous_devices, disappeared_providers)
         self._preserve_disappeared_device_backends(devices, previous_devices, system_devices, current_providers)
         self._devices = tuple(devices)
+        self._scanned_at = time.monotonic()
         return list(self._devices)
 
     def _probe(self) -> tuple[list[ComputeDevice], tuple[str, ...], ComputeDevice | None]:

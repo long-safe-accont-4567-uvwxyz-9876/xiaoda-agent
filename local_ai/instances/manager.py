@@ -489,13 +489,18 @@ class InstanceManager:
             return updated
 
     async def refresh_health(self) -> list[ModelInstance]:
-        # scan(force=True) 内部做同步设备探测（/sys 遍历、subprocess、
-        # onnxruntime provider 验证含一次真实推理）——若某次探测 hang，
-        # 裸调会直接冻结事件循环数百秒且无法被 wait_for 取消（同步阻塞不响应
-        # CancelledError）。移入线程池：健康轮询只关心结果，不占事件循环。
+        # scan 内部做同步设备探测（/sys 遍历、subprocess、onnxruntime provider
+        # 验证含一次真实推理）——若某次探测 hang，裸调会直接冻结事件循环数百秒
+        # 且无法被 wait_for 取消（同步阻塞不响应 CancelledError）。移入线程池：
+        # 健康轮询只关心结果，不占事件循环。
+        # 2026-08-27：不再 force=True 强扫。DeviceRegistry.scan 自带 TTL 缓存
+        # （DEVICE_SCAN_TTL_SECONDS，默认 300s），健康环每 60s 到此只是复用
+        # 缓存结果，TTL 到期才真正重探。此前强扫导致每分钟一次 sudo 探针
+        # 子进程 + NPU 争抢成为常驻负载（instance health 走 _run_sync，
+        # 不受本次改动影响）。
         devices = {
             device.id: device
-            for device in await asyncio.to_thread(self._device_registry.scan, True)
+            for device in await asyncio.to_thread(self._device_registry.scan)
         }
         with self._state_lock:
             instances = tuple(self._instances.items())
