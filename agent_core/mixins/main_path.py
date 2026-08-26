@@ -2,7 +2,7 @@
 
 包含主处理路径相关方法：_run_main_process_path、_setup_main_emotion_and_memory、
 _run_emotion_llm_background、_build_main_messages、_finalize_main_reply、
-_dynamic_emotion_threshold、_retrieve_main_memories、_inject_image_description、
+_retrieve_main_memories、_inject_image_description、
 _prepare_sticker_and_tools、_resolve_task_and_circuit、_call_main_llm_with_verification。
 
 叶子模块依赖约定：本 mixin 只允许依赖 agent_core._shared、agent_core.mixins.verification、
@@ -338,49 +338,6 @@ class MainPathMixin:
                              audio_path=audio_path, tool_results=tool_results, image_paths=media_image_paths,
                              video_path=media_video_path, tts_pending=tts_pending, tts_text=tts_text)
 
-    def _dynamic_emotion_threshold(self, user_input: str, emotion: dict, base: float = 0.5) -> float:
-        """根据对话情景动态调整情绪触发阈值。
-
-        自适应策略:
-          1. 情绪强度高 → 降低阈值 (更容易触发安慰记忆)
-          2. 用户表达情感关键词多 → 降低阈值
-          3. 对话深入 (长输入) → 降低阈值
-          4. 短/无情感输入 → 保持或提高阈值 (避免误触发)
-
-        最终阈值 clamp 在 [0.2, 0.8] 范围内, 防止极端值。
-        """
-        threshold = base
-        intensity = float(emotion.get("intensity", 0.0))
-
-        # 因子 1: 情绪强度越高, 阈值越低
-        # intensity 0.8 → threshold -= 0.15; intensity 0.3 → threshold += 0.05
-        if intensity >= 0.7:
-            threshold -= 0.15
-        elif intensity >= 0.5:
-            threshold -= 0.05
-        elif intensity <= 0.2:
-            threshold += 0.05
-
-        # 因子 2: 情感关键词密度
-        emotional_words = (
-            "难过", "伤心", "哭", "痛", "累", "烦", "压力", "焦虑",
-            "害怕", "孤独", "想你", "分手", "吵架", "遗憾", "后悔",
-            "开心", "喜欢", "幸福", "感恩", "想", "心情", "感觉",
-        )
-        query_lower = user_input.lower() if isinstance(user_input, str) else ""
-        emo_count = sum(1 for w in emotional_words if w in query_lower)
-        if emo_count >= 3:
-            threshold -= 0.1   # 密集情感表达 → 大幅降低
-        elif emo_count >= 1:
-            threshold -= 0.05  # 有情感词 → 小幅降低
-
-        # 因子 3: 输入长度 (深入对话)
-        effective_len = sum(2 if '\u4e00' <= c <= '\u9fff' else 1 for c in query_lower)
-        if effective_len > 40:
-            threshold -= 0.05  # 长输入: 用户在认真倾诉
-
-        return max(0.2, min(0.8, threshold))
-
     async def _retrieve_main_memories(
         self,
         user_input: Any,
@@ -530,17 +487,8 @@ class MainPathMixin:
                     logger.warning("memory.retrieve_failed", error=str(e))
                     results = None
                 if results is not None:
-                    # 动态情绪阈值: 根据对话情景自适应调整
-                    _base_threshold = 0.5
-                    try:
-                        import config as _emotion_cfg
-                        _base_threshold = float(getattr(_emotion_cfg, "EMOTION_TRIGGER_THRESHOLD", 0.5))
-                    except (ImportError, ValueError, TypeError):
-                        logger.debug("main_path.emotion_threshold_config_fallback")
-                    _emo_threshold = self._dynamic_emotion_threshold(
-                        user_input, emotion, _base_threshold
-                    )
-                    # 注：comfort_memories 不再追加到 results
+                    # 注：comfort_memories 与动态情绪阈值已随安抚检索移除一并退役；
+                    # 情绪安抚由模型基于真实相关记忆自行组织语言。
                     # 根因：retrieve_comfort_memories 只按情绪标签+重要性+时间排序，
                     # 与当前 query 零语义相关，会污染记忆检索结果，导致"回忆不准"。
                     # 情绪安抚应由模型基于真实相关记忆自行组织语言，而非注入无关"开心记忆"。
