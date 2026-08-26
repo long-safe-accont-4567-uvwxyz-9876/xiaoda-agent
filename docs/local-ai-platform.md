@@ -5,6 +5,7 @@
 ## 适用范围
 
 - 发布产物覆盖 Windows x64、Linux x64 与 Linux ARM64，不包含 Android 客户端。Android 当前仅保留数据契约，不提供客户端、安装包或完整部署路径。
+- **平台支持定位（2026-08-26 审计确认）**：Windows x64 与 Linux（x86_64/aarch64）为受支持平台，发布矩阵验证；macOS（darwin）为**尽力而为**——源码含 darwin 分支（CPU 探测、会话调优），但无发布工件、无 CI 覆盖、不承诺可用。从源码在 macOS 运行遇到问题按社区贡献处理。
 - 本地对话使用 ONNX Runtime GenAI；Embedding 与 Reranker 使用标准 ONNX Runtime。市场模型不会捆绑进发布产物，需由用户下载。
 - Web UI 的「本地部署」页面统一管理部署、模型广场、已安装模型、算力设备、功能节点和下载任务。
 - 云端、本地和自定义 Provider 由「模型接入」页面统一配置；本地模型管理与 Provider 凭证管理是两个独立入口。

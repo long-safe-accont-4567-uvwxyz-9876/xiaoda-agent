@@ -33,7 +33,13 @@ CURRENT_SCHEMA_VERSION = 32
 
 
 def _detect_fs_type(path: Path) -> str:
-    """检测路径所在文件系统类型（如 ext4/vfat/exfat/ntfs）。失败返回空串。"""
+    """检测路径所在文件系统类型（如 ext4/vfat/exfat/ntfs）。失败返回空串。
+
+    平台覆盖：win32 走 ctypes 卷查询；Linux 读 /proc/mounts；
+    darwin 等其他 POSIX 平台无 /proc/mounts，open 抛 FileNotFoundError
+    （OSError 子类）被下方 except 捕获 → 返回空串 → 按"非 FAT"处理（WAL），
+    与 APFS/HFS+ 实际能力一致，语义安全。
+    """
     try:
         p = path.resolve()
         # Windows: 用 ctypes 获取卷文件系统类型
