@@ -31,10 +31,9 @@
 - [Dockerfile](../Dockerfile) - 容器镜像构建文件
 - [健康检查脚本 (Linux)](../scripts/doctor.sh) - 自检脚本
 - [健康检查脚本 (Windows)](../scripts/doctor.bat) - 自检脚本
-- [K8s 部署配置](../deploy/k8s.yaml) - Kubernetes 部署
-- [systemd 服务单元](../deploy/qq-agent.service) - QQ Bot systemd 服务
+- [K8s 部署配置](../deploy/k8s.yaml) - Kubernetes 部署（参考模板，未随版本验证）
 
-## 📊 审计与质量
+## 📊 审计与质量（历史归档）
 
 - [代码质量审计报告](../audit/code_quality_audit_report.md) - 代码质量评估
 - [代码质量审计证据](../audit/code_quality_audit_evidence.md) - 审计原始证据

@@ -188,17 +188,14 @@ python qq_bot_adapter.py
 
 ### 方式三：systemd 服务（Linux 生产环境）
 
-```bash
-# 复制并编辑服务文件
-cp deploy/qq-agent.service /etc/systemd/system/
-# 编辑其中的路径和用户名
-sudo systemctl daemon-reload
-sudo systemctl enable qq-agent
-sudo systemctl start qq-agent
+> 现行形态为单进程：`agent.py --web` 内含 QQ Bot（服务单元 `nahida-web.service`,
+> 安装于 `/etc/systemd/system/`,不在仓库内——本机生产配置含外挂数据盘挂载依赖）。
+> 通用模板可参考旧版 `deploy/qq-agent.service`(已废弃删除)的历史内容,ExecStart 用：
+>
+> ```bash
+> ExecStart=/path/to/.venv/bin/python agent.py --web --host 127.0.0.1 --port 8082
+> ```
 
-# 查看状态
-sudo systemctl status qq-agent
-```
 
 ---
 
