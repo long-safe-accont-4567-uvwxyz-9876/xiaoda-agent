@@ -173,6 +173,7 @@ NODE_PROMPT_PROFILES: dict[str, tuple[PromptProfile, ...]] = {
                 "emotion.emotion_llm:_SYSTEM_PROMPT",
                 "emotion.emotion_llm:_USER_PROMPT_TEMPLATE",
             ),
+            variables=("input", "context"),
             status="production",
         ),
     ),
