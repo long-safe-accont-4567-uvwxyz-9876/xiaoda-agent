@@ -8,6 +8,7 @@ import httpx
 from loguru import logger
 
 from utils.http_pool import get_shared_client
+from utils.metrics import metrics
 
 
 class Reranker:
@@ -145,6 +146,9 @@ class Reranker:
             self._stats["avg_latency_ms"] = (
                 self._stats["avg_latency_ms"] * 0.9 + latency * 0.1
             )
+            # 直方图打点（timer.rerank，秒）：暴露到 /api/v1/system/metrics，
+            # 观测外部 rerank API 退化（50 文档实测 ~870ms）
+            metrics.observe("rerank", latency / 1000)
 
             logger.debug("reranker.done",
                          query_len=len(query),

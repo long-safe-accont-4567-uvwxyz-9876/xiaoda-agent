@@ -39,6 +39,7 @@ from emotion.emotion_simple import build_emotion_hint, detect_emotion
 from tool_engine.tool_registry import to_openai_tools
 from utils.common import DEFAULT_MAX_TOKENS
 from utils.common import safe_int as _safe_int
+from utils.metrics import metrics
 from utils.text_utils import encode_image_to_base64
 
 
@@ -470,6 +471,9 @@ class MainPathMixin:
                                 "memory.evidence_shadow_failed error={}", str(evidence_error)
                             )
                     _retrieve_ms = int((time.time() - _t0) * 1000)
+                    # 直方图打点：暴露到 /api/v1/system/metrics（timer.memory_retrieve），
+                    # 供线上退化监控（8s 超时线、WAL 读放大回溯）。
+                    metrics.observe("memory_retrieve", _retrieve_ms / 1000)
                     logger.info("pipeline.memory.retrieve.done elapsed_ms={} result_count={}",
                                 _retrieve_ms, len(results) if results else 0)
                 except asyncio.TimeoutError:
