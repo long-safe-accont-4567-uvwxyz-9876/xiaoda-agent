@@ -26,6 +26,9 @@ from typing import Any
 
 from loguru import logger
 
+# 实证无环（behavioral_health 同款）：introspection ← background_tasks 单向依赖
+from core.background_tasks import _spawn
+
 # J-Space Hook: 行为信号流采集 (非阻塞, 失败不影响主流程)
 try:
     from config import ENABLE_J_SPACE_HOOKS
@@ -144,7 +147,6 @@ class AgentIntrospector:
         # J-Space Hook: emit cognitive_load signal (non-blocking)
         if _signal_stream is not None:
             try:
-                from core.background_tasks import _spawn
                 # _spawn 自带无事件循环降级与异常日志，无需额外 loop 探测
                 _spawn(_signal_stream.emit(
                     "cognitive_load", state.cognitive_load, "introspection"))
