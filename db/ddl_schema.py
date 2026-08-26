@@ -3,6 +3,15 @@
 自 db/database.py 拆分（上帝文件 Phase 2）：函数体逐字节搬移，仅缩进调整。
 _create_tables 编排入口一并搬入（依赖 LegacyMigrationMixin._run_migrations，
 由 DatabaseManager 继承组合）。
+
+┌─ Schema 真相源说明 ──────────────────────────────────────────────┐
+│ 本文件只覆盖核心记忆/会话表。以下模块各自维护额外 DDL：           │
+│   db/legacy_migrations.py        — kg_v2/memory_v2 等迁移期表(21) │
+│   db/db_memory_reconciliation.py — 对账与 outbox 表(6)            │
+│   db/db_workflow.py              — workflow 运行时表(7)           │
+│   core/belief_router.py          — agent_beliefs(路由器自建)      │
+│ 全新库初始化必须让以上 init 与本文件一起执行，否则相关功能 500。  │
+└──────────────────────────────────────────────────────────────────┘
 """
 from __future__ import annotations
 
