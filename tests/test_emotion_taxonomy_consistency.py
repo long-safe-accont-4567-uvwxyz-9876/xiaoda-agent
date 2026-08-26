@@ -158,6 +158,8 @@ class TestStickerTaxonomy:
         if not sticker_dir.exists():
             pytest.skip("小妲表情包目录不存在")
         dirs = {d.name for d in sticker_dir.iterdir() if d.is_dir()}
+        if not dirs:
+            pytest.skip("小妲表情包目录为空（CI/裸机无素材，部署机才铺 19 个情绪子目录）")
         assert dirs == VALID_EMOTION_TAGS, dirs ^ VALID_EMOTION_TAGS
 
 

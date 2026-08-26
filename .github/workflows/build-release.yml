@@ -705,8 +705,10 @@ jobs:
           tail -n +$((ARCHIVE_LINE + 1)) "$RUN_FILE" > "$PAYLOAD"
           MAGIC=$(head -c 2 "$PAYLOAD" | od -An -tx1 | tr -d ' \n')
           [ "$MAGIC" = "1f8b" ] || { echo "FATAL: payload magic=$MAGIC, expected gzip 1f8b"; exit 1; }
-          tar -tzf "$PAYLOAD" > /dev/null || { echo "FATAL: payload is not a valid tar.gz"; exit 1; }
-          tar -tzf "$PAYLOAD" | head -3
+          # 先完整捕获清单再截取展示：`tar | head` 在 pipefail 下会因
+          # head 提前关管道触发 SIGPIPE（tar exit 141）误报失败
+          TAR_LIST=$(tar -tzf "$PAYLOAD") || { echo "FATAL: payload is not a valid tar.gz"; exit 1; }
+          printf '%s\n' "$TAR_LIST" | sed -n '1,3p'
           rm -f "$PAYLOAD"
 
           # 4) 反向验证：用假 payload 注入临时副本，确认脚本对「注释里含
@@ -890,6 +892,7 @@ jobs:
         run: |
           sudo apt-get update && sudo apt-get install -y \
             portaudio19-dev \
+            ffmpeg \
             libstdc++6 \
             libgcc-s1 \
             libglib2.0-0 \

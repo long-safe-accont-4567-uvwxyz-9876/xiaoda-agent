@@ -256,7 +256,12 @@ class TestDetectEmotionLlm:
                 "properties": {"primary": {"type": "string"}},
             },
         })
-        repository.promote("emotion.analyze")
+        # promote 自 2026-08 起强制 AB 门禁（无报告晋升 ValueError），
+        # 通过样本字段与 test_prompt_override_consumption.PASSING_AB_REPORT 一致
+        repository.promote("emotion.analyze", ab_report={
+            "candidate": {"schema_rate": 1.0, "golden_rate": 1.0, "violation_count": 0},
+            "regressions": [],
+        })
         monkeypatch.setattr(config_service_module, "_instance", config)
         router = MockRouter(
             '{"primary":"平静","P":0,"A":0,"D":0.5,"needs":[],"style":""}'

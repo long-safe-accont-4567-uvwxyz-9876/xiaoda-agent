@@ -73,10 +73,19 @@ def test_adapter_instantiable(mock_deps):
     assert bot._portrait_manager is mock_deps["portrait_manager"]
 
 
-def test_start_does_not_raise(adapter):
-    """2. start() 不抛异常（仅记录 warning）"""
-    asyncio.run(adapter.start())
-    assert adapter._running is True
+def test_start_without_credentials_rolls_back_to_not_ready(adapter, monkeypatch):
+    """2. start() 无凭证时不抛异常，且按 R3-Major#2 回滚 not-ready 状态
+
+    新契约：start() 早期置位 _running=True，依赖不满足（无凭证等待扫码）
+    时必须回滚 _running=False 并返回 ok=False 的 readiness dict，
+    避免僵尸实例让 /wechat/stop 失效。
+    钉死无凭证分支：部署机上 ~/.ai-agent/wechat_credentials.json 真实存在，
+    不 mock 会随宿主机状态漂移（CI 无凭证 / 本机有凭证）。
+    """
+    monkeypatch.setattr(adapter, "_load_credentials", lambda: None)
+    readiness = asyncio.run(adapter.start())
+    assert readiness["ok"] is False
+    assert adapter._running is False
 
 
 def test_stop_does_not_raise(adapter):
