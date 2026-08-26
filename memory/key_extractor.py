@@ -39,7 +39,47 @@ _STOPWORDS = {
     "in", "on", "at", "to", "for", "of", "with", "by", "from", "as",
     "into", "about", "between", "through", "during", "before", "after",
     "up", "down", "out", "off", "over", "under", "again",
+    # 对话框架词（2026-08-27 防复发）：几乎每条记忆都出现（DF 29%~41%），
+    # 曾参与致概念图按"共享≥3 keys"互连成百万边稠密图。会话角色词
+    # （爸爸/妈妈/用户/人家 + agent 显示名）不在此硬编码，由
+    # _get_key_stopwords() 动态注入：config KEY_EXTRACTOR_ROLE_WORDS
+    # 可部署覆盖，agent display_name 读 config/agents/*.json。
+    "回应", "回复", "消息", "说话", "刚才", "现在", "已经", "一下", "一点",
+    "知道", "时候",
 }
+
+# 缓存动态停用词集（display_name 读文件有 mtime 缓存，但集合合并也不必每 token 重算）
+_dynamic_stopwords: set[str] | None = None
+
+
+def _get_key_stopwords() -> set[str]:
+    """返回静态表 + 会话角色词的完整停用词集。
+
+    角色词来源（防复发 2026-08-27，见 db_concept.MAX_KEY_DF_RATIO）：
+    - config.KEY_EXTRACTOR_ROLE_WORDS：部署方可覆盖的角色词列表
+      （默认含"爸爸/妈妈/用户/人家"等本部署通用称呼）
+    - agent 显示名（get_agent_display_name("xiaoda")）：用户改名后自动跟随，
+      与 _memory_utils._get_topic_stopwords 同一模式
+    """
+    global _dynamic_stopwords
+    if _dynamic_stopwords is None:
+        extra: set[str] = set()
+        try:
+            import config as _cfg
+            raw = getattr(_cfg, "KEY_EXTRACTOR_ROLE_WORDS", None)
+            if isinstance(raw, (list, tuple, set)):
+                extra.update(str(w).strip().lower() for w in raw if str(w).strip())
+        except Exception:
+            pass
+        try:
+            from config import get_agent_display_name
+            display = get_agent_display_name("xiaoda")
+            if display and display.strip():
+                extra.add(display.strip().lower())
+        except Exception:
+            pass
+        _dynamic_stopwords = _STOPWORDS | extra
+    return _dynamic_stopwords
 
 
 class KeyExtractor:
@@ -86,8 +126,8 @@ class KeyExtractor:
                 continue
             # 小写化
             lower = token.lower()
-            # 停用词过滤
-            if lower in _STOPWORDS:
+            # 停用词过滤（含动态注入的会话角色词）
+            if lower in _get_key_stopwords():
                 continue
             # 同义词归一化
             lower = self.NORMALIZE.get(lower, lower)

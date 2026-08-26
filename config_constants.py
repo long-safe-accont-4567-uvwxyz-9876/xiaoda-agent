@@ -378,6 +378,13 @@ MEMORY_WARM_MAX = _safe_int(os.getenv("MEMORY_WARM_MAX"), 10)
 # 温用户向量融合权重 (0.0~1.0): 冷=0.0, 温=0.2, 热=0.5(均衡)
 MEMORY_WARM_VEC_WEIGHT = _safe_float(os.getenv("MEMORY_WARM_VEC_WEIGHT"), 0.6)
 
+# 会话角色词（KeyExtractor 停用词，逗号分隔可覆盖）：这些词在几乎每条记忆出现，
+# DF 过高会让概念图按"共享≥3 keys"互连成稠密图（2026-08-27 百万边事故）。
+# agent 显示名由 key_extractor 动态注入，无需在此配置。
+KEY_EXTRACTOR_ROLE_WORDS = [
+    w.strip() for w in os.getenv("KEY_EXTRACTOR_ROLE_WORDS", "爸爸,妈妈,用户,人家").split(",") if w.strip()
+]
+
 # ── P3 记忆蒸馏压缩配置 ──
 MAX_EPISODIC_MEMORIES = _safe_int(os.getenv("MAX_EPISODIC_MEMORIES"), 200)
 MEMORY_DISTILL_BATCH = _safe_int(os.getenv("MEMORY_DISTILL_BATCH"), 30)

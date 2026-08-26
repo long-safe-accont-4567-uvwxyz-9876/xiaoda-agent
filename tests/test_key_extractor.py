@@ -73,3 +73,29 @@ def test_normalize_mapping_exists():
 
 def test_max_keys_value():
     assert KeyExtractor.MAX_KEYS == 24
+
+
+def test_role_words_not_hardcoded_but_filtered():
+    """2026-08-27 防复发：会话角色词不硬编码在 _STOPWORDS 里，
+    而是由 config.KEY_EXTRACTOR_ROLE_WORDS + agent 显示名动态注入。
+    提取结果中不得出现角色词（它们 DF 过高，曾致概念图百万边事故）。"""
+    from memory.key_extractor import _STOPWORDS, _get_key_stopwords
+
+    ke = KeyExtractor()
+    keys = ke.extract("爸爸和小妲还有用户一起吃火锅")
+    joined = set(keys)
+    for role in ("爸爸", "小妲", "用户"):
+        assert role not in _STOPWORDS, f"{role} 不应硬编码在静态表"
+        assert role not in joined, f"{role} 应被动态停用词过滤"
+    assert "吃火锅" in joined
+
+
+def test_key_stopwords_include_display_name():
+    """动态停用词集应包含 agent 显示名（与 _get_topic_stopwords 同模式）。"""
+    from config import get_agent_display_name
+    from memory.key_extractor import _get_key_stopwords
+
+    sw = _get_key_stopwords()
+    display = get_agent_display_name("xiaoda")
+    if display:
+        assert display.lower() in sw
