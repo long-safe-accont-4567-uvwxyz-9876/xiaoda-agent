@@ -193,9 +193,7 @@ class AgentCoreBootstrapper:
                 logger.warning("rust_hybrid.status enabled=true loaded=false "
                                "回退纯 Python（.so 缺失或契约不满足，见 rust_core/build.sh）")
             # enabled=false 时静默（用户未开启，不打扰）
-        except (ImportError, AttributeError):  # pragma: no cover - 纯防御
-            # 探测路径只可能缺模块/缺符号；其余异常应暴露而非吞掉，
-            # 否则违背本段"静默回退→可见降级"的初衷（broad-except 棘轮）
+        except (ImportError, AttributeError):  # 纯防御：仅缺模块/缺符号（棘轮收窄）
             pass
 
         self.core._initialized = True
