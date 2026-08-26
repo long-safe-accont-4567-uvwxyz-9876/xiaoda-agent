@@ -11,7 +11,10 @@ install_botpy_patches()，测试只依赖本模块。
   3) BotWebSocket.on_closed        — 4007/4009 会话失效清 session 强制 IDENTIFY；
                                      4008 限频保留 session 走 RESUME
   4) botpy.client.Client._pool_init — 会话循环异常退避 + 未完成登录补登录；
-                                     顺带移除原实现永假的 else 分支
+                                     顺带移除原实现永假的 else 分支；
+                                     loop 异常处理器的 ZeroDivisionError→stop()
+                                     收敛为仅取消本 Client 会话 runner（单进程
+                                     共享 loop 下停 loop 会连带杀掉 WebUI）
   5) 文件日志从 CWD/botpy.log 重定向到项目 LOG_DIR（redirect_bot_log）
 
 升级 SDK 代价/风险：
@@ -138,6 +141,64 @@ async def _patched_on_closed(self: Any, close_status_code: Any, close_msg: Any) 
 _original_pool_init: Any = None
 
 
+def _install_loop_handler(client: Any) -> None:
+    """为会话 loop 安装收敛版异常处理器。
+
+    原 SDK 语义：ZeroDivisionError 一律 ``_loop.stop()``。独立进程形态下等价于
+    "QQ 进程退出"；单进程合并后该 loop 同时承载 WebUI/QQ Bot/WS 全部子系统，
+    停 loop = 全服务猝死。收敛为：仅当异常源自 botpy 内部协程（心跳/会话）时
+    取消本 Client 的会话 runner，multi_run 的 asyncio.wait 随之返回 → 外层
+    while 重连；复现性故障由 run_qq_bot 指数退避(5→120s)兜底。其余来源只记录。
+    """
+    loop: Any = client._connection.loop
+
+    def _origin_module_of(context: Any) -> str:
+        source = context.get("future") or context.get("task")
+        coro = getattr(source, "get_coro", lambda: None)()
+        frame = getattr(coro, "cr_frame", None)
+        return str(getattr(frame, "f_globals", {}).get("__name__", ""))
+
+    def _cancel_session_runners() -> int:
+        cancelled = 0
+        for task in asyncio.all_tasks(loop):
+            if task.done():
+                continue
+            coro = task.get_coro()
+            frame = getattr(coro, "cr_frame", None)
+            if (
+                getattr(frame, "f_locals", {}).get("self") is client._connection
+                and str(getattr(coro, "__qualname__", "")).endswith("_runner")
+            ):
+                task.cancel()
+                cancelled += 1
+        return cancelled
+
+    def _loop_exception_handler(_loop: Any, context: Any) -> None:
+        _loop.default_exception_handler(context)
+        exception = context.get("exception")
+        if not isinstance(exception, ZeroDivisionError):
+            return
+        try:
+            if not _origin_module_of(context).startswith("botpy"):
+                _log_botpy_error(
+                    "[botpy] 非botpy来源的ZeroDivisionError仅记录不停服"
+                    "(旧实现停共享loop会连带杀掉WebUI)")
+                return
+            n = _cancel_session_runners()
+            _log_botpy_error(
+                f"[botpy] botpy协程内ZeroDivisionError，取消{n}个session runner走重连"
+                "(不再停共享loop)")
+        except Exception:  # noqa: BLE001 — 处理器自身绝不能成为新的故障源
+            _log_botpy_error("[botpy] 异常处理器自愈路径失败，降级为仅记录")
+
+    loop.set_exception_handler(_loop_exception_handler)
+
+
+def _log_botpy_error(message: str) -> None:
+    """handler 内的日志出口，独立成函数便于测试注入。"""
+    __import__("botpy.logging", fromlist=["get_logger"]).get_logger().error(message)
+
+
 async def _patched_pool_init(self, token: Any, session_interval: Any) -> Any:
     _botpy_log = __import__("botpy.logging", fromlist=["get_logger"]).get_logger()
     for i in range(self._ws_ap["shards"]):
@@ -151,15 +212,7 @@ async def _patched_pool_init(self, token: Any, session_interval: Any) -> Any:
         }
         self._connection.add(session)
 
-    loop = self._connection.loop
-
-    def _loop_exception_handler(_loop: Any, context: Any) -> None:
-        _loop.default_exception_handler(context)
-        exception = context.get("exception")
-        if isinstance(exception, ZeroDivisionError):
-            _loop.stop()
-
-    loop.set_exception_handler(_loop_exception_handler)
+    _install_loop_handler(self)
 
     recon_attempts = 0
     max_recon_delay = 60
