@@ -147,6 +147,7 @@ jobs:
           touch web/media/stickers/.gitkeep
 
       - name: Install Python dependencies
+        shell: bash
         run: |
           pip install pyinstaller
           pip install onnx
