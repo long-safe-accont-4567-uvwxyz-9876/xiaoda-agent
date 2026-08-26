@@ -510,6 +510,16 @@ for pkg in ('pilk', 'sqlite_vec', 'onnxruntime', 'onnxruntime_genai', 'tokenizer
     except Exception:
         pass
 
+# rust_core（Rust 混合加速扩展）：memory/rust_hybrid.py 惰性导入，
+# 静态分析必然漏掉。构建产物存在于 rust_core/target/release/ 时收集
+# （需先在目标平台跑 bash rust_core/build.sh；缺失时跳过，
+# 运行时自动回退纯 Python，检索功能不受影响，仅失去 3.1x 加速）。
+for _so_name in ('rust_core.so', 'rust_core.pyd'):
+    _so = os.path.join(SPECPATH, 'rust_core', 'target', 'release', _so_name)
+    if os.path.isfile(_so):
+        binaries.append((_so, '.'))
+        break
+
 # ---------------------------------------------------------------------------
 # Excludes – trim the bundle by removing unused heavy modules
 # ---------------------------------------------------------------------------

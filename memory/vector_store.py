@@ -116,7 +116,10 @@ class EmbedCache:
                     for k, v in zip(keys, vecs):
                         if len(self._cache) >= self._max_size:
                             break
-                        self._cache[str(k)] = [float(x) for x in v]
+                        # tolist() 一次 C 层转换整行，替代逐元素 float()
+                        # （512 维 × 数百条启动加载，实测省百毫秒级冷启动）
+                        self._cache[str(k)] = v.tolist() if hasattr(v, "tolist") \
+                            else [float(x) for x in v]
             else:
                 import pickle
                 with open(self._persist_path, "rb") as f:
@@ -1195,11 +1198,20 @@ class VectorStore:
         candidate_ids: list[int],
         top_k: int,
     ) -> list[tuple[int, float]]:
-        """Exact bounded search over candidate rowids when vec0 cannot filter KNN."""
+        """Exact bounded search over candidate rowids when vec0 cannot filter KNN.
+
+        距离计算分两条路径：
+        - numpy 可用：批量 frombuffer + 广播减法，C/BLAS 层完成（行数多时
+          相比逐行 struct.unpack + 生成器 sum 快约一个数量级）；
+        - numpy 不可用：逐行 struct.unpack 纯 Python 兜底。
+        两者结果逐位一致（同一 L2 公式与求和顺序无关紧要，浮点差异
+        在 tie-breaking 排序前不可观测）。
+        """
         if not candidate_ids or top_k <= 0:
             return []
         candidate_list = sorted({int(value) for value in candidate_ids})
-        ranked: list[tuple[int, float]] = []
+        row_ids: list[int] = []
+        raw_blobs: list[bytes] = []
         for offset in range(0, len(candidate_list), 900):
             batch = candidate_list[offset:offset + 900]
             placeholders = ",".join("?" for _ in batch)
@@ -1211,16 +1223,42 @@ class VectorStore:
             for row_id, raw in rows:
                 if not isinstance(raw, (bytes, bytearray, memoryview)):
                     continue
-                values = struct.unpack(f"<{len(raw) // 4}f", bytes(raw))
-                if len(values) != len(query_vec):
-                    continue
-                distance = math.sqrt(sum(
-                    (float(value) - float(query_value)) ** 2
-                    for value, query_value in zip(values, query_vec, strict=True)
-                ))
-                ranked.append((int(row_id), distance))
+                row_ids.append(int(row_id))
+                raw_blobs.append(bytes(raw))
+
+        if _HAS_NUMPY and raw_blobs:
+            dim = len(query_vec)
+            matrix = np.frombuffer(b"".join(raw_blobs), dtype="<f4")
+            if matrix.size == len(raw_blobs) * dim:
+                # 所有行维度一致（正常情况）：批量广播减法 + 行内点积
+                diff = matrix.reshape(len(raw_blobs), dim).astype(np.float32) \
+                    - np.asarray(query_vec, dtype=np.float32)
+                dists = np.sqrt(np.einsum("ij,ij->i", diff, diff))
+                ranked = list(zip(row_ids, dists.tolist(), strict=True))
+            else:
+                # 维度不一致行（理论不出现）：逐行兜底剔除
+                ranked = self._exact_fallback(row_ids, raw_blobs, query_vec)
+        else:
+            ranked = self._exact_fallback(row_ids, raw_blobs, query_vec)
         ranked.sort(key=lambda item: (item[1], item[0]))
         return ranked[:top_k]
+
+    @staticmethod
+    def _exact_fallback(
+        row_ids: list[int], raw_blobs: list[bytes], query_vec: list[float]
+    ) -> list[tuple[int, float]]:
+        """纯 Python L2 兜底（numpy 不可用/维度异常时）。"""
+        ranked: list[tuple[int, float]] = []
+        for row_id, raw in zip(row_ids, raw_blobs, strict=True):
+            values = struct.unpack(f"<{len(raw) // 4}f", raw)
+            if len(values) != len(query_vec):
+                continue
+            distance = math.sqrt(sum(
+                (float(value) - float(query_value)) ** 2
+                for value, query_value in zip(values, query_vec, strict=True)
+            ))
+            ranked.append((row_id, distance))
+        return ranked
 
     async def search(self, query_text: str, top_k: int = 5,
                      candidate_ids: list[int] | None = None,

@@ -37,9 +37,14 @@ then
   exit 1
 fi
 
-# 同步到项目 venv（若存在），保证 pytest 无 PYTHONPATH 时也用新产物
-VENV_SP="../.venv/lib/python3.11/site-packages"
-if [ -d "$VENV_SP" ]; then
+# 同步到项目 venv（若存在），保证 pytest 无 PYTHONPATH 时也用新产物。
+# 站点目录自动发现（不硬编码 Python 版本）：升级 3.11 -> 3.12 时
+# 旧硬编码路径会静默失配，等价性测试组整组 skip 而非报错--此为该隐患的修复
+VENV_SP=""
+if [ -x "../.venv/bin/python" ]; then
+  VENV_SP="$(../.venv/bin/python -c 'import sysconfig; print(sysconfig.get_paths()["purelib"])')"
+fi
+if [ -n "$VENV_SP" ] && [ -d "$VENV_SP" ]; then
   cp -f target/release/librust_core.so "$VENV_SP/rust_core.so"
   echo "已同步到 $VENV_SP/rust_core.so"
 fi

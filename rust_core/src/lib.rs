@@ -149,75 +149,30 @@ struct NodeIndex {
     /// 预 lowercase 文本（加载时一次）
     texts_lower: Vec<String>,
     weights: Vec<f64>,
+    /// 全量 key 文档频率（new() 一次预计算）：key -> 含该 key 的节点数。
+    /// keys 加载后恒不变，df 是静态统计--每查询重算等于把 O(预计算) 干成 O(每查询)
+    key_df: HashMap<Box<str>, usize>,
     /// 驻留边快照（load_edges 后可用）：邻接表按节点下标组织
     /// adj[i] = Vec<(neighbor_idx, weight)>，图游走零字符串哈希
     adj: Vec<Vec<(usize, f64)>>,
-    /// id → 下标（load_edges 时构建）
+    /// id -> 下标（new() 一次性构建；ids 构造后恒不变，
+    /// 边快照刷新无需重建，省去每次 load_edges 的全量 String 克隆）
     id_index: HashMap<String, usize>,
     /// 边快照是否已加载
     has_graph: bool,
 }
 
-#[pymethods]
 impl NodeIndex {
-    #[new]
-    #[pyo3(signature = (node_ids, node_keys_json, node_texts, node_weights))]
-    fn new(
-        node_ids: Vec<String>,
-        node_keys_json: Vec<String>,
-        node_texts: Vec<String>,
-        node_weights: Vec<f64>,
-    ) -> PyResult<Self> {
-        if node_ids.len() != node_keys_json.len()
-            || node_ids.len() != node_texts.len()
-            || node_ids.len() != node_weights.len()
-        {
-            return Err(PyValueError::new_err(
-                "node_ids/node_keys_json/node_texts/node_weights length mismatch",
-            ));
-        }
-        let keys: Vec<HashSet<String>> = node_keys_json
-            .iter()
-            .map(|s| parse_json_keys(s).unwrap_or_default().into_iter().collect())
-            .collect();
-        let texts_lower: Vec<String> = node_texts.iter().map(|t| t.to_lowercase()).collect();
-        let n = node_ids.len();
-        Ok(NodeIndex {
-            ids: node_ids,
-            keys,
-            texts_lower,
-            weights: node_weights,
-            adj: vec![Vec::new(); n],
-            id_index: HashMap::with_capacity(n),
-            has_graph: false,
-        })
-    }
-
-    /// 节点数（健康检查用）
-    #[getter]
-    fn size(&self) -> usize {
-        self.ids.len()
-    }
-
-    /// 直接命中通道：IDF 加权 key 重叠 + 双向子串包含（语义与无状态版逐位一致）。
-    /// 返回 {node_id: score}，仅含得分 > 0 的节点。
-    fn direct_channel(&self, py: Python<'_>, query: &str, query_keys: Vec<String>) -> Py<PyDict> {
-        // IDF（节点数据已驻留，无需重复解析）。
-        // df 的 key 直接借用 self.keys（&str），不用 Box::leak——泄漏会随查询量线性增长
+    /// direct_channel 的纯计算段（不接触任何 Python 对象，可在无 GIL 下执行）。
+    fn direct_scores<'a>(&'a self, query: &str, query_keys: &[String])
+        -> HashMap<&'a str, f64> {
         let n = self.ids.len() as f64;
         let qset: HashSet<&str> = query_keys.iter().map(|s| s.as_str()).collect();
-        let mut df: HashMap<&str, usize> = HashMap::new();
-        for nk in &self.keys {
-            for k in nk {
-                if qset.contains(k.as_str()) {
-                    *df.entry(k.as_str()).or_insert(0) += 1;
-                }
-            }
-        }
+        // IDF：df 已在 new() 全量预计算，此处仅 |query_keys| 次查表
         let idf: HashMap<&str, f64> = query_keys
             .iter()
             .map(|k| {
-                let d = *df.get(k.as_str()).unwrap_or(&0) as f64;
+                let d = self.key_df.get(k.as_str()).copied().unwrap_or(0) as f64;
                 (k.as_str(), (n / (1.0 + d)).ln())
             })
             .collect();
@@ -256,6 +211,130 @@ impl NodeIndex {
                     (substr + reverse) * 0.6 * w_bias;
             }
         }
+        direct
+    }
+
+    /// spreading_channel 的纯计算段（不接触任何 Python 对象，可在无 GIL 下执行）。
+    /// 返回 (被写入过的下标及其激活值, 未识别种子的合并累积)。
+    fn spreading_scores<'a>(&'a self, seeds: &'a [(String, f64)], radius: usize,
+                            decay: f64, threshold: f64)
+        -> (Vec<(&'a str, f64)>, HashMap<&'a str, f64>) {
+        // 种子入队；不在节点集的种子按 Python 语义仅累积自身激活、不传播
+        // （生产路径种子恒来自 direct_channel ⊆ 节点集，此分支纯防御）
+        let mut spread = vec![0.0f64; self.ids.len()];
+        // 位图记录被 defaultdict 写入过的下标（含 0 值）--HashSet per-op 哈希开销更高
+        let mut touched = vec![false; self.ids.len()];
+        let mut wave: HashMap<usize, f64> = HashMap::new();
+        let mut unknown: HashMap<&str, f64> = HashMap::new();
+        for (nid, act) in seeds {
+            if let Some(&idx) = self.id_index.get(nid.as_str()) {
+                wave.insert(idx, *act);
+            } else {
+                // 同 id 多次出现时合并累积（保持与 dict 累加一致）
+                *unknown.entry(nid.as_str()).or_insert(0.0) += *act;
+            }
+        }
+
+        let mut current = wave;
+        for hop in 0..=radius {
+            let mut next: HashMap<usize, f64> = HashMap::new();
+            for (&idx, &act) in current.iter() {
+                // spread[idx] 初始化即为 0.0：写入即保留（含 0 值种子条目）
+                touched[idx] = true;
+                spread[idx] += act;
+                if hop < radius && act > threshold {
+                    // adj 与 ids 同长，idx 恒在界内；用安全索引避免 unsafe
+                    if let Some(edges) = self.adj.get(idx) {
+                        for &(nb, ew) in edges {
+                            let propagated = act * decay * ew / ((hop + 1) as f64);
+                            *next.entry(nb).or_insert(0.0) += propagated;
+                        }
+                    }
+                }
+            }
+            current = next;
+            if current.is_empty() {
+                break;
+            }
+        }
+
+        let pairs: Vec<(&str, f64)> = touched
+            .iter()
+            .enumerate()
+            .filter(|(_, &t)| t)
+            .map(|(i, _)| (self.ids[i].as_str(), spread[i]))
+            .collect();
+        (pairs, unknown)
+    }
+}
+
+#[pymethods]
+impl NodeIndex {
+    #[new]
+    #[pyo3(signature = (node_ids, node_keys_json, node_texts, node_weights))]
+    fn new(
+        node_ids: Vec<String>,
+        node_keys_json: Vec<String>,
+        node_texts: Vec<String>,
+        node_weights: Vec<f64>,
+    ) -> PyResult<Self> {
+        if node_ids.len() != node_keys_json.len()
+            || node_ids.len() != node_texts.len()
+            || node_ids.len() != node_weights.len()
+        {
+            return Err(PyValueError::new_err(
+                "node_ids/node_keys_json/node_texts/node_weights length mismatch",
+            ));
+        }
+        let keys: Vec<HashSet<String>> = node_keys_json
+            .iter()
+            .map(|s| parse_json_keys(s).unwrap_or_default().into_iter().collect())
+            .collect();
+        let texts_lower: Vec<String> = node_texts.iter().map(|t| t.to_lowercase()).collect();
+        let n = node_ids.len();
+        // 全量 df 预计算：静态数据一次统计，direct_channel 每查询仅查表
+        let mut key_df: HashMap<Box<str>, usize> = HashMap::new();
+        for nk in &keys {
+            for k in nk {
+                *key_df.entry(k.as_str().into()).or_insert(0) += 1;
+            }
+        }
+        // id -> 下标一次性构建：ids 构造后恒不变，load_edges 不再重建
+        let mut id_index: HashMap<String, usize> = HashMap::with_capacity(n);
+        for (i, id) in node_ids.iter().enumerate() {
+            id_index.insert(id.clone(), i);
+        }
+        Ok(NodeIndex {
+            ids: node_ids,
+            keys,
+            texts_lower,
+            weights: node_weights,
+            key_df,
+            adj: vec![Vec::new(); n],
+            id_index,
+            has_graph: false,
+        })
+    }
+
+    /// 节点数（健康检查用）
+    #[getter]
+    fn size(&self) -> usize {
+        self.ids.len()
+    }
+
+    /// 直接命中通道：IDF 加权 key 重叠 + 双向子串包含（语义与无状态版逐位一致）。
+    /// 返回 {node_id: score}，仅含得分 > 0 的节点。
+    ///
+    /// 纯计算段在 py.allow_threads 内无 GIL 执行：7ms 的 IDF+打分不再冻结
+    /// 同进程所有 Python 线程（QQ/Web 双通道共享进程的尾延迟改善），
+    /// 结束后回 GIL 组装 PyDict。
+    fn direct_channel(&self, py: Python<'_>, query: &str, query_keys: Vec<String>) -> Py<PyDict> {
+        // 关键：计算只借用 &self（NodeIndex 字段全是 Send 数据，跨线程安全），
+        // 零 Python 对象接触；q_lower/to_lowercase 也在闭包内完成
+        let direct: Vec<(&str, f64)> = py
+            .allow_threads(|| self.direct_scores(query, &query_keys))
+            .into_iter()
+            .collect();
 
         let out = PyDict::new(py);
         for (nid, score) in direct {
@@ -271,10 +350,7 @@ impl NodeIndex {
     /// 游走时邻居必须 alive 才入队，加载期预过滤结果一致）。
     #[pyo3(signature = (rows,))]
     fn load_edges(&mut self, rows: Vec<(String, String, f64)>) -> PyResult<usize> {
-        self.id_index.clear();
-        for (i, id) in self.ids.iter().enumerate() {
-            self.id_index.insert(id.clone(), i);
-        }
+        // id_index 已在 new() 构建且 ids 恒不变，此处只重置邻接表
         for v in self.adj.iter_mut() {
             v.clear();
         }
@@ -302,6 +378,9 @@ impl NodeIndex {
     ///
     /// 实测（2417 节点 / 100 万边）：游走 26.4x 于 Python 版（842.7→31.9ms），
     /// 最大相对误差 3.09e-15。
+    ///
+    /// 图游走在 py.allow_threads 内无 GIL 执行：~32ms 的波前游走不再冻结
+    /// 同进程所有 Python 线程，结束后回 GIL 组装 PyDict。
     #[pyo3(signature = (seeds, radius=3, decay=0.5, threshold=0.05))]
     fn spreading_channel(
         &self,
@@ -314,57 +393,15 @@ impl NodeIndex {
         if !self.has_graph {
             return Err(PyValueError::new_err("edges not loaded; call load_edges first"));
         }
-        // 种子入队；不在节点集的种子按 Python 语义仅累积自身激活、不传播
-        // （生产路径种子恒来自 direct_channel ⊆ 节点集，此分支纯防御）
-        let mut spread = vec![0.0f64; self.ids.len()];
-        let mut visited: HashSet<usize> = HashSet::new(); // 被 defaultdict 写入过的下标（含 0 值）
-        let mut wave: HashMap<usize, f64> = HashMap::new();
-        let mut unknown_spread: Vec<(usize, f64)> = Vec::new();
-        for (i, (nid, act)) in seeds.iter().enumerate() {
-            if let Some(&idx) = self.id_index.get(nid) {
-                wave.insert(idx, *act);
-                visited.insert(idx); // Python: spread[nid] += act 无条件写入（含 0 值种子）
-            } else {
-                unknown_spread.push((i, *act));
-            }
-        }
-
-        let mut current = wave;
-        for hop in 0..=radius {
-            let mut next: HashMap<usize, f64> = HashMap::new();
-            for (&idx, &act) in current.iter() {
-                if !visited.contains(&idx) {
-                    visited.insert(idx);
-                    spread[idx] = 0.0;
-                }
-                spread[idx] += act;
-                if hop < radius && act > threshold {
-                    // adj 与 ids 同长，idx 恒在界内；用安全索引避免 unsafe
-                    if let Some(edges) = self.adj.get(idx) {
-                        for &(nb, ew) in edges {
-                            let propagated = act * decay * ew / ((hop + 1) as f64);
-                            *next.entry(nb).or_insert(0.0) += propagated;
-                        }
-                    }
-                }
-            }
-            current = next;
-            if current.is_empty() {
-                break;
-            }
-        }
+        // 计算只借用 &self 与 &seeds（字段全为 Send 数据），零 Python 对象接触
+        let (known, unknown): (Vec<(&str, f64)>, HashMap<&str, f64>) = py
+            .allow_threads(|| self.spreading_scores(&seeds, radius, decay, threshold));
 
         let out = PyDict::new(py);
-        for &i in &visited {
-            let _ = out.set_item(self.ids[i].as_str(), spread[i]);
+        for (nid, v) in known {
+            let _ = out.set_item(nid, v);
         }
-        // 未知种子：同 id 多次出现时合并累积（保持与 dict 累加一致）
-        let mut merged: HashMap<&str, f64> = HashMap::new();
-        for (seed_i, act) in unknown_spread {
-            let nid = seeds[seed_i].0.as_str();
-            *merged.entry(nid).or_insert(0.0) += act;
-        }
-        for (nid, v) in merged {
+        for (nid, v) in unknown {
             let _ = out.set_item(nid, v);
         }
         Ok(out.into())
@@ -377,7 +414,7 @@ fn rust_core(m: &Bound<'_, PyModule>) -> PyResult<()> {
     // 必须相等，任何 pyclass/pymethod 增删改（含语义变化）双侧同步 bump。
     // Python 侧 _try_import 校验此值+符号表，不符视同扩展不可用（回退纯 Python），
     // 防止陈旧 .so 在使用点爆 AttributeError。
-    m.add("CONTRACT_VERSION", 2)?;
+    m.add("CONTRACT_VERSION", 3)?;
     m.add_class::<NodeIndex>()?;
     Ok(())
 }

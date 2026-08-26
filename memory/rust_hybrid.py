@@ -39,7 +39,7 @@ RUST_HYBRID_MIN_NODES = 500
 
 # 二进制契约版本：与 rust_core/src/lib.rs 的 CONTRACT_VERSION 必须相等。
 # 任何 pyclass/pymethod 的增删改（含语义变化）都要双侧同步 bump。
-RUST_CORE_CONTRACT_VERSION = 2
+RUST_CORE_CONTRACT_VERSION = 3
 # _try_import 返回模块必须满足的最小符号表（类 + 方法级探针）。
 _REQUIRED_CONTRACT = ("NodeIndex", "CONTRACT_VERSION")
 

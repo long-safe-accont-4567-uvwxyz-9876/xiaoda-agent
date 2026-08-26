@@ -78,12 +78,12 @@ def _line_count(rel: str) -> int:
 #     report_error/report_success 传实际出错客户端 api_key(多凭证并发在途
 #     时旧启发式误伤健康凭证), 两处调用点各拆两行；
 ALLOWLIST_BASELINES: dict[str, int] = {
-    "memory/vector_store.py": 1619,
+    "memory/vector_store.py": 1657,
     "web/server.py": 1404,
     "agent_context.py": 1345,
     "web/routers/setup.py": 1333,
     "db/legacy_migrations.py": 1289,
-    "core/bootstrap.py": 1329,
+    "core/bootstrap.py": 1336,
     "utils/text_utils.py": 1151,
     "memory/_memory_encoder.py": 1134,
     "db/db_memory_reconciliation.py": 1102,

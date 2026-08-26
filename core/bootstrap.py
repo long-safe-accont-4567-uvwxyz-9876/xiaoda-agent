@@ -181,6 +181,21 @@ class AgentCoreBootstrapper:
 
         await self._bootstrap_optional_components()
 
+        # ── Rust 混合加速状态可见化（让"静默回退"变成"可见降级"） ──
+        try:
+            from memory import rust_hybrid as _rh
+            _rh_enabled = _rh.RUST_HYBRID_ENABLED
+            _rh_loaded = _rh._try_import() is not None
+            if _rh_enabled and _rh_loaded:
+                logger.info("rust_hybrid.status enabled=true loaded=true contract=v{}",
+                            _rh.RUST_CORE_CONTRACT_VERSION)
+            elif _rh_enabled and not _rh_loaded:
+                logger.warning("rust_hybrid.status enabled=true loaded=false "
+                               "回退纯 Python（.so 缺失或契约不满足，见 rust_core/build.sh）")
+            # enabled=false 时静默（用户未开启，不打扰）
+        except Exception:  # pragma: no cover - 纯防御
+            pass
+
         self.core._initialized = True
         self.core.startup_health = self.health
         logger.info("agent_core.initialized" + (" (reinit)" if reinit else ""))

@@ -61,8 +61,8 @@ Rust 下沉在「解释器开销主导」的热路径上确实成立：
 
 ```
 rust_core/                    # 新增：PyO3 crate（零第三方依赖）
-├── Cargo.toml                # pyo3 0.23, release+lto
-└── src/lib.rs                # NodeIndex(常驻索引) + direct_channel + cosine_topk(备选)
+├── Cargo.toml                # pyo3 0.23, release+lto, strip
+└── src/lib.rs                # NodeIndex(常驻索引) + direct_channel + spreading_channel
 memory/rust_hybrid.py         # 新增：接入层（开关/回退/规模门控）
 memory/spreading_activation.py # 修改：recall() Step3+4 可选走 Rust 路径
 tests/test_rust_hybrid_poc.py # 新增：7 项等价性测试（真实数据+边界用例）
