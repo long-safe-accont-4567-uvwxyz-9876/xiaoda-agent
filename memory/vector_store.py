@@ -6,6 +6,7 @@ import os
 import struct
 import sys
 import threading
+import time
 from collections import OrderedDict
 from pathlib import Path
 from typing import Any
@@ -69,6 +70,7 @@ import httpx as _httpx_embed
 
 from config_constants import env_flag
 from utils.http_pool import get_shared_client as _get_embed_shared_client
+from utils.metrics import metrics
 from utils.thread_pools import to_thread_heavy, to_thread_hot
 
 _EMBED_HTTP_TIMEOUT = _httpx_embed.Timeout(connect=15.0, read=5.0, write=10.0, pool=10.0)
@@ -960,7 +962,13 @@ class VectorStore:
     async def _do_embed_batch(self, texts: list[str]) -> list[list[float]]:
         if self._local_provider is None:
             raise LocalEmbeddingUnavailableError("no running local embedding instance")
+        _t0 = time.perf_counter()
         vectors = await self._local_provider.embed(texts)
+        # 直方图打点（timer.embed_provider）：区分 NPU/CPU 推理退化、批量均摊观测
+        metrics.observe(
+            "embed_provider",
+            (time.perf_counter() - _t0) / max(len(texts), 1),
+        )
         if len(vectors) != len(texts):
             raise RuntimeError(
                 f"local embedding returned {len(vectors)} vectors for {len(texts)} texts"
