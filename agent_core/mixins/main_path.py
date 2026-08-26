@@ -408,7 +408,7 @@ class MainPathMixin:
                 _t0 = time.time()
                 logger.info("pipeline.memory.retrieve.start")
                 try:
-                    _k = self.memory._suggest_k(user_input, default_k=8)
+                    _k = self.memory.suggest_k(user_input, default_k=8)
                     logger.info("pipeline.memory.retrieve.call start k={}", _k)
                     # 治本（2026-08-05）：单次记忆检索超时 2→5s。
                     # 根因：2s 对 embed/reranker/检索链路过短，网络波动即误砍，

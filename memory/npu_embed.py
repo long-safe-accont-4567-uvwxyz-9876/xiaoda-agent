@@ -211,7 +211,7 @@ class NpuEmbeddingProvider:
                 if time.monotonic() > deadline:
                     raise TimeoutError(
                         f"runner magic timeout after {self._timeout_s:.0f}s")
-        except (TimeoutError, RuntimeError, OSError) as e:
+        except (TimeoutError, RuntimeError, OSError):
             # 清理泄漏的子进程和管道，避免 magic 超时后僵尸进程/stderr 句柄残留
             try:
                 if self._proc and self._proc.poll() is None:
@@ -463,8 +463,8 @@ class AdaptiveEmbeddingProvider:
         except Exception as e:  # noqa: BLE001
             logger.warning("adaptive_embed.tokenize_failed error={}", str(e))
             return []
-        short_i = [i for i, l in enumerate(lens) if l <= self._threshold]
-        long_i = [i for i, l in enumerate(lens) if l > self._threshold]
+        short_i = [i for i, n in enumerate(lens) if n <= self._threshold]
+        long_i = [i for i, n in enumerate(lens) if n > self._threshold]
         result: list[list[float] | None] = [None] * len(texts)
         if short_i:
             # CPU 懒加载：NPU 模式 CPU 未常驻，短文本首次走到 CPU 时再加载

@@ -1,15 +1,15 @@
 """Skills/工具路由（R6）：列表、全局开关、调试执行、统计。"""
 from __future__ import annotations
-from typing import Any
 
 import json
 import time
+from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from loguru import logger
 
-from web.schemas import Envelope
 from web.routers.auth import get_current_user
+from web.schemas import Envelope
 
 router = APIRouter(tags=["tools"], dependencies=[Depends(get_current_user)])
 
@@ -32,7 +32,7 @@ def _tool_source(name: str) -> str:
 
 
 def list_tools_meta() -> list[dict]:
-    from tool_engine.tool_registry import to_openai_tools, list_tools
+    from tool_engine.tool_registry import list_tools, to_openai_tools
     to_openai_tools()  # 确保所有工具模块已导入注册
     out = []
     for t in list_tools():
@@ -77,7 +77,7 @@ async def get_tools() -> Any:
 
 @router.put("/tools/{name}", response_model=Envelope[dict])
 async def update_tool(name: str, body: dict, request: Request) -> Any:
-    from tool_engine.tool_registry import get_tool, invalidate_tool_cache
+    from tool_engine.tool_registry import get_tool
     tool = get_tool(name)
     if not tool:
         raise HTTPException(404, f"工具 {name} 不存在")
@@ -189,8 +189,9 @@ def _format_tool_test_result(name: str, result: Any, elapsed_ms: float) -> dict:
 async def test_tool(name: str, request: Request) -> Any:
     """测试单个工具是否可用（真实执行，安全参数）"""
     import asyncio
-    from tool_engine.tool_registry import get_tool
+
     from tool_engine.tool_executor import ToolExecutor
+    from tool_engine.tool_registry import get_tool
 
     tool = get_tool(name)
     if not tool:
@@ -319,6 +320,9 @@ async def save_skill(name: str, body: dict, request: Request) -> Any:
 
 @router.delete("/skills/{name}", response_model=Envelope[dict])
 async def delete_skill(name: str, request: Request) -> Any:
+    # 删除类接口统一要求确认头（前端 ToolsView 已带 X-Confirm）
+    if request.headers.get("X-Confirm") != "yes":
+        raise HTTPException(400, "缺少 X-Confirm: yes 确认头")
     fp = _skills_dir() / f"{_safe_skill_name(name)}.md"
     if not fp.exists():
         raise HTTPException(404, f"Skill {name} 不存在")

@@ -28,6 +28,10 @@ class PromptProfile:
     variables: tuple[str, ...] = ()
     min_model_capabilities: tuple[str, ...] = ()
     status: PromptStatus = "draft"
+    # 单 ref 模板的治理对象槽位：False=user 消息（默认）；True=system 消息
+    # （如 intent.decompose 治理对象是 _SYSTEM_PROMPT，user 由运行时动态构建）。
+    # 不参与 template_hash——槽位属于渲染约定而非内容契约。
+    system_slot: bool = False
 
     def __post_init__(self) -> None:
         if not self.prompt_id or not self.version:
@@ -201,7 +205,10 @@ NODE_PROMPT_PROFILES: dict[str, tuple[PromptProfile, ...]] = {
     "intent_decomposition": (
         PromptProfile(
             "intent.decompose", "1.0.0", _INTENT_SCHEMA,
-            ("core.intent_decomposition:IntentDecomposer._SYSTEM_PROMPT",),
+            (
+                "core.intent_decomposition:IntentDecomposer._SYSTEM_PROMPT",
+                "core.intent_decomposition:IntentDecomposer.USER_ANALYZE_TEMPLATE",
+            ),
             status="production",
         ),
     ),

@@ -252,7 +252,7 @@ function onTest(key: string) {
 }
 
 .test-status-icon.status-untested {
-  color: #888;
+  color: var(--moon-faint);
 }
 
 .test-status-icon.status-testing {
@@ -274,7 +274,7 @@ function onTest(key: string) {
   width: 10px;
   height: 10px;
   border-radius: 50%;
-  background: #666;
+  background: var(--moon-faint);
 }
 
 @keyframes spin {

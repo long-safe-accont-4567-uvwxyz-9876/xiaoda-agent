@@ -974,14 +974,9 @@ class SubAgentManagerMixin:
         # A2A 共享黑板：委托前读取已有产出（factual 与非 factual 结果不同，需区分 key）
         bb = getattr(self.context, "shared_blackboard", None)
         task_key = self._bb_task_key("xiaoli", task, suffix="factual" if factual else "", user_id=_ctx.user_id if _ctx else "")
-        if bb is not None:
-            try:
-                cached = await bb.get(task_key)
-                if cached is not None:
-                    logger.debug("blackboard.delegate_hit key={} agent=xiaoli", task_key)
-                    return cached
-            except Exception as e:
-                logger.debug("blackboard.get_failed key={} error={}", task_key, e)
+        cached = await self._read_blackboard_cache("xiaoli", task, bb, task_key)
+        if cached is not None:
+            return cached
         if factual:
             context = "这是小妲委托的查询任务。请直接返回查询结果，不要加任何个人风格、感叹号或角色扮演，只报告事实数据。"
         else:
@@ -991,12 +986,7 @@ class SubAgentManagerMixin:
         result = await self.dispatcher.dispatch("xiaoli", task, context=context, status_callback=_ctx.status_callback if _ctx else None, address_term=self.context.current_address_term)
         if result is None:
             return f"{get_agent_display_name('xiaoli')}{TIRED_MSG}"
-        # A2A 共享黑板：委托完成后写入产出
-        if bb is not None:
-            try:
-                await bb.put(task_key, result, agent_name="xiaoli")
-            except Exception as e:
-                logger.debug("blackboard.put_failed key={} error={}", task_key, e)
+        await self._write_blackboard_cache(bb, task_key, result, "xiaoli")
         return result
 
     @staticmethod

@@ -633,6 +633,9 @@ async def cancel_download(task_id: str, body: CancelRequest, request: Request) -
 
 @router.delete("/local-ai/downloads/{task_id}", status_code=status.HTTP_204_NO_CONTENT)
 async def delete_download(task_id: str, request: Request) -> Response:
+    # 删除类接口统一要求确认头（前端 localAi.deleteDownload 已带 X-Confirm）
+    if request.headers.get("X-Confirm") != "yes":
+        raise HTTPException(status_code=400, detail="缺少 X-Confirm: yes 确认头")
     try:
         await _services(request).downloads.delete(task_id)
     except KeyError as error:

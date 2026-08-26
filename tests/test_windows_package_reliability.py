@@ -746,8 +746,8 @@ def test_linux_updater_maps_uname_arch_to_release_asset_names():
     updater = read_project_file("scripts/auto-update.sh")
     # 提取 resolve_release_platform 函数体，在受控环境执行并断言映射结果
     lines = updater.splitlines()
-    start = next(i for i, l in enumerate(lines) if l.startswith("resolve_release_platform()"))
-    end = next(i for i, l in enumerate(lines[start:], start) if l == "}")
+    start = next(i for i, ln in enumerate(lines) if ln.startswith("resolve_release_platform()"))
+    end = next(i for i, ln in enumerate(lines[start:], start) if ln == "}")
     function_body = "\n".join(lines[start:end + 1])
 
     script = (
@@ -829,8 +829,8 @@ def test_updater_asset_patterns_cover_every_release_matrix_platform(tmp_path):
     # aarch64 主机经 resolve_release_platform 映射后命中 linux-arm64 资产
     updater = read_project_file("scripts/auto-update.sh")
     lines = updater.splitlines()
-    start = next(i for i, l in enumerate(lines) if l.startswith("resolve_release_platform()"))
-    end = next(i for i, l in enumerate(lines[start:], start) if l == "}")
+    start = next(i for i, ln in enumerate(lines) if ln.startswith("resolve_release_platform()"))
+    end = next(i for i, ln in enumerate(lines[start:], start) if ln == "}")
     function_body = "\n".join(lines[start:end + 1])
     mapped = subprocess.run(
         ["bash", "-c", f"{function_body}\nresolve_release_platform Linux aarch64"],

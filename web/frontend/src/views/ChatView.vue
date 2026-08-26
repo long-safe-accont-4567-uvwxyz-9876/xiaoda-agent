@@ -470,14 +470,14 @@ const emotionColors: Record<string, string> = {
 .jspace-fab {
   position: fixed; bottom: 80px; right: 20px; z-index: 100;
   width: 40px; height: 40px; border-radius: 50%;
-  border: 1px solid var(--moon-border, #333);
-  background: var(--moon-bg-soft, #1a1a2e);
+  border: 1px solid var(--line);
+  background: var(--surface-1);
   color: var(--moon-dim);
   font-size: 18px; cursor: pointer;
   transition: all .2s; display: flex; align-items: center; justify-content: center;
 }
-.jspace-fab:hover { border-color: var(--moon-accent, #7c6fff); color: var(--moon-accent, #7c6fff); }
-.jspace-fab.active { background: var(--moon-accent, #7c6fff); color: #fff; border-color: var(--moon-accent, #7c6fff); }
+.jspace-fab:hover { border-color: var(--line-strong); color: var(--dendro-bright); }
+.jspace-fab.active { background: linear-gradient(135deg, var(--dendro), var(--jade)); color: #0a2414; border-color: var(--dendro); }
 
 .chat-view {
   display: flex;

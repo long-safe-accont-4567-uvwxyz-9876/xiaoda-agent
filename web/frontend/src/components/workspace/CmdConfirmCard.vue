@@ -109,7 +109,7 @@ async function decide(d: 'deny' | 'allow_once' | 'allow', addToWhitelist: boolea
 .cmd-code {
   display: block;
   font-family: 'JetBrains Mono', monospace;
-  background: rgba(0, 0, 0, 0.28);
+  background: rgba(10, 20, 14, 0.45);
   border: 1px solid rgba(127, 214, 80, 0.15);
   border-radius: 6px;
   padding: 6px 9px;

@@ -66,8 +66,35 @@ class BackgroundDelegation:
 
 _JOBS: dict[str, BackgroundDelegation] = {}
 
+# 终态任务保留一段时间供 status 查询，过期即从登记表移除；
+# 条目持有 asyncio_task 引用，不淘汰会导致已完成协程的帧无法回收。
+_TERMINAL_STATUSES = frozenset({"completed", "failed", "cancelled",
+                                "delivered", "deliver_failed"})
+_RETENTION_SECONDS = 3600
+_MAX_JOBS = 200
+
+
+def _evict_expired(now: float | None = None) -> int:
+    """移除终态且超过保留期的登记项，返回淘汰数。"""
+    now = time.time() if now is None else now
+    expired = [tid for tid, j in _JOBS.items()
+               if j.status in _TERMINAL_STATUSES
+               and j.finished_at is not None
+               and now - j.finished_at > _RETENTION_SECONDS]
+    for tid in expired:
+        del _JOBS[tid]
+    return len(expired)
+
 
 def register(job: BackgroundDelegation) -> str:
+    _evict_expired()
+    overflow = len(_JOBS) - _MAX_JOBS + 1
+    if overflow > 0:
+        terminal = sorted((j for j in _JOBS.values()
+                           if j.status in _TERMINAL_STATUSES),
+                          key=lambda j: j.finished_at or 0.0)
+        for stale in terminal[:overflow]:
+            del _JOBS[stale.task_id]
     _JOBS[job.task_id] = job
     return job.task_id
 
@@ -98,13 +125,15 @@ def note_progress(job: BackgroundDelegation, text: str) -> None:
 
 
 def find_running(agent: str | None = None,
-                 task_id_prefix: str | None = None) -> BackgroundDelegation | None:
-    """取最近一条运行中的任务（可按 agent 名/编号前缀过滤）。"""
+                 task_id_prefix: str | None = None,
+                 display_name: str | None = None) -> BackgroundDelegation | None:
+    """取最近一条运行中的任务（可按 agent 名/编号前缀/显示名过滤）。"""
     candidates = [
         j for j in _JOBS.values()
         if j.status == "running"
         and (agent is None or j.agent == agent.lower())
         and (task_id_prefix is None or j.task_id.startswith(task_id_prefix))
+        and (display_name is None or j.display_name.lower() == display_name.lower())
     ]
     return max(candidates, key=lambda j: j.started_at, default=None)
 

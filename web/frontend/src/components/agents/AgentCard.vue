@@ -1,10 +1,18 @@
 <script setup lang="ts">
+import { ref, watch } from 'vue'
 import { NButton, NSwitch, NTag, NPopconfirm } from 'naive-ui'
 import SumeruIcon from '../fx/SumeruIcon.vue'
+import AgentAvatarMedia from './AgentAvatarMedia.vue'
+import { wallpaperKind } from '../../utils/wallpaper'
 import { t } from '../../i18n'
 import type { AgentInfo } from '../../api/types'
 
-defineProps<{ agent: AgentInfo }>()
+const props = defineProps<{ agent: AgentInfo }>()
+
+// 壁纸媒体加载失败 → 回退文字首字（此前是 display:none 直接空白）
+const avatarFailed = ref(false)
+// 换壁纸后重置失败标记：旧图失败不应连累新壁纸的首次尝试
+watch(() => props.agent.wallpaper, () => { avatarFailed.value = false })
 
 const emit = defineEmits<{
   (e: 'edit', agent: AgentInfo): void
@@ -17,8 +25,10 @@ const emit = defineEmits<{
   <div class="agent-card glass-panel glass-panel-hover" @click="emit('edit', agent)">
     <div class="card-head">
       <span class="agent-avatar">
-        <img v-if="agent.wallpaper" :src="agent.wallpaper" class="avatar-img" @error="($event: Event) => { ($event.target as HTMLImageElement).style.display = 'none' }" />
-        <span v-if="!agent.wallpaper" class="avatar-letter">{{ agent.display_name.slice(0, 1) }}</span>
+        <AgentAvatarMedia v-if="agent.wallpaper && wallpaperKind(agent.wallpaper) !== 'html' && !avatarFailed"
+                          :wallpaper="agent.wallpaper" :poster="agent.wallpaper_poster"
+                          @error="avatarFailed = true" />
+        <span v-else class="avatar-letter">{{ agent.display_name.slice(0, 1) }}</span>
       </span>
       <div class="agent-names">
         <span class="agent-display">{{ agent.display_name }}</span>
@@ -65,7 +75,6 @@ const emit = defineEmits<{
   flex-shrink: 0;
   overflow: hidden;
 }
-.avatar-img { width: 100%; height: 100%; object-fit: cover; }
 .avatar-letter { font-size: 18px; font-weight: 700; color: var(--dendro); }
 
 .agent-names { display: flex; flex-direction: column; flex: 1; min-width: 0; }

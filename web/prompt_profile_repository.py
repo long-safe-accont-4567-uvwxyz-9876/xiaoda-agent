@@ -66,6 +66,11 @@ class PromptProfileRepository:
         if not isinstance(variables, dict) or not isinstance(output_schema, dict):
             raise ValueError("prompt variables and output_schema must be objects")
         self._validate_schema(output_schema)
+        profile = profile_by_id(prompt_id)
+        if profile is not None and profile.system_slot and not str(record.get("system_template") or "").strip():
+            raise ValueError(
+                f"{prompt_id} 治理对象是 system 槽：改进内容必须写入 system_template"
+            )
         staged = {
             "prompt_id": prompt_id,
             "version": version,

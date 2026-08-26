@@ -140,7 +140,7 @@ function formatTime(ts: string): string {
 .disclaimer-scroll {
   max-height: 420px;
   overflow-y: auto;
-  background: rgba(0, 0, 0, 0.25);
+  background: rgba(10, 20, 14, 0.45);
   border-radius: 10px;
   padding: 18px 22px;
   border: 1px solid var(--glass-border);

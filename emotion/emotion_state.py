@@ -11,8 +11,8 @@
 from __future__ import annotations
 
 import asyncio
-import time
 import threading
+import time
 
 from loguru import logger
 
@@ -252,7 +252,7 @@ class EmotionState:
                 self._persist_path.write_text(payload, encoding="utf-8")
 
         try:
-            loop = asyncio.get_running_loop()
+            asyncio.get_running_loop()
             # 同类副作用修复：裸 create_task(to_thread) 无强引用会被 GC 回收导致
             # 情绪状态持久化丢失。用 _spawn 跟踪（线程内写盘 + 完成回收）。
             from core.background_tasks import _spawn

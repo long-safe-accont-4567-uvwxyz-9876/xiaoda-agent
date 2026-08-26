@@ -42,6 +42,10 @@ else:
 _pty_sessions: dict[str, dict] = {}
 _pty_sessions_lock = threading.Lock()
 
+# 会话配额：认证连接可循环拉起 PTY 子进程耗尽进程表，全局/每连接双上限兜底
+MAX_TERMINAL_SESSIONS = 16
+MAX_TERMINAL_SESSIONS_PER_CONN = 4
+
 # 终端输出合帧缓冲: term_sid -> {"buf": str, "timer": asyncio.TimerHandle|None}
 # PTY 大输出会被内核拆成大量小块(实测 288KB/2188 次 read)，逐条发 JSON 帧
 # 会把前端 xterm 渲染冲垮——按 ~16ms/帧合并后发送。
@@ -83,6 +87,17 @@ async def _handle_terminal_start(conn_id: str, msg: dict, term_sid: str) -> None
             await manager.send_to(conn_id, {
                 "type": "terminal_error", "term_sid": term_sid,
                 "error": "term_sid already exists"})
+            return
+        # 资源配额：全局与每连接双上限，防认证连接循环拉起 PTY 耗尽进程表
+        conn_owned = sum(1 for s in _pty_sessions.values()
+                         if s.get("conn_id") == conn_id)
+        if (len(_pty_sessions) >= MAX_TERMINAL_SESSIONS
+                or conn_owned >= MAX_TERMINAL_SESSIONS_PER_CONN):
+            logger.warning("ws.terminal.start.quota_exceeded conn_id={} total={} owned={}",
+                           conn_id, len(_pty_sessions), conn_owned)
+            await manager.send_to(conn_id, {
+                "type": "terminal_error", "term_sid": term_sid,
+                "error": "终端会话数已达上限，请先关闭已有会话"})
             return
     shell_type = (msg.get("shell") or "bash").strip().lower()
     try:
@@ -463,7 +478,11 @@ def _cleanup_pty(term_sid: str) -> None:
 def _handle_terminal_input(conn_id: str, msg: dict) -> None:
     """将用户输入写入终端 stdin。"""
     term_sid = str(msg.get("term_sid") or "")
+    # data 非字符串（恶意/异常帧）时强转，防 .encode() 抛 AttributeError
+    # 逃出端点 except 元组导致整条 WS 连接被断开
     data = msg.get("data", "")
+    if not isinstance(data, str):
+        data = str(data)
     with _pty_sessions_lock:
         session = _pty_sessions.get(term_sid)
         if not session or not session["alive"]:

@@ -397,5 +397,7 @@ ENABLE_J_SPACE_HOOKS = env_flag("ENABLE_J_SPACE_HOOKS", True)
 # 结果异步持久化到 mental_state（primary + PAD + needs）供下次请求使用。
 ENABLE_EMOTION_LLM = env_flag("ENABLE_EMOTION_LLM", True)
 DIRECTION_REGISTRY_PATH = os.getenv("DIRECTION_REGISTRY_PATH", str(DATA_DIR / "direction_registry.json"))
+# Thompson Sampling 信念持久化库（空串则不持久化、重启归零）
+BELIEF_DB_PATH = os.getenv("BELIEF_DB_PATH", str(DATA_DIR / "beliefs.db"))
 SIGNAL_STREAM_MAX_HISTORY = _safe_int(os.getenv("SIGNAL_STREAM_MAX_HISTORY"), 1000)
 INTERVENTION_DEFAULT_COOLDOWN = _safe_float(os.getenv("INTERVENTION_DEFAULT_COOLDOWN"), 30.0)

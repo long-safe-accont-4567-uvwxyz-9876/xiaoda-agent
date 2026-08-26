@@ -70,6 +70,26 @@ class DDLMixin:
             )
         """)
 
+        # instincts（本能规则；insight 路由直用 raw SQL，新库缺失会 500）
+        await self._conn.execute("""
+            CREATE TABLE IF NOT EXISTS instincts (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                content TEXT NOT NULL,
+                confidence REAL NOT NULL DEFAULT 0.5,
+                source_session TEXT NOT NULL DEFAULT '',
+                status TEXT NOT NULL DEFAULT 'active',
+                created_at REAL NOT NULL,
+                last_used_at REAL NOT NULL,
+                use_count INTEGER NOT NULL DEFAULT 0
+            )
+        """)
+        await self._conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_instincts_status ON instincts(status)")
+        await self._conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_instincts_confidence ON instincts(confidence)")
+        await self._conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_instincts_last_used ON instincts(last_used_at)")
+
         # episodic_memories
         await self._conn.execute("""
             CREATE TABLE IF NOT EXISTS episodic_memories (

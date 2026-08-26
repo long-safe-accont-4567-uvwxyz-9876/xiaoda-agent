@@ -104,7 +104,7 @@ async function toggleGreeting(g: any, value: boolean) {
 
 async function removeGreeting(id: number) {
   try {
-    await del(`/schedule/greetings/${id}`)
+    await del(`/schedule/greetings/${id}`, true)
     message.success(t('scheduleView.planDeleted'))
     await loadAll()
   } catch (e: any) { message.error(e.message) }

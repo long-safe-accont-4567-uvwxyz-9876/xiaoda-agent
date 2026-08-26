@@ -781,7 +781,7 @@ const permLabel = computed<Record<string, string>>(() => ({
   max-height: 240px;
   overflow-y: auto;
   border-radius: 8px;
-  background: rgba(0, 0, 0, 0.18);
+  background: rgba(10, 20, 14, 0.35);
   padding: 6px 8px;
 }
 .audit-entry {

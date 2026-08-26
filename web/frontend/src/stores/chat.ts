@@ -79,6 +79,9 @@ export const useChatStore = defineStore('chat', () => {
   const pendingMsgId = ref('')
   const greetingPing = ref(0)  // 问候到达脉冲（GrassParticles 蒲公英雨）
   const streamStates = new Map<string, { lastSeq: number; terminal: boolean }>()
+  // 终态流记录上限：只置 terminal flag 从不删除会让长会话缓慢增长，
+  // 超限淘汰最旧记录（与后端 _MAX_STREAM_SESSIONS=256 同策略）
+  const STREAM_STATES_MAX = 256()
 
   const pendingTimers: ReturnType<typeof setTimeout>[] = []
 
@@ -126,7 +129,12 @@ export const useChatStore = defineStore('chat', () => {
     if (state.terminal || seq <= state.lastSeq) return
     state.lastSeq = seq
     state.terminal = e.terminal === true
+    streamStates.delete(msgId)
     streamStates.set(msgId, state)
+    if (streamStates.size > STREAM_STATES_MAX) {
+      const oldest = streamStates.keys().next().value
+      if (oldest !== undefined) streamStates.delete(oldest)
+    }
     const event = e.event as string
     if (event === 'text_delta') {
       onStreamText({ ...e, type: 'stream_text' })

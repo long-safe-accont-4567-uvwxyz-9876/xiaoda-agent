@@ -35,16 +35,6 @@ from enum import IntEnum
 
 from loguru import logger
 
-_pending_tasks: set[asyncio.Task] = set()
-
-
-def _fire_and_forget(coro) -> asyncio.Task:
-    """安全创建后台 Task，持有引用防止 GC 回收。"""
-    task = asyncio.create_task(coro)
-    _pending_tasks.add(task)
-    task.add_done_callback(_pending_tasks.discard)
-    return task
-
 # J-Space Hook: 行为信号流采集 (非阻塞, 失败不影响主流程)
 try:
     from config import ENABLE_J_SPACE_HOOKS
@@ -190,13 +180,10 @@ class BehavioralHealthScorer:
         # J-Space Hook: emit health signal (non-blocking)
         if _signal_stream is not None:
             try:
-                try:
-                    asyncio.get_running_loop()
-                except RuntimeError:
-                    logger.debug("behavioral_health.no_event_loop_skip", exc_info=True)
-                else:
-                    _fire_and_forget(_signal_stream.emit(
-                        "health", float(score_val) / 5.0, "behavioral_health"))
+                from core.background_tasks import _spawn
+                # _spawn 自带无事件循环降级与异常日志，无需额外 loop 探测
+                _spawn(_signal_stream.emit(
+                    "health", float(score_val) / 5.0, "behavioral_health"))
             except Exception as e:
                 logger.debug("behavioral_health.signal_emit_failed", error=str(e))
 

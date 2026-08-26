@@ -130,7 +130,7 @@ const wechatImg = '/assets/sponsor/wechat_qr.png'
 
 .usage-section {
   padding: 10px 14px;
-  background: rgba(0, 0, 0, 0.18);
+  background: rgba(10, 20, 14, 0.35);
   border-radius: 8px;
   border-left: 2px solid var(--dendro);
 }
@@ -146,7 +146,7 @@ const wechatImg = '/assets/sponsor/wechat_qr.png'
 
 .warning-section {
   padding: 10px 14px;
-  background: rgba(0, 0, 0, 0.18);
+  background: rgba(10, 20, 14, 0.35);
   border-radius: 8px;
   border-left: 2px solid rgba(232, 213, 163, 0.4);
 }

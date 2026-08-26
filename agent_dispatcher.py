@@ -209,12 +209,8 @@ class AgentDispatcher:
     def refresh_all_clients(self) -> int:
         count = 0
         for name, agent in self._agents.items():
-            agent._router = getattr(self._core, "router", None)
-            agent._initialized = agent._router is not None
-            agent._degraded = not agent._initialized
-            if agent._initialized:
+            if agent.refresh_router():
                 count += 1
-                logger.info("sub_agent.router_refreshed", name=name)
         return count
 
     def route_task(self, task_type: str, input_text: str) -> str:
@@ -388,16 +384,24 @@ class AgentDispatcher:
         return {"targets": targets, "mode": "parallel_fanout",
                 "synthesizer": "xiaoda", "verifier": ""}
 
+    _routing_v2_config_cache: tuple[float, dict] | None = None  # (mtime, config)
+
     def _load_routing_v2_config(self) -> dict:
-        """从 config/agent_routing_v2.json 加载多域路由配置。"""
+        """从 config/agent_routing_v2.json 加载多域路由配置（带文件修改时间缓存）。"""
         import json
         from pathlib import Path
 
         config_path = Path(__file__).parent / "config" / "agent_routing_v2.json"
         if config_path.exists():
             try:
+                mtime = config_path.stat().st_mtime
+                if (self._routing_v2_config_cache
+                        and self._routing_v2_config_cache[0] == mtime):
+                    return self._routing_v2_config_cache[1]
                 with open(config_path, encoding="utf-8") as f:
-                    return json.load(f)
+                    result = json.load(f)
+                self._routing_v2_config_cache = (mtime, result)
+                return result
             except (OSError, json.JSONDecodeError, ValueError) as e:
                 logger.warning("agent.routing_v2_config_load_failed", error=str(e))
         return {"single_domain": {}, "multi_domain": {}, "operation_patterns": {}}

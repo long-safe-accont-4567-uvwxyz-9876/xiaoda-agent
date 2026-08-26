@@ -18,9 +18,9 @@ from __future__ import annotations
 
 import asyncio
 import json
-import time
+from dataclasses import dataclass
 from typing import Any, ClassVar
-from dataclasses import dataclass, field
+
 from loguru import logger
 
 
@@ -105,6 +105,9 @@ class IntentDecomposer:
         "- evidence 必须是原文中的实际片段"
     )
 
+    # user 侧模板常量化：治理 override 可同时替换 system+user 双槽
+    USER_ANALYZE_TEMPLATE: ClassVar[str] = "分析以下文本的意图成分：\n\n{text}"
+
     def __init__(self, use_llm_decomposition: bool = True):
         self._use_llm = use_llm_decomposition
         self._free_backend: Any = None
@@ -140,6 +143,26 @@ class IntentDecomposer:
         if self._use_llm:
             return await self._llm_encode(output, context)
         return self._rule_encode(output, context)
+
+    @staticmethod
+    def _build_messages(output: str) -> list[dict]:
+        """构建分析消息：production override 优先（system+user 双槽），缺省回退内置。"""
+        try:
+            from web.prompt_profile_repository import try_resolve
+
+            override = try_resolve("intent.decompose", {"text": output})
+        except Exception:
+            override = None
+        if override is not None:
+            system_prompt, user_prompt = override
+        else:
+            system_prompt = IntentDecomposer._SYSTEM_PROMPT
+            user_prompt = IntentDecomposer.USER_ANALYZE_TEMPLATE.replace(
+                "{text}", output)
+        return [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": user_prompt},
+        ]
 
     def _rule_encode(self, output: str, context: dict | None = None) -> DecomposedOutput:
         """规则基分解 — Phase 1 实现"""
@@ -193,21 +216,9 @@ class IntentDecomposer:
             logger.debug("intent_decomposition.backend_disabled")
             return self._rule_encode(output, context)
 
-        # production override 优先（intent.decompose 治理对象是 system 模板），
+        # production override 优先（intent.decompose 治理 system+user 双槽），
         # 空白/异常回退内置；system 槽禁含未信任变量（渲染层强制）
-        try:
-            from web.prompt_profile_repository import try_resolve
-
-            override = try_resolve("intent.decompose", {"text": output})
-        except Exception:
-            override = None
-        system_prompt = (
-            override[0].strip() if override and override[0].strip() else self._SYSTEM_PROMPT
-        )
-        messages = [
-            {"role": "system", "content": system_prompt},
-            {"role": "user", "content": f"分析以下文本的意图成分：\n\n{output}"},
-        ]
+        messages = self._build_messages(output)
 
         try:
             raw = await asyncio.wait_for(

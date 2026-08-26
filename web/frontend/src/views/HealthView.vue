@@ -226,7 +226,7 @@ const stateIcon: Record<string, string> = {
 
 .probe-light {
   width: 9px; height: 9px; border-radius: 50%;
-  background: #555; flex-shrink: 0;
+  background: var(--moon-faint); flex-shrink: 0;
 }
 .probe-light.running { background: var(--wisdom); animation: breathe 1s ease-in-out infinite; }
 .probe-light.ok { background: var(--dendro); box-shadow: 0 0 8px var(--dendro); }

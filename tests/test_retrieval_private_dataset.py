@@ -219,5 +219,27 @@ async def test_frozen_dataset_executes_through_full_retrieval_pipeline(
             "call", "retrieval_eval_summary", summary)
 
         assert not failures, f"管线级行为断言失败 {len(failures)} 项:\n" + "\n".join(failures)
+
+        # prompt 组装确定性样本：真实管线结果 → EvidenceBundle → to_prompt
+        # 非空（补齐“冻结集缺 prompt 注入路径真实命中样本”缺口，纯确定性无 LLM）
+        from memory.evidence import EvidenceBundle, RetrievalPlan
+
+        sample = next(
+            (c for c in payload["cases"] if c.get("results")), None)
+        assert sample is not None, "无任何带结果的 case 可作 prompt 组装样本"
+        src_case = cases_by_id[
+            next(cid for cid in EXECUTED_CASE_IDS
+                 if cases_by_id[cid]["query"] == sample["query"])]
+        plan = RetrievalPlan.from_query(
+            src_case["query"],
+            scope=Scope(user_id="eval-alice", agent_id="xiaoda"),
+            top_k=5, enabled_channels=set(), budget_ms=8000,
+        )
+        bundle = EvidenceBundle.from_results(
+            plan, sample["results"]).apply_budget(3000)
+        assert bundle.evidence, f"{src_case['id']}: bundle 无证据"
+        rendered = bundle.to_prompt()
+        assert rendered and "retrieved_evidence" in rendered
+        assert bundle.evidence[0].evidence_id in rendered
     finally:
         await manager.close()

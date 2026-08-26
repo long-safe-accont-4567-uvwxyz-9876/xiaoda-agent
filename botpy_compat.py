@@ -129,7 +129,7 @@ async def _patched_on_closed(self: Any, close_status_code: Any, close_msg: Any) 
         # 4008 限频：session 仍有效，保留 session_id 走 RESUME（不丢未 ACK 消息）
         # botpy 自带 session_interval backoff，不强行 sleep 避免与重连机制冲突
         _botpy_log.warning(
-            f"[botpy] 限频(code=4008)，保留session走RESUME，等待botpy backoff重连")
+            "[botpy] 限频(code=4008)，保留session走RESUME，等待botpy backoff重连")
     await _original_on_closed(self, close_status_code, close_msg)
 
 

@@ -2,8 +2,8 @@
 from __future__ import annotations
 
 import sys
-from unittest.mock import AsyncMock
 from pathlib import Path
+from unittest.mock import AsyncMock
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
@@ -179,7 +179,6 @@ def test_distill_compress_consumes_override(tmp_path, monkeypatch):
 
 async def test_kg_and_intent_overrides_consumed():
     """kg.summarize_entity / kg.resolve_conflict / intent.decompose 三个消费方接线回归。"""
-    import sys
     from types import SimpleNamespace
 
     captured: list[tuple[str, dict]] = []
@@ -188,15 +187,12 @@ async def test_kg_and_intent_overrides_consumed():
         captured.append((prompt_id, variables))
         return ("sys", f"OVERRIDE::{prompt_id}")
 
-    monkey_mod = sys.modules["tests.test_prompt_override_consumption"]
     # kg.summarize_entity
     import memory.knowledge_graph_v2 as kgv2
-    orig = kgv2.SUMMARY_REWRITE_PROMPT
     called = {}
     async def fake_call(messages, **kw):
         called["prompt"] = messages[0]["content"]
         return "new summary"
-    kg = SimpleNamespace(_call_free_model=fake_call)
     import web.prompt_profile_repository as ppr
     saved = ppr.try_resolve
     ppr.try_resolve = fake_try_resolve
@@ -213,3 +209,38 @@ async def test_kg_and_intent_overrides_consumed():
         assert idx is not None
     finally:
         ppr.try_resolve = saved
+
+
+def test_intent_decompose_fallback_and_dual_slot_override(tmp_path, monkeypatch):
+    from core.intent_decomposition import IntentDecomposer
+    from web import config_service as config_service_module
+
+    monkeypatch.setattr(config_service_module, "_instance",
+                        ConfigService(tmp_path / "overrides.json"))
+    fallback = IntentDecomposer._build_messages("帮我查天气{}")
+    assert "意图分析专家" in fallback[0]["content"]
+    assert "帮我查天气{}" in fallback[1]["content"]
+
+    config = _promote_override(tmp_path, "intent.decompose", {
+        "prompt_id": "intent.decompose",
+        "version": "2.0.0",
+        "system_template": "V2系统规则：只输出JSON。",
+        "user_template": "分析下这段话{text}的意图。",
+        "variables": {"text": {"required": True}},
+        "output_schema": {"type": "string"},
+    })
+    monkeypatch.setattr(config_service_module, "_instance", config)
+
+    messages = IntentDecomposer._build_messages("查询文本")
+    assert messages[0]["content"] == "V2系统规则：只输出JSON。"
+    assert messages[1]["content"] == "分析下这段话查询文本的意图。"
+
+
+def test_intent_profile_renders_builtin_as_system_plus_user():
+    from web.prompt_ab_runner import render_builtin_templates
+
+    system, user = render_builtin_templates(
+        "intent.decompose", {"text": "样本输入"}
+    )
+    assert "意图分析专家" in system
+    assert "样本输入" in user

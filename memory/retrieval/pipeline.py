@@ -530,6 +530,12 @@ class RetrievalEngine(RecallChannelMixin, FusionRerankMixin, QueryTransformMixin
                                 is_raw_filter: Any, query_vec: list[float] | None,
                                 candidate_ids: Any, use_kg: bool) -> RecallChannels:
         """温/热用户: 并行执行 FTS、向量、KG、子chunk、扩散、实体、KG v2 七路召回。"""
+        # 预热 KG 实体抽取：免费模型抽取(0.4~6s)与 vec/embed 等通道并行跑，
+        # kg 通道到达时命中 single-flight/缓存——此前抽取串行吃掉全局窗口、
+        # 整通道被 retrieve_global_timeout 连坐取消（11 次 error/34% 失败率根因）
+        if use_kg and getattr(self._mm, "kg", None) is not None:
+            _spawn(self._mm.kg.get_query_entities(query))
+
         logger.info("memory.gather_start", query=query[:30])
 
         # B1: 七路召回各自是独立 Task（contextvars 快照拷贝），通道内

@@ -151,6 +151,70 @@ async def test_range_ignored_restarts_without_duplicate_bytes(tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_fake_200_truncated_body_recovers_via_fresh_download(tmp_path):
+    """回归（2026-08-26 真机实测）：ModelScope /resolve/ 对 Range 请求回伪 200。
+
+    实际观测：状态 200（非 206）、无 Content-Range、body 仅含尾部字节且提前
+    断连（声明 11343 实发 7562）。旧实现只对"206 但区间不符"重开，对 200 直接
+    消费截断 body -> .part 永远凑不齐 -> IOError FAILED；重试 offset>0 再次
+    命中同样故障，永久失败循环。修复后：200 响应一律丢弃，从零重开无 Range
+    的完整 GET（实测可靠），并保证旧的截断流被关闭。
+    """
+    content = b"0123456789abcdef"
+    destination = tmp_path / "model"
+    part = destination / "nested" / "model.onnx.part"
+    part.parent.mkdir(parents=True)
+    part.write_bytes(b"0123")  # 4 字节历史分片，触发 Range 请求
+
+    class Fake200TruncatingTransport(FakeTransport):
+        """offset>0 时模拟 ModelScope 伪 200：完整 body 声明，尾部字节实发。"""
+
+        def __init__(self, files: dict[str, bytes]) -> None:
+            super().__init__(files)
+            self.fake200_closed = False
+            self.fake200_consumed = False
+
+        async def open(self, model: CatalogModel, path: str, offset: int) -> DownloadStream:
+            if offset == 0:
+                return await super().open(model, path, offset)  # 基类负责记录
+            self.requests.append((path, offset))
+            declared = self.files[path]
+
+            async def tail_chunks():
+                self.fake200_consumed = True
+                # 只发尾部字节（真实故障是声明 11343 实发 7562 后断连）
+                yield declared[4:]
+
+            async def close() -> None:
+                self.fake200_closed = True
+
+            return DownloadStream(
+                status_code=200,
+                total_size=len(declared),  # 声明全长（Content-Length 语义）
+                chunks=tail_chunks(),
+                range_start=None,
+                range_total=None,
+                close=close,
+            )
+
+    transport = Fake200TruncatingTransport({"nested/model.onnx": content})
+    manager = make_manager(tmp_path, transport, FakeRegistry(), [])
+    task = manager.create(make_model(content), destination)
+
+    completed = await manager.start(task.id)
+
+    assert completed.state is TaskState.COMPLETED
+    # 请求序列：先带 offset=4 的 Range 探测，伪 200 被丢弃后从零重开
+    assert transport.requests == [
+        ("nested/model.onnx", 4),
+        ("nested/model.onnx", 0),
+    ]
+    assert transport.fake200_closed, "截断的伪 200 流必须被关闭，否则连接泄漏"
+    assert not transport.fake200_consumed, "伪 200 的截断 body 不应被消费"
+    assert (destination / "nested" / "model.onnx").read_bytes() == content
+
+
+@pytest.mark.asyncio
 async def test_progress_events_contain_full_download_task(tmp_path):
     content = b"progress"
     events: list[dict] = []

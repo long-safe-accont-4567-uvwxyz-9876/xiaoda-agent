@@ -144,8 +144,10 @@ def init_j_space() -> None:
         _structured_blackboard = StructuredBlackboard()
         # EnhancedBeliefRouter wraps the base BeliefRouter
         try:
+            from config import BELIEF_DB_PATH
             from belief_router import BeliefRouter
-            _base_router = BeliefRouter()
+            # 传真实路径接通持久化：无参构造会让 Thompson Sampling 每次重启归零
+            _base_router = BeliefRouter(db_path=BELIEF_DB_PATH)
             _enhanced_router = EnhancedBeliefRouter(
                 base_router=_base_router,
                 direction_registry=_direction_registry,

@@ -354,7 +354,7 @@ async function testSkill(item: any) {
           <Tilt3D v-for="tool in filtered" :key="tool.name">
           <div class="tool-row glass-panel"
                :class="{ disabled: !tool.enabled }">
-            <span class="perm-dot" :style="{ background: permColor[tool.permission] || '#9ca3af' }"
+            <span class="perm-dot" :style="{ background: permColor[tool.permission] || 'var(--moon-faint)' }"
                   :title="`${t('toolsView.permLevel')} ${tool.permission}`"></span>
             <div class="tool-main">
               <div class="tool-title">

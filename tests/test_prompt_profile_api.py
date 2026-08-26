@@ -340,3 +340,12 @@ def test_audit_log_records_governance_events(tmp_path, monkeypatch):
     assert "api" in events[1]["rates"]
     assert events[2]["gated"] is True
     assert all(e["ts"] > 0 for e in events)
+
+
+def test_ab_run_rejects_zero_runs_without_llm_side_effect(api):
+    resp = api.post(
+        "/local-deploy/prompt-profiles/memory.build_recall_note/ab-run",
+        json={"backends": ["api"], "runs": 0},
+    )
+    assert resp.status_code == 422
+    assert "runs must be within" in resp.json()["detail"]

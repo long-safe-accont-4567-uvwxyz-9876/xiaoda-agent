@@ -171,8 +171,9 @@ class AgentCore(MessageProcessorMixin, ToolExecutorMixin, SubAgentManagerMixin):
         self._circuit_breaker = CircuitBreaker()
         # 启用 SmartErrorHandler + FailureTrigger（失败触发器与反思闭环）
         self._smart_error_handler = SmartErrorHandler(db=self.db, dispatcher=self.dispatcher)
+        # memory_db 此时必为 None（self.memory 尚未初始化），
+        # 由 core.bootstrap 在 memory 就绪后调用 _failure_trigger.bind_memory() 接线
         self._failure_trigger = FailureTrigger(
-            memory_db=self.memory.memory if self.memory else None,
             learning_manager=self._smart_error_handler,
         )
         # 将失败触发器注入钩子引擎，供 fire_post_tool_use_failure 使用

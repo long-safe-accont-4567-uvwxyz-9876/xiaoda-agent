@@ -506,7 +506,9 @@ def _compute_scene_signature(weights: dict[str, float], module_names: list[str])
     filtered_ordering = tuple(name for name in bucket_ordering if name in module_set)
 
     # 补充桶排序中未包含的模块 (按字母序追加到开头, 优先级最低)
-    remaining = [name for name in module_names if name not in module_set]
+    # 注意必须对照 filtered_ordering 取差集——对照 module_set 会恒为空
+    ordered_set = set(filtered_ordering)
+    remaining = sorted(name for name in module_names if name not in ordered_set)
     if remaining:
         filtered_ordering = tuple(remaining) + filtered_ordering
 

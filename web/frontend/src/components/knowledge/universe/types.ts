@@ -8,6 +8,8 @@ export interface GraphNode extends NodeObject {
   name: string
   kind?: string
   val?: number
+  /** 世界树枝干锚点（引擎指派；锚点弹簧力据此安放节点） */
+  __anchor?: import('three').Vector3
 }
 
 export interface GraphLink {

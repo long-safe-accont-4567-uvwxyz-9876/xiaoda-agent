@@ -558,7 +558,7 @@ function onMcpTabChange(tab: string) {
 .card-title-area { min-width: 0; flex: 1; }
 .card-title { margin: 0 0 2px; overflow: hidden; font-size: 15px; font-weight: 600; text-overflow: ellipsis; white-space: nowrap; }
 .card-author { font-size: 12px; color: var(--moon-dim); overflow-wrap: anywhere; }
-.card-desc { display: -webkit-box; margin: 0 0 10px; overflow: hidden; color: var(--moon-secondary, #aaa); font-size: 13px; line-height: 1.5; -webkit-box-orient: vertical; -webkit-line-clamp: 2; }
+.card-desc { display: -webkit-box; margin: 0 0 10px; overflow: hidden; color: var(--moon-dim); font-size: 13px; line-height: 1.5; -webkit-box-orient: vertical; -webkit-line-clamp: 2; }
 .card-footer { display: flex; min-width: 0; align-items: center; justify-content: space-between; gap: 10px; }
 .card-downloads { min-width: 0; font-size: 12px; color: var(--moon-dim); overflow-wrap: anywhere; }
 .card-actions { display: flex; flex-shrink: 0; gap: 6px; }

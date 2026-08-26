@@ -243,7 +243,7 @@ export const api = {
   getWorkflow: (id: string) => get<Workflow>('/workflows/' + id),
   createWorkflow: (data: Workflow) => post<Workflow>('/workflows', data),
   updateWorkflow: (id: string, data: Workflow) => put<Workflow>('/workflows/' + id, data),
-  deleteWorkflow: (id: string) => del<void>('/workflows/' + id),
+  deleteWorkflow: (id: string) => del<void>('/workflows/' + id, true),
   previewWorkflow: (id: string) => get<{prompt: string}>('/workflows/' + id + '/preview'),
 
   listWorkflowRuns: (wfId: string) => get<WorkflowRun[]>(`/workflows/${wfId}/runs`),

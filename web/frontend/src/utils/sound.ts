@@ -1,10 +1,11 @@
 /**
- * 草元素音效引擎 —— 全程序化 WebAudio 合成，零音频文件依赖。
+ * 草元素音效引擎 —— 零音频文件依赖（纯程序化合成）。
  *
- * 音色设计（A 大调五声音阶，清脆、柔和、自然系）：
+ * 音色设计（清脆、柔和、自然系）：
  *  - send    叶拂：短促上扬的风噪扫频 + 一声轻叶颤音（发消息）
  *  - receive 风铃：E6/B6 双音晶亮拨弦 + 空气感延迟尾巴（收到回复）
- *  - click   露珠：一滴高处落下的水珠，音高微降，极轻（按钮/导航点击）
+ *  - click   风铃轻点：E6 快攻速衰拨弦 + B6 微光点缀 —— 与风铃同族但更
+ *            短促轻盈，高频点击不粘滞（按钮/导航点击）
  *  - notify  晨铃：A5→C#6→E6 三音琶音，三角波柔和晨钟（问候推送）
  *  - toggle  嫩芽：一声短促上挑的芽音（开关切换）
  *
@@ -168,23 +169,12 @@ class SoundEngine {
         this.pluck(1318.5, 0, 0.55, 0.16)
         this.pluck(1975.5, 0.09, 0.7, 0.11)
         break
-      case 'click': {
-        // 露珠：一滴水，音高 880→520 滑落
-        const t0 = ctx.currentTime
-        const osc = ctx.createOscillator()
-        osc.type = 'sine'
-        osc.frequency.setValueAtTime(880, t0)
-        osc.frequency.exponentialRampToValueAtTime(520, t0 + 0.07)
-        const g = ctx.createGain()
-        g.gain.setValueAtTime(0, t0)
-        g.gain.linearRampToValueAtTime(0.09, t0 + 0.006)
-        g.gain.exponentialRampToValueAtTime(0.0001, t0 + 0.11)
-        osc.connect(g)
-        g.connect(this.master!)
-        osc.start(t0)
-        osc.stop(t0 + 0.14)
+      case 'click':
+        // 风铃轻点：E6 主体快攻速衰 + B6 极轻高音点缀
+        // —— 与 receive 同族的晶亮质感，但短促轻盈，连续点击不粘滞
+        this.pluck(1318.5, 0, 0.15, 0.12)
+        this.pluck(1975.5, 0.035, 0.2, 0.045)
         break
-      }
       case 'notify':
         // 晨铃：A5 → C#6 → E6 琶音，三角波柔和
         this.bell(880, 0, 0.8, 0.10)

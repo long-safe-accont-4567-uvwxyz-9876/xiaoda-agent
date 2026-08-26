@@ -311,8 +311,12 @@ class MemoryManager:
     def _is_retrieval_simple(self, query: str) -> bool:
         return self._retrieval._is_retrieval_simple(query)
 
-    def _suggest_k(self, query: str, default_k: int = 8) -> int:
+    def suggest_k(self, query: str, default_k: int = 8) -> int:
+        """按查询复杂度建议检索条数（公开接口，供跨模块调用）。"""
         return self._retrieval._suggest_k(query, default_k=default_k)
+
+    def _suggest_k(self, query: str, default_k: int = 8) -> int:
+        return self.suggest_k(query, default_k=default_k)
 
     async def retrieve_memories(self, query: str, k: int = 5, context: str = "",
                                  _retry_attempted: bool = False,

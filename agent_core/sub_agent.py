@@ -212,6 +212,15 @@ class SubAgent:
     def available(self) -> bool:
         return self._initialized and self._router is not None and not self._degraded
 
+    def refresh_router(self) -> bool:
+        """从 core 重新抓取 router 并刷新就绪/降级状态（热更新后由 dispatcher 调用）。"""
+        self._router = getattr(self._core, "router", None)
+        self._initialized = self._router is not None
+        self._degraded = not self._initialized
+        if self._initialized:
+            logger.info("sub_agent.router_refreshed", name=self.config.name)
+        return self._initialized
+
     @property
     def degraded(self) -> bool:
         """降级模式：探活失败但仍注册，实际调用时回退到主体 agent。"""

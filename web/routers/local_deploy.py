@@ -840,10 +840,14 @@ async def ab_run_prompt_profile(request: Request, prompt_id: str, body: dict | N
             status_code=422,
             detail=f"backends must be a non-empty subset of {list(SWEEP_BACKENDS)}",
         )
-    try:
-        runs = int(data.get("runs") or 1)
-    except (TypeError, ValueError) as e:
-        raise HTTPException(status_code=422, detail="runs must be an integer") from e
+    raw_runs = data.get("runs")
+    if raw_runs is None:
+        runs = 1
+    else:
+        # 严格校验：0/""/bool 等 falsy 值不得被 `or 1` 吞成合法轮次
+        if isinstance(raw_runs, bool) or not isinstance(raw_runs, int):
+            raise HTTPException(status_code=422, detail="runs must be an integer")
+        runs = raw_runs
     if runs < 1 or runs > 5:
         raise HTTPException(status_code=422, detail="runs must be within 1..5")
     if len(backends) > 1 and runs > 1:

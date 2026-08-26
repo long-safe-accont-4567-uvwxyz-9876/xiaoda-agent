@@ -166,7 +166,7 @@ async function setAgentVoice(voiceRef: string | null) {
 async function deleteVoice(name: string) {
   if (!selectedAgent.value) return
   try {
-    await del(`/media/tts/voices/${selectedAgent.value}/${name}`)
+    await del(`/media/tts/voices/${selectedAgent.value}/${name}`, true)
     message.success(t('mediaView.voiceDeleted'))
     await loadVoices()
   } catch (e: any) { message.error(e.message) }
@@ -197,7 +197,7 @@ async function loadTasks() {
 
 async function cancelTask(id: string) {
   try {
-    await del(`/media/tasks/${id}`)
+    await del(`/media/tasks/${id}`, true)
     message.success(t('mediaView.cancelled'))
     loadTasks()
   } catch (e: any) { message.error(e.message) }

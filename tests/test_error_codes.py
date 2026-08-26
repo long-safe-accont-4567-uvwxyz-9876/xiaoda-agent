@@ -16,11 +16,18 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 
 import pytest
 
-from core.error_codes import ErrorCodeEnum, from_exception
 from core.app_exception import (
-    AuthError, ToolError, LLMError, MemoryError,
-    NetworkError, ConfigError, DatabaseError, RateLimitError, SystemError,
+    AuthError,
+    ConfigError,
+    DatabaseError,
+    LLMError,
+    MemoryError,
+    NetworkError,
+    RateLimitError,
+    SystemError,
+    ToolError,
 )
+from core.error_codes import ErrorCodeEnum, from_exception
 
 # 错误码格式: E_类别(大写字母)+3位数字
 _CODE_RE = re.compile(r"^E_[A-Z]+\d{3}$")
@@ -187,6 +194,7 @@ def test_fastapi_handler():
     """FastAPI 异常处理器返回正确 JSON"""
     from fastapi import FastAPI
     from fastapi.testclient import TestClient
+
     from web.error_handler import register_error_handlers
 
     app = FastAPI()

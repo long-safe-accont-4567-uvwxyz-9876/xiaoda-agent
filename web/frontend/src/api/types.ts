@@ -52,6 +52,8 @@ export interface AgentInfo {
   tool_count: number
   mcp_servers: string[]
   wallpaper?: string
+  /** 视频壁纸的 ffmpeg 首帧海报（{stem}_poster.jpg），仅真实存在时返回 */
+  wallpaper_poster?: string
   voice_ref?: string | null
   route_description?: string
   /** 子代理缺 API Key 等降级标志（agent_registry 序列化字段） */

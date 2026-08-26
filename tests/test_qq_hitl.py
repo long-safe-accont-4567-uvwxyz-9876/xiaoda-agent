@@ -24,11 +24,13 @@ PROJECT_ROOT = Path(__file__).parent.parent
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
-from security.human_approval import (
-    ApprovalRequest, ApprovalStatus, RiskLevel, IMApprovalChannel,
-)
-
 from qq_bot_adapter import AIQQBot
+from security.human_approval import (
+    ApprovalRequest,
+    ApprovalStatus,
+    IMApprovalChannel,
+    RiskLevel,
+)
 
 
 def _make_req(user_id: str = "u1", operation: str = "delete_file",

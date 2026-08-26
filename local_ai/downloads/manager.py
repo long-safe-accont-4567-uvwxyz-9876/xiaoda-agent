@@ -13,8 +13,9 @@ from datetime import datetime, timezone
 from pathlib import Path, PurePosixPath
 from typing import Any
 
-from core.cancel_token import CancellationError, CancelToken
 from loguru import logger
+
+from core.cancel_token import CancellationError, CancelToken
 from local_ai.contracts import (
     CatalogFile,
     CatalogModel,
@@ -335,10 +336,14 @@ class DownloadManager:
             and stream.range_start == offset
             and stream.range_total == manifest.size
         )
-        if offset > 0 and stream.status_code == 206 and not append:
+        # 200 同样不可信：ModelScope /resolve/ 实测对 Range 请求回 200（非 206）
+        # 却只发尾部字节（Content-Length 仍声明全长）后断连。直接消费会把截断
+        # body 写进 .part，重试时 offset>0 再次命中同样故障，永久失败循环。
+        # 故 offset>0 且无法确认可追加时，统一丢弃响应从零重开（无 Range 的
+        # 完整 GET 实测可靠）。
+        if offset > 0 and not append:
             await _close_stream(stream)
             stream = await self._transport.open(model, manifest.path, 0)
-        if offset > 0 and not append:
             offset = 0
         mode = "ab" if append else "wb"
         completed_before = self._completed_bytes_before(model, destination, manifest.path)
@@ -385,6 +390,7 @@ class DownloadManager:
         starting_bytes: int,
     ) -> None:
         import os as _os
+
         from huggingface_hub import hf_hub_download
 
         _os.environ.setdefault("HF_ENDPOINT", "https://hf-mirror.com")

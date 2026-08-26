@@ -4,6 +4,8 @@ import { useChatStore } from '../../stores/chat'
 import { useAgentsStore } from '../../stores/agents'
 import { getWsClient } from '../../api/ws'
 import EmotionAvatar from '../chat/EmotionAvatar.vue'
+import AgentAvatarMedia from '../agents/AgentAvatarMedia.vue'
+import { wallpaperKind } from '../../utils/wallpaper'
 import { t } from '../../i18n'
 import { refreshAgentNames } from '../../utils/agentNames'
 
@@ -80,8 +82,9 @@ const stageText: Record<string, string> = {
         @click="chat.setAgent(a.name)"
       >
         <span class="chip-avatar">
-          <img v-if="a.wallpaper && !failedAvatars.has(a.name)" :src="a.wallpaper" class="chip-avatar-img"
-               @error="onAvatarError(a.name)" />
+          <AgentAvatarMedia v-if="a.wallpaper && wallpaperKind(a.wallpaper) !== 'html' && !failedAvatars.has(a.name)"
+                            :wallpaper="a.wallpaper" :poster="a.wallpaper_poster" class="chip-avatar-img"
+                            @error="onAvatarError(a.name)" />
           <template v-else>{{ a.display_name.slice(0, 1) }}</template>
         </span>
         <span class="chip-name">{{ a.display_name }}</span>

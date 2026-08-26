@@ -843,7 +843,8 @@ _watchdog_stop: _threading.Event | None = None
 
 
 def _watchdog_thread_main(
-    loop: asyncio.AbstractEventLoop, stop_flag: "_threading.Event"
+    loop: asyncio.AbstractEventLoop, stop_flag: "_threading.Event",
+    loop_thread_ident: int,
 ) -> None:
     import sys
     import traceback as _tb
@@ -877,17 +878,45 @@ def _watchdog_thread_main(
             lag, _BLOCK_THRESHOLD,
         )
         try:
-            # 线程独立于事件循环：若阻塞尚未结束，主线程正停在真实阻塞点
-            for tid, frame in sys._current_frames().items():
-                stack_lines = _tb.format_stack(frame)
-                # 只打印最后 40 行，避免日志爆炸
-                tail = stack_lines[-40:] if len(stack_lines) > 40 else stack_lines
+            # 取证策略：阻塞发生在 loop 线程本身（同步操作），其当前帧即真凶。
+            # 历史教训：全线程栈 tail-40 会让 LOOP 线程帧被 idle 工作线程淹没。
+            frames = sys._current_frames()
+            loop_frame = frames.get(loop_thread_ident)
+            if loop_frame is not None:
+                loop_stack = "".join(_tb.format_stack(loop_frame))
                 logger.error(
-                    "event_loop.blocked_thread tid={} stack_tail=\n{}",
-                    tid, ''.join(tail),
+                    "event_loop.blocked_loop_thread stack=\n{}",
+                    loop_stack,
                 )
+            # 全量线程栈落盘独立文件，供事后深查（不挤占日志）
+            try:
+                from pathlib import Path as _Path
+
+                from config import LOG_DIR
+                dump_path = _Path(LOG_DIR) / f"loop_block_dump_{int(now)}.txt"
+                with open(dump_path, "w", encoding="utf-8") as fh:
+                    for tid, frame in sys._current_frames().items():
+                        th = _threading._active.get(tid)
+                        fh.write(f"\n=== tid={tid} name={getattr(th, 'name', '?')} ===\n")
+                        fh.write("".join(_tb.format_stack(frame)))
+            except (OSError, AttributeError) as _dump_err:
+                logger.error("event_loop.watchdog_dump_failed error={}", _dump_err)
+            try:
+                for tid, frame in sys._current_frames().items():
+                    if tid == loop_thread_ident:
+                        continue
+                    th = _threading._active.get(tid)
+                    head = _tb.format_stack(frame)
+                    logger.error(
+                        "event_loop.blocked_thread tid={} name={} frame={} ",
+                        tid, getattr(th, "name", "?"),
+                        head[-1].strip() if head else "?",
+                    )
+            except Exception as e:
+                logger.error("event_loop.watchdog_dump_failed error={}", str(e), exc_info=True)
         except Exception as e:
-            logger.error("event_loop.watchdog_dump_failed error={}", str(e), exc_info=True)
+            # 外层取证兜底：任何栈采集异常不得杀死 watchdog 线程
+            logger.error("event_loop.watchdog_forensics_failed error={}", str(e), exc_info=True)
 
 
 def start_event_loop_watchdog() -> None:
@@ -901,9 +930,10 @@ def start_event_loop_watchdog() -> None:
         logger.warning("event_loop.watchdog_no_loop")
         return
     _watchdog_stop = _threading.Event()
+    loop_thread_ident = _threading.get_ident()
     _watchdog_thread = _threading.Thread(
         target=_watchdog_thread_main,
-        args=(loop, _watchdog_stop),
+        args=(loop, _watchdog_stop, loop_thread_ident),
         name="event-loop-watchdog",
         daemon=True,
     )

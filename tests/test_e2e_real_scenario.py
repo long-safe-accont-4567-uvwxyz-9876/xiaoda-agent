@@ -8,15 +8,17 @@
 4. 日志隔离（B1: TEST_MODE 跳过文件 sink）
 5. 安全拦截（A3: 危险命令拦截）
 """
+import asyncio
 import os
 import sys
 import time
-import asyncio
 from pathlib import Path
+
 sys.path.insert(0, str(Path(__file__).parent.parent))
 os.environ.setdefault("TEST_MODE", "true")
 
 from dotenv import load_dotenv
+
 load_dotenv()
 
 
@@ -26,7 +28,6 @@ async def test_model_route_configuration():
     print("-" * 50)
 
     # 验证 webui_overrides.json 中的路由配置
-    from config import LOG_DIR
     overrides_path = Path("/media/orangepi/KIOXIA/nahida-data/config/webui_overrides.json")
 
     if not overrides_path.exists():
@@ -60,7 +61,7 @@ async def test_model_route_configuration():
         print(f"\n  结果: FAIL ({len(issues)} 个问题)")
         return False
     else:
-        print(f"\n  结果: PASS (路由配置正确)")
+        print("\n  结果: PASS (路由配置正确)")
         return True
 
 
@@ -69,9 +70,10 @@ async def test_error_classification_and_failover():
     print("\n[测试2] 错误分类与故障转移 (A2)")
     print("-" * 50)
 
-    from utils.error_classifier import ErrorClassifier, FailoverReason, RecoveryAction
-    import openai
     import httpx
+    import openai
+
+    from utils.error_classifier import ErrorClassifier, FailoverReason, RecoveryAction
 
     classifier = ErrorClassifier()
 
@@ -133,7 +135,7 @@ async def test_rag_pipeline_error_logging():
             print(f"  OK: INTENT_CLASSIFY_TIMEOUT = {timeout}s (配置存在)")
             timeout_ok = True
         else:
-            print(f"  FAIL: INTENT_CLASSIFY_TIMEOUT 未配置")
+            print("  FAIL: INTENT_CLASSIFY_TIMEOUT 未配置")
             timeout_ok = False
     except Exception as e:
         print(f"  FAIL: 无法读取配置: {e}")
@@ -152,13 +154,13 @@ async def test_rag_pipeline_error_logging():
             print(f"  OK: 意图分类成功 -> {intent}")
             classify_ok = True
         except asyncio.TimeoutError:
-            print(f"  WARN: 意图分类超时（10s）")
+            print("  WARN: 意图分类超时（10s）")
             classify_ok = True  # 超时不影响功能，CRAG有降级
         except Exception as e:
             print(f"  WARN: 意图分类异常: {type(e).__name__}: {str(e)[:60]}")
             classify_ok = True  # 异常不影响功能，CRAG有降级
     else:
-        print(f"  SKIP: QueryTransformer 不可用（无API Key）")
+        print("  SKIP: QueryTransformer 不可用（无API Key）")
         classify_ok = True
 
     result = timeout_ok and classify_ok
@@ -172,6 +174,7 @@ async def test_log_isolation():
     print("-" * 50)
 
     from loguru import logger
+
     from utils.logging_config import setup_logging
 
     # 确认 TEST_MODE 下无文件 sink
@@ -273,10 +276,10 @@ async def test_agent_core_initialization():
 
         # 验证 security_filter 注入
         if core.context._security_filter is core.security:
-            print(f"  OK: security_filter 正确注入")
+            print("  OK: security_filter 正确注入")
             passed += 1
         else:
-            print(f"  FAIL: security_filter 未正确注入")
+            print("  FAIL: security_filter 未正确注入")
 
         total = len(checks) + 1
         print(f"\n  结果: {'PASS' if passed == total else 'FAIL'} ({passed}/{total})")
@@ -284,7 +287,7 @@ async def test_agent_core_initialization():
 
     except Exception as e:
         print(f"  ERROR: AgentCore 初始化失败: {type(e).__name__}: {str(e)[:80]}")
-        print(f"\n  结果: FAIL")
+        print("\n  结果: FAIL")
         return False
 
 

@@ -572,7 +572,7 @@ class AgentCoreBootstrapper:
                 logger.warning("kg_v2.init_failed_fallback_to_v1", error=str(e))
 
         if core._failure_trigger._memory_db is None:
-            core._failure_trigger._memory_db = core.memory.memory
+            core._failure_trigger.bind_memory(core.memory.memory)
         # 注入 MemoryManager 到 memory_tool，修复记忆工具不可用问题
         from tools import memory_tool
         memory_tool.bind(core.memory)
@@ -811,13 +811,13 @@ class AgentCoreBootstrapper:
                 "name": "xiaoli",
                 "voice_ref": "xiaoli",
                 "sticker_dir": str(XIAOLI_STICKER_DIR),
-                "excluded_tools": {"call_xiaoli", "shell_command", "python_executor", "write_file", "search_files", "read_file", "list_files", "web_browse", "document_reader", "multi_search", "wolfram_query"},
+                "excluded_tools": {"shell_command", "python_executor", "write_file", "search_files", "read_file", "list_files", "web_browse", "document_reader", "multi_search", "wolfram_query"},
                 "capabilities": ["chat", "play", "fun"],
                 "route_description": "日常聊天、玩耍、轻松有趣的对话",
             },
             {
                 "name": "xiaolang",
-                "excluded_tools": {"call_xiaoli", "call_xiaoda", "delegate_task"},
+                "excluded_tools": {"call_xiaoda", "delegate_task"},
                 "capabilities": ["coding", "debug", "script", "programming", "hardware", "system", "devops"],
                 "route_description": "编程、代码编写、调试、技术问题、硬件控制、系统运维、开发辅助",
                 # 默认关闭 git/github MCP：首次安装不再自动启用（需在 WebUI 权限矩阵按需开启）
@@ -825,13 +825,13 @@ class AgentCoreBootstrapper:
             },
             {
                 "name": "xiaolian",
-                "excluded_tools": {"call_xiaoli", "call_xiaoda", "delegate_task", "shell_command", "python_executor", "write_file"},
+                "excluded_tools": {"call_xiaoda", "delegate_task", "shell_command", "python_executor", "write_file"},
                 "capabilities": ["search", "lookup", "query", "explore", "discover"],
                 "route_description": "搜索信息、查询资料、探索发现",
             },
             {
                 "name": "xiaoke",
-                "excluded_tools": {"call_xiaoli", "call_xiaoda", "delegate_task", "shell_command", "write_file"},
+                "excluded_tools": {"call_xiaoda", "delegate_task", "shell_command", "write_file"},
                 "capabilities": ["research", "analysis", "study", "academic"],
                 "route_description": "研究分析、学术思考、深度解读",
             },
@@ -1034,15 +1034,12 @@ class AgentCoreBootstrapper:
                         + f"\n  任务：{j['result_preview'] or '—'}")
                 return ToolResult.ok("后台委托任务一览：\n" + "\n".join(lines))
 
-            job = ad.find_running(agent=target.strip().lower() or None,
-                                  task_id_prefix=target.strip() or None)
-            if job is None and target.strip():
-                # 容错：允许用显示名匹配
-                for j in ad._JOBS.values():
-                    if j.status == "running" and (
-                            j.display_name.lower() == target.strip().lower()):
-                        job = j
-                        break
+            t = target.strip()
+            # 三种定位方式逐个尝试（task_id 恒带 bg- 前缀，
+            # 与 agent 名做 AND 永远匹配不上，不能合并成一次调用）
+            job = (ad.find_running(task_id_prefix=t or None)
+                   or ad.find_running(agent=t.lower() or None)
+                   or ad.find_running(display_name=t or None))
 
             if action == "abort":
                 if job is None:

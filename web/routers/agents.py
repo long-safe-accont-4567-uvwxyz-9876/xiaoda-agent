@@ -12,6 +12,7 @@ from loguru import logger
 
 from web.routers.auth import get_current_user
 from web.schemas import Envelope
+from web.upload_utils import b64_length_within_limit, read_upload_limited
 
 router = APIRouter(tags=["agents"])
 
@@ -375,12 +376,18 @@ async def upload_wallpaper(name: str, body: dict, request: Request, _user: str =
         # image/video 正则 payload 在 group(2)；HTML 正则只有 group(1)
         matched = m or vm
         payload_b64 = matched.group(2) if matched else hm.group(1)
+    except (IndexError, AttributeError) as exc:
+        logger.debug("agents.wallpaper_payload_extract_failed: {}", exc)
+        raise HTTPException(400, "data URL 格式错误") from None
+    # 先按 base64 字符数预检大小再解码（P1）：解码后再查限额时，
+    # 数百 MB 的 payload 会先占满内存。各类型解码后上限的最大值为
+    # 视频 50MB，超出者无需解码即可拒绝。
+    if not b64_length_within_limit(payload_b64, _VIDEO_MAX_BYTES):
+        raise HTTPException(400, "文件超出大小上限（视频 ≤50MB，图片 ≤8MB，GIF ≤20MB，HTML ≤2MB）")
+    try:
         raw = base64.b64decode(payload_b64, validate=True)
-    except (OSError, KeyError, ValueError, RuntimeError, TypeError) as exc:
+    except (ValueError, TypeError) as exc:
         logger.debug("agents.base64_decode_failed: {}", exc, exc_info=True)
-        raise HTTPException(400, "base64 解码失败") from None
-    except Exception:
-        logger.exception("agents.upload_wallpaper.unexpected_error")
         raise HTTPException(400, "base64 解码失败") from None
 
     _WALLPAPER_DIR.mkdir(parents=True, exist_ok=True)
@@ -623,10 +630,8 @@ async def upload_sticker(
     if ext not in _IMG_EXTS:
         raise HTTPException(400, f"仅支持 {', '.join(_IMG_EXTS)} 格式")
 
-    # 读取文件内容
-    content = await file.read()
-    if len(content) > 8 * 1024 * 1024:
-        raise HTTPException(400, "图片不能超过 8MB")
+    # 读取文件内容（分块累计，超限即时拒绝，避免超大文件先整体进内存）
+    content = await read_upload_limited(file, 8 * 1024 * 1024, "图片")
 
     # 确定保存路径
     sticker_dir = _resolve_sticker_dir(name, request)

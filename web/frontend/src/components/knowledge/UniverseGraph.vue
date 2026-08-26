@@ -2,8 +2,10 @@
 /**
  * 纳西妲宇宙 —— 3D 知识图谱全屏视图（编排层）
  *
- * 基于 3d-force-graph 渲染须弥配色的知识图谱，叠加三层星空、Bloom 后处理、
- * 节点高亮、闲置公转与 WS 实时同步。
+ * 基于 3d-force-graph 渲染须弥配色的知识图谱。记忆生长在世界树上：
+ * 程序化世界树居中，节点由锚点弹簧力安放在枝干上（高度数近主干、
+ * 低度数在末梢），单击展开时新记忆沿父节点的枝头"向外生长"，
+ * 叠加三层星空、Bloom 后处理、破土生长动画、节点高亮、闲置公转与 WS 实时同步。
  *
  * 逻辑分层拆分（./universe/，2026-08-23 拆解专项）：
  *   - types.ts       共享类型
@@ -12,7 +14,8 @@
  *   - starfield.ts   三层星空生成、自转与释放
  *   - ripples.ts     点击涟漪（geometry/material dispose 时序）
  *   - perfMonitor.ts 帧率采样与自动降档判定
- *   - engine.ts      three.js 场景引擎（实例生命周期 / Bloom / 交互绑定 / 相机）
+ *   - worldTree.ts   世界树场景（递归分枝 / 锚点 / 光尘 / 冠层辉光）
+ *   - engine.ts      three.js 场景引擎（实例生命周期 / Bloom / 锚点力 / 交互绑定 / 相机）
  * 本组件只保留：数据加载与按需展开编排、WS 同步、UI 状态与覆盖层。
  *
  * 适配说明（installed v1.80）：
@@ -63,7 +66,7 @@ const webglUnavailable = ref(false)
 const fps = ref(0)
 const qualityTier = ref<'high' | 'medium' | 'low'>('high')
 const toolbarCollapsed = ref(false)
-// 边数过载标记：>600 边时初始档位直接降到 medium 并关粒子
+// 边数过载标记：>900 边时初始档位直接降到 medium（聚焦式粒子已移除全量粒子开销，阈值放宽）
 const heavyEdges = ref(false)
 
 // 模态内部可控的检索 / 深度状态（与 prop 同步，但允许在浮层内独立切换）
@@ -107,7 +110,6 @@ const acc = useKnowledgeGraphData<GraphNode, GraphLink>(
     name: String(raw.name),
     kind: raw.kind,
     val: degree + 1,
-    fx: 0, fy: 0, fz: 0,
   }),
   (raw) => ({ source: String(raw.from), target: String(raw.to), relation: raw.relation }),
 )
@@ -123,11 +125,12 @@ async function loadGraph(retries = 0) {
 
   loading.value = true
   try {
-    // 按需展开模型：重置累积状态，只拉起步实体 depth=1 邻域（<400 边）
-    // 用户后续单击节点增量展开，不再一次性拉全图
+    // 按需展开模型：重置累积状态，拉起步实体在指定深度内的邻域；
+    // 用户后续单击节点仍可增量展开，不再一次性拉全图
     acc.reset()
     const startEntity = props.entity.trim()
-    const data = await getKnowledgeGraph(startEntity, Math.min(activeDepth.value ?? 6, 1))
+    engine?.resetWorld(startEntity) // 全量重载：清空落梢状态，检索实体优先作为根球
+    const data = await getKnowledgeGraph(startEntity, activeDepth.value ?? 1)
     if (destroyed) return
 
     acc.merge(data.nodes || [], data.edges || [])
@@ -152,8 +155,8 @@ function applyAccumulatedToGraph() {
   links.value = [...accLinks.value]
   nodeCount.value = accNodes.value.length
 
-  // 渲染规模分级：>600 边关粒子流（每条边一个动画粒子是最大 GPU 开销）
-  heavyEdges.value = accLinks.value.length > 600
+  // 渲染规模分级：>900 边强制 medium 起步（Bloom 关；粒子已改聚焦式，开销可控）
+  heavyEdges.value = accLinks.value.length > 900
 
   // 性能保护：节点过多则降级（用户已点击"仍要进入 3D"则跳过）
   if (accNodes.value.length > 2000 && !bypassDegrade) {
@@ -169,16 +172,16 @@ function applyAccumulatedToGraph() {
   eng.updateNeighborIndex(accNodes.value, accLinks.value)
   if (!eng.hasInstance) eng.init()
 
-  // 大图（>400 节点）先只挂节点、延后 300ms 再挂边：力导向先散开节点，
-  // 避免边+节点同时求解导致的初始帧卡死
-  const bigGraph = accNodes.value.length > 400
-  eng.setData(accNodes.value, bigGraph ? [] : accLinks.value)
-  eng.configureForce(bigGraph)
+  // setData 内部处理大图分阶段挂边；getLatest 保证延后触发时读到最新累积数据
+  eng.setData(
+    [...accNodes.value],
+    [...accLinks.value],
+    () => ({ nodes: [...accNodes.value], links: [...accLinks.value] }),
+  )
 
   loading.value = false
   expandingName.value = ''
 
-  eng.scheduleRelease(() => accNodes.value, () => accLinks.value)
   eng.scheduleZoomToFit()
 }
 
@@ -367,6 +370,9 @@ watch(() => props.depth, (d) => {
     <!-- 3D 容器 -->
     <div ref="containerEl" class="universe-canvas" />
 
+    <!-- 世界树提示（左下角） -->
+    <div class="universe-treehint">{{ t('universeGraph.treeHint') }}</div>
+
     <!-- 加载中 -->
     <div v-if="loading" class="universe-loading">
       <div class="sumeru-spinner" />
@@ -422,6 +428,20 @@ watch(() => props.depth, (d) => {
   height: 100%;
 }
 
+.universe-treehint {
+  position: absolute;
+  bottom: 14px;
+  left: 16px;
+  padding: 5px 12px;
+  border-radius: 999px;
+  font-size: 11.5px;
+  color: var(--moon-dim);
+  background: rgba(10, 20, 14, 0.45);
+  border: 1px solid var(--glass-border);
+  z-index: 10;
+  pointer-events: none;
+}
+
 .universe-toolbar {
   position: absolute;
   top: 16px;
@@ -473,7 +493,7 @@ watch(() => props.depth, (d) => {
   font-family: monospace;
   padding: 2px 6px;
   border-radius: 4px;
-  background: rgba(0, 0, 0, 0.3);
+  background: rgba(10, 20, 14, 0.45);
 }
 
 .universe-fps.fps-good {

@@ -59,6 +59,10 @@ let knowledgeChart: echarts.ECharts | null = null
 // ── 挂载即拉取（原 activeTab watcher 的 nextTick+100ms 时序）──
 onMounted(() => {
   window.addEventListener('resize', handleResize)
+  // 空闲预载 3D 分包（three.js 依赖较重）：首次点进记忆树免去下载/解析等待
+  const preload = () => { import('../knowledge/UniverseGraph.vue').catch(() => {}) }
+  if ('requestIdleCallback' in window) requestIdleCallback(preload, { timeout: 4000 })
+  else setTimeout(preload, 1500)
   nextTick(() => {
     setTimeout(() => emit('load'), 100)
   })
@@ -231,7 +235,21 @@ onBeforeUnmount(() => {
         <span v-if="expandingNode" class="kg-expanding">{{ t('insightView.expanding') }}「{{ expandingNode }}」…</span>
         <n-button size="tiny" type="primary" @click="emit('add-entity')"><SumeruIcon name="plus" :size="12" variant="duo" tone="add" interactive /> {{ t('insightView.addEntity') }}</n-button>
         <n-button size="tiny" type="primary" @click="emit('add-relation')"><SumeruIcon name="plus" :size="12" variant="duo" tone="add" interactive /> {{ t('insightView.addRelation') }}</n-button>
-        <n-button size="tiny" type="primary" @click="showUniverse = true"><SumeruIcon name="sparkle" :size="12" variant="duo" tone="magic" interactive /> {{ t('insightView.fullscreen') }}</n-button>
+        <!-- 记忆树入口：本页与众不同的存在，呼吸辉光 + 旋转光晕 + 摇曳树冠 + 飘叶 -->
+        <button class="kg-tree-entry" :title="t('insightView.memoryTreeTip')" @click="showUniverse = true">
+          <span class="kg-tree-halo" aria-hidden="true"></span>
+          <svg class="kg-tree-icon" viewBox="0 0 24 24" aria-hidden="true">
+            <circle cx="6.6" cy="10.4" r="3.1" class="kg-canopy kg-c2" />
+            <circle cx="17.4" cy="10.4" r="3.1" class="kg-canopy kg-c2" />
+            <circle cx="12" cy="7.2" r="4.8" class="kg-canopy kg-c1" />
+            <path d="M12 21.5v-7.2M12 16.2l-3.2-2.6M12 14.4l3.2-2.4" class="kg-trunk" />
+            <circle cx="12" cy="3" r="1.15" class="kg-dot" />
+          </svg>
+          <span class="kg-tree-label">{{ t('insightView.memoryTree') }}</span>
+          <span class="kg-leaf kg-l1" aria-hidden="true"></span>
+          <span class="kg-leaf kg-l2" aria-hidden="true"></span>
+          <span class="kg-leaf kg-l3" aria-hidden="true"></span>
+        </button>
       </div>
       <div ref="graphEl" class="chart tall"></div>
     </div>
@@ -325,4 +343,109 @@ onBeforeUnmount(() => {
 .kg-section h4 { font-size: 13px; color: var(--dendro); margin-bottom: 8px; }
 .kg-rel-from, .kg-rel-to { font-size: 12px; color: var(--moon); }
 .kg-rel-from::after { content: ' →'; color: var(--wisdom); margin: 0 4px; }
+
+/* ── 记忆树入口：呼吸辉光 + 旋转光晕 + 摇曳树冠 + 飘叶 ── */
+.kg-tree-entry {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  padding: 5px 15px;
+  border-radius: 999px;
+  border: 1px solid rgba(143, 229, 96, 0.55);
+  background: linear-gradient(135deg, rgba(21, 42, 29, 0.94), rgba(11, 25, 17, 0.94));
+  color: #d9f2c8;
+  font-size: 12.5px;
+  font-weight: 600;
+  letter-spacing: 0.05em;
+  cursor: pointer;
+  isolation: isolate;
+  animation: kg-tree-breath 2.8s ease-in-out infinite;
+  transition: transform 0.18s ease;
+}
+.kg-tree-entry:hover { transform: translateY(-1px) scale(1.04); }
+.kg-tree-entry:active { transform: scale(0.96); }
+
+/* 旋转扫掠光晕（置于按钮后方，模糊成光环） */
+.kg-tree-halo {
+  position: absolute;
+  inset: -45%;
+  z-index: -1;
+  border-radius: 50%;
+  background: conic-gradient(
+    from 0deg,
+    transparent 0deg, transparent 250deg,
+    rgba(143, 229, 96, 0.85) 305deg,
+    rgba(232, 213, 163, 0.9) 332deg,
+    transparent 360deg
+  );
+  filter: blur(7px);
+  opacity: 0.55;
+  animation: kg-tree-spin 4.2s linear infinite;
+}
+
+@keyframes kg-tree-spin { to { transform: rotate(360deg); } }
+
+@keyframes kg-tree-breath {
+  0%, 100% { box-shadow: 0 0 10px rgba(143, 229, 96, 0.25), inset 0 0 8px rgba(143, 229, 96, 0.12); }
+  50% { box-shadow: 0 0 24px rgba(143, 229, 96, 0.6), inset 0 0 12px rgba(143, 229, 96, 0.24); }
+}
+
+/* 树形图标：树冠随风摇 */
+.kg-tree-icon {
+  width: 16px;
+  height: 16px;
+  transform-origin: 50% 92%;
+  animation: kg-tree-sway 3.2s ease-in-out infinite alternate;
+}
+@keyframes kg-tree-sway {
+  from { transform: rotate(-4deg); }
+  to { transform: rotate(4deg); }
+}
+.kg-canopy.kg-c1 { fill: #8fe560; }
+.kg-canopy.kg-c2 { fill: #57a34a; }
+.kg-trunk {
+  fill: none;
+  stroke: #e8d5a3;
+  stroke-width: 1.7;
+  stroke-linecap: round;
+}
+.kg-dot {
+  fill: #fffbe6;
+  transform-box: fill-box;
+  transform-origin: center;
+  animation: kg-dot-pulse 1.6s ease-in-out infinite;
+}
+@keyframes kg-dot-pulse {
+  0%, 100% { opacity: 0.35; transform: scale(0.8); }
+  50% { opacity: 1; transform: scale(1.25); }
+}
+
+/* 缓缓上飘的叶片 */
+.kg-leaf {
+  position: absolute;
+  bottom: 2px;
+  width: 7px;
+  height: 7px;
+  border-radius: 0 70% 0 70%;
+  background: linear-gradient(135deg, #aef07c, #57a34a);
+  opacity: 0;
+  pointer-events: none;
+  animation: kg-leaf-float 3.4s ease-in infinite;
+}
+.kg-l1 { left: 8%; }
+.kg-l2 { left: 46%; width: 5px; height: 5px; animation-delay: 1.1s; }
+.kg-l3 { left: 76%; animation-delay: 2.2s; }
+@keyframes kg-leaf-float {
+  0% { transform: translateY(0) rotate(0deg); opacity: 0; }
+  12% { opacity: 0.95; }
+  100% { transform: translateY(-30px) translateX(-9px) rotate(160deg); opacity: 0; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .kg-tree-entry,
+  .kg-tree-entry * {
+    animation: none !important;
+  }
+}
 </style>

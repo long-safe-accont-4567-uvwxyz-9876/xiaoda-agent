@@ -45,6 +45,10 @@ def render_builtin_templates(
                 text = text.replace(f"<<{token}>>", str(variables[token]))
         rendered.append(text)
     if len(rendered) == 1:
+        # 单 ref 槽位由 profile.system_slot 决定：intent.decompose 治理
+        # 对象是 system 消息，其余节点模板本质是 user 内容
+        if profile.system_slot:
+            return rendered[0], ""
         return "", rendered[0]
     return rendered[0], rendered[1]
 

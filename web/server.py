@@ -25,6 +25,17 @@ async def _apply_model_overrides(core: Any, provider_service: Any | None = None)
     logger.info("webui._apply_model_overrides_start")
     cfg = get_config_service()
 
+    # .env → 凭证文件同步（915023d6 重构时误删）：.env 是 API Key 的文档化配置面，
+    # 启动时以 .env 为准回写凭证存储，否则凭证文件里的陈旧占位符会被一直使用
+    # （实测症状：siliconflow 凭证文件残留 6 位占位符，探针 401 "Token is invalid"）
+    try:
+        from setup_wizard import _load_env_values
+        env_values = _load_env_values()
+    except (ImportError, OSError, ValueError):
+        logger.debug("server.load_env_error", exc_info=True)
+        env_values = {}
+    _register_env_providers(cfg, env_values, os)
+
     if provider_service is None:
         provider_service = getattr(core, "provider_service", None)
     if provider_service is not None:
@@ -1166,6 +1177,10 @@ def _add_rate_limit_middleware(app: FastAPI) -> None:
         logger.debug("server.config_fallback_error", exc_info=True)
         _rate_limit_db = str(Path(__file__).parent.parent / "data" / "rate_limit_buckets.sqlite")
     app.add_middleware(RateLimitMiddleware, persist_path=_rate_limit_db)
+    # 全局 body 上限（80MB，WEBUI_MAX_BODY_MB 可调）：传输层先行截断，
+    # 端点级限额（视频壁纸 50MB 等）不必各自抵御超大 body 的内存放大
+    from web.middleware.body_limit import BodySizeLimitMiddleware
+    app.add_middleware(BodySizeLimitMiddleware)
     # API 响应 gzip 压缩（insight/memories 等大 JSON 实测 55KB 未压缩传输；
     # minimum_size=1000 避免小响应的压缩开销反噬）
     from fastapi.middleware.gzip import GZipMiddleware
@@ -1174,7 +1189,7 @@ def _add_rate_limit_middleware(app: FastAPI) -> None:
 
 def _add_security_and_sla_middleware(app: FastAPI) -> None:
     @app.middleware("http")
-    async def _allow_frame_embed(request: Any, call_next: Any) -> Any:
+    async def _trace_sla_and_security_headers(request: Any, call_next: Any) -> Any:
         import time as _time
 
         from utils.trace_context import new_trace_id
@@ -1199,6 +1214,9 @@ def _add_security_and_sla_middleware(app: FastAPI) -> None:
                 "media-src 'self' data: blob:; "
                 "font-src 'self' data:; "
                 "connect-src 'self' ws: wss:; "
+                # frame-ancestors 白名单中的 18089：桌面模式 splash 启动屏
+                # （agent.py _splash_port，127.0.0.1 静态 HTTP 服务）以 iframe
+                # 嵌入 WebUI，仅放行本机回环地址
                 "frame-ancestors 'self' http://127.0.0.1:18089 http://localhost:18089; "
                 "object-src 'none'; base-uri 'self'"
             )

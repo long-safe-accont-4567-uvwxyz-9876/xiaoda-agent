@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, onMounted, watch } from 'vue'
+import { ref, onMounted, onUnmounted, watch } from 'vue'
 import SumeruIcon from '../components/fx/SumeruIcon.vue'
 import { useRouter } from 'vue-router'
 import {
@@ -323,6 +323,9 @@ function startRunsPollingIfActive() {
 }
 
 watch(() => showRunsModal.value, v => { if (!v) stopRunsPolling() })
+
+// 组件卸载兜底停表：弹窗开着直接切路由会把 2.5s 轮询带去坟场（内存泄漏）
+onUnmounted(stopRunsPolling)
 
 async function cancelRun(runId: string) {
   try {

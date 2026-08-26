@@ -459,27 +459,26 @@ INTENT_DECOMP_CASES: tuple[PromptABCase, ...] = (
     PromptABCase(
         case_id="id.factors_cover_both_goals",
         variables={
-            "query": "帮我查明天北京的天气，然后推荐一家适合谈事情的餐厅",
+            "text": "帮我查明天北京的天气，然后推荐一家适合谈事情的餐厅",
         },
         required_fields=("factors", "residual"),
         evidence_list_field="factors",
         evidence_quote_field="evidence",
-        evidence_source_variable="query",
+        evidence_source_variable="text",
         expect_contains=("天气", "餐厅"),
     ),
     PromptABCase(
         case_id="id.three_subtasks_with_time_ref",
         variables={
-            "query": "订周六的餐厅，顺便查那天的天气，出门前提醒我带伞",
+            "text": "订周六的餐厅，顺便查那天的天气，出门前提醒我带伞",
         },
         required_fields=("factors", "residual"),
         evidence_list_field="factors",
         evidence_quote_field="evidence",
-        evidence_source_variable="query",
+        evidence_source_variable="text",
         expect_contains=("周六", "餐厅", "天气", "伞"),
     ),
 )
-
 
 GOLDEN_CASES_BY_NODE: dict[str, tuple[PromptABCase, ...]] = {
     "query_transform": QUERY_TRANSFORM_CASES,

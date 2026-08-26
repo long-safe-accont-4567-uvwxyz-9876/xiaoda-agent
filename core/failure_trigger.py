@@ -32,6 +32,10 @@ class FailureTrigger:
         self._memory_db = memory_db
         self._learning_manager = learning_manager
 
+    def bind_memory(self, memory_db: Any) -> None:
+        """接线 MemoryDB（AgentCore.__init__ 时 memory 未就绪，由 bootstrap 后期注入）。"""
+        self._memory_db = memory_db
+
     async def on_failure(self, context: FailureContext) -> dict:
         """失败时触发反思流程
 

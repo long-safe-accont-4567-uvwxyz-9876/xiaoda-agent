@@ -19,7 +19,7 @@ from emotion.emotion_enum import EMOTION_VOCAB_SLASH
 from tool_engine.tool_registry import ToolPermission
 
 _NAHIDA_DN = get_agent_display_name('xiaoda')
-_KELI_DN = get_agent_display_name('xiaoli')
+_XIAOLI_DN = get_agent_display_name('xiaoli')
 
 BUILTIN_TOOLS: list[dict[str, Any]] = [
     # ── tools.file_tools_v2 ──────────────────────────────────────────
@@ -149,7 +149,7 @@ BUILTIN_TOOLS: list[dict[str, Any]] = [
     },
     {
         "name": "call_xiaoda",
-        "description": f"向{_NAHIDA_DN}姐姐求助。当{_KELI_DN}遇到不懂的问题、需要深度分析、或需要{_NAHIDA_DN}姐姐亲自回答时使用此工具。{_NAHIDA_DN}姐姐是须弥的草神，温柔聪慧，擅长深度思考和分析。",
+        "description": f"向{_NAHIDA_DN}姐姐求助。当{_XIAOLI_DN}遇到不懂的问题、需要深度分析、或需要{_NAHIDA_DN}姐姐亲自回答时使用此工具。{_NAHIDA_DN}姐姐是须弥的草神，温柔聪慧，擅长深度思考和分析。",
         "schema": {
             "type": "object",
             "properties": {

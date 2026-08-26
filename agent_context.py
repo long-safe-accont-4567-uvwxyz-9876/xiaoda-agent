@@ -1,12 +1,12 @@
 import asyncio
-import time
 import re
+import time
+from collections.abc import Callable
 from copy import deepcopy
 from dataclasses import dataclass, field
 from typing import Any
-from collections.abc import Callable
-from loguru import logger
 
+from loguru import logger
 
 # ── 记忆检索格式过滤 ──────────────────────────────────
 # 根因：用户反馈"数据库原文直接蹦出来了"。记忆检索结果直接注入 LLM 时，
@@ -1166,6 +1166,7 @@ class AgentContext:
         restore_succeeded = True
         try:
             _now = time.time()
+            rows = None  # 主查询失败时保持 None → 走兜底查询
             try:
                 rows = await db.get_conversations_readonly(
                     start_ts=_now - 86400,
@@ -1175,19 +1176,14 @@ class AgentContext:
                     limit=50,
                 )
             except (OSError, RuntimeError, ValueError):
-                fallback_kwargs = {"limit": 10, "user_id": query_user_id}
-                if scope is not None:
-                    fallback_kwargs["scope"] = scope
-                rows = (
-                    await db.memory.get_recent_conversations(**fallback_kwargs)
-                    if query_user_id
-                    else await db.memory.get_recent_conversations(limit=10)
-                )
+                pass  # 预期内的查询失败
             except Exception:
                 logger.exception(
                     "agent_context.conversation_query_unexpected user={}",
                     target_user_id,
                 )
+            # 兜底：退回最近会话（两分支共用同一出口，防拷贝漂移）
+            if rows is None:
                 fallback_kwargs = {"limit": 10, "user_id": query_user_id}
                 if scope is not None:
                     fallback_kwargs["scope"] = scope

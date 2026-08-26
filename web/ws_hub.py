@@ -92,6 +92,9 @@ class ConnectionManager:
         self._send_queues: dict[str, asyncio.Queue] = {}
         self._writer_tasks: dict[str, asyncio.Task] = {}
         self._term_start_tasks: set[asyncio.Task] = set()
+        # 每连接在途 chat 任务数上限：客户端换 msg_id 即可并发拉起无限 LLM
+        # 任务（track_message_task 只按 msg_id 幂等），此处按连接方硬顶
+        self.MAX_CHAT_TASKS_PER_CONN = 3
         self._stream_sessions: OrderedDict[tuple[str, str], dict[str, Any]] = OrderedDict()
         self._MAX_STREAM_SESSIONS = 256
         self._SEND_QUEUE_MAX = 64  # 有界队列上限；溢出的连接视为过慢并关闭
@@ -200,6 +203,32 @@ class ConnectionManager:
 
     def get_message_task(self, conn_id: str, msg_id: str) -> asyncio.Task | None:
         return self._tasks.get((conn_id, msg_id))
+
+    def inflight_chat_count(self, conn_id: str) -> int:
+        """该连接当前在途的 chat 任务数（用于每连接并发节流）。"""
+        return sum(1 for (owner, _), task in self._tasks.items()
+                   if owner == conn_id and not task.done())
+
+    def get_session(self, conn_id: str) -> str:
+        """读取连接绑定的会话 ID（封装 _session_map，避免跨模块私有访问）。"""
+        return self._session_map.get(conn_id, "")
+
+    def set_session(self, conn_id: str, session_id: str) -> None:
+        if session_id:
+            self._session_map[conn_id] = session_id
+
+    def get_agent(self, conn_id: str) -> str:
+        """读取连接当前受话 agent（封装 _agent_map）。"""
+        return self._agent_map.get(conn_id, "xiaoda")
+
+    def set_agent(self, conn_id: str, agent: str) -> None:
+        self._agent_map[conn_id] = agent
+
+    def notify_pong(self, conn_id: str) -> None:
+        """客户端心跳 pong 应答（封装 _pong_events）。"""
+        evt = self._pong_events.get(conn_id)
+        if evt:
+            evt.set()
 
     async def cancel_message_task(self, conn_id: str, msg_id: str) -> None:
         task = self.get_message_task(conn_id, msg_id)
@@ -522,13 +551,17 @@ def _cleanup_old_media() -> int:
 
 
 async def _media_cleanup_loop() -> None:
-    """后台循环：定期清理过期动态媒体文件。"""
+    """后台循环：定期清理过期动态媒体文件（IO 下放线程池，不占事件循环）。"""
     while True:
         await asyncio.sleep(_MEDIA_CLEANUP_INTERVAL_SECONDS)
         try:
-            _cleanup_old_media()
+            removed = await asyncio.to_thread(_cleanup_old_media)
         except (OSError, RuntimeError) as e:
             logger.warning("ws.media_cleanup_error", error=str(e))
+            continue
+        if removed:
+            logger.info("ws.media_cleanup", removed=removed,
+                        max_age_hours=_MEDIA_MAX_AGE_SECONDS // 3600)
 
 
 def start_media_cleanup() -> None:
@@ -565,19 +598,21 @@ def serialize_result(result: Any) -> dict:
     }
 
 
+async def _synthesize_speech(core: Any, agent: str, tts_text: str, emotion: str) -> str | None:
+    """按 agent 分派 TTS 合成（xiaoda 主体直连，子 agent 未注册时回退主体）。"""
+    if agent == "xiaoda":
+        return await core.tts.synthesize_xiaoda(tts_text, emotion=emotion)
+    sub_agent = core.dispatcher.get_agent(agent)
+    if sub_agent:
+        return await sub_agent.synthesize(tts_text, emotion=emotion)
+    return await core.tts.synthesize_xiaoda(tts_text, emotion=emotion)
+
+
 async def _async_tts_task(core: Any, agent: str, tts_text: str, emotion: str,
                            conn_id: str, msg_id: str) -> None:
-    """Task 6: 后台 TTS 合成任务 —— 合成完成后推送 audio_ready 事件。"""
+    """Task 6: 后台 TTS 合成任务 -- 合成完成后推送 audio_ready 事件。"""
     try:
-        if agent == "xiaoda":
-            audio_path = await core.tts.synthesize_xiaoda(tts_text, emotion=emotion)
-        else:
-            sub_agent = core.dispatcher.get_agent(agent)
-            if sub_agent:
-                audio_path = await sub_agent.synthesize(tts_text, emotion=emotion)
-            else:
-                audio_path = await core.tts.synthesize_xiaoda(tts_text, emotion=emotion)
-
+        audio_path = await _synthesize_speech(core, agent, tts_text, emotion)
         audio_url = _publish_file(audio_path, "tts") if audio_path else None
         if audio_url:
             await manager.send_to(conn_id, {
@@ -585,21 +620,16 @@ async def _async_tts_task(core: Any, agent: str, tts_text: str, emotion: str,
             })
         else:
             logger.warning("ws.async_tts_no_audio", conn_id=conn_id, msg_id=msg_id)
-    except (OSError, RuntimeError, asyncio.CancelledError) as e:
+    except asyncio.CancelledError:
+        raise
+    except (OSError, RuntimeError) as e:
         logger.error("ws.async_tts_failed", conn_id=conn_id, msg_id=msg_id, error=str(e))
 
 
 async def _synthesize_tts_sync(core: Any, agent: str, tts_text: str, emotion: str) -> str | None:
     """同步 TTS 合成（HTTP 端点等无 WebSocket 连接场景的回退）。"""
     try:
-        if agent == "xiaoda":
-            audio_path = await core.tts.synthesize_xiaoda(tts_text, emotion=emotion)
-        else:
-            sub_agent = core.dispatcher.get_agent(agent)
-            if sub_agent:
-                audio_path = await sub_agent.synthesize(tts_text, emotion=emotion)
-            else:
-                audio_path = await core.tts.synthesize_xiaoda(tts_text, emotion=emotion)
+        audio_path = await _synthesize_speech(core, agent, tts_text, emotion)
         return _publish_file(audio_path, "tts") if audio_path else None
     except (OSError, RuntimeError) as e:
         logger.error("ws.sync_tts_failed", error=str(e))
@@ -739,7 +769,7 @@ async def websocket_endpoint(ws: WebSocket) -> None:
     logger.info("ws.connected conn_id={}", conn_id)
     await manager.send_to(conn_id, {
         "type": "connected", "conn_id": conn_id,
-        "session_id": manager._session_map[conn_id],
+        "session_id": manager.get_session(conn_id),
     })
 
     try:
@@ -774,20 +804,18 @@ async def _dispatch_message(conn_id: str, msg: dict, mtype: str, ws: WebSocket) 
         await manager.send_to(conn_id, {"type": "pong"})
 
     elif mtype == "pong":
-        # G5: 客户端响应心跳 pong —— 唤醒心跳协程的 wait_for
-        evt = manager._pong_events.get(conn_id)
-        if evt:
-            evt.set()
+        # G5: 客户端响应心跳 pong -- 唤醒心跳协程的 wait_for
+        manager.notify_pong(conn_id)
 
     elif mtype == "set_agent":
         agent = str(msg.get("agent") or "xiaoda")
-        manager._agent_map[conn_id] = agent
+        manager.set_agent(conn_id, agent)
         await manager.send_to(conn_id, {"type": "agent_changed", "agent": agent})
 
     elif mtype == "set_session":
         sid = str(msg.get("session_id") or "")
         if sid:
-            manager._session_map[conn_id] = sid
+            manager.set_session(conn_id, sid)
             await manager.send_to(conn_id, {"type": "session_changed", "session_id": sid})
 
     elif mtype == "chat":
@@ -798,6 +826,15 @@ async def _dispatch_message(conn_id: str, msg: dict, mtype: str, ws: WebSocket) 
                 "type": "error", "msg_id": msg_id,
                 "code": "DUPLICATE_COMPLETED",
                 "message": "该消息已处理完成，请勿重复发送",
+            })
+            return
+        # 每连接并发节流：track_message_task 只按 msg_id 幂等，客户端换
+        # msg_id 即可无限并发拉起 LLM 任务，此处按连接硬顶在途数
+        if manager.inflight_chat_count(conn_id) >= manager.MAX_CHAT_TASKS_PER_CONN:
+            await manager.send_to(conn_id, {
+                "type": "error", "msg_id": msg_id,
+                "code": "TOO_MANY_INFLIGHT",
+                "message": "当前连接并发请求过多，请等待在途消息完成",
             })
             return
         task = asyncio.create_task(_handle_chat(conn_id, msg, msg_id, ws))
@@ -931,10 +968,10 @@ async def _handle_chat(conn_id: str, msg: dict, msg_id: str, ws: WebSocket) -> N
         return
     if not text:
         text = "📷 图片" if image_url_field else f"📄 {Path(doc_path_field).name}"
-    agent = str(msg.get("agent") or manager._agent_map.get(conn_id, "xiaoda"))
+    agent = str(msg.get("agent") or manager.get_agent(conn_id))
     session_id = str(msg.get("session_id") or
-                     manager._session_map.get(conn_id) or f"web_{uuid.uuid4().hex[:12]}")
-    manager._session_map[conn_id] = session_id
+                     manager.get_session(conn_id) or f"web_{uuid.uuid4().hex[:12]}")
+    manager.set_session(conn_id, session_id)
     app = ws.scope.get("app")
     core = app.state.core
 
@@ -988,14 +1025,19 @@ async def _handle_chat(conn_id: str, msg: dict, msg_id: str, ws: WebSocket) -> N
         data.update({"type": "final", "msg_id": msg_id})
         await manager.send_to(conn_id, data)
     except asyncio.CancelledError:
+        # 取消须向上传播（吞掉会破坏 asyncio 取消语义，任务无法真正终止）。
+        # ABORTED 通知经 finally 前的队列发送：send_to 是非阻塞入队，
+        # 不会因连接失效而挂起；随后 raise 恢复取消链。
         await manager.send_to(conn_id, {
             "type": "error", "msg_id": msg_id,
             "code": "ABORTED", "message": "已中断生成"})
-    except (RuntimeError, OSError, asyncio.CancelledError, ValueError) as e:
-        logger.error("ws.chat.failed conn_id={} error={}", conn_id, str(e))
+        raise
+    except (RuntimeError, OSError, ValueError) as e:
+        # 异常原文不回传客户端（可能带内部路径/模型细节），完整信息进日志
+        logger.exception("ws.chat.failed conn_id={} msg_id={}", conn_id, msg_id)
         await manager.send_to(conn_id, {
             "type": "error", "msg_id": msg_id,
-            "code": "CHAT_ERROR", "message": str(e)[:300]})
+            "code": "CHAT_ERROR", "message": "生成回复失败，请稍后重试或查看服务端日志"})
     finally:
         reset_current_request_context(request_context_token)
         current_msg_id.reset(token)

@@ -1,13 +1,13 @@
-from typing import Any
 import asyncio
 import json
 import re
 import time
+from typing import Any
+
 from loguru import logger
 
 from db.db_knowledge import KnowledgeDB
 from utils.free_model_backend import FreeModelBackend
-
 
 ENTITY_EXTRACT_PROMPT = """从以下对话摘要中提取关键实体和关系，只提取最显著的3-5个。
 
@@ -101,6 +101,9 @@ class KnowledgeGraph:
         self._query_entity_lru: list[str] = []
         # 规则提取器（jieba，<10ms）用于实体前置短路，避免对无实体查询调用 LLM
         self._rule_extractor: Any = None
+        # single-flight：同 query 并发请求合并为一次底层抽取（2026-08-25 性能专项：
+        # 预热任务与 KG 通道并发到达时，避免免费模型被双飞、抽取耗时被双付）
+        self._query_entity_inflight: dict[str, asyncio.Future] = {}
         # 节点后端选择：auto/local/api/off（local=走本地模型；off=禁用提取）
         # 后端切换统一委托给 FreeModelBackend（local/off 的 key 备份与恢复逻辑复用共享实现）
         self._free = FreeModelBackend()
@@ -251,6 +254,12 @@ class KnowledgeGraph:
         I6: 供召回通道和快速评分共用，避免 N+1 次 LLM 调用。
         修复 P0-2: 加 LRU + TTL 缓存，同一 query 5 分钟内只调一次 LLM。
         """
+        # single-flight：同 query 的并发调用共享同一次底层抽取
+        # （预热任务与 KG 通道同时到达时只调一次免费模型）
+        inflight = self._query_entity_inflight.get(query)
+        if inflight is not None:
+            return await asyncio.shield(inflight)
+
         # P0-2: 缓存命中检查
         now = time.time()
         cached = self._query_entity_cache.get(query)
@@ -272,6 +281,41 @@ class KnowledgeGraph:
                     self._query_entity_lru.remove(query)
                 except ValueError:
                     logger.debug("kg.query_entity_lru_expire_remove_missing", exc_info=True)
+
+        # 未命中缓存：登记 single-flight 后执行底层抽取（规则短路 + 免费模型）
+        loop = asyncio.get_running_loop()
+        fut: asyncio.Future = loop.create_future()
+        self._query_entity_inflight[query] = fut
+        try:
+            result_set = await self._extract_query_entities_cached(query)
+        except BaseException as e:
+            if not fut.done():
+                fut.set_exception(
+                    e if isinstance(e, Exception) else RuntimeError(str(e)))
+            raise
+        finally:
+            self._query_entity_inflight.pop(query, None)
+        if not fut.done():
+            fut.set_result(result_set)
+        return result_set
+
+    async def _extract_query_entities_cached(self, query: str) -> set[str]:
+        """底层抽取（jieba 规则短路 + 免费模型），写入 5min 缓存。
+
+        由 get_query_entities 的 single-flight 包装调用；双检缓存防并发方
+        已完成时重复调模型。
+        """
+        now = time.time()
+        cached = self._query_entity_cache.get(query)
+        if cached is not None:
+            entities_set, expire_ts = cached
+            if now < expire_ts:
+                return entities_set
+            self._query_entity_cache.pop(query, None)
+            try:
+                self._query_entity_lru.remove(query)
+            except ValueError:
+                pass
 
         # 规则前置短路：jieba 规则提取（<10ms，且比 LLM 更激进）为空 → 查询无实体，
         # 直接返回空集并跳过 LLM 调用（规则为空时 LLM 提取必然也为空，结果完全一致）。
@@ -444,8 +488,8 @@ class KnowledgeGraph:
         # OntoLearner B1: 复杂度评分, 跳过高复杂度摘要的 KG 提取
         # 论文实证: 失败模式与本体复杂度正相关 (非模型大小)
         try:
-            from memory.ontology_complexity import should_extract
             import config as _cfg
+            from memory.ontology_complexity import should_extract
             _threshold = float(getattr(_cfg, "ONTOLOGY_SKIP_THRESHOLD", 0.75))
             _do_extract, _score = should_extract(summary, skip_threshold=_threshold)
             if not _do_extract:

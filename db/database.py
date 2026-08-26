@@ -143,6 +143,11 @@ class DatabaseManager(LegacyMigrationMixin, DDLMixin, ConversationLogMixin, Life
             self._readonly_conn.row_factory = aiosqlite.Row
             await self._readonly_conn.execute("PRAGMA query_only=1")
             await self._readonly_conn.execute("PRAGMA busy_timeout=2000")
+            # schema 探针：曾观测只读连接偶发报 no such column（WAL 旧快照/
+            # 启动时序边缘态）。带病只读连接会让 restore 反复走异常兜底，
+            # 这里启动即验证核心列，失败则弃用并回退主连接。
+            await self._readonly_conn.execute(
+                "SELECT timestamp FROM conversation_logs LIMIT 1")
             logger.info("database.readonly_conn_ready")
         except Exception as e:
             # 只读连接初始化失败不阻塞启动，restore 回退到主连接(保留原行为)
@@ -395,6 +400,7 @@ class DatabaseManager(LegacyMigrationMixin, DDLMixin, ConversationLogMixin, Life
         params.append(limit)
         sql = (
             f"SELECT timestamp, user_message, assistant_reply, user_id, session_id "
+            f"FROM conversation_logs "
             f"{where} ORDER BY timestamp DESC LIMIT ?"
         )
         # 优先只读连接，失败回退主连接

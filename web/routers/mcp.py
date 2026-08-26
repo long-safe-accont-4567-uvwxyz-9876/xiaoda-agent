@@ -20,9 +20,9 @@ router = APIRouter(tags=["mcp"], dependencies=[Depends(get_current_user)])
 # 校验逻辑下沉到中性模块 security.mcp_command_policy（market 安装层同样复用），
 # 本层仅把 ValueError 包装为 HTTPException(400)，对外行为与错误文案保持一致。
 from security.mcp_command_policy import (  # noqa: E402
-    _ALLOWED_MCP_BINARIES,
-    _ENV_BLOCKED_PREFIXES,
     validate_mcp_command as _validate_mcp_command_policy,
+)
+from security.mcp_command_policy import (
     validate_mcp_env as _validate_mcp_env_policy,
 )
 
@@ -129,13 +129,16 @@ def _serialize(name: str, client: Any, cfg_record: dict | None, mgr: Any=None) -
         command = record.get("command", "")
         args = record.get("args", [])
         env_keys = sorted((record.get("env") or {}).keys())
-    # 获取已禁用工具列表
+    # 获取已禁用工具列表（_tool_enabled_map 结构为 {server_name: {tool_name: enabled}}，
+    # 与 MCPManager.set_tool_enabled / is_tool_enabled 保持一致；旧实现用 (name, t)
+    # 元组查顶层 dict 永远 miss，导致 WebUI 禁用的工具在 server 列表里从不显示为已禁用）
     disabled_tools = []
     if mgr is not None:
         try:
+            server_map = getattr(mgr, "_tool_enabled_map", {}).get(name) or {}
             disabled_tools = sorted([
                 t for t in tool_names
-                if not mgr._tool_enabled_map.get((name, t), True)
+                if not server_map.get(t, True)
             ])
         except (KeyError, AttributeError, ValueError) as exc:
             logger.debug("mcp.disabled_tools_fetch_failed: {}", exc, exc_info=True)
