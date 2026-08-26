@@ -2115,23 +2115,27 @@ if __name__ == "__main__":
     _main_app_id = os.getenv("QQBOT_APP_ID", "").strip() or APP_ID
     _main_app_secret = os.getenv("QQBOT_APP_SECRET", "").strip() or APP_SECRET
     if not _main_app_id or _main_app_id == "your_app_id_here":
-        print("=" * 55)
-        print("  请先配置 QQ Bot AppID 和 AppSecret")
-        print("")
-        print("  步骤:")
-        print("  1. 浏览器打开: https://q.qq.com")
-        print("  2. 用手机 QQ 扫码登录")
-        print("  3. 点击「创建机器人」")
-        print("  4. 复制 AppID 和 AppSecret")
-        print("  5. 填入 .env 文件")
-        print("=" * 55)
+        # 直启模式的引导信息统一走 loguru：WebUI 单进程下 stdout 是日志管道，
+        # 独立终端运行时 loguru 的 stderr 输出同样直达用户
+        logger.error(
+            "qq_bot.missing_credentials\n"
+            "=" * 55 + "\n"
+            "  请先配置 QQ Bot AppID 和 AppSecret\n\n"
+            "  步骤:\n"
+            "  1. 浏览器打开: https://q.qq.com\n"
+            "  2. 用手机 QQ 扫码登录\n"
+            "  3. 点击「创建机器人」\n"
+            "  4. 复制 AppID 和 AppSecret\n"
+            "  5. 填入 .env 文件\n" + "=" * 55
+        )
         sys.exit(1)
 
-    print("=" * 50)
-    print(f"{get_agent_display_name('xiaoda')}的 QQ Bot 启动中...")
-    print("  私聊: 全自动回复")
-    print("  群聊: @机器人 触发")
-    print("=" * 50)
+    logger.info(
+        f"{get_agent_display_name('xiaoda')}的 QQ Bot 启动中\n"
+        + "=" * 50 + "\n"
+        "  私聊: 全自动回复\n"
+        "  群聊: @机器人 触发\n" + "=" * 50
+    )
 
     intents = botpy.Intents(public_messages=True)
     is_sandbox = _qq_cfg.get("is_sandbox", False)
@@ -2163,12 +2167,9 @@ if __name__ == "__main__":
                 retry=retry_count,
                 delay=delay,
             )
-            print(f"\n  ⚠ QQ Bot 异常退出: {str(e)[:100]}")
-            print(f"  🔄 {delay:.0f} 秒后重连 (第 {retry_count} 次)...\n")
             # __main__ 块为同步上下文（client.run 是同步调用），使用 time.sleep
             time.sleep(delay)
 
     if retry_count >= MAX_RETRIES:
         logger.error("qq_bot.max_retries_exceeded")
-        print("  ❌ QQ Bot 重连次数已达上限，退出")
         sys.exit(1)

@@ -28,16 +28,13 @@ ROOT = Path(__file__).resolve().parents[1]
 # 2026-08-25 P2 拆分②：web/ws_hub.py(1591) → ws_hub(1118)+ws_terminal(518)，
 #   原条目替换为拆分后两文件实测值。
 # 2026-08-26 上调记录（协议 b：必要增长，理由供提交说明引用）：
+#   qq_bot_adapter.py 2174→2175 —— __main__ 直启块 18 处 print 换 loguru
+#     （可观测性清偿，多行消息合并致净 +1；见 fceb388d）；
 #   web/ws_hub.py 1118→1160 —— 每连接 chat 并发硬顶(MAX_CHAT_TASKS_PER_CONN=3,
 #     防换 msg_id 无限拉起 LLM 任务)+ ConnectionManager 封装方法(get/set_session、
 #     get/set_agent、notify_pong、inflight_chat_count)+媒体清理 IO 下放线程池；
-#   web/ws_terminal.py 534→553 —— 终端会话同款封装方法接线与 IO 下放；
-#   prompt_builder/_prompt_scene.py 781→783 —— 桶排序差集 bug 修复
-#     (对照 filtered_ordering 而非 module_set,原差集恒为空)；
-#   web/server.py 1397→1404 —— .env→凭证存储启动回写(修 siliconflow 陈旧
-#     占位符致探针 401)+ 全局 body 上限中间件(80MB)接线。
 BASELINES: dict[str, int] = {
-    "qq_bot_adapter.py": 2174,
+    "qq_bot_adapter.py": 2175,
     "wechat_bot_adapter.py": 1591,
     "web/ws_hub.py": 1160,
     "web/ws_terminal.py": 553,
@@ -64,6 +61,11 @@ def _line_count(rel: str) -> int:
 # 赦免清单其余成员的基线(2026-08-25 一致性收口:进清单必被看守,
 # 由 debt_audit.sh 的"赦免清单一致性"检查强制)
 # 2026-08-26 上调记录（协议 b：必要增长）：
+#   web/ws_terminal.py 534→553 —— 终端会话同款封装方法接线与 IO 下放；
+#   prompt_builder/_prompt_scene.py 781→783 —— 桶排序差集 bug 修复
+#     (对照 filtered_ordering 而非 module_set,原差集恒为空)；
+#   web/server.py 1397→1404 —— .env→凭证存储启动回写(修 siliconflow 陈旧
+#     占位符致探针 401)+ 全局 body 上限中间件(80MB)接线。
 #   web/routers/setup.py 1322→1333 —— test-key 速率限制按 IP 分桶(防多用户
 #     挤占配额、防伪造 IP 撑爆内存)+ first_run 探测 IO 下放线程池；
 #   memory/retrieval/pipeline.py 1069→1075 —— KG 实体抽取预热与七路召回并行
