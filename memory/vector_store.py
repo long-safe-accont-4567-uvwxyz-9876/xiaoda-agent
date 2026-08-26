@@ -69,7 +69,7 @@ import httpx as _httpx_embed
 
 from config_constants import env_flag
 from utils.http_pool import get_shared_client as _get_embed_shared_client
-from utils.thread_pools import to_thread_hot
+from utils.thread_pools import to_thread_heavy, to_thread_hot
 
 _EMBED_HTTP_TIMEOUT = _httpx_embed.Timeout(connect=15.0, read=5.0, write=10.0, pool=10.0)
 
@@ -663,7 +663,9 @@ class VectorStore:
                 cmd.extend(["--model", model, "--base-url", base_url, "--api-key", api_key])
 
             logger.info("vector_store.auto_rebuild_running cmd={}", " ".join(cmd[:2]))
-            result = await to_thread_hot(
+            # 重建是分钟级可等重活：占住 hot 池会挤压检索链路的 worker，
+            # 走 heavy 池（期间在线检索服务不受影响）
+            result = await to_thread_heavy(
                 subprocess.run, cmd,
                 capture_output=True, text=True, timeout=3600,
             )

@@ -82,14 +82,15 @@ def _line_count(rel: str) -> int:
 #     report_error/report_success 传实际出错客户端 api_key(多凭证并发在途
 #     时旧启发式误伤健康凭证), 两处调用点各拆两行；
 # 2026-08-27 上调记录（协议 b：必要增长）：
-#   memory/vector_store.py 1682→1684 —— 全部 sqlite/embed 同步操作迁移到
-#     hot-io 延迟敏感线程池(utils/thread_pools.py)，import 行与注释；
+#   memory/vector_store.py 1682→1686 —— 全部 sqlite/embed 同步操作迁移到
+#     hot-io 延迟敏感线程池(utils/thread_pools.py)，import 行与注释；审查
+#     后续修：_auto_rebuild 分钟级重建子进程从 hot 池改 heavy 池(挤压检索)；
 #   memory/retrieval/pipeline.py 1075→1084 —— 小妲 P1-4 贯穿：简单路径预计算
 #     查询向量传入混合检索(vec 主通道与 child 子通道批内复用, embed 减半)；
 #   core/background_tasks.py 950→956 —— _spawn finally 的 ContextVar reset
 #     增加 ValueError 防护(loop 关停 GC finalizer 路径 reset 必然失败抛错)；
 ALLOWLIST_BASELINES: dict[str, int] = {
-    "memory/vector_store.py": 1684,
+    "memory/vector_store.py": 1686,
     "web/server.py": 1404,
     "agent_context.py": 1345,
     "web/routers/setup.py": 1333,
