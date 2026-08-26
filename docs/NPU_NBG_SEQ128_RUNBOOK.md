@@ -260,12 +260,83 @@ NPU_SEQ=128
 - **双 NBG 常驻**：文档型长文本(记忆编码)继续走 512 包、查询走 128 包——InstanceManager 支持 profile.options.nbg_path 多实例，收益有限可暂缓;
 - **只导 CLS**：若在 ONNX 导出阶段直接做 CLS+L2 收敛成输出 (B,H)，可省 128×1024×4→4096B 的带宽;属锦上添花。
 
-## 10. 已知坑位速查
+## 11. 实机现状（2026-08-27 SSH 勘察，本节优先读）
+
+目标机 Lenovo 笔记本（`lenovo@192.168.16.165`，Windows + **WSL2 Debian 13 (trixie)**），已勘察到：
+
+**工具链大部分现成，比 §1 预估省两步：**
+
+| §1 前置物 | 实况 | 动作 |
+|---|---|---|
+| docker 镜像 ubuntu-npu | ✅ 已有 `v2.0.10.2`（7.8GB，WSL 内） | 直接用，runbook 里 `--image ubuntu-npu:v2.0.10.2` |
+| ai-sdk scripts（pegasus_*.sh） | ✅ 当年工作区完整存活：`~/bge_npu_kit/a733_npu_driver/`（含 `work/ai-sdk/.../scripts/`） | 无需 clone |
+| ONNX 导出脚本 | ⚠️ 半缺口：当时靠一次性内联 python 改图（未落盘） | 用 `~/npu_seq128_kit/export_bge_onnx.py` 重导（见下） |
+
+**WSL 家目录关键资产**（`/root/bge_npu_kit/`，约 937G 盘可用）：
+
+- `model/bge-large-zh-fixed3_softmax3d.onnx`（1.3GB）：上一代 seq512 的改图产物——"fixed3"= 固定 shape、GELU→Sigmoid（INT8 精度配套）、softmax 改写为 3D 友好算子。**本次 seq128 重导必须复刻这三点**，否则 ACUITY 编译和量化精度都可能翻车；
+- `host_scripts/make_bge_w8a16.py`：丢失已久的 W8A16 量化表合并脚本找到了——int16 表做底、fullconnect 权重换 pcq int8 scale、bias 换 i32；走 W8A16 路线时直接复用；
+- `conv_bge_large_wsl.sh`：当年 convert 命令实锤——`--quant uint8 --image ubuntu-npu:v2.0.10.2 --inputs "input_ids attention_mask" --input-size-list "1,512#1,512"`（注意：最终包是 **2 输入**、无 token_type_ids；size 列表用 `#` 分隔，且带 `--size-with-batch "1#1"` 定制参数，该参数在 a733_npu_driver 定制版 convert 脚本里）；
+- `calib_large/dataset.txt`+npy：上一代校准集；
+- `host_scripts/check_cos.py` + `float_ref.txt`：精度对拍工具与 float 基准。
+
+**由此修正的 seq128 执行路径**（替代 §2 默认描述）：
+
+1. `export_bge_onnx.py --seq 128` 导出后，还要做同款三项图改造：
+   - GELU → Sigmoid（与旧包一致，保持量化行为可比；若 W8A16 合并表按节点名匹配 fullconnect 层号，Transformer 结构不变则名字 pattern 不变）；
+   - softmax / 其他 ACUITY 不友好算子按 fixed3_softmax3d 同款重写——最稳妥的办法是直接用 onnx 层面把旧 1.3GB 图的 **Embedding/位置编码张量 resize 到 128**（位置嵌入是可学习向量插值不可行，但 BGE 的 position_ids 是 0..511 连续——**截断式处理不成立，必须重新导出**）；导出时用 transformers 自动建 128 版新图，再单独替换 GELU→Sigmoid 节点即可，softmax 维度问题若 ACUITY 报错再按 3D softmax 补；
+2. `--inputs "input_ids attention_mask"`（2 输入，删掉 token_type_ids 或全 0 保留视 calib 生成器而定，两侧保持一致即可）；
+3. 板端 Python 侧协议不变（SEQ=128 经 `NPU_SEQ` env 注入，N_IN 仍为 2）。
+
+**Windows ↔ WSL 协作注意**（实测踩坑）：SSH 落在 Windows cmd，UTF-16/GBK 输出易乱码——长命令建议写成 `.bat` 放 C:\clean 再执行；文件已双向就位：Windows `C:\clean\{4个套件文件}` ≡ WSL `/root/npu_seq128_kit/`。
+
+## 12. 一页纸开工清单（拿到机器直接敲）
+
+```bash
+# ── Windows 端:进入 WSL ──
+wsl -d Debian
+
+# ── 以下在 WSL Debian 内(root) ──
+cd ~/bge_npu_kit
+docker images | grep ubuntu-npu                      # v2.0.10.2 就绪确认
+
+# 1) 导出 seq128 onnx(venv 准备)
+python3 -m venv ~/.venv-bge && . ~/.venv-bge/bin/activate
+pip install torch transformers onnx onnxruntime tokenizers numpy
+python ~/npu_seq128_kit/export_bge_onnx.py \
+    --model-dir /path/to/bge-large-zh-v1.5 --seq 128 \
+    --out ~/bge_npu_kit/model/bge-large-zh-seq128_sigmoid.onnx
+# 2) GELU→Sigmoid 节点替换(小脚本,§11 第1步) + onnxruntime 自检 ≥0.999
+
+# 3) 校准集(seq128, 复用真实记忆语料)
+python ~/npu_seq128_kit/make_calib.py \
+    --tokenizer <bge tokenizer.json> --texts ~/npu_seq128_kit/calib_texts.txt \
+    --seq 128 --out ~/bge_npu_kit/calib128 --max-samples 200
+
+# 4) 编译(int16 保底先跑通,再冲 w8a16)
+cd ~/bge_npu_kit/a733_npu_driver
+DOCKER_RUN_ARGS="--cpus 8 --memory 16g" \
+  scripts/host/convert_onnx_to_nbg.sh \
+    --name bge_large_zh_sigmoid \
+    --onnx ~/bge_npu_kit/model/bge-large-zh-seq128_sigmoid.onnx \
+    --dataset ~/bge_npu_kit/calib128/dataset.txt \
+    --quant uint8 --image ubuntu-npu:v2.0.10.2 \
+    --inputs "input_ids attention_mask" \
+    --input-size-list "1,128#1,128" \
+    --outputs last_hidden_state --size-with-batch "1#1"
+
+# 5) 产物: work/model-packages/bge_large_zh_sigmoid/uint8/network_binary.nb
+#    → U盘带回香橙派 → 按 §6 冒烟、§7 直测、§8 切流(.env 两行)
+```
+
+## 13. 已知坑位速查
 
 | 症状 | 根因 | 处置 |
 |---|---|---|
-| convert 报 `missing AI SDK pegasus_setup.sh` | §1.2 没补齐 | clone ai-sdk |
-| quantize 精度崩到 0.6~0.8 | pcq 纯 INT8 的 QK^T 老毛病 | 用 `--quant int16` 或 `--hybrid` |
+| convert 报 `missing AI SDK pegasus_setup.sh` | §1.2 没补齐（WSL 实机已自带，见 §11） | clone ai-sdk 或用 `~/bge_npu_kit` 内现成副本 |
+| quantize 精度崩到 0.6~0.8 | pcq 纯 INT8 的 QK^T 老毛病 | 用 `--quant int16` 或按 §11 走 make_bge_w8a16.py 合并 W8A16 |
 | vpm_run 段错误 | target ID / nb 架构不对 | 核对 `--target` 未改动 |
-| runner 一直等 magic | runner SEQ 与包不一致 | §7 两处 SEQ 同时改 |
+| runner 一直等 magic | runner SEQ 与包不一致 | §7 两处 SEQ 同步（C 侧 --seq 参数 + 板上 NPU_SEQ=128） |
 | 向量 norm≠1 | mask 打包错误导致 pad 参与 softmax | 检查 `_tokenize` 的 attention 后缀 0 |
+| SSH 下中文/输出乱码 | Windows cmd UTF-16/GBK 混杂 | 命令写 .bat 放 C:\clean 再执行；或 base64 转义 |
+| ACUITY 报 softmax 维度不支持 | 导出图保持 2D softmax | 按 fixed3_softmax3d 先例改 3D，或先试 opset14 原生图 |
