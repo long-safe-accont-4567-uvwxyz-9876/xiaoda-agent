@@ -68,7 +68,7 @@ class ClientLifecycleMixin:
             else:
                 client = self.get_custom_client(provider)
             return str(getattr(client, "api_key", "") or "")
-        except Exception:  # noqa: BLE001 — 归因失败不允许影响主流程
+        except (AttributeError, KeyError, TypeError):  # 归因失败不允许影响主流程
             return ""
 
     def _active_api_key(self, provider: str) -> str:
