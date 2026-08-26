@@ -42,7 +42,7 @@ class _LazyAgentDisplay(dict):
     def _ensure_loaded(self) -> None:
         if self._loaded:
             return
-        from config import get_agent_display_name, agent_names
+        from config import agent_names, get_agent_display_name
         self.update({
             name: get_agent_display_name(name)
             for name in agent_names()

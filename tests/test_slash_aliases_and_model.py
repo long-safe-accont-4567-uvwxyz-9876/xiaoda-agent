@@ -15,8 +15,6 @@ import pytest
 
 from slash_commands import (
     COMMAND_ALIASES,
-    COMMAND_META,
-    OWNER_ONLY_COMMANDS,
     SlashCommandHandler,
     get_argument_completions,
     resolve_command,
@@ -297,7 +295,7 @@ def test_list_models_current_reflects_chat_model_not_preference():
 
 def test_list_models_current_falls_back_when_no_chat_model():
     """_current_chat_model 未初始化时回退到默认路由模型。"""
-    from model_router import ModelRouter, ROUTE_TABLE
+    from model_router import ROUTE_TABLE, ModelRouter
     router = object.__new__(ModelRouter)
     router._current_chat_model = None
     info = router.list_models()
@@ -335,6 +333,7 @@ def test_preference_getters_fallback_when_no_chat_model():
 def _complete(line: str, text: str) -> list[str]:
     """用假 readline buffer 调用 cli._cli_completer 收集所有候选。"""
     import readline as _rl
+
     import cli
     orig = _rl.get_line_buffer
     _rl.get_line_buffer = lambda: line

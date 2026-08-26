@@ -3,10 +3,8 @@
     验证 ALLOWED_NON_MASTER_TOOLS 只包含只读/纯对话工具，
     不含 shell_command/python_executor/write_file/edit_file 等 EXECUTE 类工具。
     """
-import pytest
 
 from agent_core.message_processor import MessageProcessorMixin
-
 
 # EXECUTE 类工具（不应出现在非主人白名单中）
 _EXECUTE_TOOLS = frozenset({

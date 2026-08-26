@@ -3,7 +3,6 @@ import pytest
 
 from security.permission_manager import PermissionManager
 
-
 # shell 元字符集合（与 permission_manager 内部一致）
 _SHELL_METACHARS = set("|&;`$()<>{}[]!?*~\n\r")
 

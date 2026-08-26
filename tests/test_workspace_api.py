@@ -13,9 +13,8 @@ from fastapi.testclient import TestClient
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 from security.permission_manager import get_permission_manager
 from web.routers.auth import get_current_user
-from web.routers.workspace import (router as workspace_router,
-                                    register_cmd_decision_scope,
-                                    _pending_cmd_decisions)
+from web.routers.workspace import _pending_cmd_decisions, register_cmd_decision_scope
+from web.routers.workspace import router as workspace_router
 
 
 def D(r):
@@ -77,10 +76,17 @@ class TestWorkspaceEndpoints:
 
     def test_revoke(self, client, pm, tmp_path):
         client.post("/api/v1/workspace/confirm", json={"path": str(tmp_path)})
-        r = client.delete("/api/v1/workspace")
+        # 删除类接口统一要求确认头（CLAUDE.md 契约，与 agents/insight 路由同款）
+        r = client.delete("/api/v1/workspace", headers={"X-Confirm": "yes"})
         assert r.status_code == 200
         assert D(r)["authorized"] is False
         assert pm.is_cwd_authorized() is False
+
+    def test_revoke_requires_confirm_header(self, client, pm, tmp_path):
+        client.post("/api/v1/workspace/confirm", json={"path": str(tmp_path)})
+        r = client.delete("/api/v1/workspace")
+        assert r.status_code == 400
+        assert pm.is_cwd_authorized() is True
 
     def test_browse_directory(self, client, tmp_path):
         (tmp_path / "subdir1").mkdir()
@@ -119,7 +125,8 @@ class TestWhitelistEndpoints:
 
     def test_remove_from_whitelist(self, client, pm):
         pm.add_to_whitelist("npm")
-        r = client.delete("/api/v1/workspace/whitelist/npm")
+        r = client.delete("/api/v1/workspace/whitelist/npm",
+                          headers={"X-Confirm": "yes"})
         assert r.status_code == 200
         assert "npm" not in D(r)["whitelist"]
 

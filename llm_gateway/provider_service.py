@@ -70,7 +70,7 @@ class ProviderCredentialStore:
         return load_provider_key(provider_id)
 
     def write(self, provider_id: str, value: str) -> None:
-        from utils.atomic_write import atomic_write, _restrict_file_permissions_windows
+        from utils.atomic_write import _restrict_file_permissions_windows, atomic_write
         from web._provider_keys import _encode_key, _key_file
 
         path = _key_file(provider_id)

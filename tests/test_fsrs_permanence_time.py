@@ -17,9 +17,9 @@ import pytest
 from memory.fsrs_model import (
     S_INIT,
     S_PERMANENT,
+    FSRSModel,
     MemoryPhase,
     MemoryState,
-    FSRSModel,
 )
 
 

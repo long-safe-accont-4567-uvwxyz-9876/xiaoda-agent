@@ -4,10 +4,11 @@
 """
 
 import re
-import httpx
-from loguru import logger
 from dataclasses import dataclass
 from typing import Any
+
+import httpx
+from loguru import logger
 
 
 @dataclass

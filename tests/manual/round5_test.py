@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
 """第五轮深度测试 - Agent 对话流程 + 边界条件 + 未覆盖模块"""
 import asyncio
-import sys
 import os
+import sys
 import tempfile
+
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."))
 
 
@@ -226,7 +227,7 @@ def test_boundary_conditions():
     # 测试 6: AtomicWrite 边界
     print("\n[6] AtomicWrite 边界测试...")
     try:
-        from utils.atomic_write import atomic_write, atomic_json_write
+        from utils.atomic_write import atomic_json_write, atomic_write
 
         with tempfile.TemporaryDirectory() as tmpdir:
             # 正常写入

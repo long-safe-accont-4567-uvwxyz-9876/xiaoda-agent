@@ -1,6 +1,7 @@
 """EventBus 核心测试 — 定向投递给 User，非订阅/广播。"""
 import pytest
-from core.event_bus import event_bus, AgentEvent, AgentEventType, gen_task_id
+
+from core.event_bus import AgentEvent, AgentEventType, event_bus, gen_task_id
 
 
 @pytest.fixture(autouse=True)

@@ -1,16 +1,18 @@
-from typing import ClassVar
-import re
 import json
 import random
+import re
 from pathlib import Path
+from typing import ClassVar
+
 from loguru import logger
+
 from .emotion_enum import (
-    Emotion,
+    STICKER_FALLBACK,
     TTS_STYLE_VALUES,
     VALID_EMOTION_TAGS,
-    resolve_emotion,
-    STICKER_FALLBACK,
+    Emotion,
     is_unified,
+    resolve_emotion,
 )
 
 

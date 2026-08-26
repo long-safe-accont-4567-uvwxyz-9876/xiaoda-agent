@@ -8,19 +8,20 @@
   被拦截的 fixed/random 问候在 DND 结束后 10 分钟内补发一次
 """
 from __future__ import annotations
-from typing import Any
 
 import asyncio
-import httpx
 import json
 import os
 import random
 import time
 from datetime import datetime
 from pathlib import Path
+from typing import Any
 from zoneinfo import ZoneInfo
 
+import httpx
 from loguru import logger
+
 from emotion.greeting_seeds import pick_seeds
 from utils.llm_cleanup import strip_thinking as _strip_thinking
 

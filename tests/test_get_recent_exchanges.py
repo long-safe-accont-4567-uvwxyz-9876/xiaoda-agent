@@ -4,7 +4,6 @@
   去重原本只查最近 1 条回复，用户相同问题隔几轮再发时旧回复已滚出窗口
   → 换 (user_message, assistant_reply) 交换对查询、按 user 消息相似度定位。
 """
-import asyncio
 import os
 import tempfile
 

@@ -17,7 +17,6 @@
 import sys
 from pathlib import Path
 
-
 # 确保项目根目录在 sys.path 中
 PROJECT_ROOT = Path(__file__).parent.parent
 if str(PROJECT_ROOT) not in sys.path:
@@ -25,14 +24,13 @@ if str(PROJECT_ROOT) not in sys.path:
 
 from core.degradation_strategy import (
     DEFAULT_FEATURE_MAP,
+    EMERGENCY_FALLBACK_REPLY,
     DegradationLevel,
     DegradationStrategy,
-    EMERGENCY_FALLBACK_REPLY,
     LevelChangeEvent,
     get_degradation_strategy,
     reset_degradation_strategy,
 )
-
 
 # ────────────────────────────────────────────────────────────
 # 1. L0 正常模式: 所有功能可用
@@ -340,9 +338,9 @@ class TestDetectorIntegration:
 class TestSLOIntegration:
     def test_evaluate_from_slo_high_burn(self):
         """SLO burn_rate > 2 触发 L1_DEGRADED"""
-        from core.slo_tracker import SLOTarget, SLOTracker
-        from core.slo_tracker import SLOMeasurement
         import time as _time
+
+        from core.slo_tracker import SLOMeasurement, SLOTarget, SLOTracker
 
         tracker = SLOTracker(SLOTarget(availability=0.999))
         # 注入大量失败使 burn_rate 远超 2
@@ -358,9 +356,9 @@ class TestSLOIntegration:
 
     def test_evaluate_from_slo_healthy_no_trigger(self):
         """健康 SLO 不触发降级"""
-        from core.slo_tracker import SLOTarget, SLOTracker
-        from core.slo_tracker import SLOMeasurement
         import time as _time
+
+        from core.slo_tracker import SLOMeasurement, SLOTarget, SLOTracker
 
         tracker = SLOTracker(SLOTarget(availability=0.999))
         for _ in range(100):
@@ -396,12 +394,12 @@ class TestGlobalSingleton:
 class TestWireAutoTrigger:
     def test_wire_auto_trigger_registers_callback(self):
         """wire_auto_trigger 通过 detector.on_degradation 注册回调"""
-        from core.degradation_strategy import wire_auto_trigger
         from core.degradation_detector import (
             DegradationDetector,
             DegradationReport,
             Severity,
         )
+        from core.degradation_strategy import wire_auto_trigger
 
         reset_degradation_strategy()
         det = DegradationDetector()

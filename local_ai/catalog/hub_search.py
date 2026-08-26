@@ -8,12 +8,10 @@ from __future__ import annotations
 
 import json
 import re
-import time
 from concurrent.futures import ThreadPoolExecutor
 from typing import Any
 
 import httpx
-
 from loguru import logger
 
 from local_ai.catalog.modelscope import _check_ssrf

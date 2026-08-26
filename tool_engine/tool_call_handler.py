@@ -265,9 +265,6 @@ class ToolCallHandler:
         if not tool_calls:
             return self._clean_reply(assistant_content), []
 
-        if reasoning_content:
-            pass  # scavenge 已移除：DSML 从 content 中已完整解析出工具调用列表
-
         tool_results = []
         tool_messages = []
         assistant_calls = [
@@ -284,14 +281,13 @@ class ToolCallHandler:
 
         messages.append(assistant_msg)
 
-        if tool_calls:
-            display_names = [TOOL_DISPLAY_NAMES.get(tc["function"]["name"], tc["function"]["name"]) for tc in tool_calls]
-            logger.info("tool.calls_selected tools={} user_input={}", [tc['function']['name'] for tc in tool_calls], current_user_input[:80])
-            # 只对耗时/重要工具显示进度，简单查询跳过
-            important_tools = {"shell_command", "python_executor", "web_search", "multi_search", "web_browse", "document_reader"}
-            has_important = any(tc["function"]["name"] in important_tools for tc in tool_calls)
-            if has_important:
-                await self._notify_status(f"{get_status_msg(self._agent_name, 'using', '、'.join(display_names[:3]), self._personality_file)}{'等' if len(display_names) > 3 else ''}")
+        display_names = [TOOL_DISPLAY_NAMES.get(tc["function"]["name"], tc["function"]["name"]) for tc in tool_calls]
+        logger.info("tool.calls_selected tools={} user_input={}", [tc['function']['name'] for tc in tool_calls], current_user_input[:80])
+        # 只对耗时/重要工具显示进度，简单查询跳过
+        important_tools = {"shell_command", "python_executor", "web_search", "multi_search", "web_browse", "document_reader"}
+        has_important = any(tc["function"]["name"] in important_tools for tc in tool_calls)
+        if has_important:
+            await self._notify_status(f"{get_status_msg(self._agent_name, 'using', '、'.join(display_names[:3]), self._personality_file)}{'等' if len(display_names) > 3 else ''}")
 
         _concurrent_count = len(tool_calls)
         _exec_start = time.time()

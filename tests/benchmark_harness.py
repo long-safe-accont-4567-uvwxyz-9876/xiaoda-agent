@@ -58,9 +58,9 @@ def measure_latency() -> int:
     start = time.perf_counter()
 
     # Import core modules
-    from tool_engine.tool_guardrails import ToolGuardrails
-    from tool_engine.tool_executor import ToolExecutor
     from core.circuit_breaker import CircuitBreaker, CognitiveState
+    from tool_engine.tool_executor import ToolExecutor
+    from tool_engine.tool_guardrails import ToolGuardrails
 
     # Instantiate key objects
     ToolGuardrails()
@@ -89,11 +89,11 @@ def measure_tool_accuracy() -> int:
 
     Score: average of (coverage_ratio * 100) and (pass_rate * 100)
     """
-    from tool_engine.tool_guardrails import (
-        ToolGuardrails,
-        _TOOL_VALIDATION_RULES,
-    )
     from tool_engine.tool_call_handler import TOOL_DISPLAY_NAMES
+    from tool_engine.tool_guardrails import (
+        _TOOL_VALIDATION_RULES,
+        ToolGuardrails,
+    )
 
     # Coverage: tools with validation rules / total display tools
     total_display = len(TOOL_DISPLAY_NAMES)

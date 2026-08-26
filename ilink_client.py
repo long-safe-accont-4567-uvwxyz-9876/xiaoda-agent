@@ -20,11 +20,10 @@
 """
 from __future__ import annotations
 
+import asyncio
 import base64
 import hashlib
-import asyncio
 import os
-import random
 import struct
 import time
 import urllib.parse
@@ -35,7 +34,7 @@ import httpx
 from loguru import logger
 
 try:
-    from utils.atomic_write import atomic_write, _restrict_file_permissions_windows
+    from utils.atomic_write import _restrict_file_permissions_windows, atomic_write
 except (ImportError, AttributeError):
     atomic_write = None  # type: ignore[assignment]
     def _restrict_file_permissions_windows(path):  # type: ignore[no-redef]
@@ -47,9 +46,8 @@ except Exception:
     def _restrict_file_permissions_windows(path):  # type: ignore[no-redef]
         return
 
-from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
 from cryptography.hazmat.primitives import padding
-
+from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
 
 # ============================================================================
 # 常量定义

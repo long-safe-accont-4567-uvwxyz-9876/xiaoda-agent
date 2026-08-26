@@ -11,11 +11,13 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any, Callable
 
+from loguru import logger
 from prompt_toolkit.application import Application
 from prompt_toolkit.buffer import Buffer
+from prompt_toolkit.filters import Condition
+from prompt_toolkit.formatted_text import ANSI
 from prompt_toolkit.history import FileHistory
 from prompt_toolkit.key_binding import KeyBindings
-from prompt_toolkit.filters import Condition
 from prompt_toolkit.layout.containers import (
     ConditionalContainer,
     HSplit,
@@ -23,10 +25,8 @@ from prompt_toolkit.layout.containers import (
     Window,
 )
 from prompt_toolkit.layout.controls import BufferControl, FormattedTextControl
-from prompt_toolkit.formatted_text import ANSI
 from prompt_toolkit.layout.layout import Layout
 from prompt_toolkit.styles import Style
-from loguru import logger
 
 
 @dataclass

@@ -18,7 +18,6 @@ from collections.abc import Callable
 
 from loguru import logger
 
-
 # ── Token 格式常量 ────────────────────────────────────────────
 # 格式: {PREFIX}-{8位随机hex}-{4位校验hex}
 # 示例: CANARY-a1b2c3d4-9f8e

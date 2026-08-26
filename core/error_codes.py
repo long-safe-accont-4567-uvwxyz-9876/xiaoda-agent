@@ -6,9 +6,10 @@
 Q1 扩展: 新增 ErrorCodeEnum (E_AUTH001 风格)，每个错误码携带 code/http_status/message/retryable，
 并提供 from_exception() 根据异常类型推断错误码。旧的 ErrorCode 类与 make_error 保持兼容。
 """
-from typing import Any
 from dataclasses import dataclass
 from enum import Enum
+from typing import Any
+
 from loguru import logger
 
 

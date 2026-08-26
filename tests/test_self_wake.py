@@ -2,15 +2,15 @@
 
 测试 core/self_wake.py 的 WakeTrigger、WakeRecord、SelfWakeManager。
 """
-import asyncio
 import time
+
 import pytest
 
 from core.self_wake import (
-    WakeTrigger,
-    WakeState,
-    WakeRecord,
     SelfWakeManager,
+    WakeRecord,
+    WakeState,
+    WakeTrigger,
     get_self_wake_manager,
 )
 

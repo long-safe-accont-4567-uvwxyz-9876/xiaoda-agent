@@ -7,7 +7,6 @@
 用户消息做字面相似度匹配（>= REPLY_DEDUP_USER_SIM 视为同一问题重发），
 命中交换对的旧回复作为对比候选；无匹配时退回"最近 1 条"语义。
 """
-import asyncio
 from collections import OrderedDict
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
