@@ -111,18 +111,13 @@ class ScoringTouchMixin:
             migrations: (mem_id, phase, difficulty, stability, last_review, reinforcement_count)
         """
         try:
-            for mem_id, phase, difficulty, stability, last_review, rc in migrations:
-                try:
-                    await self._mm.memory.update_fsrs_state(
-                        mem_id,
-                        difficulty=difficulty,
-                        stability=stability,
-                        phase=phase,
-                        last_review=last_review,
-                        reinforcement_count=rc,
-                    )
-                except (KeyError, ValueError, TypeError) as e:
-                    logger.debug("fsrs.migrate_failed", mid=mem_id, error=str(e))
+            # 单事务 executemany（消除逐条提交的写放大，与 _batch_touch_memories 同理）
+            rows = [
+                (difficulty, stability, phase, last_review, rc, mem_id)
+                for mem_id, phase, difficulty, stability, last_review, rc
+                in migrations
+            ]
+            await self._mm.memory.update_fsrs_state_batch(rows)
             logger.debug("fsrs.batch_migrated", count=len(migrations))
         except Exception as e:
             logger.warning("fsrs.batch_migrate_error", error=str(e))
@@ -356,47 +351,49 @@ class ScoringTouchMixin:
 
         修复：此前 increment_access_count 从未被调用，记忆永远无法进入 PERMANENT 状态，
         FSRS 遗忘曲线也完全不生效。
+
+        性能（2026-08-27）：改为一次 IN 查询取齐 + 内存计算 + 单事务批量写。
+        原实现逐条 get_memory_by_id → update_fsrs_state(提交) →
+        increment_access_count(提交)，10 条命中 = 30 次 SQL + 20 次带 fsync 的
+        独立事务，在唯一写连接锁上与前台检索争抢（USB 盘上尤甚）。
         """
         if not mem_ids:
             return
         try:
+            ids = [int(mid) for mid in mem_ids]
+            mems = await self._mm.memory.get_memories_by_ids(ids)
+            if not mems:
+                return
             now = time.time()
-            for mid in mem_ids:
+            fsrs_rows: list[tuple[float, float, str, float, int, int]] = []
+            for mem in mems[:20]:
                 try:
-                    mem = await self._mm.memory.get_memory_by_id(mid)
-                    if not mem:
-                        continue
-                    # 构建 MemoryState
+                    mid = mem["id"]
                     created_at = mem.get("created_at", 0.0) or mem.get("timestamp", 0.0)
                     last_review = mem.get("last_review", 0.0) or created_at
-                    phase_str = mem.get("phase", "buffer")
-                    difficulty = mem.get("difficulty", 5.0)
-                    stability = mem.get("stability", S_INIT)
-                    rc = mem.get("reinforcement_count", 0)
-
                     state = MemoryState(
-                        difficulty=difficulty,
-                        stability=stability,
-                        phase=MemoryPhase.safe(phase_str),
+                        difficulty=mem.get("difficulty", 5.0),
+                        stability=mem.get("stability", S_INIT),
+                        phase=MemoryPhase.safe(mem.get("phase", "buffer")),
                         last_review=last_review,
                         created_at=created_at,
-                        reinforcement_count=rc,
+                        reinforcement_count=mem.get("reinforcement_count", 0),
                     )
                     # PASSIVE_USE 信号：stability 增长但 growth_factor 较低
                     new_state = self._mm._fsrs.reinforce(state, ReinforcementSignal.PASSIVE_USE, now)
-
-                    await self._mm.memory.update_fsrs_state(
+                    fsrs_rows.append((
+                        new_state.difficulty,
+                        new_state.stability,
+                        new_state.phase.value,
+                        now,
+                        new_state.reinforcement_count,
                         mid,
-                        difficulty=new_state.difficulty,
-                        stability=new_state.stability,
-                        phase=new_state.phase.value,
-                        last_review=now,
-                        reinforcement_count=new_state.reinforcement_count,
-                    )
-                    # 递增 access_count
-                    await self._mm.memory.increment_access_count(mid)
+                    ))
                 except (KeyError, ValueError, TypeError) as e:
-                    logger.debug("memory.touch_failed", mid=mid, error=str(e))
-            logger.debug("memory.batch_touched", count=len(mem_ids))
+                    logger.debug("memory.touch_failed", mid=mem.get("id"), error=str(e))
+            if fsrs_rows:
+                await self._mm.memory.update_fsrs_state_batch(fsrs_rows)
+            await self._mm.memory.batch_increment_access_count(ids)
+            logger.debug("memory.batch_touched", count=len(fsrs_rows))
         except Exception as e:
             logger.warning("memory.batch_touch_error", error=str(e))

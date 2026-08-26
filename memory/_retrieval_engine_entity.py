@@ -7,6 +7,7 @@ Entity Boost 与 KG 上下文增强方法。仅依赖 self._mm 组件 + _memory_
 from __future__ import annotations
 
 import asyncio
+import inspect
 import time
 from typing import Any
 
@@ -101,13 +102,32 @@ class EntityKgBoostMixin:
                 return candidates
 
             now = time.time()
+            # 批量 boost（2026-08-27）：单次 IN 查询取齐全部候选实体，内存计算。
+            # 原实现逐候选调 get_query_entities_boost → 每候选一次 JOIN 往返，
+            # 60 候选 = 60 次串行 aiosqlite 查询挤占共享连接。
+            mem_ids = [c["id"] for c in candidates if c.get("id") is not None]
+            # getattr_static 探测：Mock 的动态子属性不可信，只有真实 EntityStore
+            # 才走批量路径；否则回退逐候选单条接口（旧实现 / 测试 Mock）
+            batch_fn = None
+            store = self._mm.entity_store
+            if store is not None:
+                try:
+                    inspect.getattr_static(store, "get_query_entities_boost_batch")
+                    batch_fn = store.get_query_entities_boost_batch
+                except AttributeError:
+                    batch_fn = None
+            if callable(batch_fn):
+                boost_map = await batch_fn(mem_ids, query_entity_names, now=now)
+            else:
+                boost_map = {}
+                for mid in mem_ids:
+                    boost_map[mid] = await store.get_query_entities_boost(
+                        mid, query_entity_names, now=now)
             for candidate in candidates:
                 mem_id = candidate.get("id")
                 if mem_id is None:
                     continue
-                boost = await self._mm.entity_store.get_query_entities_boost(
-                    mem_id, query_entity_names, now=now
-                )
+                boost = boost_map.get(mem_id, 0.0)
                 if boost > 0:
                     candidate["rrf_score"] = candidate.get("rrf_score", 0.0) + boost
                     candidate["entity_boost"] = boost

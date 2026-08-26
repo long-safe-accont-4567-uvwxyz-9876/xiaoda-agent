@@ -176,6 +176,26 @@ class EmotionRecallMixin:
         if auto_commit:
             await self._conn.commit()
 
+    async def batch_update_fsrs_state(self, rows: list[tuple[float, float, str,
+                                                          float, int, int]],
+                                       auto_commit: bool = True) -> None:
+        """批量更新 FSRS 状态（消除检索命中后的逐条提交写风暴）。
+
+        rows 为 (difficulty, stability, phase, last_review, reinforcement_count,
+        memory_id) 元组列表；单事务 executemany 提交。
+        """
+        if not rows:
+            return
+        await self._conn.executemany(
+            """UPDATE episodic_memories
+               SET difficulty=?, stability=?, phase=?, last_review=?,
+                   reinforcement_count=?
+               WHERE id=?""",
+            rows,
+        )
+        if auto_commit:
+            await self._conn.commit()
+
     async def get_memories_since(self, since_ts: float,
                                   limit: int = 200) -> list[dict]:
         cursor = await self._read_conn().execute(

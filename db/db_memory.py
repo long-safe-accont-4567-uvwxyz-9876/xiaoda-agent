@@ -1,5 +1,7 @@
 from typing import Any
 
+import asyncio
+
 import aiosqlite
 from loguru import logger
 
@@ -470,7 +472,9 @@ class MemoryDB(ChildChunkMixin, EntityMixin, EpisodicMixin, SearchMixin, Distill
         """
         try:
             from db.fts_utils import _tokenize_for_fts
-            tokenized = _tokenize_for_fts(summary)
+            # jieba 分词是同步 CPU 操作（首调加载词典 1-2s，之后每次 10-50ms），
+            # 在事件循环内直接执行会冻结整个 asyncio 服务；移到线程池
+            tokenized = await asyncio.to_thread(_tokenize_for_fts, summary)
             if tokenized.strip():
                 if delete_first:
                     await self._conn.execute(

@@ -179,3 +179,29 @@ class EntityStore:
         except Exception as e:
             logger.debug("entity_store.get_boost_failed", error=str(e))
             return 0.0
+
+    async def get_query_entities_boost_batch(self, memory_ids: list[int],
+                                              query_entities: set[str],
+                                              now: float | None = None) -> dict[int, float]:
+        """批量计算多个记忆的 Entity Boost（消除精排阶段 N+1）。
+
+        单次 IN 查询取齐全部候选的关联实体，循环内纯内存计算。
+        返回 {memory_id: boost}，未命中/无实体的记忆映射到 0.0。
+        """
+        if not memory_ids or not query_entities:
+            return {mid: 0.0 for mid in memory_ids}
+        try:
+            grouped = await self.db.get_entities_by_memory_ids(memory_ids)
+            now_val = now if now is not None else time.time()
+            boosts: dict[int, float] = {}
+            for mid in memory_ids:
+                entities = grouped.get(mid) or []
+                total = sum(
+                    compute_entity_boost(entity, query_entities, now=now_val)
+                    for entity in entities
+                )
+                boosts[mid] = total
+            return boosts
+        except Exception as e:
+            logger.debug("entity_store.get_boost_batch_failed", error=str(e))
+            return {mid: 0.0 for mid in memory_ids}
