@@ -9,7 +9,7 @@ from loguru import logger
 
 from security.sandbox_config import check_domain_allowed
 from security.ssrf_guard import validate_url as _ssrf_validate_url
-from tool_engine.tool_registry import ToolPermission, ToolResult, register_tool
+from tool_engine.tool_registry import ToolResult
 
 _CONTENT_LIMIT = 8000
 
@@ -145,24 +145,6 @@ def _fetch_html(url: str, timeout: int = 15) -> tuple[int, str, str]:
     return response.status, html, ""
 
 
-@register_tool(
-    name="web_browse",
-    description=(
-        "打开网页 URL 读取正文全文。这是 web_search 的配套工具："
-        "搜索结果只有摘要，挑最相关的链接用本工具读全文后再回答，信息才准确完整。"
-        "适合读新闻、文章、文档、百科页面。"
-    ),
-    schema={
-        "type": "object",
-        "properties": {
-            "url": {"type": "string", "description": "要浏览的网页URL"}
-        },
-        "required": ["url"],
-    },
-    permission=ToolPermission.READ_ONLY,
-    category="web",
-    max_frequency=5,
-)
 async def web_browse(url: str) -> ToolResult:
     try:
         if not url.startswith(("http://", "https://")):

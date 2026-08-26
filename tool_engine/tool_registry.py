@@ -162,6 +162,11 @@ def register_tool(name: str, description: str, schema: dict,
     def decorator(func: Any) -> Any:
         """实际注册函数的装饰器内层."""
         global _schema_cache, _schema_version
+        if name in _tools:
+            # 显式告警：同名覆写依赖 import 顺序（如 web_browse 旧/增强版），
+            # 静默切实现属于隐式契约，任何新双注册都应在此可见
+            logger.warning("tool_registry.duplicate_overwrite name={} old_source={}",
+                           name, _tools[name].get("source", "?"))
         _tools[name] = {
             "name": name,
             "description": description,
