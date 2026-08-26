@@ -332,6 +332,9 @@ class DDLMixin:
         await self._conn.execute("""CREATE INDEX IF NOT EXISTS idx_memory_entities_type ON memory_entities(entity_type)""")
         await self._conn.execute("""CREATE INDEX IF NOT EXISTS idx_eml_entity ON entity_memory_links(entity_id)""")
         await self._conn.execute("""CREATE INDEX IF NOT EXISTS idx_eml_memory ON entity_memory_links(memory_id)""")
+        # 2026-08-27 性能专项：情绪召回与蒸馏扫描此前全索引 SCAN（EXPLAIN 实证）
+        await self._conn.execute("""CREATE INDEX IF NOT EXISTS idx_mem_emotion_ts ON episodic_memories(emotion_label, importance DESC, timestamp DESC)""")
+        await self._conn.execute("""CREATE INDEX IF NOT EXISTS idx_mem_undistilled ON episodic_memories(timestamp) WHERE distilled = 0""")
 
     async def _seed_cleanup_config(self) -> None:
         """Phase 4: 插入默认清理策略（仅当 cleanup_config 表为空时）。"""
