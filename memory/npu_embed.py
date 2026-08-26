@@ -34,7 +34,9 @@ from memory.local_embed import LocalEmbeddingProvider  # noqa: E402
 
 # runner 流协议常量（与 bge_npu_runner.c --serve 一致）
 MAGIC = b"BGEVEC01"
-SEQ = 512
+# SEQ 与 HID/N_IN 同款支持 env 覆盖：NBG 编译期固化序列长度（512 包实测喂 128 输入
+# 耗时不变），重编 seq128 包后设 NPU_SEQ=128 即可切包，无需改代码（docs/NPU_NBG_SEQ128_RUNBOOK.md §8）。
+SEQ = int(os.getenv("NPU_SEQ", "512"))
 # 模型维度和输入数由 NPU 型号决定（bge-small-zh: 512 维 3 输入；
 # bge-large-zh w8a16: 1024 维 2 输入）。支持 env 覆盖便于切换模型。
 HID = int(os.getenv("NPU_HID", "1024"))

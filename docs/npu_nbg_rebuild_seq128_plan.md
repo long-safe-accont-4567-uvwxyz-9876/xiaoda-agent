@@ -30,6 +30,8 @@ seq512→seq128 计算量比约 4:1，按现 1885ms 线性折算 **~470ms/条**�
 
 ## 执行顺序建议（拿到镜像后半天可完成）
 
+> **逐步操作手册见 [NPU_NBG_SEQ128_RUNBOOK.md](NPU_NBG_SEQ128_RUNBOOK.md)**（x86 host 编译全流程 + 板端切流回滚，2026-08-27 定稿；Python 侧 SEQ 已支持 `NPU_SEQ` env 切换，随同提交）。
+
 1. host 上 clone ai-sdk scripts（#2）
 2. 写并跑 ONNX 导出脚本（#3），产出 `model_seq128.onnx`
 3. 重新生成 128 版校准 npy；跑 convert_onnx_to_nbg.sh --quant pcq --hybrid
