@@ -13,8 +13,9 @@
 """
 from __future__ import annotations
 
+from unittest.mock import AsyncMock, MagicMock, patch
+
 import pytest
-from unittest.mock import MagicMock, AsyncMock, patch
 
 
 def _make_memory_manager(**kwargs):
@@ -91,6 +92,30 @@ class TestVectorRecallDistanceFilter:
         assert len(results) == 3, f"相关向量应保留，但只剩 {len(results)} 条"
 
     @pytest.mark.asyncio
+    async def test_hyde_dict_results_use_the_same_vector_channel_contract(self):
+        mm = _make_memory_manager()
+        mm.vec = MagicMock()
+        mm.vec.search_with_hyde = AsyncMock(return_value=[
+            {"rowid": 201, "distance": 0.3},
+            {"rowid": 202, "distance": 0.5},
+        ])
+        mm.memory.get_memories_by_ids = AsyncMock(return_value=[
+            {"id": 201, "summary": "Python 数据库连接配置", "user_id": "u1", "agent_id": "a1", "is_raw": 0},
+            {"id": 202, "summary": "sqlite 连接字符串", "user_id": "u1", "agent_id": "a1", "is_raw": 0},
+        ])
+        mm._query_transformer = MagicMock()
+        mm._query_transformer.available = True
+        mm._query_transformer.generate_hyde_document = AsyncMock(
+            return_value="这是数据库连接配置的假设答案"
+        )
+
+        with patch("config.HYDE_ENABLED", True):
+            results = await mm._hybrid_vec_search("如何连接数据库", k=5)
+
+        assert [r["id"] for r in results] == [201, 202]
+        assert results[0]["score"] > results[1]["score"]
+
+    @pytest.mark.asyncio
     async def test_mixed_distances_only_keeps_relevant(self):
         """混合距离：只保留相关的，过滤不相关的。"""
         mm = _make_memory_manager()
@@ -123,6 +148,43 @@ class TestVectorRecallDistanceFilter:
         # 相关项分数应远高于无关项
         assert by_id[301]["score"] > by_id[303]["score"] * 10, "相关项分数应远高于无关项"
 
+    @pytest.mark.asyncio
+    async def test_visibility_failure_keeps_only_active_scoped_rows(self):
+        mm = _make_memory_manager()
+        mm.vec = MagicMock()
+        mm.vec.search = AsyncMock(return_value=[(401, 0.2), (402, 0.3)])
+        mm.memory.get_visible_memories_by_ids = AsyncMock(
+            side_effect=RuntimeError("visibility lookup failed")
+        )
+        mm.memory.get_memories_by_ids = AsyncMock(return_value=[
+            {
+                "id": 401,
+                "summary": "active",
+                "status": "active",
+                "user_id": "u1",
+                "agent_id": "a1",
+                "session_id": "private-1",
+                "is_raw": 0,
+            },
+            {
+                "id": 402,
+                "summary": "superseded",
+                "status": "superseded",
+                "user_id": "u1",
+                "agent_id": "a1",
+                "session_id": "private-1",
+                "is_raw": 0,
+            },
+        ])
+
+        from memory.scope import Scope
+
+        results = await mm._hybrid_vec_search(
+            "query", k=5, scope=Scope.personal(user_id="u1", agent_id="a1")
+        )
+
+        assert [row["id"] for row in results] == [401]
+
 
 class TestRRFFusionQualityFloor:
     """治本点2: RRF 融合后应过滤极低分候选（统计学下限，非拍脑袋阈值）。"""
@@ -146,6 +208,44 @@ class TestRRFFusionQualityFloor:
         # 期望：应有机制区分（这是 RRF 的固有局限，需在融合前过滤源头）
         # 此测试验证 RRF 本身行为正确（不在此层修复）
         assert len(fused) > 0
+
+
+class TestRRFFallbackContract:
+    @pytest.mark.asyncio
+    async def test_rrf_fallback_is_not_filtered_by_reranker_threshold(self):
+        mm = _make_memory_manager()
+        result = {
+            "id": 1,
+            "summary": "用户喜欢篮球",
+            "score": 0.9,
+            "rrf_score": 0.016,
+            "importance": 0.5,
+        }
+        mm.kg = None
+        mm._query_transformer = MagicMock()
+        mm._query_transformer.available = True
+        mm._query_transformer.classify_intent = AsyncMock(return_value="factual")
+        mm._try_temporal_search = AsyncMock(return_value=None)
+        mm._is_retrieval_simple = MagicMock(return_value=True)
+        mm.retrieve_memories_hybrid = AsyncMock(return_value=[result])
+        mm._apply_fsrs_scoring = AsyncMock(
+            side_effect=lambda rows: [dict(row, fluid_score=0.5) for row in rows]
+        )
+        mm._compute_recency_boost = MagicMock(return_value=0.5)
+        mm._assessor.assess = MagicMock(
+            return_value={"should_retry": False, "confidence": 1.0, "level": "good"}
+        )
+        mm._dedup_by_content_similarity = MagicMock(side_effect=lambda rows: rows)
+        mm._query_cache = MagicMock()
+        mm._query_cache.get = AsyncMock(return_value=None)
+        mm._query_cache.put = AsyncMock()
+
+        from memory.scope import Scope
+        filtered = await mm.retrieve_memories("篮球", k=5, scope=Scope())
+
+        assert filtered[0]["score_kind"] == "rrf"
+        assert "rerank_score" not in filtered[0]
+        assert [r["id"] for r in filtered] == [1]
 
 
 class TestRetrieveMemoriesNoNoiseInjection:

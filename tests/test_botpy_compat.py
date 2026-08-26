@@ -128,3 +128,151 @@ def test_compat_probe_on_real_sdk():
     """真实安装的 qq-botpy 上探针应报告无漂移。"""
     drift = bc.check_sdk_compat()
     assert drift == [], f"SDK 适配漂移: {drift}"
+
+
+# ── loop 异常处理器（ZeroDivisionError 不再停共享 loop）──────
+
+class _FakeLog:
+    """替换 botpy.logging 出口，捕获 handler 的处置日志。"""
+
+    def __init__(self):
+        self.records: list[str] = []
+
+    def error(self, message, *args):
+        self.records.append(message % args if args else message)
+
+
+def _make_shim_connection(cancelled: list):
+    """在名为 botpy.* 的伪模块内定义 ConnectionSession._runner 并实例化。
+
+    同时满足 handler 的两个识别条件：runner 帧 globals.__name__ 以 botpy
+    开头、f_locals["self"] is 该实例（真实绑定方法，无需注入帧）。
+    返回的实例挂 .loop 属性后即可作为 fake client 的 _connection。
+    """
+
+    ns = {
+        "__name__": "botpy.test_shim",
+        "asyncio": __import__("asyncio"),
+        "cancelled": cancelled,
+    }
+    exec(
+        "class ConnectionSession:\n"
+        "    async def _runner(self):\n"
+        "        try:\n"
+        "            await asyncio.sleep(3600)\n"
+        "        except asyncio.CancelledError:\n"
+        "            cancelled.append(True)\n"
+        "            raise\n",
+        ns,
+    )
+    return ns["ConnectionSession"]()
+
+
+def _install_handler(monkeypatch, log: _FakeLog, conn):
+    """安装 handler 到新 loop，返回 (loop, handler)。"""
+    import asyncio
+    from types import SimpleNamespace
+
+    monkeypatch.setattr(bc, "_log_botpy_error", log.error)
+    loop = asyncio.new_event_loop()
+    conn.loop = loop
+    bc._install_loop_handler(SimpleNamespace(_connection=conn))
+    return loop, loop.get_exception_handler()
+
+
+def test_zde_from_botpy_cancels_runners_not_loop(monkeypatch):
+    """botpy 来源的 ZeroDivisionError → 取消本 Client 的 session runner，loop 存活。"""
+    import asyncio
+
+    log = _FakeLog()
+    cancelled: list = []
+    conn = _make_shim_connection(cancelled)
+    loop, _handler = _install_handler(monkeypatch, log, conn)
+    try:
+        task = loop.create_task(conn._runner())
+
+        async def main():
+            await asyncio.sleep(0)  # 让 task 起跑进入 sleep
+            handler = loop.get_exception_handler()
+            assert handler is not None, "handler 未安装"
+            handler(loop, {"exception": ZeroDivisionError("boom"), "task": task})
+            await asyncio.sleep(0.05)
+            return task
+
+        task = loop.run_until_complete(main())
+        assert cancelled == [True], "session runner 应被取消以触发重连"
+        assert task.cancelled(), "runner 任务应处于已取消态"
+        assert not loop.is_closed(), "共享 loop 绝不能被停止"
+        assert any("session runner" in r for r in log.records)
+    finally:
+        loop.close()
+
+
+def test_zde_from_non_botpy_is_log_only(monkeypatch):
+    """非 botpy 来源的 ZeroDivisionError → 仅记录，不取消任何任务。"""
+    import asyncio
+
+    log = _FakeLog()
+    cancelled: list = []
+    conn = _make_shim_connection(cancelled)
+    loop, _handler = _install_handler(monkeypatch, log, conn)
+    try:
+        state = {"cancelled": False}
+
+        async def webui_coro():
+            try:
+                await asyncio.sleep(3600)
+            except asyncio.CancelledError:
+                state["cancelled"] = True
+                raise
+
+        async def main():
+            task = loop.create_task(webui_coro())
+            await asyncio.sleep(0)
+            handler = loop.get_exception_handler()
+            handler(loop, {"exception": ZeroDivisionError("boom"), "task": task})
+            await asyncio.sleep(0.05)
+            assert not state["cancelled"], "非 botpy 来源不应取消任务"
+
+        loop.run_until_complete(main())
+        assert any("仅记录不停服" in r for r in log.records)
+    finally:
+        loop.close()
+
+
+def test_zde_without_task_context_degrades_to_log_only(monkeypatch):
+    """context 缺 future/task（如裸 handle 异常）→ 归因不到来源，保守仅记录。"""
+
+    log = _FakeLog()
+    cancelled: list = []
+    conn = _make_shim_connection(cancelled)
+    loop, _handler = _install_handler(monkeypatch, log, conn)
+    try:
+        async def main():
+            handler = loop.get_exception_handler()
+            handler(loop, {"exception": ZeroDivisionError("boom")})
+
+        loop.run_until_complete(main())
+        assert cancelled == [], "无来源信息时不应误杀会话任务"
+        assert any("仅记录不停服" in r for r in log.records)
+    finally:
+        loop.close()
+
+
+def test_non_zde_is_untouched(monkeypatch):
+    """非 ZeroDivisionError 异常 → 除默认记录外不做任何处置。"""
+
+    log = _FakeLog()
+    cancelled: list = []
+    conn = _make_shim_connection(cancelled)
+    loop, _handler = _install_handler(monkeypatch, log, conn)
+    try:
+        async def main():
+            handler = loop.get_exception_handler()
+            handler(loop, {"exception": RuntimeError("x"), "future": None})
+
+        loop.run_until_complete(main())
+        assert cancelled == []
+        assert log.records == [], "非 ZDE 不应有处置日志"
+    finally:
+        loop.close()

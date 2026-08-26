@@ -14,14 +14,15 @@ import asyncio
 import os
 from pathlib import Path
 from types import SimpleNamespace
-from typing import Any, TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from loguru import logger
 
-from config import _ensure_workspace_template
-from config import DEFAULT_PROVIDER as _DEFAULT_PROVIDER, PRO_MODEL_NAME as _PRO_MODEL
-from config import MODEL_NAME as _MODEL_NAME, get_provider_config as _get_provider_config
-from config import get_agent_display_name
+from config import DEFAULT_PROVIDER as _DEFAULT_PROVIDER
+from config import MODEL_NAME as _MODEL_NAME
+from config import PRO_MODEL_NAME as _PRO_MODEL
+from config import _ensure_workspace_template, get_agent_display_name
+from config import get_provider_config as _get_provider_config
 from core.background_tasks import BackgroundTaskManager, _spawn
 
 if TYPE_CHECKING:
@@ -193,8 +194,9 @@ class AgentCoreBootstrapper:
         h = self.health
         # J-Space 架构优化初始化（非阻塞，失败不影响主流程）
         try:
-            from core.j_space_bootstrap import init_j_space
+            from core.j_space_bootstrap import get_intent_decomposer, init_j_space
             init_j_space()
+            get_intent_decomposer(router=getattr(self.core, "router", None))
             h.record_ok("j_space")
         except Exception as e:
             logger.warning(f"j_space.bootstrap_failed (non-blocking): {e}")
@@ -222,9 +224,8 @@ class AgentCoreBootstrapper:
             set_global_tts_engine(self.core.tts)
         await self._run_optional_step("tts", _init_tts)
 
-        # 子代理注册 / 任务图 / 交互层 / MCP / 插件（均可选）
+        # 子代理注册 / 交互层 / MCP / 插件（均可选）
         await self._run_optional_step("sub_agents", self._register_sub_agents)
-        await self._run_optional_step("task_graph", self._build_task_graph)
         await self._run_optional_step("interaction", self._init_interaction)
         await self._run_optional_step("mcp", self._init_mcp)
 
@@ -258,6 +259,7 @@ class AgentCoreBootstrapper:
     def _ensure_voice_refs(self) -> None:
         """首次运行时将参考音频从安装包复制到用户数据目录"""
         import shutil
+
         from config import VOICE_REF_DIR
         bundled_dir = self._get_bundled_assets_dir() / "voice_refs"
         if not bundled_dir.exists():
@@ -287,38 +289,29 @@ class AgentCoreBootstrapper:
     def _ensure_stickers(self) -> None:
         """首次运行时将表情包从安装包复制到用户数据目录"""
         import shutil
+
         from config import STICKER_DIR, XIAOLI_STICKER_DIR
         bundled_dir = self._get_bundled_assets_dir() / "stickers"
         if not bundled_dir.exists():
             return
 
-        # 复制 xiaoda 表情包
-        xiaoda_src = bundled_dir / "xiaoda"
-        if xiaoda_src.exists() and xiaoda_src.is_dir():
-            STICKER_DIR.mkdir(parents=True, exist_ok=True)
-            for emotion_dir in xiaoda_src.iterdir():
+        # (voice, 安装包子目录, 目标目录)：两段复制逻辑逐字相同，仅目录不同，循环摊平
+        for voice, src, dest in (
+            ("xiaoda", bundled_dir / "xiaoda", STICKER_DIR),
+            ("xiaoli", bundled_dir / "xiaoli", XIAOLI_STICKER_DIR),
+        ):
+            if not (src.exists() and src.is_dir()):
+                continue
+            dest.mkdir(parents=True, exist_ok=True)
+            for emotion_dir in src.iterdir():
                 if emotion_dir.is_dir():
-                    dest_emotion = STICKER_DIR / emotion_dir.name
+                    dest_emotion = dest / emotion_dir.name
                     if not dest_emotion.exists():
                         try:
                             shutil.copytree(emotion_dir, dest_emotion)
-                            logger.info("bootstrap.stickers_copied", voice="xiaoda", emotion=emotion_dir.name)
+                            logger.info("bootstrap.stickers_copied", voice=voice, emotion=emotion_dir.name)
                         except Exception:
-                            logger.warning("bootstrap.stickers_copy_failed", voice="xiaoda", emotion=emotion_dir.name)
-
-        # 复制 xiaoli 表情包
-        xiaoli_src = bundled_dir / "xiaoli"
-        if xiaoli_src.exists() and xiaoli_src.is_dir():
-            XIAOLI_STICKER_DIR.mkdir(parents=True, exist_ok=True)
-            for emotion_dir in xiaoli_src.iterdir():
-                if emotion_dir.is_dir():
-                    dest_emotion = XIAOLI_STICKER_DIR / emotion_dir.name
-                    if not dest_emotion.exists():
-                        try:
-                            shutil.copytree(emotion_dir, dest_emotion)
-                            logger.info("bootstrap.stickers_copied", voice="xiaoli", emotion=emotion_dir.name)
-                        except Exception:
-                            logger.warning("bootstrap.stickers_copy_failed", voice="xiaoli", emotion=emotion_dir.name)
+                            logger.warning("bootstrap.stickers_copy_failed", voice=voice, emotion=emotion_dir.name)
 
     # 表情包情绪分类子目录（用户往这些目录放图片即可自动调用）
     _STICKER_EMOTION_DIRS = (
@@ -402,6 +395,7 @@ class AgentCoreBootstrapper:
         embed_mode = os.getenv("EMBED_MODE", "remote")
         try:
             import json as _json
+
             from config import get_config_dir
             _ov_path = Path(get_config_dir()) / "webui_overrides.json"
             if _ov_path.exists():
@@ -465,12 +459,14 @@ class AgentCoreBootstrapper:
 
     async def _init_cognitive(self) -> None:
         """初始化认知系统：Reranker、QueryTransformer、Memory、KG、Instinct、ErrorPipeline。"""
-        from memory.memory_manager import MemoryManager
-        from memory.knowledge_graph import KnowledgeGraph
-        from memory.notebook_manager import NotebookManager
-        from memory.learning_manager import LearningManager
-        from emotion.portrait_manager import PortraitManager
         import config
+        from emotion.portrait_manager import PortraitManager
+        from memory.entity_extractor import EntityExtractor
+        from memory.entity_store import EntityStore
+        from memory.knowledge_graph import KnowledgeGraph
+        from memory.learning_manager import LearningManager
+        from memory.memory_manager import MemoryManager
+        from memory.notebook_manager import NotebookManager
 
         core = self.core
 
@@ -508,6 +504,12 @@ class AgentCoreBootstrapper:
                 else None
             ),
             query_transformer=query_transformer,
+            # R1-1 修复（2026-08-24）：实体召回第 6 路 + Entity Boost 此前因未注入
+            # 恒空（调研文档 P0 清单）。extractor 不传 router = 纯 jieba 规则快抽，
+            # 读路 <10ms、写路后台 fire-and-forget，零新增 LLM 成本；
+            # 后续要启用 LLM 精抽时再传 router。
+            entity_extractor=EntityExtractor(router=None),
+            entity_store=EntityStore(core.db.memory),
         )
         # 启动时对账：检测主表已落盘但向量索引缺失的记忆（fire-and-forget，不阻塞启动）
         try:
@@ -539,8 +541,8 @@ class AgentCoreBootstrapper:
         # KG v2 注入（功能开关开启时启用 v2 路径，失败降级到 v1）
         if getattr(config, 'KG_V2_ENABLED', False):
             try:
-                from memory.knowledge_graph_v2 import KnowledgeGraphV2
                 from memory.kg_search import KGSearchEngine
+                from memory.knowledge_graph_v2 import KnowledgeGraphV2
                 kg_v2 = KnowledgeGraphV2(
                     db_v2=core.db.kg_v2,
                     vector_store=core._vec_store,
@@ -570,7 +572,7 @@ class AgentCoreBootstrapper:
                 logger.warning("kg_v2.init_failed_fallback_to_v1", error=str(e))
 
         if core._failure_trigger._memory_db is None:
-            core._failure_trigger._memory_db = core.memory.memory
+            core._failure_trigger.bind_memory(core.memory.memory)
         # 注入 MemoryManager 到 memory_tool，修复记忆工具不可用问题
         from tools import memory_tool
         memory_tool.bind(core.memory)
@@ -714,8 +716,8 @@ class AgentCoreBootstrapper:
     # ── 子代理注册 ────────────────────────────────────────
 
     async def _register_sub_agents(self) -> None:
-        from agent_dispatcher import SubAgentConfig
         import config as _cfg_mod
+        from agent_dispatcher import SubAgentConfig
         # 同函数内 AGENTS_CONFIG_DIR 有 ImportError 兜底，此符号同等对待：
         # config 重构删除常量时不致启动崩溃（兜底取源头定义 config_paths）
         XIAOLI_STICKER_DIR = getattr(_cfg_mod, "XIAOLI_STICKER_DIR", None)
@@ -739,24 +741,26 @@ class AgentCoreBootstrapper:
         # 从未读取该文件，一直用 _DEFAULT_PROVIDER 构造 SubAgentConfig。
         import json as _json
 
+        # 单次注册流程内同名 JSON 只读一次磁盘，结果缓存复用（此前 provider/
+        # model/base_url/api_key_env/wallpaper 五个读取点各自重读同一文件，
+        # 一个 agent 约 6 次 IO）。持久化值覆盖内置默认的优先级由下方解析逻辑保持。
+        _persisted_cache: dict[str, dict] = {}
+
         def _load_persisted(_name: str) -> dict:
             """读取 config/agents/{name}.json 持久化配置；缺失字段返回空。"""
-            _fp = _agents_dir / f"{_name}.json"
-            try:
-                if _fp.exists():
-                    return _json.loads(_fp.read_text(encoding="utf-8"))
-            except (OSError, ValueError):
-                logger.debug("bootstrap.agent_persist_load_failed name={}", _name, exc_info=True)
-            return {}
+            if _name not in _persisted_cache:
+                _fp = _agents_dir / f"{_name}.json"
+                try:
+                    if _fp.exists():
+                        _persisted_cache[_name] = _json.loads(_fp.read_text(encoding="utf-8"))
+                    else:
+                        _persisted_cache[_name] = {}
+                except (OSError, ValueError):
+                    logger.debug("bootstrap.agent_persist_load_failed name={}", _name, exc_info=True)
+                    _persisted_cache[_name] = {}
+            return _persisted_cache[_name]
 
-        def _resolved_provider(_name: str) -> str:
-            return _load_persisted(_name).get("provider") or _DEFAULT_PROVIDER
-
-        def _resolved_model(_name: str) -> str:
-            return _load_persisted(_name).get("model") or _agent_model
-
-        def _resolved_base_url(_name: str) -> str:
-            _p = _load_persisted(_name)
+        def _resolve_base_url(_p: dict) -> str:
             if _p.get("base_url"):
                 return _p["base_url"]
             # provider 变更后自动解析 base_url/api_key_env，与 update() 逻辑一致
@@ -767,8 +771,7 @@ class AgentCoreBootstrapper:
             except (KeyError, ValueError):
                 return _prov_cfg["base_url"]
 
-        def _resolved_api_key_env(_name: str) -> str:
-            _p = _load_persisted(_name)
+        def _resolve_api_key_env(_p: dict) -> str:
             if _p.get("api_key_env"):
                 return _p["api_key_env"]
             _prov = _p.get("provider") or _DEFAULT_PROVIDER
@@ -798,69 +801,61 @@ class AgentCoreBootstrapper:
                             _name, _target.stat().st_size)
             return str(_target)
 
-        xiaoli_config = SubAgentConfig(
-            name="xiaoli",
-            display_name=get_agent_display_name("xiaoli"),
-            provider=_resolved_provider("xiaoli"),
-            model=_resolved_model("xiaoli"),
-            personality_file=_ensure_personality_file("xiaoli"),
-            voice_ref="xiaoli",
-            excluded_tools={"call_xiaoli", "shell_command", "python_executor", "write_file", "search_files", "read_file", "list_files", "web_browse", "document_reader", "multi_search", "wolfram_query"},
-            base_url=_resolved_base_url("xiaoli"),
-            api_key_env=_resolved_api_key_env("xiaoli"),
-            capabilities=["chat", "play", "fun"],
-            route_description="日常聊天、玩耍、轻松有趣的对话",
-            sticker_dir=str(XIAOLI_STICKER_DIR),
-            wallpaper=_load_persisted("xiaoli").get("wallpaper") or "",
+        # 内置子代理差异字段表（顺序即注册顺序）。仅列与统一构造路径不同的字段：
+        # provider/model/base_url/api_key_env/wallpaper 由持久化配置覆盖内置默认，
+        # display_name 走 get_agent_display_name，personality_file 走
+        # _ensure_personality_file。route_description 文案进入 delegate_task
+        # 工具描述，原样搬运勿改写。
+        builtin_specs: tuple[dict, ...] = (
+            {
+                "name": "xiaoli",
+                "voice_ref": "xiaoli",
+                "sticker_dir": str(XIAOLI_STICKER_DIR),
+                "excluded_tools": {"shell_command", "python_executor", "write_file", "search_files", "read_file", "list_files", "web_browse", "document_reader", "multi_search", "wolfram_query"},
+                "capabilities": ["chat", "play", "fun"],
+                "route_description": "日常聊天、玩耍、轻松有趣的对话",
+            },
+            {
+                "name": "xiaolang",
+                "excluded_tools": {"call_xiaoda", "delegate_task"},
+                "capabilities": ["coding", "debug", "script", "programming", "hardware", "system", "devops"],
+                "route_description": "编程、代码编写、调试、技术问题、硬件控制、系统运维、开发辅助",
+                # 默认关闭 git/github MCP：首次安装不再自动启用（需在 WebUI 权限矩阵按需开启）
+                "mcp_servers": [],
+            },
+            {
+                "name": "xiaolian",
+                "excluded_tools": {"call_xiaoda", "delegate_task", "shell_command", "python_executor", "write_file"},
+                "capabilities": ["search", "lookup", "query", "explore", "discover"],
+                "route_description": "搜索信息、查询资料、探索发现",
+            },
+            {
+                "name": "xiaoke",
+                "excluded_tools": {"call_xiaoda", "delegate_task", "shell_command", "write_file"},
+                "capabilities": ["research", "analysis", "study", "academic"],
+                "route_description": "研究分析、学术思考、深度解读",
+            },
         )
-        await core.dispatcher.register(xiaoli_config)
-        xiaolang_config = SubAgentConfig(
-            name="xiaolang",
-            display_name=get_agent_display_name("xiaolang"),
-            provider=_resolved_provider("xiaolang"),
-            model=_resolved_model("xiaolang"),
-            personality_file=_ensure_personality_file("xiaolang"),
-            voice_ref=None,
-            excluded_tools={"call_xiaoli", "call_xiaoda", "delegate_task"},
-            base_url=_resolved_base_url("xiaolang"),
-            api_key_env=_resolved_api_key_env("xiaolang"),
-            capabilities=["coding", "debug", "script", "programming", "hardware", "system", "devops"],
-            route_description="编程、代码编写、调试、技术问题、硬件控制、系统运维、开发辅助",
-            # 默认关闭 git/github MCP：首次安装不再自动启用（需在 WebUI 权限矩阵按需开启）
-            mcp_servers=[],
-            wallpaper=_load_persisted("xiaolang").get("wallpaper") or "",
-        )
-        await core.dispatcher.register(xiaolang_config)
-        xiaolian_config = SubAgentConfig(
-            name="xiaolian",
-            display_name=get_agent_display_name("xiaolian"),
-            provider=_resolved_provider("xiaolian"),
-            model=_resolved_model("xiaolian"),
-            personality_file=_ensure_personality_file("xiaolian"),
-            voice_ref=None,
-            excluded_tools={"call_xiaoli", "call_xiaoda", "delegate_task", "shell_command", "python_executor", "write_file"},
-            base_url=_resolved_base_url("xiaolian"),
-            api_key_env=_resolved_api_key_env("xiaolian"),
-            capabilities=["search", "lookup", "query", "explore", "discover"],
-            route_description="搜索信息、查询资料、探索发现",
-            wallpaper=_load_persisted("xiaolian").get("wallpaper") or "",
-        )
-        await core.dispatcher.register(xiaolian_config)
-        xiaoke_config = SubAgentConfig(
-            name="xiaoke",
-            display_name=get_agent_display_name("xiaoke"),
-            provider=_resolved_provider("xiaoke"),
-            model=_resolved_model("xiaoke"),
-            personality_file=_ensure_personality_file("xiaoke"),
-            voice_ref=None,
-            excluded_tools={"call_xiaoli", "call_xiaoda", "delegate_task", "shell_command", "write_file"},
-            base_url=_resolved_base_url("xiaoke"),
-            api_key_env=_resolved_api_key_env("xiaoke"),
-            capabilities=["research", "analysis", "study", "academic"],
-            route_description="研究分析、学术思考、深度解读",
-            wallpaper=_load_persisted("xiaoke").get("wallpaper") or "",
-        )
-        await core.dispatcher.register(xiaoke_config)
+
+        for spec in builtin_specs:
+            name = spec["name"]
+            persisted = _load_persisted(name)
+            await core.dispatcher.register(SubAgentConfig(
+                name=name,
+                display_name=get_agent_display_name(name),
+                provider=persisted.get("provider") or _DEFAULT_PROVIDER,
+                model=persisted.get("model") or _agent_model,
+                personality_file=_ensure_personality_file(name),
+                voice_ref=spec.get("voice_ref"),
+                excluded_tools=set(spec.get("excluded_tools", ())),
+                base_url=_resolve_base_url(persisted),
+                api_key_env=_resolve_api_key_env(persisted),
+                capabilities=list(spec.get("capabilities", [])),
+                route_description=spec.get("route_description", ""),
+                mcp_servers=list(spec.get("mcp_servers", [])),
+                sticker_dir=spec.get("sticker_dir", ""),
+                wallpaper=persisted.get("wallpaper") or "",
+            ))
 
         # 为每个子智能体自动创建表情包目录（含示例情绪分类子目录）
         self._ensure_agent_sticker_dirs(core)
@@ -878,7 +873,7 @@ class AgentCoreBootstrapper:
 
     def _register_delegate_tool(self) -> None:
         """注册通用 delegate_task 工具，描述动态嵌入各子代理的 route_description。"""
-        from tool_engine.tool_registry import register_tool_direct, ToolPermission
+        from tool_engine.tool_registry import ToolPermission, register_tool_direct
 
         core = self.core
         roster = "；".join(
@@ -886,16 +881,77 @@ class AgentCoreBootstrapper:
             for name, cfg in core._agent_route_configs.items()
             if cfg.get("route_description"))
 
-        async def delegate_task(agent: str, task: str,
-                                 mode: str = "single", verifier: str = "") -> Any:
+        async def delegate_task(agent: str, task: str = "",
+                                 mode: str = "single", verifier: str = "",
+                                 background: bool = False) -> Any:
             """将任务委托给指定子代理完成并返回结果。
 
             mode=generate_verify 时，verifier 指定的子代理会独立审查结果。
+            background=true 时立即返回受理回执，子代理脱离当轮在后台执行，
+            完成后按用户来源渠道（QQ/微信/WebUI）主动推送结果——适合长任务
+            （搜索汇总、代码分析、多代理协作）。默认 false 同步等待结果。
             """
             from tool_engine.tool_executor import ToolResult
-            reply = await core.delegate_to_agent(
-                agent.strip().lower(), task, mode=mode, verifier=verifier)
-            return ToolResult.ok(reply)
+            name = agent.strip().lower()
+            # 健壮性：LLM 偶尔传显示名（如"小莉"）而非标识名——别名归一
+            route_cfgs = core._agent_route_configs or {}
+            if name not in route_cfgs:
+                for key, cfg in route_cfgs.items():
+                    if cfg.get("display_name", "").lower() == name:
+                        name = key
+                        break
+            display = (route_cfgs.get(name, {}) or {}).get("display_name", name)
+
+            # 健壮性：LLM 反复漏传 task（实测 agnes-flash 高发）——回退到
+            # 用户原话。委托语义下"当前请求"就是任务本身，等价且不丢工作。
+            if not task.strip():
+                from agent_core._shared import _current_request_ctx as _crc
+                _ctx0 = _crc.get()
+                task = (getattr(_ctx0, "user_input", "") or "").strip()
+            if not task.strip():
+                return ToolResult.fail(
+                    f"调用 delegate_task 缺少 task 参数，请补全要委托给{display}的任务内容")
+
+            if not background:
+                reply = await core.delegate_to_agent(name, task, mode=mode, verifier=verifier)
+                return ToolResult.ok(reply)
+
+            # ---- 后台模式：登记 → spawn → 立即回执 --------------------
+            import uuid as _uuid
+
+            from agent_core._shared import _current_request_ctx
+            from core import async_delegation as ad
+
+            ctx = _current_request_ctx.get()
+            job = ad.BackgroundDelegation(
+                task_id=f"bg-{name}-{_uuid.uuid4().hex[:8]}",
+                agent=name,
+                display_name=display,
+                mode=mode,
+                verifier=verifier,
+                task_text=task[:500],
+                channel=getattr(ctx, "channel", "") if ctx else "",
+                session_id=getattr(ctx, "session_id", "") if ctx else "",
+                user_openid=getattr(ctx, "user_openid", "") if ctx else "",
+                user_id=getattr(ctx, "user_id", "") if ctx else "",
+            )
+            ad.register(job)
+
+            async def _runner() -> None:
+                try:
+                    await core.run_background_delegation(job)
+                except Exception as e:  # noqa: BLE001 —— 兜底：执行体自身异常也要告知
+                    logger.exception("async_delegation.runner_crashed task={}", job.task_id)
+                    ad.mark_done(job.task_id, ok=False, preview=str(e)[:120])
+                    await ad.deliver(job, f"后台任务内部错误：{str(e)[:300]}", failed=True)
+
+            _spawn(_runner())
+
+            # 中性受理语：不搞机械回执，模型自然带过即可；结果完成后
+            # 主代理会以自己的口吻主动转述（async_delegation.compose_and_deliver）
+            return ToolResult.ok(
+                f"任务已转交{display}在后台执行。请自然继续当前回复，"
+                "无需强调受理细节；完成后你会收到结果，届时以自己的口吻转述给用户。")
 
         register_tool_direct(
             name="delegate_task",
@@ -913,6 +969,9 @@ class AgentCoreBootstrapper:
                 "失败自动降级到下一个，适用于高可靠性任务）；"
                 "mode=debate（辩论模式，agent 填两个辩论方，verifier 填综合者，"
                 "正反方独立论证后综合，适用于分析/决策任务）。"
+                "【background 后台模式】background=true 适合耗时任务（搜索汇总/"
+                "代码分析/多代理协作）：立即返回受理回执，完成后按用户来源渠道"
+                "主动推送结果；闲聊与短问答禁止用后台模式。"
                 "【严格规则】以下情况绝对不要委托，必须自己回答："
                 "1. 日常闲聊、问候、寒暄（如'你好'、'在吗'、'今天怎么样'）；"
                 "2. 表情包、情感表达、陪伴对话；"
@@ -937,6 +996,9 @@ class AgentCoreBootstrapper:
                                  "description": "验证子代理名（仅 mode=generate_verify 时使用）",
                                  "enum": list(core._agent_route_configs.keys()),
                                  "default": ""},
+                    "background": {"type": "boolean",
+                                   "description": "true=后台执行：立即返回受理回执，完成后按用户来源渠道主动推送结果（适合长任务）；false=同步等待结果（默认）",
+                                   "default": False},
                 },
                 "required": ["agent", "task"],
             },
@@ -945,10 +1007,93 @@ class AgentCoreBootstrapper:
         )
 
         self._register_sticker_tool()
+        self._register_sub_agent_control_tool()
+
+    def _register_sub_agent_control_tool(self) -> None:
+        """注册 sub_agent_control：主代理查看后台委托进度 / 终止 / 插话。"""
+        from tool_engine.tool_registry import ToolPermission, register_tool_direct
+
+        async def sub_agent_control(action: str, target: str = "",
+                                    message: str = "") -> Any:
+            from core import async_delegation as ad
+            from tool_engine.tool_executor import ToolResult
+            action = action.strip().lower()
+
+            if action == "status":
+                jobs = ad.snapshot()
+                if not jobs:
+                    return ToolResult.ok("当前没有任何后台委托任务。")
+                lines = []
+                for j in jobs[:8]:
+                    lines.append(
+                        f"· {j['display_name']}（{j['task_id']}）[{j['status']}] "
+                        f"已运行 {j['elapsed_s']}s"
+                        + (f" · 进度：{j['last_progress']}" if j["last_progress"] else "")
+                        + (f" · 待处理插话 {j['pending_interjections']} 条"
+                           if j["pending_interjections"] else "")
+                        + f"\n  任务：{j['result_preview'] or '—'}")
+                return ToolResult.ok("后台委托任务一览：\n" + "\n".join(lines))
+
+            t = target.strip()
+            # 三种定位方式逐个尝试（task_id 恒带 bg- 前缀，
+            # 与 agent 名做 AND 永远匹配不上，不能合并成一次调用）
+            job = (ad.find_running(task_id_prefix=t or None)
+                   or ad.find_running(agent=t.lower() or None)
+                   or ad.find_running(display_name=t or None))
+
+            if action == "abort":
+                if job is None:
+                    return ToolResult.fail("没有找到运行中的对应后台任务。")
+                task = job.asyncio_task
+                if task is not None and not task.done():
+                    task.cancel()
+                    return ToolResult.ok(
+                        f"已终止{job.display_name}的后台任务，并会向用户确认终止。")
+                return ToolResult.fail("该任务已经结束了。")
+
+            if action == "interject":
+                if job is None:
+                    return ToolResult.fail(
+                        "没有找到运行中的对应后台任务，无法插话。")
+                if not message.strip():
+                    return ToolResult.fail("插话内容不能为空。")
+                job.interjections.append(message.strip()[:600])
+                return ToolResult.ok(
+                    f"已把你的补充递交给{job.display_name}，她会在下一轮处理时纳入。")
+
+            return ToolResult.fail(
+                f"未知操作 {action}，可用：status / abort / interject")
+
+        register_tool_direct(
+            name="sub_agent_control",
+            description=(
+                "查看/控制正在后台执行的子代理任务。action=status 查看全部后台任务的进度与状态；"
+                "action=abort 终止某个运行中的任务（target 填子代理名或任务编号）；"
+                "action=interject 向运行中的任务插话补充指示（message 填要说的话），"
+                "子代理会在下一轮处理时纳入。用户问'进度怎么样/停掉它/跟它说…'时使用。"),
+            func=sub_agent_control,
+            parameters={
+                "type": "object",
+                "properties": {
+                    "action": {"type": "string",
+                               "description": "操作类型",
+                               "enum": ["status", "abort", "interject"]},
+                    "target": {"type": "string",
+                               "description": "目标子代理名或任务编号（status 可省略）",
+                               "default": ""},
+                    "message": {"type": "string",
+                                "description": "插话内容（仅 interject 需要）",
+                                "default": ""},
+                },
+                "required": ["action"],
+            },
+            permission=ToolPermission.READ_ONLY,
+            category="fun",
+        )
 
     def _register_sticker_tool(self) -> None:
         """注册 list_stickers 工具，让 LLM 可以查看可用表情包及描述，从而精准选择。"""
-        from tool_engine.tool_registry import register_tool_direct, ToolPermission
+        from tool_engine.tool_registry import ToolPermission, register_tool_direct
 
         core = self.core
 
@@ -988,32 +1133,11 @@ class AgentCoreBootstrapper:
             category="fun",
         )
 
-    async def _build_task_graph(self) -> None:
-        from openai import AsyncOpenAI as _AOI
-        from task_orchestrator import build_task_graph
-        from model_router import _resolve_provider_key
-        from config import get_base_url_for_provider
-
-        core = self.core
-        # 统一凭证读取口径：enc:v1: 密文自动解密，避免把密文当 Key → 401
-        _key = _resolve_provider_key("MIMO_API_KEY")
-        _url = get_base_url_for_provider("mimo")
-        route_client = _AOI(
-            api_key=_key,
-            base_url=_url,
-        )
-        core._task_graph = build_task_graph(
-            dispatcher=core.dispatcher,
-            agent_configs=core._agent_route_configs,
-            route_client=route_client,
-            xiaoda_chat_callback=core._xiaoda_synthesis_chat,
-        )
-
     # ── 交互层 ────────────────────────────────────────────
 
     async def _init_interaction(self) -> None:
-        from utils.smart_error_handler import get_error_handler
         from slash_commands import SlashCommandHandler
+        from utils.smart_error_handler import get_error_handler
 
         core = self.core
         core._error_handler = get_error_handler(
@@ -1027,12 +1151,6 @@ class AgentCoreBootstrapper:
             instinct_prompt = await core.instinct_manager.build_instinct_prompt()
             if instinct_prompt:
                 core.context.instinct_prompt = instinct_prompt
-        portrait = await core.portrait_manager.get_current_portrait()
-        if portrait and portrait.get("content"):
-            core.context.user_portrait = portrait["content"]
-            logger.info("portrait.loaded", version=portrait.get("version"))
-        await core._load_notebook_context()
-        await core.context.restore_from_db(core.db)
         core.slash_handler = SlashCommandHandler(
             db=core.db,
             router=core.router,
@@ -1090,6 +1208,7 @@ class AgentCoreBootstrapper:
 
     async def _init_mcp(self) -> None:
         import json as _json
+
         from config import MCP_SERVERS, WORKSPACE_DIR
 
         core = self.core

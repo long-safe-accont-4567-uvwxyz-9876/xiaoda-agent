@@ -1,31 +1,31 @@
+import asyncio
 from typing import Any
+
 from loguru import logger
 
+from config import get_agent_display_name  # noqa: F401
 from db.database import DatabaseManager
 from db.db_memory import MemoryDB
+
 # FTS5 分词工具从 db.fts_utils 导入 (打破 db <-> memory 循环); 这里 re-export
 # 保持向后兼容 (其他模块仍可 `from memory.memory_manager import _tokenize_for_fts`)
-from db.fts_utils import _tokenize_for_fts
-from .vector_store import VectorStore
-from .fsrs_model import FSRSModel, estimate_initial_difficulty
+from db.fts_utils import _tokenize_for_fts  # noqa: F401
+from memory._memory_encoder import MemoryEncoder
+from memory._memory_maintenance import MemoryMaintenance
+from memory._memory_utils import (  # noqa: F401
+    _normalize_for_dedupe,
+    _normalize_score,
+    _parse_temporal_query,
+    reciprocal_rank_fusion,
+    validate_memory_content,
+)
+from memory._retrieval_engine import RetrievalEngine
+
+from .fsrs_model import FSRSModel, estimate_initial_difficulty  # noqa: F401
 from .memory_distiller import MemoryDistiller
 from .query_cache import QueryCache
 from .retrieval_assessor import RetrievalAssessor
-from config import get_agent_display_name
-
-
-# 以下 _memory_utils re-export 仅保留有真实外部消费者（`from memory.memory_manager import X`）的符号。
-from memory._memory_utils import (
-    _parse_temporal_query,
-    reciprocal_rank_fusion,
-    _normalize_score,
-    validate_memory_content,
-    _normalize_for_dedupe,
-)
-
-from memory._retrieval_engine import RetrievalEngine
-from memory._memory_encoder import MemoryEncoder
-from memory._memory_maintenance import MemoryMaintenance
+from .vector_store import VectorStore
 
 
 class MemoryManager:
@@ -82,10 +82,10 @@ class MemoryManager:
         self.concept_graph = None
         self.spreading_engine = None
         try:
-            from memory.concept_graph import ConceptGraph
-            from memory.spreading_activation import SpreadingActivationEngine
-            from memory.key_extractor import KeyExtractor
             from db.db_concept import ConceptDB
+            from memory.concept_graph import ConceptGraph
+            from memory.key_extractor import KeyExtractor
+            from memory.spreading_activation import SpreadingActivationEngine
             if hasattr(self, 'db') and self.db and hasattr(self.db, '_conn') and self.db._conn is not None:
                 concept_db = ConceptDB(self.db._conn)
                 self._concept_db = concept_db
@@ -211,9 +211,6 @@ class MemoryManager:
                                 memories: list[dict] | None) -> int:
         return await self._retrieval.audit_retrieval(response_id, memories)
 
-    async def _has_duplicate(self, summary: str, scope: Any | None = None) -> bool:
-        return await self._retrieval._has_duplicate(summary, scope=scope)
-
     def signal_new_message(self) -> None:
         self._retrieval.signal_new_message()
 
@@ -226,9 +223,6 @@ class MemoryManager:
         return await self._retrieval.retrieve_memories_hybrid(
             query, k=k, use_reranker=use_reranker, use_kg=use_kg, scope=scope,
             include_raw=include_raw, query_vec=query_vec)
-
-    async def _hybrid_fts_search(self, query: str, k: int) -> list[dict]:
-        return await self._retrieval._hybrid_fts_search(query, k)
 
     async def _hybrid_vec_search(self, query: str, k: int,
                                  candidate_ids: list[int] | None = None,
@@ -252,23 +246,63 @@ class MemoryManager:
         return await self._retrieval._get_candidate_ids_by_selectors(
             selectors, limit=limit, scope=scope)
 
-    async def rerank_with_selected_local_model(
-        self,
-        query: str,
-        documents: list[str],
-        top_n: int | None = None,
-    ) -> list[dict]:
-        return await self._retrieval.rerank_with_selected_local_model(
-            query, documents, top_n=top_n)
-
     async def _insert_indexed_children(
         self,
         parent_id: int,
         children: list[dict],
         importance: float,
     ) -> bool:
-        return await self._retrieval._insert_indexed_children(
-            parent_id, children, importance)
+        """写入侧：父chunk落库 + 子chunk向量索引（原子性保护）。
+
+        2026-08 自 retrieval 引擎归还本模块：生产调用链为
+        _memory_encoder → MemoryManager._insert_indexed_children，
+        写入逻辑与检索无关，归属写入方。（自 memory/_retrieval_engine.py
+        纯移动而来，仅 self._mm → self；日志文案/异常类型零变化。）
+        """
+        child_ids = []
+        error: BaseException | None = None
+        child_records = [
+            {
+                **child,
+                "importance": importance * child["weight"],
+            }
+            for child in children
+        ]
+
+        async def _insert_batch() -> list[int]:
+            transaction = getattr(getattr(self, "db", None), "write_transaction", None)
+            if transaction is None:
+                return await self.memory.insert_child_chunks(parent_id, child_records)
+            async with transaction():
+                return await self.memory.insert_child_chunks(
+                    parent_id,
+                    child_records,
+                    auto_commit=False,
+                )
+
+        insert_task = asyncio.create_task(_insert_batch())
+        try:
+            child_ids = await asyncio.shield(insert_task)
+            child_items = [
+                (child_id, child["embed_content"])
+                for child_id, child in zip(child_ids, children, strict=True)
+            ]
+            if await self.vec.batch_upsert_children(child_items):
+                return True
+        except BaseException as caught:
+            error = caught
+            if isinstance(caught, asyncio.CancelledError):
+                try:
+                    child_ids = await asyncio.shield(insert_task)
+                except (ImportError, OSError, RuntimeError, ValueError):
+                    child_ids = []
+                except Exception:
+                    logger.exception(".memory._retrieval_engine._insert_batch_unexpected")
+                    child_ids = []
+        await asyncio.shield(self.memory.delete_child_chunks(child_ids))
+        if isinstance(error, asyncio.CancelledError):
+            raise error
+        return False
 
     async def _hybrid_rerank(self, query: str, fused: list[tuple[str, float]],
                               all_items: dict[str, dict], k: int) -> list[dict] | None:
@@ -277,18 +311,56 @@ class MemoryManager:
     def _is_retrieval_simple(self, query: str) -> bool:
         return self._retrieval._is_retrieval_simple(query)
 
-    def _suggest_k(self, query: str, default_k: int = 8) -> int:
+    def suggest_k(self, query: str, default_k: int = 8) -> int:
+        """按查询复杂度建议检索条数（公开接口，供跨模块调用）。"""
         return self._retrieval._suggest_k(query, default_k=default_k)
+
+    def _suggest_k(self, query: str, default_k: int = 8) -> int:
+        return self.suggest_k(query, default_k=default_k)
 
     async def retrieve_memories(self, query: str, k: int = 5, context: str = "",
                                  _retry_attempted: bool = False,
                                  scope: Any | None = None,
                                  conv_user_id: str = "",
-                                 apply_min_score: bool = True) -> list[dict]:
-        return await self._retrieval.retrieve_memories(
+                                 apply_min_score: bool = True,
+                                 record_access: bool = True) -> list[dict]:
+        results = await self._retrieval.retrieve_memories(
             query, k=k, context=context, _retry_attempted=_retry_attempted,
             scope=scope, conv_user_id=conv_user_id,
-            apply_min_score=apply_min_score)
+            apply_min_score=apply_min_score, record_access=record_access)
+        if results:
+            from memory.retrieval.trace import (
+                read_retrieval_dropped,
+                read_retrieval_trace,
+            )
+
+            degraded = read_retrieval_trace()
+            dropped = read_retrieval_dropped()
+            for result in results:
+                if degraded:
+                    result["degraded_components"] = list(degraded)
+            if dropped:
+                results[0]["retrieval_dropped"] = list(dropped)
+        return results
+
+    async def retrieve_memories_with_trace(
+        self, query: str, k: int = 5, context: str = "",
+        scope: Any | None = None, conv_user_id: str = "",
+        apply_min_score: bool = True,
+    ):
+        from memory.retrieval.trace import (
+            RetrievalOutcome,
+            read_retrieval_dropped,
+            read_retrieval_trace,
+        )
+
+        results = await self.retrieve_memories(
+            query, k=k, context=context, scope=scope,
+            conv_user_id=conv_user_id, apply_min_score=apply_min_score,
+        )
+        return RetrievalOutcome(
+            tuple(results), read_retrieval_trace(), read_retrieval_dropped()
+        )
 
     async def _try_temporal_search(self, query: str, k: int,
                                     scope: Any | None = None,
@@ -303,10 +375,6 @@ class MemoryManager:
                                          conv_user_id: str = "") -> list[dict]:
         return await self._retrieval._search_conversation_logs(
             start_ts, end_ts, scope, k, conv_user_id=conv_user_id)
-
-    async def _apply_reranker_to_results(self, query: str, results: list[dict],
-                                          k: int) -> list[dict]:
-        return await self._retrieval._apply_reranker_to_results(query, results, k)
 
     async def _transform_queries(self, query: str, context: str) -> list[str]:
         return await self._retrieval._transform_queries(query, context)
@@ -325,10 +393,6 @@ class MemoryManager:
     async def _vector_fallback_search(self, query: str, k: int,
                                        scope: Any | None = None) -> list[dict]:
         return await self._retrieval._vector_fallback_search(query, k, scope=scope)
-
-    async def _importance_fallback_search(self, k: int,
-                                           scope: Any | None = None) -> list[dict]:
-        return await self._retrieval._importance_fallback_search(k, scope=scope)
 
     async def _apply_fsrs_scoring(self, results: list[dict]) -> list[dict]:
         return await self._retrieval._apply_fsrs_scoring(results)
@@ -357,8 +421,12 @@ class MemoryManager:
     async def _batch_touch_memories(self, mem_ids: list[int | str]) -> None:
         return await self._retrieval._batch_touch_memories(mem_ids)
 
-    async def _apply_kg_context_enhance(self, results: list[dict]) -> None:
-        return await self._retrieval._apply_kg_context_enhance(results)
+    async def _apply_kg_context_enhance(
+        self, results: list[dict], scope: Any | None = None
+    ) -> None:
+        return await self._retrieval._apply_kg_context_enhance(
+            results, scope=scope
+        )
 
     async def encode_memory(self, context: dict, scope: Any | None = None) -> None:
         await self._encoder.encode_memory(context, scope=scope)
@@ -410,6 +478,35 @@ class MemoryManager:
 
     async def _enrich_memory_async(self, mem_id: int, exchanges: list[dict]) -> None:
         return await self._encoder._enrich_memory_async(mem_id, exchanges)
+
+    async def _run_enrichment_pipeline(
+        self,
+        mem_id: int,
+        summary: str,
+        scope: Any,
+        importance: float,
+        emotion: str,
+        exchanges: list[dict],
+    ) -> None:
+        return await self._encoder._run_enrichment_pipeline(
+            mem_id, summary, scope, importance, emotion, exchanges
+        )
+
+    async def classify_pending_memories(
+        self, scope: Any, limit: int = 50
+    ) -> int:
+        """Classify one bounded scope batch serially using the normal pipeline hook."""
+        import config as _cfg
+
+        if not getattr(_cfg, "MEMORY_TYPE_ENRICHMENT_ENABLED", False):
+            return 0
+        rows = await self.memory.get_pending_memory_classifications(
+            scope=scope, limit=limit
+        )
+        for row in rows:
+            exchanges = [{"role": "user", "content": row["summary"]}]
+            await self._enrich_memory_async(row["id"], exchanges)
+        return len(rows)
 
     def _estimate_importance(self, exchanges: list[dict], context: dict) -> float:
         return self._encoder._estimate_importance(exchanges, context)

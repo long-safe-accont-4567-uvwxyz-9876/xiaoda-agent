@@ -9,20 +9,23 @@ if sys.platform == "win32":
         except (AttributeError, ValueError):
             pass
 
-import time
-import random
 import asyncio
+import random
 import threading
+import time
 from collections.abc import Callable
+
 from loguru import logger
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from dotenv import load_dotenv
+
 # 与全局 dotenv 策略统一：显式脚本目录 .env（不依赖 CWD）+ override=False
 load_dotenv(os.path.join(os.path.dirname(os.path.abspath(__file__)), ".env"), override=False)
 
 from utils.logging_config import setup_logging
+
 setup_logging()
 logger.remove()
 logger.add(
@@ -31,8 +34,9 @@ logger.add(
     level="WARNING",
 )
 
-import cli_client
 import contextlib
+
+import cli_client
 
 # ── prompt_toolkit 支持（/ 弹出下拉 + 菜单选择）──────────────
 # 缺失时优雅回退到 readline 路径，不崩溃（旧安装包兼容）。
@@ -299,7 +303,7 @@ STATUS_MAP = {
 
 # IP-safe: 动态从 config/agents/*.json 读取 display_name，避免硬编码原名
 try:
-    from config import get_agent_display_name, agent_names
+    from config import agent_names, get_agent_display_name
     from emotion.emoji_config import get_ack_message
     AGENT_NAMES = {name: get_agent_display_name(name) for name in agent_names()}
     # ACK 消息使用自定义配置（随心即言）

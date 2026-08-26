@@ -1,16 +1,17 @@
 """时间感知增强测试：_try_temporal_search 加入 scope 过滤 + EntityStore last_seen 更新"""
-import asyncio
-import time
-import pytest
 import sys
+import time
 from pathlib import Path
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import MagicMock
+
+import pytest
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from memory.scope import Scope
 from memory.entity_extractor import Entity
 from memory.entity_store import EntityStore, compute_entity_boost
+from memory.retrieval.pipeline import RetrievalEngine
+from memory.scope import Scope
 
 
 @pytest.fixture
@@ -106,6 +107,42 @@ class TestTemporalSearchScoped:
         assert len(results) >= 1
         for r in results:
             assert r["is_raw"] == 0
+
+    async def test_conversation_logs_isolate_private_and_each_group(self, temporal_db):
+        rows = (
+            ("alice", "private-1", "private one"),
+            ("alice", "private-2", "private two"),
+            ("qq_group:audit-a", "qq_group:group-a", "group a"),
+            ("qq_group:audit-b", "qq_group:group-b", "group b"),
+        )
+        for user_id, session_id, message in rows:
+            await temporal_db.insert_conversation_log(
+                user_id=user_id,
+                source="qq_group" if session_id.startswith("qq_group:") else "qq_c2c",
+                user_message=message,
+                assistant_reply="reply",
+                session_id=session_id,
+            )
+
+        manager = MagicMock()
+        manager.memory = temporal_db.memory
+        engine = RetrievalEngine(manager)
+        private = await engine._search_conversation_logs(
+            0, time.time() + 1, Scope.personal("alice", "private-2"), 10,
+            conv_user_id="alice",
+        )
+        group_a = await engine._search_conversation_logs(
+            0, time.time() + 1, Scope.group("alice", "group-a"), 10,
+            conv_user_id="alice",
+        )
+        group_b = await engine._search_conversation_logs(
+            0, time.time() + 1, Scope.group("alice", "group-b"), 10,
+            conv_user_id="alice",
+        )
+
+        assert {row["session_id"] for row in private} == {"private-1", "private-2"}
+        assert [row["session_id"] for row in group_a] == ["qq_group:group-a"]
+        assert [row["session_id"] for row in group_b] == ["qq_group:group-b"]
 
 
 class TestEntityLastSeenUpdate:

@@ -1,15 +1,14 @@
 """EntityStore 测试：实体存储 + 反向链接 + recall_by_entities + Entity Boost"""
-import asyncio
-import time
-import pytest
 import sys
+import time
 from pathlib import Path
-from unittest.mock import AsyncMock, MagicMock
+
+import pytest
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from memory.entity_store import EntityStore, ENTITY_BOOST_WEIGHT, compute_entity_boost
 from memory.entity_extractor import Entity
+from memory.entity_store import ENTITY_BOOST_WEIGHT, EntityStore, compute_entity_boost
 from memory.scope import Scope
 
 

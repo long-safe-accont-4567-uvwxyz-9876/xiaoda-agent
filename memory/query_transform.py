@@ -1,20 +1,57 @@
 # query_transform.py — 查询改写与扩展（使用硅基流动免费模型，不占用主模型配额）
-from typing import Any, ClassVar
-import os
 import asyncio
 import hashlib
+import os
+import re
 import time
 from collections import OrderedDict
+from typing import Any, ClassVar
+
 import httpx
 from loguru import logger
 
-from utils.http_pool import get_shared_client
 from utils.free_model_backend import call_local_model
-
+from utils.http_pool import get_shared_client
 
 # G15: sentinel 用于区分"缓存未命中"和"命中 None"
 # 不能用 None 作为 sentinel，因为 None 是合法的缓存值（LLM 可能返回 None）
 _CACHE_MISS = object()
+
+
+REWRITE_PROMPT = """将以下用户查询改写为更适合文档检索的关键词查询。
+要求：
+1. 保留核心语义，去除口语化表达
+2. 推断可能的关联关键词并补充（如"饮食偏好"补充"香菜 豆浆 川菜 咖啡"，"后端代码"补充"Python FastAPI SQLAlchemy Docker"）
+3. 只输出改写后的查询，不要解释
+
+原始查询: {original_query}
+对话上下文: {context_block}
+
+改写后的查询:"""
+
+EXPAND_PROMPT = """为以下查询生成 {n} 个不同视角的搜索查询，用于提高检索召回率。
+每行一个查询，不要编号，不要解释。
+
+原始查询: {query}"""
+
+HYDE_PROMPT = """请根据以下问题，写一段简短的假设性答案（50-100字）。
+不需要完全正确，只需要语义上与答案文档接近。
+只输出答案文本，不要解释。
+
+问题: {query}
+"""
+
+CLASSIFY_PROMPT = "请分类以下查询的意图类型（temporal/factual/chat/multi-hop），只输出类型名称：\n查询: {query}"
+
+# HyDE 子集门控（HYDE_SUBSET_MODE=non_exact 时生效）：
+# 精确标识符/数字串类查询依赖词法通道，HyDE 假设文档只会引入噪声（先验 -25%）
+_EXACT_TOKEN_RE = re.compile(r"[A-Za-z][A-Za-z0-9_./-]{2,}")
+_NUMERIC_RUN_RE = re.compile(r"\d{4,}")
+_CJK_RE = re.compile(r"[\u4e00-\u9fff]")
+_WEEKDAY_TIME_RE = re.compile(
+    r"[周星期][一二三四五六日天末]|\d{1,2}\s*月|\d{1,2}\s*[点时]"
+    r"|上午|下午|晚上|凌晨|哪一?[年月日天]"
+)
 
 
 class QueryTransformer:
@@ -34,6 +71,10 @@ class QueryTransformer:
 
     # 意图分类关键词（规则匹配快速路径）
     TEMPORAL_KEYWORDS: ClassVar[set[str]] = {"昨天", "前天", "今天", "上周", "上个月", "刚才", "之前", "那次", "那天", "那次对话", "刚刚", "小时前", "分钟前"}
+    # HyDE 门控用：标识符类名词（出现即视为 exact 意图）
+    IDENTIFIER_NOUNS: ClassVar[set[str]] = {
+        "号码", "编号", "证件", "护照", "密码", "账号", "工号", "单号",
+    }
     CHAT_KEYWORDS: ClassVar[set[str]] = {
         # 问候类
         "你好", "嗨", "谢谢", "再见", "哈哈", "早安", "晚安", "在吗", "在不在",
@@ -202,16 +243,25 @@ class QueryTransformer:
         if cached is not _CACHE_MISS:
             return cached
 
-        prompt = f"""将以下用户查询改写为更适合文档检索的关键词查询。
-要求：
-1. 保留核心语义，去除口语化表达
-2. 推断可能的关联关键词并补充（如"饮食偏好"补充"香菜 豆浆 川菜 咖啡"，"后端代码"补充"Python FastAPI SQLAlchemy Docker"）
-3. 只输出改写后的查询，不要解释
+        context_block = context[-200:] if context else '无'
+        override = None
+        try:
+            from web.prompt_profile_repository import try_resolve
 
-原始查询: {original_query}
-对话上下文: {context[-200:] if context else '无'}
-
-改写后的查询:"""
+            override = try_resolve("query.rewrite", {
+                "original_query": original_query, "context_block": context_block,
+            })
+        except Exception:
+            override = None
+        if override is not None:
+            prompt = override[1]
+        else:
+            # 防御性加固：查询/上下文可能含 {} 字符，用 str.replace 替代 f-string
+            prompt = (
+                REWRITE_PROMPT
+                .replace("{original_query}", original_query)
+                .replace("{context_block}", context_block)
+            )
 
         # CodeRabbit #2: 加 asyncio 层超时防线（httpx 4s 之外的兜底，防止
         # 客户端重试/连接建立慢导致 retrieve_memories 整体超时）。与 hyde/classify 一致。
@@ -255,10 +305,23 @@ class QueryTransformer:
         if cached is not _CACHE_MISS:
             return list(cached)  # 返回副本，避免外部修改污染缓存
 
-        prompt = f"""为以下查询生成 {n} 个不同视角的搜索查询，用于提高检索召回率。
-每行一个查询，不要编号，不要解释。
+        override = None
+        try:
+            from web.prompt_profile_repository import try_resolve
 
-原始查询: {query}"""
+            override = try_resolve("query.expand", {
+                "n": str(n), "query": query,
+            })
+        except Exception:
+            override = None
+        if override is not None:
+            prompt = override[1]
+        else:
+            prompt = (
+                EXPAND_PROMPT
+                .replace("{n}", str(n))
+                .replace("{query}", query)
+            )
 
         # CodeRabbit #2: 加 asyncio 层超时防线，超时降级返回 [query]
         # CodeRabbit #D: 超时降级后继续走缓存流程（与 result=None 一致）
@@ -292,6 +355,28 @@ class QueryTransformer:
                         ttl=None if result else self.TRANSFORM_FALLBACK_TTL)
         return list(final)  # 返回副本
 
+    def should_use_hyde(self, query: str) -> bool:
+        """HyDE 子集门控（HYDE_SUBSET_MODE=non_exact 时由向量通道调用）。
+
+        精确标识符/数字串/时间词/多跳连接词类查询依赖词法通道命中，
+        HyDE 假设文档只会引入噪声（先验实测 Recall@5 -25%）→ 返回 False。
+        中文查询含 ASCII 技术词（中英混排）同样视为 exact 形态。
+        """
+        if _NUMERIC_RUN_RE.search(query):
+            return False
+        if any(kw in query for kw in self.TEMPORAL_KEYWORDS):
+            return False
+        if _WEEKDAY_TIME_RE.search(query):
+            return False
+        if any(kw in query for kw in self.MULTIHOP_KEYWORDS):
+            return False
+        if _CJK_RE.search(query):
+            if any(kw in query for kw in self.IDENTIFIER_NOUNS):
+                return False
+            if _EXACT_TOKEN_RE.search(query):
+                return False
+        return True
+
     async def generate_hyde_document(self, query: str, context: str = "") -> str | None:
         """生成假设答案文档用于 HyDE 向量混合
 
@@ -307,12 +392,17 @@ class QueryTransformer:
         if cached is not _CACHE_MISS:
             return cached
 
-        prompt = f"""请根据以下问题，写一段简短的假设性答案（50-100字）。
-不需要完全正确，只需要语义上与答案文档接近。
-只输出答案文本，不要解释。
+        override = None
+        try:
+            from web.prompt_profile_repository import try_resolve
 
-问题: {query}
-"""
+            override = try_resolve("query.hyde", {"query": query})
+        except Exception:
+            override = None
+        if override is not None:
+            prompt = override[1]
+        else:
+            prompt = HYDE_PROMPT.replace("{query}", query)
         try:
             result = await asyncio.wait_for(
                 self._call_free_model(prompt, temperature=0.3, max_tokens=100),
@@ -374,7 +464,17 @@ class QueryTransformer:
             llm_classify = False
 
         if llm_classify and self._available:
-            prompt = f"请分类以下查询的意图类型（temporal/factual/chat/multi-hop），只输出类型名称：\n查询: {query}"
+            override = None
+            try:
+                from web.prompt_profile_repository import try_resolve
+
+                override = try_resolve("query.classify", {"query": query})
+            except Exception:
+                override = None
+            if override is not None:
+                prompt = override[1]
+            else:
+                prompt = CLASSIFY_PROMPT.replace("{query}", query)
             try:
                 _cfg_timeout = getattr(_cfg, "INTENT_CLASSIFY_TIMEOUT", 5.0)
                 result = await asyncio.wait_for(

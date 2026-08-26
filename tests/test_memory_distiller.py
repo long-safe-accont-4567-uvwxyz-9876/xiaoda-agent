@@ -4,10 +4,11 @@
 """
 import sys
 from pathlib import Path
+
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-import unittest
 import asyncio
+import unittest
 from unittest.mock import AsyncMock, MagicMock
 
 from memory.memory_distiller import MemoryDistiller
@@ -42,6 +43,15 @@ class TestMemoryDistiller(unittest.TestCase):
         result = asyncio.run(self.distiller.distill(self._sample_memories()))
         self.assertEqual(result, "router摘要")
         self.mock_router.route.assert_awaited_once()
+
+    def test_distill_off_does_not_fallback_to_router(self):
+        self.distiller.set_backend("off")
+        self.mock_router.route = AsyncMock(return_value="must-not-run")
+
+        result = asyncio.run(self.distiller.distill(self._sample_memories()))
+
+        self.assertEqual(result, "")
+        self.mock_router.route.assert_not_awaited()
 
     def test_distill_empty_memories(self):
         """空列表返回空字符串"""

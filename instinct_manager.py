@@ -1,12 +1,12 @@
-import os
-import time
 import asyncio
-from utils.similarity import ratio as text_ratio
+import time
+
 from loguru import logger
 
 from db.database import DatabaseManager
 from model_router import ModelRouter
 from utils.free_model_backend import FreeModelBackend
+from utils.similarity import ratio as text_ratio
 
 # LLM 思考过程特征词 — 包含这些词的行不是有效的本能
 _LLM_THINKING_KEYWORDS = {
@@ -28,6 +28,7 @@ _PROMPT_EXAMPLE_FRAGMENTS = {
 
 # 无效本能模式（正则）— 拒绝过短、模板化、或非用户偏好类内容
 import re as _re
+
 _INVALID_INSTINCT_PATTERNS = [
     _re.compile(r"^用户行为模式"),     # 模板化标题
     _re.compile(r"^用户提问"),          # 单次行为非偏好
@@ -106,19 +107,34 @@ class InstinctManager:
         await self.db._conn.commit()
         logger.info("instinct.table_ready")
 
-    async def extract_instincts(self, user_input: str, reply: str, session_id: str) -> None:
-        """对话结束后异步提取 Instinct，使用 LLM 分析对话提取可复用模式"""
-        if not self._available or self._free.disabled:
-            return
+    @staticmethod
+    def _render_extract_prompt(user_input: str, reply: str) -> str:
+        """渲染本能提取提示词：production override 优先，缺省回退内置模板。"""
+        try:
+            from web.prompt_profile_repository import try_resolve
+
+            override = try_resolve(
+                "instinct.extract", {"user_input": user_input, "reply": reply},
+            )
+        except Exception:
+            override = None
+        if override is not None:
+            return override[1]
         # 防御性加固：用 str.replace 替代 str.format
         # 根因：user_input/reply 可能含 {} / {0} 等字符（JSON/Python 代码/正则），
         # .format() 会抛 IndexError/KeyError 导致 extract_instincts 失败（与
         # profile_learner.insight_failed 同类 bug）。
-        prompt = (
+        return (
             EXTRACT_PROMPT
             .replace("{user_input}", user_input)
             .replace("{reply}", reply)
         )
+
+    async def extract_instincts(self, user_input: str, reply: str, session_id: str) -> None:
+        """对话结束后异步提取 Instinct，使用 LLM 分析对话提取可复用模式"""
+        if not self._available or self._free.disabled:
+            return
+        prompt = self._render_extract_prompt(user_input, reply)
         messages = [{"role": "user", "content": prompt}]
 
         result = await self._call_llm_for_instincts(messages)
@@ -157,7 +173,7 @@ class InstinctManager:
         _llm_t0 = time.time()
         result = await self._call_free_model(messages, temperature=0.3, max_tokens=800)
         _free_ms = int((time.time() - _llm_t0) * 1000)
-        if result is None:
+        if result is None and self._free.backend == "api":
             try:
                 _route_t0 = time.time()
                 result = await asyncio.wait_for(

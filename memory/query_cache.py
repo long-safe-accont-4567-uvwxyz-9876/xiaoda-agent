@@ -47,8 +47,8 @@ class QueryCache:
         self._threshold = float(threshold)
         self._max_size = int(max_size)
         self._ttl = int(ttl)
-        # 每个条目: {"vec": list[float], "results": list[dict], "ts": float}
-        self._cache: OrderedDict[str, dict] = OrderedDict()
+        # 每个条目: {"namespace": str, "vec": list[float], "results": list[dict], "ts": float}
+        self._cache: OrderedDict[tuple[str, str], dict] = OrderedDict()
         self._lock = asyncio.Lock()
         # 统计指标
         self.hits: int = 0
@@ -107,14 +107,15 @@ class QueryCache:
             return 0.0
         return dot / (na * nb)
 
-    async def get(self, query: str) -> list[dict] | None:
-        """查询缓存。
+    async def get(self, namespace: str, query: str | None = None) -> list[dict] | None:
+        """查询缓存，只在同一 namespace 内执行语义匹配。
 
-        对 query 生成嵌入向量，遍历缓存条目计算余弦相似度，
-        >= threshold 且未过 TTL 则返回缓存的 results（LRU 命中时更新访问顺序）。
-        嵌入函数不可用、向量生成失败、无命中均返回 None。
-        顺便清理已过期的条目。
+        ``get(query)`` 保留为默认 namespace 的兼容调用；生产检索应使用
+        ``get(namespace, query)``，避免不同用户或 Agent 的相似查询互相命中。
         """
+        if query is None:
+            query = namespace
+            namespace = ""
         self.total_queries += 1
         if not self._embed_func:
             self.misses += 1
@@ -126,15 +127,17 @@ class QueryCache:
             return None
 
         now = time.time()
-        best_key: str | None = None
+        best_key: tuple[str, str] | None = None
         best_score: float = 0.0
-        expired_keys: list[str] = []
+        expired_keys: list[tuple[str, str]] = []
 
         async with self._lock:
             for key, entry in self._cache.items():
                 # TTL 过期检查
                 if (now - entry["ts"]) > self._ttl:
                     expired_keys.append(key)
+                    continue
+                if entry["namespace"] != namespace:
                     continue
                 score = self._cosine_similarity(query_vec, entry["vec"])
                 if score >= self._threshold and score > best_score:
@@ -159,15 +162,24 @@ class QueryCache:
             self.misses += 1
             return None
 
-    async def put(self, query: str, results: list[dict]) -> None:
+    async def put(
+        self,
+        namespace: str,
+        query: str | list[dict],
+        results: list[dict] | None = None,
+    ) -> None:
         """写入缓存。
 
-        嵌入函数不可用、results 为空、向量生成失败时不存。
-        缓存已满时淘汰最久未访问的条目（LRU，头部出队）。
-        同一 query 重复写入时更新并刷新访问顺序。
-
-        注意: 对 results 做深拷贝，避免调用方后续修改 dict 字段污染缓存。
+        ``put(query, results)`` 保留为默认 namespace 的兼容调用；生产检索应使用
+        ``put(namespace, query, results)``。namespace 不参与 embedding，只用于隔离
+        语义候选集合。
         """
+        if results is None:
+            results = query if isinstance(query, list) else []
+            query = namespace
+            namespace = ""
+        if not isinstance(query, str):
+            return
         if not self._embed_func or not results:
             return
 
@@ -180,16 +192,35 @@ class QueryCache:
         safe_results = copy.deepcopy(results)
 
         async with self._lock:
-            key = query
+            key = (namespace, query)
             if key in self._cache:
                 # 已存在：先移到末尾，再覆盖（保持末尾位置）
                 self._cache.move_to_end(key)
             self._cache[key] = {
+                "namespace": namespace,
                 "vec": query_vec,
                 "results": safe_results,
                 "ts": time.time(),
             }
             # LRU 淘汰：超出容量时从头部弹出最久未访问
+            while len(self._cache) > self._max_size:
+                self._cache.popitem(last=False)
+
+    async def reconfigure(
+        self,
+        *,
+        threshold: float | None = None,
+        max_size: int | None = None,
+        ttl: int | None = None,
+    ) -> None:
+        """热更新缓存参数；缩容时立即执行 LRU 淘汰。"""
+        async with self._lock:
+            if threshold is not None:
+                self._threshold = float(threshold)
+            if max_size is not None:
+                self._max_size = max(1, int(max_size))
+            if ttl is not None:
+                self._ttl = max(0, int(ttl))
             while len(self._cache) > self._max_size:
                 self._cache.popitem(last=False)
 

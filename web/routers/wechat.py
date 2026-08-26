@@ -23,12 +23,12 @@ from typing import Any
 from fastapi import APIRouter, Depends, Query, Request
 from loguru import logger
 
-from web.schemas import Envelope
-from web.routers.auth import get_current_user
-from ilink_client import ILinkClient
-from wechat_bot_adapter import save_credentials, load_credentials, clear_credentials
 from channel_adapter_base import upsert_env_file_line
 from config import ENV_PATH
+from ilink_client import ILinkClient
+from web.routers.auth import get_current_user
+from web.schemas import Envelope
+from wechat_bot_adapter import clear_credentials, load_credentials, save_credentials
 
 # 需认证的路由：所有端点默认走 get_current_user 依赖
 router = APIRouter(tags=["wechat"], dependencies=[Depends(get_current_user)])
@@ -66,8 +66,9 @@ def _save_master_wechat_id(user_id: str) -> None:
             core = getattr(_web_app, "state", None) and getattr(_web_app.state, "core", None)
             if core is not None and getattr(core, "security", None) is not None:
                 core.security.add_owner_id(user_id)
-        except Exception as e:  # noqa: BLE001
-            logger.debug("wechat.refresh_runtime_owner_failed error={}", str(e)[:120])
+        except (ImportError, AttributeError, RuntimeError) as e:
+            # 配置已持久化但运行时未生效——重启前行为不一致，必须可见（批次 B）
+            logger.warning("wechat.refresh_runtime_owner_failed error={}", str(e)[:120])
     except Exception as e:  # noqa: BLE001
         logger.warning("wechat.save_master_wechat_id_failed error={}", str(e)[:200])
 
@@ -105,8 +106,9 @@ def _generate_qr_image_base64(data: str) -> str:
 
     返回 data URI 格式，前端可直接用 <img src="..."> 显示。
     """
-    import io
     import base64
+    import io
+
     import qrcode
 
     qr = qrcode.QRCode(
@@ -354,6 +356,11 @@ async def start_bot(request: Request) -> Any:
 
     从凭证文件加载凭证，创建 WeChatBotAdapter 并调用 start()。
     start() 内部会加载凭证、初始化 ILinkClient、启动长轮询任务。
+
+    T4（僵尸 adapter 修复）：start() 返回结构化 readiness dict
+    {ok, connected, polling, error}；仅在 readiness.ok 时才把 adapter 挂载到
+    app.state.wechat_bot——失败时如实返回失败详情，绝不挂载未就绪实例
+    （旧实现无条件挂载并返回 success=True，产生 /wechat/stop 无法停止的僵尸）。
     """
     async with _get_lifecycle_lock():
         # 先停止已有的 bot 实例（避免重复轮询）
@@ -389,19 +396,33 @@ async def start_bot(request: Request) -> Any:
             )
 
         try:
-            await adapter.start()
-            request.app.state.wechat_bot = adapter
-            logger.info("wechat.bot.started")
-            return Envelope(data={"success": True})
+            readiness = await adapter.start() or {}
         except Exception as e:
             logger.error(
                 "wechat.start.failed error={} type={}",
                 str(e)[:200], type(e).__name__, exc_info=True,
             )
+            request.app.state.wechat_bot = None
             return Envelope(
                 ok=False,
                 error={"code": "START_FAILED", "message": f"启动失败: {e}"},
             )
+        # T4：以结构化 readiness 判定成败；失败不挂载、如实返回详情
+        if not readiness.get("ok"):
+            detail = readiness.get("error") or "适配器未就绪（connected/polling 未达成）"
+            logger.warning(
+                "wechat.start.not_ready connected={} polling={} error={}",
+                bool(readiness.get("connected")), bool(readiness.get("polling")),
+                str(detail)[:200],
+            )
+            request.app.state.wechat_bot = None
+            return Envelope(
+                ok=False,
+                error={"code": "START_FAILED", "message": f"启动失败: {detail}"},
+            )
+        request.app.state.wechat_bot = adapter
+        logger.info("wechat.bot.started")
+        return Envelope(data={"success": True})
 
 
 @router.post("/wechat/stop", response_model=Envelope[dict])

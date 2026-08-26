@@ -1,7 +1,8 @@
 # tests/test_behavioral_signal.py
+
 import pytest
-import asyncio
-from core.behavioral_signal import SignalEntry, BehavioralSignalStream
+
+from core.behavioral_signal import BehavioralSignalStream
 
 
 @pytest.mark.asyncio

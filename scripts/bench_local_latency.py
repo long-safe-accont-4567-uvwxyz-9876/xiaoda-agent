@@ -20,8 +20,6 @@ import tempfile
 import time
 from pathlib import Path
 
-import numpy as np
-
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
@@ -74,8 +72,8 @@ def main() -> int:
 
     # 按 token 长度分桶（与生产路由逻辑一致）
     lens = provider._token_lens(texts)
-    short_texts = [t for t, l in zip(texts, lens) if l <= provider._threshold]
-    long_texts = [t for t, l in zip(texts, lens) if l > provider._threshold]
+    short_texts = [t for t, n in zip(texts, lens) if n <= provider._threshold]
+    long_texts = [t for t, n in zip(texts, lens) if n > provider._threshold]
     print(f"[data] 总文本={len(texts)} 短={len(short_texts)} 长={len(long_texts)} "
           f"token长度范围={min(lens)}~{max(lens)}", flush=True)
 
@@ -126,7 +124,7 @@ def main() -> int:
     e2e = short_lat + long_lat + search_lat
     if e2e:
         mean = statistics.mean(e2e)
-        print(f"\n=== 汇总 ===", flush=True)
+        print("\n=== 汇总 ===", flush=True)
         print(f"[端到端 embed+search] mean={mean:.1f}ms "
               f"p95={sorted(e2e)[int(len(e2e)*0.95)]:.1f}ms", flush=True)
         if short_lat and long_lat:

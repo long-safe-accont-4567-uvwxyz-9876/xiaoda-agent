@@ -49,8 +49,8 @@ def _extract_token(prompt: str) -> str:
 
 def test_canary_loop_inject_scan_redacts():
     """注入 → 扫描闭环：泄露的 token 被替换为 [REDACTED]。"""
-    from security.canary import get_canary_detector
     from prompt_builder import build_system_prompt
+    from security.canary import get_canary_detector
 
     prompt = build_system_prompt(address_term="爸爸")
     token = _extract_token(prompt)
@@ -69,8 +69,8 @@ def test_canary_loop_inject_scan_redacts():
 
 def test_canary_loop_clean_output_unchanged():
     """不含 token 的输出原样返回。"""
-    from security.canary import get_canary_detector
     from prompt_builder import build_system_prompt
+    from security.canary import get_canary_detector
 
     build_system_prompt(address_term="爸爸")  # 生成并注入 token
     detector = get_canary_detector()
@@ -84,8 +84,8 @@ def test_canary_loop_clean_output_unchanged():
 def test_scene_aware_prompt_injects_canary(monkeypatch):
     """主路径 build_scene_aware_prompt 也注入 canary token。"""
     import prompt_builder
-    from security.canary import get_canary_detector
     from prompt_builder import build_scene_aware_prompt
+    from security.canary import get_canary_detector
 
     prompt_builder.reset_scene_cache()
     monkeypatch.setattr(

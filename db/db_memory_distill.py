@@ -6,6 +6,7 @@ Mixin 组合：MemoryDB 继承 DistillPortraitMixin 获得记忆 enrichment、
 """
 from __future__ import annotations
 
+import asyncio
 import time
 
 from loguru import logger
@@ -59,6 +60,62 @@ class DistillPortraitMixin:
             return True
         except Exception as e:
             logger.warning("db_memory.enrichment_update_failed", error=str(e))
+            return False
+
+    async def merge_memory_knowledge_state(
+        self,
+        memory_id: int,
+        *,
+        summary: str,
+        metadata_json: str,
+        memory_type: str,
+        importance: float,
+        phase: str,
+        stability: float,
+        reinforcement_count: int,
+        auto_commit: bool = True,
+        strict: bool = False,
+    ) -> bool:
+        try:
+            cursor = await self._conn.execute(
+                "UPDATE episodic_memories SET summary=?, metadata_json=?, "
+                "memory_type=?, importance=?, phase=?, stability=?, "
+                "reinforcement_count=? WHERE id=? AND is_raw=0",
+                (
+                    summary,
+                    metadata_json,
+                    memory_type,
+                    importance,
+                    phase,
+                    stability,
+                    reinforcement_count,
+                    memory_id,
+                ),
+            )
+            if cursor.rowcount <= 0:
+                if auto_commit:
+                    await self._conn.commit()
+                return False
+            await self._sync_fts(
+                memory_id,
+                summary,
+                "db_memory.knowledge_merge_fts_failed",
+                auto_commit=False,
+                strict=strict,
+            )
+            if auto_commit:
+                await self._conn.commit()
+            return True
+        except asyncio.CancelledError:
+            if auto_commit:
+                await asyncio.shield(self._conn.rollback())
+            raise
+        except Exception as e:
+            logger.warning("db_memory.knowledge_merge_failed", error=str(e))
+            if auto_commit:
+                await self._conn.rollback()
+            if strict:
+                raise
             return False
 
     async def insert_portrait(self, content: str, version: int = 1,
@@ -200,14 +257,36 @@ class DistillPortraitMixin:
         return cursor.lastrowid
 
     async def get_memory_summaries(self, limit: int = 5) -> list[dict]:
-        """获取最近的蒸馏摘要（按时间降序）"""
+        """获取最近的蒸馏摘要（按时间降序）。
+
+        enforce 对账联动：摘要无逐条溯源，一旦有已执行（executed=1）的消解动作，
+        早于该动作时间的聚合摘要可能携带已 superseded 的旧事实——读时过滤，
+        待维护蒸馏用新可见性重生成。shadow（executed=0 提案）不过滤；
+        旧库无对账表时退化为不过滤。
+        """
         try:
-            cursor = await self._read_conn().execute(
-                """SELECT id, summary_text, created_at, memory_count
-                   FROM memory_summaries
-                   ORDER BY created_at DESC LIMIT ?""",
-                (limit,),
-            )
+            cutoff: float | None = None
+            try:
+                row = await (await self._read_conn().execute(
+                    "SELECT MAX(created_at) AS latest FROM memory_reconciliation_actions "
+                    "WHERE executed=1"
+                )).fetchone()
+                if row is not None:
+                    latest = row["latest"] if not isinstance(row, (tuple, list)) else row[0]
+                    if latest is not None:
+                        cutoff = float(latest)
+            except Exception:
+                cutoff = None
+
+            query = """SELECT id, summary_text, created_at, memory_count
+                       FROM memory_summaries"""
+            params: list = []
+            if cutoff is not None:
+                query += " WHERE created_at > ?"
+                params.append(cutoff)
+            query += " ORDER BY created_at DESC LIMIT ?"
+            params.append(limit)
+            cursor = await self._read_conn().execute(query, params)
             rows = await cursor.fetchall()
             return [dict(r) for r in rows]
         except Exception as e:

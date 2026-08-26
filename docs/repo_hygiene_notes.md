@@ -145,3 +145,40 @@ web 侧已追踪的墙纸（`web/frontend/public/assets/wallpapers/*`）不受�
   `tests/test_sensitive_file_permission_correction.py`、
   `tests/test_whitelist_shell_metachar.py` — 新测试源码。
 - `security_audit_report.md` — 生成的审计报告文档，是否入库由维护者决定。
+
+## 5. 多平台兼容性审计附记（2026-08-26，只读核查+定点修复）
+
+### 5.1 GitHub Actions 实况（API 匿名核查）
+
+- **Actions 已启用且三平台矩阵真实在跑**：build-release.yml 矩阵含
+  windows-x64 / linux-x86_64 / linux-arm64（ubuntu-24.04-arm），
+  win32 守卫测试有 CI 补位——此前"仓库在 Gitee、workflows 不执行"的
+  CLAUDE.md 表述已过时（现双远程，GitHub 侧活跃）。历史运行 2335 次。
+- **但 2026-08-23 05:29 后全部停摆**：此后所有 push（含 08-26 的
+  ea230ca3 十提交）零触发。原因待查（Actions 配额/账号状态/推送方式），
+  **期间合入的代码未经过任何 CI 验证**。
+- **最后一次 build-release（run 32620493732, 08-23）三构建 job 全红**：
+  windows-x64 / linux-x86_64 / linux-arm64 均挂在 "Build with PyInstaller"
+  步骤；test job 的 "Run critical tests (strict)" 也失败；
+  仅 docker multi-arch 成功，release job 跳过。
+  **当前没有任何平台有新鲜的已验证发布工件**。
+
+### 5.2 定点结论
+
+- `db/database.py _detect_fs_type` 的 `/proc/mounts`：**误报**。
+  darwin 上 FileNotFoundError ⊂ OSError 被 :59 捕获返回空串 → 按
+  非 FAT 走 WAL，与 APFS 能力一致。已补 docstring 说明平台覆盖语义。
+- Windows 长路径：量化后风险低。最坏路径 = 安装根(~55) + 仓库名(≤45)
+  + 文件名(≤25) ≈ 125 字符 << MAX_PATH 260；下载目录经 storage_policy
+  校验。不引入 `\\?\` 处理，登记备查。
+- macOS：定位为尽力而为（源码有 darwin 分支、无工件无 CI），已在
+  docs/local-ai-platform.md「适用范围」显式声明。
+- skipif reason 规范：约定已写入 tests/conftest.py 头部注释；
+  既有 15 处 reason 语义合格，不机械改写。
+
+### 5.3 待办（人工决策）
+
+1. **查明 Actions 为何 08-23 后停摆并恢复**——这是当前多平台验证的
+   唯一防线，优先级高于一切代码修复。
+2. 排查 PyInstaller 三平台构建失败的共同根因（08-21 成功 → 08-23 全红，
+   疑似依赖引入或 spec 收集问题；rust_core 未入 CI 构建，属已知豁免）。

@@ -14,32 +14,33 @@ from __future__ import annotations
 import asyncio
 import json
 import os
-import random
-import sqlite3
 import threading
 import time
 import weakref
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Optional
 
 from loguru import logger
 
+from config_constants import env_flag
+
 try:
-    from utils.atomic_write import atomic_write, _restrict_file_permissions_windows
+    from utils.atomic_write import _restrict_file_permissions_windows, atomic_write
 except Exception:  # pragma: no cover
     atomic_write = None  # type: ignore[assignment]
     def _restrict_file_permissions_windows(path):  # type: ignore[no-redef]
         return
 
-from ilink_client import ILinkClient, SessionExpiredError, ILinkRetError
-
 from channel_adapter_base import (
     ChannelAdapterBase,
+    CoreProcessRequest,
+    TTLCache,
     clear_json_credentials,
     load_json_credentials,
     save_json_credentials,
 )
-
+from ilink_client import ILinkClient, ILinkRetError, SessionExpiredError
 
 # ============================================================================
 # 常量定义
@@ -113,13 +114,33 @@ ILINK_DEFAULT_BASE_URL = "https://ilinkai.weixin.qq.com"
 _ACTIVE_BOT: "WeChatBotAdapter | None" = None
 
 
+def _get_ctx_cache(bot: "WeChatBotAdapter") -> TTLCache:
+    values = bot._ctx_by_user
+    stamps = getattr(bot, "_ctx_by_user_ts", None)
+    if stamps is None:
+        now = time.time()
+        stamps = {key: now for key in values}
+        bot._ctx_by_user_ts = stamps
+    ttl = getattr(bot, "_CTX_TTL", 3600)
+    max_size = getattr(bot, "_CTX_MAX", 256)
+    cache = getattr(bot, "_ctx_cache", None)
+    if cache is None or cache.values is not values or cache.stamps is not stamps:
+        cache = TTLCache(values, stamps, ttl=ttl, max_size=max_size)
+        bot._ctx_cache = cache
+    return cache
+
+
 def get_active_bot() -> "WeChatBotAdapter | None":
     """返回当前活跃的微信 adapter 实例；web 层经此读取，勿直读模块私有状态。"""
     return _ACTIVE_BOT
 
 
-async def send_proactive_message(text: str) -> bool:
+async def send_proactive_message(text: str,
+                                 sticker_path: str | Path | None = None) -> bool:
     """向最近微信私聊用户主动发一条消息（供 web/greeting_scheduler 等调用）。
+
+    可选携带表情包：与主对话一致——先发正文，再单发一张纯图表情包
+    （iLink 协议不支持图文合并；表情发送失败不回退文本、不中断投递）。
 
     微信 iLink 协议要求 context_token 才能路由消息，该 token 只能在
     bot 轮询收到用户消息时缓存。因此主动发送依赖活跃 bot 实例
@@ -135,7 +156,7 @@ async def send_proactive_message(text: str) -> bool:
         raise RuntimeError(
             "还没有可用的微信用户上下文（等用户先在微信上发一条消息，Bot 收到后才能主动回复）"
         )
-    target_token = bot._ctx_by_user.get(bot._last_from_user_id, "")
+    target_token = _get_ctx_cache(bot).get(bot._last_from_user_id, "")
     if not target_token:
         raise RuntimeError(
             "还没有可用的微信用户上下文（等用户先在微信上发一条消息，Bot 收到后才能主动回复）"
@@ -143,6 +164,20 @@ async def send_proactive_message(text: str) -> bool:
     ok = await bot.send_message(text)
     if not ok:
         raise RuntimeError("微信消息发送失败（ret != 0）")
+    _sticker = Path(sticker_path) if sticker_path else None
+    if _sticker is not None and _sticker.exists():
+        sticker_ok = await bot.send_media_message(
+            "",
+            str(_sticker),
+            to_user_id=bot._last_from_user_id,
+            context_token=target_token,
+        )
+        if sticker_ok:
+            logger.info("wechat_bot.proactive_sticker_sent to={} sticker={}",
+                        bot._last_from_user_id[:16], _sticker.name)
+        else:
+            logger.warning("wechat_bot.proactive_sticker_failed to={} sticker={}",
+                           bot._last_from_user_id[:16], _sticker.name)
     logger.info("wechat_bot.proactive_sent to={} text={}", bot._last_from_user_id[:16], text[:40])
     return True
 
@@ -159,6 +194,13 @@ _START_LOCKS: "weakref.WeakKeyDictionary[asyncio.AbstractEventLoop, asyncio.Lock
     weakref.WeakKeyDictionary()
 )
 _START_LOCKS_GUARD = threading.Lock()
+
+
+@dataclass
+class WxProcessRequest(CoreProcessRequest):
+    """微信管道请求：附加回复所需的 context_token（iLink 协议路由必需）。"""
+
+    context_token: str = ""
 
 
 def _get_start_lock() -> "asyncio.Lock":
@@ -227,6 +269,13 @@ class WeChatBotAdapter(ChannelAdapterBase):
         # 消息处理任务集合：持有强引用避免被 GC 回收，stop() 时统一取消
         self._msg_tasks: set[asyncio.Task] = set()
 
+        # T1（cursor 先提交后处理）：
+        # - _batch_gathers：当前批次 gather 句柄，poll 被取消时一并取消；
+        # - _task_msg_ids：消息任务 → msg_id 映射，供 stop() 死信标记与
+        #   异常终态死信标记使用（重放去重的唯一依据）。
+        self._batch_gathers: set[asyncio.Future] = set()
+        self._task_msg_ids: dict[asyncio.Task, str] = {}
+
         # 长轮询游标（首次为空字符串，后续传入上次返回的 get_updates_buf）
         # 持久化到凭证同目录：进程重启后恢复游标，避免服务端重放历史消息。
         self._cursor: str = self._load_cursor()
@@ -238,6 +287,12 @@ class WeChatBotAdapter(ChannelAdapterBase):
         self._ctx_by_user_ts: dict[str, float] = {}
         self._CTX_TTL = 3600  # 上下文缓存 1 小时
         self._CTX_MAX = 256   # 硬上限，超出时按时间戳淘汰最旧项
+        self._ctx_cache = TTLCache(
+            self._ctx_by_user,
+            self._ctx_by_user_ts,
+            ttl=self._CTX_TTL,
+            max_size=self._CTX_MAX,
+        )
         self._last_from_user_id: str = ""
 
         # 消息去重缓存：msg_id → 时间戳，保留最近 1 小时（见 ChannelAdapterBase）。
@@ -249,6 +304,11 @@ class WeChatBotAdapter(ChannelAdapterBase):
         self._user_locks: dict[str, asyncio.Lock] = {}
         self._user_locks_ts: dict[str, float] = {}
         self._USER_LOCK_TTL = 3600  # 锁缓存 1 小时，超时清理避免长期运行内存增长
+        self._user_locks_cache = TTLCache(
+            self._user_locks,
+            self._user_locks_ts,
+            ttl=self._USER_LOCK_TTL,
+        )
 
         # W5：会话过期（ret=-14）自动恢复——服务端瞬时状态时指数退避重试，
         # 连续多次失败才判定 token 真正失效。避免一次抖动就清凭证强制人工重扫码。
@@ -267,6 +327,11 @@ class WeChatBotAdapter(ChannelAdapterBase):
         self._last_status_by_user: dict[str, str] = {}
         self._last_status_by_user_ts: dict[str, float] = {}
         self._USER_STATUS_TTL = 3600
+        self._last_status_cache = TTLCache(
+            self._last_status_by_user,
+            self._last_status_by_user_ts,
+            ttl=self._USER_STATUS_TTL,
+        )
 
         logger.info(
             "wechat_bot.init user={}",
@@ -314,7 +379,7 @@ class WeChatBotAdapter(ChannelAdapterBase):
             logger.warning("wechat_bot.cursor_load_failed error={}", str(e)[:120])
         return ""
 
-    def _save_cursor(self) -> None:
+    def _save_cursor_sync(self) -> None:
         if not self._cursor:
             return
         # R3-Major#1：写入前校验 token 归属——若凭证文件已被重新扫码更新为
@@ -343,6 +408,13 @@ class WeChatBotAdapter(ChannelAdapterBase):
         except Exception as e:
             logger.warning("wechat_bot.cursor_save_failed error={}", str(e)[:120])
 
+    async def _save_cursor_async(self) -> None:
+        """游标落盘下放线程池：atomic_write 内含 fsync，USB 盘可能卡数十秒，
+        同步执行会冻结事件循环（2026-08-25 实测 lag=36s，栈定位于
+        atomic_write→os.fsync）。轮询循环是异步上下文，直接 await 即可。"""
+        await asyncio.to_thread(self._save_cursor_sync)
+
+
     def _client_owns_credentials(self) -> bool:
         """校验凭证文件中的 bot_token 与当前 client 的 token 是否一致。
 
@@ -369,37 +441,46 @@ class WeChatBotAdapter(ChannelAdapterBase):
     def _remember_ctx(self, user_id: str, token: str) -> None:
         """记录 per-user 上下文 token（m2：带 TTL + 上限清理，避免无界增长）。
 
-        镜像 _user_locks 的清理策略：写入前先剔除过期项，再按硬上限淘汰最旧项。
+        清理策略统一委托 :meth:`TTLCache.prune_pairs`（原手搓「先剔过期 → 写入 →
+        逐个淘汰最旧」三段式的等价收敛：写入后一次性执行过期剔除 + 最旧淘汰，
+        终态一致），消除与 QQ 会话缓存清理逻辑的漂移温床。
         """
         if not user_id or not token:
             return
-        now = time.time()
-        # 剔除过期项
-        expired = [k for k, ts in self._ctx_by_user_ts.items() if now - ts > self._CTX_TTL]
-        for k in expired:
-            self._ctx_by_user.pop(k, None)
-            self._ctx_by_user_ts.pop(k, None)
-        # 写入/刷新目标项
-        self._ctx_by_user[user_id] = token
-        self._ctx_by_user_ts[user_id] = now
-        # 硬上限：仍超量时按时间戳淘汰最旧项
-        while len(self._ctx_by_user) > self._CTX_MAX:
-            oldest = min(self._ctx_by_user_ts, key=self._ctx_by_user_ts.get)
-            self._ctx_by_user.pop(oldest, None)
-            self._ctx_by_user_ts.pop(oldest, None)
+        cache = _get_ctx_cache(self)
+        cache.set(user_id, token)
 
     # ------------------------------------------------------------------
     # 生命周期
     # ------------------------------------------------------------------
 
-    async def start(self) -> None:
-        """启动微信 Bot 适配器
+    async def start(self) -> "dict[str, Any]":
+        """启动微信 Bot 适配器，返回结构化 readiness 判定（T4）。
 
         - 检测凭证文件 ~/.ai-agent/wechat_credentials.json
         - 有凭证：用凭证初始化 ILinkClient，直接启动消息轮询
         - 无凭证：等待 WebUI 触发扫码流程（不自动启动轮询）
         - 设置 _ACTIVE_BOT = self（对齐 qq_bot_adapter 的模式）
+
+        Returns:
+            readiness dict：{"ok": bool, "connected": bool, "polling": bool,
+            "error": str}。ok=True 表示适配器已连接且轮询任务在跑；调用方
+            （/wechat/start 路由、server 自动恢复）必须仅在 ok=True 时把本
+            实例挂载为活跃 bot——旧实现吞掉初始化错误并回滚 disconnected 却
+            正常返回，导致路由层无条件挂载"僵尸实例"。
+
+        兼容性：内部状态口径（_connected/_running/is_polling 等）不变；
+        返回值由 None 变为 dict——旧调用方忽略返回值时行为不受影响。
         """
+
+        def _readiness(ok: bool, error: str = "") -> dict[str, Any]:
+            return {
+                "ok": bool(ok and self._connected and self.is_polling),
+                "connected": bool(self._connected),
+                "polling": bool(self.is_polling),
+                "error": str(error or ""),
+            }
+
         global _ACTIVE_BOT
         # 串行化活跃实例的 check→stop→assign 过渡：并发 start() 交错会产生
         # 多个 poll_task 或覆盖未停止的旧实例（"消息重复 N 次"根因之一）。
@@ -410,7 +491,7 @@ class WeChatBotAdapter(ChannelAdapterBase):
             # 幂等：同一实例已在运行则直接返回，避免重复建 poller / 覆盖 client
             if _ACTIVE_BOT is self and self._running and not self._closed:
                 logger.info("wechat_bot.start_already_running")
-                return
+                return _readiness(True)
             if _ACTIVE_BOT is not None and _ACTIVE_BOT is not self and not _ACTIVE_BOT.is_closed():
                 logger.info("wechat_bot.start_stopping_existing")
                 try:
@@ -428,7 +509,7 @@ class WeChatBotAdapter(ChannelAdapterBase):
             self._running = True
             self._closed = False
 
-        # 确保 AgentCore 已初始化（未注入时尝试自建）
+        # 确保 AgentCore 已初始化（未提供时尝试自建）
         if self._core is None:
             try:
                 from agent_core import AgentCore
@@ -461,7 +542,7 @@ class WeChatBotAdapter(ChannelAdapterBase):
         # 若已被停止则中断启动，绝不再拉起 poller。
         if self._closed:
             logger.info("wechat_bot.start_aborted_stopped_concurrently")
-            return
+            return _readiness(False, "adapter stopped concurrently during start")
 
         # m9：成功启动到此处即认为一次干净的生命周期开始，复位过期重试计数，
         # 避免上次会话遗留的退避计数让新会话过早判定"真过期"。
@@ -488,6 +569,7 @@ class WeChatBotAdapter(ChannelAdapterBase):
                 self._expired = False
                 logger.info("wechat_bot.credentials_loaded starting_poller")
                 self._start_polling()
+                return _readiness(True)
             except Exception as e:
                 logger.error(
                     "wechat_bot.ilink_init_failed error={}",
@@ -501,6 +583,8 @@ class WeChatBotAdapter(ChannelAdapterBase):
                     _ACTIVE_BOT = None
                 self._running = False
                 self._closed = True
+                # T4：不再吞错回滚后正常返回——如实上报失败详情
+                return _readiness(False, f"ILinkClient init failed: {e}")
         else:
             # 无凭证：等待 WebUI 触发扫码流程（不自动启动轮询）
             # R3-Major#2：回滚 start() 早期无条件设置的 _ACTIVE_BOT/_running，
@@ -512,6 +596,7 @@ class WeChatBotAdapter(ChannelAdapterBase):
                 _ACTIVE_BOT = None
             self._running = False
             self._closed = True
+            return _readiness(False, "no credentials (scan QR code to log in)")
 
     def _start_polling(self) -> None:
         """启动消息轮询任务（幂等：已运行时不重复创建）。"""
@@ -564,11 +649,20 @@ class WeChatBotAdapter(ChannelAdapterBase):
                 )
             self._poll_task = None
 
-        # 取消未完成的消息处理任务（best-effort，避免断开后仍跑 AgentCore 至 120s）
+        # T1：批次收尾 gather 若仍在等待（poll 已死但批次未终结），一并取消，
+        # 避免 stop 后仍有悬空 await 挂着"未提交游标"的批次。
+        for gather in list(self._batch_gathers):
+            gather.cancel()
+        self._batch_gathers.clear()
+
+        # 取消未完成的消息处理任务（best-effort，避免断开后仍跑 AgentCore 至 120s）。
+        # T1 契约：取消前先按 msg_id 记死信——这些消息的游标尚未推进，重启后服务端
+        # 会按旧游标重放本批；死信让重放被去重拦截，保证"不丢消息也不重复回复"。
         if self._msg_tasks:
             for task in list(self._msg_tasks):
                 if not task.done():
                     task.cancel()
+                    self._mark_task_msg_dead(task)
             try:
                 await asyncio.gather(*self._msg_tasks, return_exceptions=True)
             except Exception as e:
@@ -680,12 +774,8 @@ class WeChatBotAdapter(ChannelAdapterBase):
                 _backoff = min(_backoff * 2, _max_backoff)
                 continue
 
-            # 更新游标（get_updates_buf）：为空时保留原游标，避免重放历史消息。
-            # W1：持久化游标，进程重启后恢复，避免服务端按空游标重放历史消息。
+            # T1：先取新游标但**不提交**——等批次内全部消息终结后再推进。
             next_cursor = result.get("cursor", "") or ""
-            if next_cursor:
-                self._cursor = next_cursor
-                self._save_cursor()
 
             # m3：不在轮询批次层面绑定 context_token——一个批次可能包含多个用户的
             # 消息，批次级 token 绑到 _last_from_user_id 会 shadow per-user 的正确绑定
@@ -698,11 +788,47 @@ class WeChatBotAdapter(ChannelAdapterBase):
                     "wechat_bot.poll_received poll_count={} elapsed_ms={} msg_count={} cursor_len={}",
                     _poll_count, _elapsed_ms, len(msgs), len(next_cursor),
                 )
+                batch_tasks = []
                 for msg in msgs:
                     task = asyncio.create_task(self._process_message(msg))
                     self._msg_tasks.add(task)
+                    msg_id = str(msg.get("msg_id", "") or "") if isinstance(msg, dict) else ""
+                    if msg_id:
+                        self._task_msg_ids[task] = msg_id
                     task.add_done_callback(self._on_msg_task_done)
-            else:
+                    batch_tasks.append(task)
+                # T1（cursor 先提交后处理缺陷）：批次内全部消息终结（成功/异常/死信）
+                # 之后才推进游标。旧实现在创建任务前就持久化 cursor，崩溃/停机会把
+                # "已提交未处理"的整批消息永久丢失；新实现崩溃重启后服务端按旧游标
+                # 重放本批，stop() 路径取消的任务已记死信（去重拦截重复回复）。
+                gather = asyncio.gather(*batch_tasks, return_exceptions=True)
+                self._batch_gathers.add(gather)
+                try:
+                    outcomes = await asyncio.shield(gather)
+                except asyncio.CancelledError:
+                    # poll 被取消（stop/过期收敛）：取消批次收尾，游标不推进，
+                    # 未完成消息的死信标记由 stop() 统一处理。
+                    gather.cancel()
+                    raise
+                finally:
+                    self._batch_gathers.discard(gather)
+                # 单条异常视为该条终结：记死信（重放不重复处理），不卡整批游标。
+                for task, outcome in zip(batch_tasks, outcomes or []):
+                    if isinstance(outcome, BaseException) and not isinstance(outcome, asyncio.CancelledError):
+                        logger.error(
+                            "wechat_bot.msg_task_failed error={}",
+                            str(outcome)[:200],
+                        )
+                        self._mark_msg_dead_by_task(task)
+
+            # 推进游标（get_updates_buf）：为空时保留原游标，避免重放历史消息。
+            # W1：持久化游标，进程重启后恢复，避免服务端按空游标重放历史消息。
+            # T1：仅当本批次无消息、或批次内全部消息已终结时才会走到这里。
+            if next_cursor:
+                self._cursor = next_cursor
+                await self._save_cursor_async()
+
+            if not msgs:
                 # 无消息时短暂 sleep，避免紧密循环
                 await asyncio.sleep(0.5)
 
@@ -798,21 +924,24 @@ class WeChatBotAdapter(ChannelAdapterBase):
             await self._process_message_locked(msg, from_user_id)
 
     def _user_lock(self, user_id: str) -> asyncio.Lock:
-        """获取（并按需创建）指定用户的串行锁，附带 TTL 清理。"""
-        now = time.time()
-        # 定期清理过期锁，避免长期运行内存线性增长
-        if len(self._user_locks) > 128:
-            expired = [
-                k for k, ts in self._user_locks_ts.items() if now - ts > self._USER_LOCK_TTL
-            ]
-            for k in expired:
-                self._user_locks.pop(k, None)
-                self._user_locks_ts.pop(k, None)
-        lock = self._user_locks.get(user_id)
+        """获取（并按需创建）指定用户的串行锁，附带 TTL 清理。
+
+        清理、查找和刷新严格按 ``prune → lookup/create → timestamp refresh``
+        执行，保证目标用户的过期锁即使是缓存唯一条目也不会被复用。
+        """
+        cache = getattr(self, "_user_locks_cache", None)
+        if cache is None or cache.values is not self._user_locks:
+            cache = TTLCache(
+                self._user_locks,
+                self._user_locks_ts,
+                ttl=self._USER_LOCK_TTL,
+            )
+            self._user_locks_cache = cache
+        cache.prune()
+        lock = cache.get(user_id, prune=False)
         if lock is None:
             lock = asyncio.Lock()
-            self._user_locks[user_id] = lock
-        self._user_locks_ts[user_id] = now
+        cache.set(user_id, lock, prune=False)
         return lock
 
     async def _process_message_locked(self, msg: dict, from_user_id: str) -> None:
@@ -904,20 +1033,97 @@ class WeChatBotAdapter(ChannelAdapterBase):
 
     def _prune_last_status_cache(self) -> None:
         """清理过期状态条目（TTL 1 小时），避免长期运行内存线性增长。"""
-        now = time.time()
-        expired = [
-            k for k, ts in self._last_status_by_user_ts.items()
-            if now - ts > self._USER_STATUS_TTL
-        ]
-        for k in expired:
-            self._last_status_by_user.pop(k, None)
-            self._last_status_by_user_ts.pop(k, None)
+        self._get_last_status_cache().prune()
+
+    def _get_last_status_cache(self) -> TTLCache:
+        cache = getattr(self, "_last_status_cache", None)
+        if cache is None or cache.values is not self._last_status_by_user:
+            cache = TTLCache(
+                self._last_status_by_user,
+                self._last_status_by_user_ts,
+                ttl=self._USER_STATUS_TTL,
+            )
+            self._last_status_cache = cache
+        return cache
 
     def _remember_last_status(self, user_id: str, status: str) -> None:
         """记录用户最近一次中间状态并清理过期条目。"""
-        self._last_status_by_user[user_id] = status
-        self._last_status_by_user_ts[user_id] = time.time()
-        self._prune_last_status_cache()
+        self._get_last_status_cache().set(user_id, status)
+
+    # ------------------------------------------------------------------
+    # B2：ChannelAdapterBase._process_with_core 骨架的微信侧钩子
+    # （ACK/session/status_callback/兜底文案与 QQ 语义不同，全部经钩子消化）
+    # ------------------------------------------------------------------
+
+    #: 微信原实现对 process 阶段捕获所有异常（宽于 QQ 的四类窄集）
+    CORE_ERROR_TYPES: tuple[type[BaseException], ...] = (Exception,)
+
+    def _get_core(self) -> Any:
+        return self._core
+
+    async def _send_ack(self, req: WxProcessRequest) -> None:
+        """处理前立即发送"收到啦，正在想"（对齐 QQ 行为）；失败容忍继续处理。"""
+        try:
+            from emotion.emoji_config import get_ack_message
+            ack_text = get_ack_message("xiaoda")
+            logger.info(
+                "wechat_bot.sending_ack to_user={} ack_text={}",
+                req.user_openid[:16], ack_text[:40],
+            )
+            ack_sent = await self.send_message(
+                ack_text,
+                to_user_id=req.user_openid,
+                context_token=req.context_token,
+            )
+            logger.info(
+                "wechat_bot.ack_sent to_user={} sent={}",
+                req.user_openid[:16], ack_sent,
+            )
+        except Exception as e:
+            logger.warning("wechat_bot.ack_send_failed error={}", str(e)[:200])
+
+    async def _resolve_session(self, req: WxProcessRequest) -> str | None:
+        """先取/建 per-user session（内存缓存优先，DB 异常兜底临时 ID）。"""
+        session_id = await self._get_or_create_user_session(req.user_openid)
+        logger.debug(
+            "wechat_bot.session_ready user={} session_id={}",
+            req.user_openid[:16], session_id[:32],
+        )
+        return session_id
+
+    def _make_status_callback(self, req: WxProcessRequest) -> Any:
+        """微信无事件总线用户通道：仅记 DEBUG 日志 + 维护 per-user 最近状态。"""
+        from_user_id = req.user_openid
+
+        async def status_notify(msg: str) -> None:
+            logger.debug(
+                "wechat_bot.status_notify user={} status={}",
+                from_user_id[:16], str(msg)[:200],
+            )
+            self._remember_last_status(from_user_id, str(msg))
+
+        return status_notify
+
+    async def _on_core_timeout(self, req: WxProcessRequest) -> None:
+        logger.warning("wechat_bot.process_timeout user_id={}", req.user_id)
+        await self.send_message(
+            "处理超时，请稍后再试",
+            to_user_id=req.user_openid,
+            context_token=req.context_token,
+        )
+
+    async def _on_core_error(self, req: WxProcessRequest, exc: BaseException) -> None:
+        logger.error(
+            "wechat_bot.process_error user_id={} error={}",
+            req.user_id,
+            str(exc)[:200],
+            exc_info=True,
+        )
+        await self.send_message(
+            "出了点小问题，等会儿再聊好不好？",
+            to_user_id=req.user_openid,
+            context_token=req.context_token,
+        )
 
     async def _handle_text_message(
         self, text: str, from_user_id: str, context_token: str
@@ -953,78 +1159,21 @@ class WeChatBotAdapter(ChannelAdapterBase):
         user_id = f"wechat_{from_user_id}" if from_user_id else "wechat_unknown"
         logger.info("wechat_bot.text_msg user_id={} text={}", user_id, text[:80])
 
-        # ACK：处理前立即发送"收到啦，正在想"（对齐 QQ 行为）
-        try:
-            from emotion.emoji_config import get_ack_message
-            ack_text = get_ack_message("xiaoda")
-            logger.info(
-                "wechat_bot.sending_ack to_user={} ack_text={}",
-                from_user_id[:16], ack_text[:40],
-            )
-            ack_sent = await self.send_message(
-                ack_text,
-                to_user_id=from_user_id,
-                context_token=context_token,
-            )
-            logger.info(
-                "wechat_bot.ack_sent to_user={} sent={}",
-                from_user_id[:16], ack_sent,
-            )
-        except Exception as e:
-            logger.warning("wechat_bot.ack_send_failed error={}", str(e)[:200])
-
         logger.info(
             "wechat_bot.calling_core_process user_id={} text_len={}",
             user_id, len(text),
         )
-        # A2：对齐 QQ C2C——先取/建 per-user session（内存缓存优先，DB 异常兜底临时 ID）
-        session_id = await self._get_or_create_user_session(from_user_id)
-        logger.debug(
-            "wechat_bot.session_ready user={} session_id={}",
-            from_user_id[:16], session_id[:32],
+        # B2：ACK → session → status_callback → wait_for(process,120) → 超时/异常兜底
+        # 统一走 ChannelAdapterBase._process_with_core 骨架（原逐段复制的管道沉淀层）。
+        req = WxProcessRequest(
+            text=text,
+            user_id=user_id,
+            source="wechat_c2c",
+            user_openid=from_user_id,
+            context_token=context_token,
         )
-
-        # A2：status_callback（签名与 QQ status_notify 一致）。
-        # 微信无事件总线用户通道：仅记 DEBUG 日志 + 维护 per-user 最近状态，不做协议发送。
-        async def status_notify(msg: str) -> None:
-            logger.debug(
-                "wechat_bot.status_notify user={} status={}",
-                from_user_id[:16], str(msg)[:200],
-            )
-            self._remember_last_status(from_user_id, str(msg))
-
-        try:
-            result = await asyncio.wait_for(
-                self._core.process(
-                    text,
-                    user_id=user_id,
-                    source="wechat_c2c",
-                    user_openid=from_user_id,
-                    session_id=session_id,
-                    status_callback=status_notify,
-                ),
-                timeout=120,
-            )
-        except asyncio.TimeoutError:
-            logger.warning("wechat_bot.process_timeout user_id={}", user_id)
-            await self.send_message(
-                "处理超时，请稍后再试",
-                to_user_id=from_user_id,
-                context_token=context_token,
-            )
-            return
-        except Exception as e:
-            logger.error(
-                "wechat_bot.process_error user_id={} error={}",
-                user_id,
-                str(e)[:200],
-                exc_info=True,
-            )
-            await self.send_message(
-                "出了点小问题，等会儿再聊好不好？",
-                to_user_id=from_user_id,
-                context_token=context_token,
-            )
+        result = await self._process_with_core(req)
+        if result is None:
             return
 
         reply = getattr(result, "reply", "") or ""
@@ -1058,65 +1207,46 @@ class WeChatBotAdapter(ChannelAdapterBase):
                 user_id, text_sent,
             )
         else:
-            num_segments = len(segments)
             logger.info(
                 "wechat_bot.stream_start user_id={} reply_len={} segments={}",
-                user_id, len(reply), num_segments,
+                user_id, len(reply), len(segments),
             )
-            for i, seg in enumerate(segments):
-                if i > 0:
-                    # 段间 800-1200ms 停顿模拟打字节奏（对齐 QQ）
-                    await asyncio.sleep(random.uniform(0.8, 1.2))
-                try:
-                    seg_ok = await self.send_message(
-                        seg,
-                        to_user_id=from_user_id,
-                        context_token=context_token,
-                    )
-                except Exception as e:
-                    # send_message 内部已兜底全部异常并返回 False，此处仅防御
-                    logger.warning(
-                        "wechat_bot.stream_segment_exception index={} total={} error={}",
-                        i, num_segments, str(e)[:200],
-                    )
-                    seg_ok = False
-                if seg_ok:
-                    logger.debug(
-                        "wechat_bot.stream_segment index={} total={} sent=True size={}",
-                        i, num_segments, len(seg),
-                    )
-                else:
-                    # 某段失败：合并剩余段（含当前段——send_message 返回 False 表示
-                    # 服务端 ret != 0，当前段未被接受，对齐 QQ 连接错误路径）为单条
-                    # 重发一次，沿用 send_message 的 context_token 缓存重试能力。
-                    logger.warning(
-                        "wechat_bot.stream_segment_failed index={} total={} merging_remaining",
-                        i, num_segments,
-                    )
-                    remaining = "".join(segments[i:])
+
+            async def _wx_send(content: str) -> bool:
+                return await self.send_message(
+                    content,
+                    to_user_id=from_user_id,
+                    context_token=context_token,
+                )
+
+            async def _recover(index: int, failure: Any) -> None:
+                remaining = "".join(segments[index:])
+                pieces = self._split_text_by_bytes(remaining, 7800)
+                for piece in pieces:
                     try:
-                        merged_ok = await self.send_message(
-                            remaining,
-                            to_user_id=from_user_id,
-                            context_token=context_token,
-                        )
-                    except Exception as e:
+                        ok = await _wx_send(piece)
+                    except Exception as exc:
                         logger.warning(
-                            "wechat_bot.stream_merged_exception size={} error={}",
-                            len(remaining), str(e)[:200],
+                            "wechat_bot.stream_recovery_exception size={} error={}",
+                            len(piece),
+                            str(exc)[:200],
                         )
-                        merged_ok = False
-                    if merged_ok:
-                        logger.info(
-                            "wechat_bot.stream_merged_resend_ok merged_from={} size={}",
-                            num_segments - i, len(remaining),
-                        )
-                    else:
+                        break
+                    if ok is False:
                         logger.warning(
-                            "wechat_bot.stream_merged_resend_failed size={}",
-                            len(remaining),
+                            "wechat_bot.stream_recovery_failed size={}",
+                            len(piece),
                         )
-                    break
+                        break
+
+            # B2：共享层只负责段间节奏与逐片发送；微信恢复含当前片，
+            # 按 7800 UTF-8 字节重切，任一恢复片失败即停止。
+            await self._send_segments_paced(
+                segments,
+                _wx_send,
+                on_failure=_recover,
+                log_prefix="wechat_bot",
+            )
         # 再发表情包（纯图，独立消息）：失败不回退文本，避免重复发送
         if sticker_path and Path(sticker_path).exists():
             logger.info(
@@ -1151,14 +1281,31 @@ class WeChatBotAdapter(ChannelAdapterBase):
         若任务被 GC 回收，异常会静默丢失；这里显式取出异常并记录。
         """
         self._msg_tasks.discard(task)
+        # T1：仅成功终结的任务清理 msg_id 映射；取消/异常终态的映射保留，
+        # 由 stop() 死信标记与批次收尾（异常死信）负责消费。
+        if not task.cancelled():
+            exc = task.exception()
+            if exc is None:
+                self._task_msg_ids.pop(task, None)
+            elif exc is not None:
+                logger.error(
+                    "wechat_bot.msg_task_failed error={}",
+                    str(exc)[:200],
+                )
         if task.cancelled():
             return
-        exc = task.exception()
-        if exc is not None:
-            logger.error(
-                "wechat_bot.msg_task_failed error={}",
-                str(exc)[:200],
-            )
+
+    def _mark_msg_dead_by_task(self, task: asyncio.Task) -> None:
+        """按任务取回 msg_id 并记入去重表（死信），幂等：无映射时静默跳过。"""
+        msg_id = self._task_msg_ids.get(task, "")
+        if msg_id:
+            # 记死信：该消息未完成处理即被取消/失败，重放时按去重拦截
+            self._processed_msg_ids.setdefault(msg_id, time.time())
+            self._task_msg_ids.pop(task, None)
+
+    def _mark_task_msg_dead(self, task: asyncio.Task) -> None:
+        """:meth:`_mark_msg_dead_by_task` 的 stop() 别名（同步、不取回任务结果）。"""
+        self._mark_msg_dead_by_task(task)
 
     # ------------------------------------------------------------------
     # 发送消息
@@ -1195,7 +1342,7 @@ class WeChatBotAdapter(ChannelAdapterBase):
             return False
 
         target_user = to_user_id or self._last_from_user_id
-        target_token = context_token or self._ctx_by_user.get(target_user, "")
+        target_token = context_token or _get_ctx_cache(self).get(target_user, "")
         if not target_user:
             logger.warning("wechat_bot.send_no_user_id content={}", content[:80])
             return False
@@ -1231,7 +1378,7 @@ class WeChatBotAdapter(ChannelAdapterBase):
             # ret=-2: context_token 过期/无效。AgentCore 处理最长 120s，
             # 期间用户若发了新消息，per-user 缓存的 token 已更新为最新，
             # 用它重试一次可能恢复投递（覆盖"处理慢导致 token 过期"场景）。
-            cached_token = self._ctx_by_user.get(target_user, "")
+            cached_token = _get_ctx_cache(self).get(target_user, "")
             if (
                 e.ret == -2
                 and cached_token
@@ -1303,7 +1450,7 @@ class WeChatBotAdapter(ChannelAdapterBase):
             logger.warning("wechat_bot.send_media_no_client content={}", content[:40])
             return False
         target_user = to_user_id or self._last_from_user_id
-        target_token = context_token or self._ctx_by_user.get(target_user, "")
+        target_token = context_token or _get_ctx_cache(self).get(target_user, "")
         if not target_user:
             logger.warning("wechat_bot.send_media_no_user_id")
             return False
@@ -1428,7 +1575,7 @@ def create_wechat_bot(
     Returns:
         WeChatBotAdapter 实例
     """
-    enabled = os.getenv("WECHAT_ILINK_ENABLED", "false").lower() in ("true", "1", "yes")
+    enabled = env_flag("WECHAT_ILINK_ENABLED", False)
     if not enabled:
         logger.info(
             "wechat_bot.skeleton_mode set WECHAT_ILINK_ENABLED=true to enable"

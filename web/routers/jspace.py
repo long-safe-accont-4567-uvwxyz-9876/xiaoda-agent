@@ -6,21 +6,37 @@ from typing import Any
 from fastapi import APIRouter, Depends, HTTPException, Request
 from loguru import logger
 
-from web.schemas import Envelope
 from web.routers.auth import get_current_user
+from web.schemas import Envelope
 
 router = APIRouter(tags=["jspace"], dependencies=[Depends(get_current_user)])
 
-_decomposer: Any = None
 
+def _get_decomposer(use_llm: bool | None = None) -> Any:
+    """获取核心 J-Space IntentDecomposer；节点 off 是请求不能越过的上限。
 
-def _get_decomposer(use_llm: bool = True) -> Any:
-    """获取或创建 IntentDecomposer 单例。"""
-    global _decomposer
+    共享单例的运行态参数不可被单个请求改写：use_llm=False 且单例处于
+    LLM 模式时，构建请求内临时规则实例（与迁移前行为一致），避免把
+    请求级降级泄漏进全局运行态；其余情况直接复用单例（backend 非 off
+    时单例即 LLM 模式，use_llm=True 无需也无法额外翻转）。
+    """
     from core.intent_decomposition import IntentDecomposer
-    if _decomposer is None or _decomposer.use_llm != use_llm:
-        _decomposer = IntentDecomposer(use_llm_decomposition=use_llm)
-    return _decomposer
+    from core.j_space_bootstrap import get_intent_decomposer
+
+    decomposer = get_intent_decomposer()
+    if (
+        use_llm is False
+        and decomposer.use_llm
+        and decomposer.node_backend != "off"
+    ):
+        return IntentDecomposer(use_llm_decomposition=False)
+    return decomposer
+
+
+def set_intent_backend(backend: str, local_model: str | None = None) -> None:
+    from core.j_space_bootstrap import set_intent_backend as configure
+
+    configure(backend, local_model)
 
 
 @router.get("/jspace/status", response_model=Envelope[dict])
@@ -43,9 +59,12 @@ async def jspace_status(request: Request) -> Any:
 
     try:
         from core.j_space_bootstrap import (
-            get_signal_stream, get_direction_registry,
-            get_intervention_loop, get_structured_blackboard,
+            get_direction_registry,
             get_enhanced_router,
+            get_intent_decomposer,
+            get_intervention_loop,
+            get_signal_stream,
+            get_structured_blackboard,
         )
         ss = get_signal_stream()
         if ss is not None:
@@ -66,6 +85,16 @@ async def jspace_status(request: Request) -> Any:
         er = get_enhanced_router()
         if er is not None:
             status["enhanced_router"] = {"active": True}
+
+        # 修复（2026-08-26 运行时实测）：分解器单例惰性创建，此前未纳入探测，
+        # status 里 intent_decomposer.active 恒为 False（与 /jspace/decompose
+        # 实际可用相矛盾）。现与其它组件同口径：单例存在即 active。
+        decomposer = get_intent_decomposer()
+        if decomposer is not None:
+            status["intent_decomposer"] = {
+                "active": True,
+                "use_llm": bool(decomposer.use_llm),
+            }
     except Exception as e:
         logger.warning("jspace.status_partial error={}", e)
 

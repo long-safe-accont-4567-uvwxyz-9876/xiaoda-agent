@@ -20,12 +20,10 @@ from __future__ import annotations
 
 import asyncio
 
+from chaos.tnr_protocol import TNRProtocol, TNRReport
 from core.behavioral_health import BehavioralHealthScorer
 from core.degradation_strategy import DegradationStrategy, reset_degradation_strategy
 from core.recovery_orchestrator import RecoveryOrchestrator
-
-from chaos.tnr_protocol import TNRProtocol, TNRReport
-
 
 # ============================================================
 # 场景定义

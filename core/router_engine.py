@@ -20,12 +20,12 @@ class RoutingDecision:
 
     Attributes:
         agent_names: 目标 Agent 名称列表（如 ["xiaoda"], ["xiaoli", "xiaolang"]）
-        mode: 调度模式 — single 单 Agent / parallel 并行 / task_graph 任务图
+        mode: 调度模式 — single 单 Agent / parallel 并行
         reasoning: 路由理由（可选，用于调试和审计）
     """
 
     agent_names: list[str]
-    mode: Literal["single", "parallel", "task_graph"]
+    mode: Literal["single", "parallel"]
     reasoning: str = ""
 
 
@@ -342,7 +342,6 @@ class RouterEngine:
     async def _classify_sub_agent_with_llm(self, user_input: str,
                                             timeout: float = 15.0) -> str | None:
         """调用 LLM 判断子代理路由。返回 agent 名称或 None（失败时）。"""
-        import asyncio
         import os
         try:
             import httpx

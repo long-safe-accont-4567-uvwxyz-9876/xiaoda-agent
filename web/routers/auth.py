@@ -1,25 +1,26 @@
 from __future__ import annotations
 
-import ipaddress
-import os
-import time
-import json
+import asyncio
+import base64
+import contextlib
 import hashlib
 import hmac
-import base64
+import ipaddress
+import json
+import os
 import secrets
+import time
 from collections import OrderedDict
 from pathlib import Path
 from threading import Lock
 from typing import Any
 
-from fastapi import APIRouter, HTTPException, Request, Depends, Response
+from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from loguru import logger
 
-from web.schemas import Envelope, LoginRequest, LoginResponse, RecoverRequest, ChangePasswordRequest
 # VULN-28：XFF 信任判定统一从 rate_limit 导入（规则单源，避免两处漂移）
 from web.middleware.rate_limit import _peer_is_trusted_proxy, _trust_forwarded_for
-import contextlib
+from web.schemas import ChangePasswordRequest, Envelope, LoginRequest, LoginResponse, RecoverRequest
 
 try:
     from utils.atomic_write import atomic_json_write
@@ -52,33 +53,37 @@ _RENEWAL_GRACE_SECONDS = 30.0
 # token -> 宽限期截止时间（epoch 秒）。仅内存态，用于续期撤销的短窗口豁免。
 _revoked_grace: dict[str, float] = {}
 
-# VULN-29：媒体访问 cookie。前端用裸 <audio :src>/<img src> 引用 /media
-# （无法携带 Authorization 头），登录成功时下发本 cookie（Path=/media，
-# HttpOnly + SameSite=Strict），/media 中间件校验之，前端零改动。
+# VULN-29：媒体访问 cookie。前端用裸 <audio :src>/<img src> 引用 /media 与
+# 贴纸端点（无法携带 Authorization 头），登录成功时下发本 cookie（HttpOnly +
+# SameSite=Strict），Path 覆盖 /media 静态目录与 /api/v1/agents 贴纸路由，
+# 前端零改动。
 MEDIA_COOKIE_NAME = "x_media_token"
+_MEDIA_COOKIE_PATHS = ("/media", "/api/v1/agents")
 
 
 def set_media_cookie(response: Any, token: str, expires_at: float) -> None:
-    """在响应上下发 /media 访问 cookie（HttpOnly + SameSite=Strict + Path 限定）。
+    """在响应上下发媒体访问 cookie（HttpOnly + SameSite=Strict，双路径）。
 
     response 为 None 时（直调/测试场景无响应对象）跳过。
     """
     if response is None:
         return
-    response.set_cookie(
-        MEDIA_COOKIE_NAME, token,
-        path="/media",
-        httponly=True,
-        samesite="strict",
-        max_age=int(max(0, expires_at - time.time())),
-    )
+    for cookie_path in _MEDIA_COOKIE_PATHS:
+        response.set_cookie(
+            MEDIA_COOKIE_NAME, token,
+            path=cookie_path,
+            httponly=True,
+            samesite="strict",
+            max_age=int(max(0, expires_at - time.time())),
+        )
 
 
 def clear_media_cookie(response: Any) -> None:
-    """登出/撤销时清除 /media 访问 cookie。response 为 None 时跳过。"""
+    """登出/撤销时清除全部媒体访问 cookie。response 为 None 时跳过。"""
     if response is None:
         return
-    response.delete_cookie(MEDIA_COOKIE_NAME, path="/media")
+    for cookie_path in _MEDIA_COOKIE_PATHS:
+        response.delete_cookie(MEDIA_COOKIE_NAME, path=cookie_path)
 
 _token_epoch: int | None = None
 _token_epoch_lock = Lock()
@@ -169,7 +174,7 @@ def _extract_expiry(token: str) -> float:
         return 0.0
 
 
-    except Exception as exc:
+    except Exception:
         logger.exception("auth._extract_expiry.unexpected_error")
         return 0.0
 
@@ -198,7 +203,7 @@ def _revoke_token(token: str, grace_seconds: float = 0.0) -> None:
             except (json.JSONDecodeError, OSError, ValueError) as exc:
                 logger.debug("auth.revoke_json_parse_failed: {}", exc, exc_info=True)
                 data = {"revoked": []}
-            except Exception as exc:
+            except Exception:
                 logger.exception("auth._revoke_token.unexpected_error")
         if token not in data["revoked"]:
             data["revoked"].append(token)
@@ -229,7 +234,7 @@ def _revoke_token(token: str, grace_seconds: float = 0.0) -> None:
             logger.warning("auth.revoke_save_failed error={}", str(e))
 
 
-        except Exception as e:
+        except Exception:
             logger.exception("auth._revoke_token.unexpected_error")
 
 
@@ -261,7 +266,7 @@ def _is_revoked(token: str) -> bool:
         return False
 
 
-    except Exception as exc:
+    except Exception:
         logger.exception("auth._is_revoked.unexpected_error")
         return False
 
@@ -321,7 +326,7 @@ def _validate_token(token: str) -> bool:
         return False
 
 
-    except Exception as exc:
+    except Exception:
         logger.exception("auth._validate_token.unexpected_error")
         return False
 
@@ -433,7 +438,7 @@ async def get_current_user(request: Request) -> str:
             logger.info("auth.token_renewed old_expiry={} new_expiry={}", int(expiry), int(new_expiry))
     except (ValueError, KeyError, TypeError, OSError) as e:
         logger.debug("auth.renew_check_failed error={}", str(e))
-    except Exception as e:
+    except Exception:
         logger.exception("auth.get_current_user.unexpected_error")
     return "webui"
 
@@ -541,7 +546,7 @@ async def _audit_auth_event(request: Request, action: str, detail: str) -> None:
         logger.debug("auth.audit_log_failed error={}", str(exc))
 
 
-    except Exception as exc:
+    except Exception:
         logger.exception("auth._audit_auth_event.unexpected_error")
 
 
@@ -550,7 +555,7 @@ def _update_env_password(new_password: str) -> None:
 
     同时更新 os.environ，使进程内登录校验立即生效。失败时抛 RuntimeError 由调用方处理。
     """
-    from setup_wizard import ENV_PATH, _parse_env_lines, _write_env, _load_env_values
+    from setup_wizard import ENV_PATH, _load_env_values, _parse_env_lines, _write_env
     existing_lines = _parse_env_lines(ENV_PATH)
     current = _load_env_values()
     merged = dict(current)
@@ -617,12 +622,13 @@ async def recover(req: RecoverRequest, request: Request, response: Response = No
         raise HTTPException(403, "找回答案错误")
 
     try:
-        _update_env_password(req.new_password)
+        # .env 同步读写下放线程池（全仓 asyncio.to_thread 惯例）
+        await asyncio.to_thread(_update_env_password, req.new_password)
     except (OSError, ValueError, RuntimeError) as exc:
         logger.error("auth.recover_env_update_failed error={}", str(exc))
         raise HTTPException(500, "更新密码配置失败") from None
 
-    except Exception as exc:
+    except Exception:
         logger.exception("auth.recover.unexpected_error")
         raise HTTPException(500, "更新密码配置失败") from None
     # 成功：清除该 IP 的失败计数
@@ -646,7 +652,7 @@ async def change_password(req: ChangePasswordRequest, user_id: str = Depends(get
     成功后更新 .env、吊销全部 token 并签发新 token（旧 token 按滑动续期
     方式带宽限期撤销），可同时轮换找回问答。返回新 token 供前端替换本地存储。
     """
-    from security.recovery_qa import verify_answer, set_recovery
+    from security.recovery_qa import set_recovery, verify_answer
 
     current_password = os.getenv("WEBUI_PASSWORD", "")
     client_ip = _get_client_ip(request) if request is not None else "unknown"
@@ -673,12 +679,13 @@ async def change_password(req: ChangePasswordRequest, user_id: str = Depends(get
     new_answer = (req.new_answer or "").strip()
 
     try:
-        _update_env_password(req.new_password)
+        # .env 同步读写下放线程池（全仓 asyncio.to_thread 惯例）
+        await asyncio.to_thread(_update_env_password, req.new_password)
     except (OSError, ValueError, RuntimeError) as exc:
         logger.error("auth.change_password_env_update_failed error={}", str(exc))
         raise HTTPException(500, "更新密码配置失败") from None
 
-    except Exception as exc:
+    except Exception:
         logger.exception("auth.change_password.unexpected_error")
         raise HTTPException(500, "更新密码配置失败") from None
     # 密码写入成功后轮换问答（若请求携带新问答）

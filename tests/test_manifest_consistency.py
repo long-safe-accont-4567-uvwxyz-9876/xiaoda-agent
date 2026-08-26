@@ -17,8 +17,10 @@ web_browse_enhanced 双重注册、后者覆写前者（见 manifest 文件头 d
 """
 from __future__ import annotations
 
+import ast
 import importlib
 import os
+from pathlib import Path
 
 import pytest
 
@@ -121,3 +123,61 @@ def test_no_decorator_builtin_missing_from_manifest() -> None:
         and getattr(tool.get("func"), "__module__", "").startswith(("tools.", "memory."))
     ]
     assert undecorated == [], f"装饰器注册了但 manifest 缺失的工具: {undecorated}"
+
+
+# AST 扫描范围：manifest 的 module_path 全部落在 tools.* 与 memory.* 两个包
+# （retrieve_context 来自 memory.context_compressor），静态扫描必须覆盖两处，
+# 否则严格相等断言会误报。
+_AST_SCAN_ROOTS = ("tools", "memory")
+
+
+def _collect_decorator_tool_names() -> set[str]:
+    """AST 静态扫描生产模块的 @register_tool 装饰器，提取工具名集合。
+
+    纯语法解析、不 import 任何被扫描模块——import 驱动的反向检查对"从未被
+    任何运行时路径 import"的模块天然失明（如曾经的 tools.tts_tools），
+    AST 扫描无论模块是否可达都能发现漂移。
+    """
+    names: set[str] = set()
+    repo_root = Path(__file__).resolve().parent.parent
+    for root in _AST_SCAN_ROOTS:
+        for path in sorted((repo_root / root).glob("*.py")):
+            tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+            for node in ast.walk(tree):
+                if not isinstance(node, ast.FunctionDef | ast.AsyncFunctionDef):
+                    continue
+                for dec in node.decorator_list:
+                    if not isinstance(dec, ast.Call):
+                        continue
+                    func = dec.func
+                    if not isinstance(func, ast.Name) or func.id != "register_tool":
+                        continue
+                    target = None
+                    if dec.args:
+                        target = dec.args[0]
+                    else:
+                        target = next(
+                            (kw.value for kw in dec.keywords if kw.arg == "name"),
+                            None,
+                        )
+                    if isinstance(target, ast.Constant) and isinstance(target.value, str):
+                        names.add(target.value)
+    return names
+
+
+def test_ast_scanned_decorators_match_manifest_bidirectionally() -> None:
+    """装饰器工具名集合（AST 静态提取）== manifest 键集合（双向）。
+
+    与 test_no_decorator_builtin_missing_from_manifest 不同，本用例不依赖
+    模块被 import：哪怕某个 tools/*.py 从未进入任何运行时 import 路径，
+    只要它声明了 @register_tool 而 manifest 缺条目（或反之），这里即失败。
+    """
+    scanned = _collect_decorator_tool_names()
+    manifest_names = {e["name"] for e in BUILTIN_TOOLS}
+    only_in_code = sorted(scanned - manifest_names)
+    only_in_manifest = sorted(manifest_names - scanned)
+    assert not only_in_code and not only_in_manifest, (
+        "@register_tool 装饰器与 _builtin_manifest.py 双向漂移:\n"
+        f"  装饰器有但 manifest 缺失: {only_in_code}\n"
+        f"  manifest 有但装饰器不存在: {only_in_manifest}"
+    )

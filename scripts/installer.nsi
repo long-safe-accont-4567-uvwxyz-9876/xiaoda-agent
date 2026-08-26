@@ -30,17 +30,46 @@ SetCompressor /SOLID lzma
 !define MUI_ICON "dist\xiaoda-agent\xiaoda-icon.ico"
 !define MUI_UNICON "dist\xiaoda-agent\xiaoda-icon.ico"
 
-; 安装页面自定义文本
-!define MUI_WELCOMEPAGE_TITLE "欢迎使用小妲 Agent 安装程序"
-!define MUI_WELCOMEPAGE_TEXT "本程序将安装小妲 Agent 到你的用户目录（无需管理员权限）。$\n$\n点击「下一步」继续。"
-!define MUI_INSTFILESPAGE_FINISH_HEADER_TEXT "安装完成"
-!define MUI_INSTFILESPAGE_FINISH_HEADER_SUBTEXT "小妲 Agent 已成功安装到你的计算机"
+; ── 视觉（2026-08-26 安装界面文艺化）：与 WebUI 须弥设计语言同源 ──
+;   侧栏图 164×314：暖白纸感底 + 四叶草 + 风絮（assets/installer-sidebar.bmp）
+;   头部图 150×57：同语言横幅（assets/installer-header.bmp）
+;   源文件由 PIL 程序化绘制（无手绘依赖），重生成见 git 历史 assets/ 生成脚本
+!define MUI_WELCOMEFINISHPAGE_BITMAP "assets\installer-sidebar.bmp"
+!define MUI_UNWELCOMEFINISHPAGE_BITMAP "assets\installer-sidebar.bmp"
+!define MUI_HEADERIMAGE
+!define MUI_HEADERIMAGE_BITMAP "assets\installer-header.bmp"
+!define MUI_HEADERIMAGE_RIGHT
+!define MUI_UNHEADERIMAGE_BITMAP "assets\installer-header.bmp"
+!define MUI_UNHEADERIMAGE_RIGHT
+!define MUI_ABORTWARNING_TEXT "确定要退出安装吗？$\n$\n小妲还没有住进这台电脑呢。"
+
+; ── 欢迎页：品牌意象 + 安装要点 ──
+!define MUI_WELCOMEPAGE_TITLE "欢迎小妲回家"
+!define MUI_WELCOMEPAGE_TEXT "小妲 Agent 即将住进这台电脑的用户目录——$\n无需管理员权限，不碰系统设置，随时可以送别（完整卸载）。$\n$\n安装内容：$\n    · 桌面智能体（WebUI + QQ Bot + 虚拟终端）$\n    · 本地模型运行时（约 1.2GB，含卸载器创建需 1-2 分钟）$\n$\n建议关闭其他程序后继续。"
+
+; ── 目录页 ──
+!define MUI_DIRECTORYPAGE_TEXT_TOP "小妲将住在下面的目录（至少需要 2GB 可用空间）。点击「浏览」可换地方。"
+!define MUI_DIRECTORYPAGE_TEXT_DESTINATION "目标目录"
+
+; ── 安装进度页 ──
+!define MUI_INSTFILESPAGE_FINISH_HEADER_TEXT "安顿完成"
+!define MUI_INSTFILESPAGE_FINISH_HEADER_SUBTEXT "小妲 Agent 已成功住进你的计算机"
+
+; ── 完成页 ──
+!define MUI_FINISHPAGE_TITLE "小妲已就位"
+!define MUI_FINISHPAGE_TEXT "安装完成。$\n$\n桌面快捷方式「小妲Agent」随时可以唤出她；开始菜单里有 CLI 命令行与「检查更新」入口。$\n$\n祝你们相处愉快。"
 ; 安装完成后可选运行自检：用 doctor.bat（详细输出 + chcp 65001 防中文乱码），
 ; 加 --launch：自检结束自动启动主程序（v0.5.60 修复：原直接跑 exe doctor，
 ; 无 pause 导致窗口一闪而过，也不会自动启动）
 !define MUI_FINISHPAGE_RUN "$INSTDIR\doctor.bat"
 !define MUI_FINISHPAGE_RUN_PARAMETERS "--launch"
-!define MUI_FINISHPAGE_RUN_TEXT "运行自检并启动（推荐）"
+!define MUI_FINISHPAGE_RUN_TEXT "运行自检并唤醒小妲（推荐）"
+
+; ── 卸载页：温柔告别 ──
+!define MUI_UNWELCOMEPAGE_TITLE "送别小妲"
+!define MUI_UNWELCOMEPAGE_TEXT "即将卸载小妲 Agent。$\n$\n她的程序文件会离开，但你们共同的记忆（$PROFILE\.ai-agent 数据目录）会好好保留——重装即可重逢。$\n$\n点击「下一步」继续。"
+!define MUI_UNFINISHPAGE_TITLE "再见，也后会无期"
+!define MUI_UNFINISHPAGE_TEXT "小妲已从这台电脑离开。$\n$\n用户数据仍保留在 $PROFILE\.ai-agent（含记忆库与配置），确认不再回来时方可手动删除。"
 
 !insertmacro MUI_PAGE_WELCOME
 !insertmacro MUI_PAGE_DIRECTORY
@@ -131,19 +160,19 @@ File /nonfatal "dist\xiaoda-agent\.env.example"
 ; 安装后清理可能残留的敏感文件（旧版升级时 .env 可能被保留）
 Delete "$INSTDIR\_internal\config\webui_overrides.json"
 Delete "$INSTDIR\config\webui_overrides.json"
-; 清理旧版 agent 配置文件（IP 风险名称迁移）
-; per-user 安装下 $COMMONAPPDATA (C:\ProgramData) 可能无写权限，Delete 失败不影响安装
+; 清理旧版 agent 配置文件（IP 风险名称迁移）。
+; 修复（2026-08-26 编译验证发现）：原代码用 $COMMONAPPDATA——NSIS 无此
+; 常量，运行时展开为空串，Delete 实际删的是相对路径（从未生效）。
+; ProgramData 路径改由 PowerShell 获取（$$ 转义防 NSIS 吞 $env:）；
+; $APPDATA 是合法常量保留原生 Delete。
+nsExec::ExecToStack 'powershell -NoProfile -Command "Remove-Item -ErrorAction SilentlyContinue \"$$env:ProgramData\Xiaoda Agent\config\agents\nahida.json\",\"$$env:ProgramData\Xiaoda Agent\config\agents\keli.json\",\"$$env:ProgramData\Xiaoda Agent\config\agents\yinlang.json\",\"$$env:ProgramData\Xiaoda Agent\config\agents\xilian.json\",\"$$env:ProgramData\Xiaoda Agent\config\agents\nike.json\""'
 ClearErrors
-Delete "$COMMONAPPDATA\Xiaoda Agent\config\agents\nahida.json"
-Delete "$COMMONAPPDATA\Xiaoda Agent\config\agents\keli.json"
-Delete "$COMMONAPPDATA\Xiaoda Agent\config\agents\yinlang.json"
-Delete "$COMMONAPPDATA\Xiaoda Agent\config\agents\xilian.json"
-Delete "$COMMONAPPDATA\Xiaoda Agent\config\agents\nike.json"
-Delete "$APPDATA\Xiaoda Agent\config\agents\nahida.json"
-Delete "$APPDATA\Xiaoda Agent\config\agents\keli.json"
-Delete "$APPDATA\Xiaoda Agent\config\agents\yinlang.json"
-Delete "$APPDATA\Xiaoda Agent\config\agents\xilian.json"
-Delete "$APPDATA\Xiaoda Agent\config\agents\nike.json"
+StrCpy $R5 "$APPDATA"
+Delete "$R5\Xiaoda Agent\config\agents\nahida.json"
+Delete "$R5\Xiaoda Agent\config\agents\keli.json"
+Delete "$R5\Xiaoda Agent\config\agents\yinlang.json"
+Delete "$R5\Xiaoda Agent\config\agents\xilian.json"
+Delete "$R5\Xiaoda Agent\config\agents\nike.json"
 ClearErrors
 ; 主快捷方式直接指向 xiaoda-agent.exe（软件窗口入口）：
 ;   - exe 双击默认启动桌面原生窗口，内部已带看门狗，崩溃/卡死时自动重启

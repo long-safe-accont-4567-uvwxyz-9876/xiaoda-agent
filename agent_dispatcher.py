@@ -3,23 +3,32 @@ from typing import Any
 
 from loguru import logger
 
-from emotion.tts_engine import TTSEngine
-from tool_engine.tool_executor import ToolExecutor
-from tool_engine.tool_repair import ToolCallRepair
+from agent_core.sub_agent import (  # noqa: F401
+    _RESOURCE_PATH_TOOLS,
+    DELEGATE_BLOCKED_TOOLS,
+    SUB_AGENT_EXTRA_TOOLS,
+    SUB_AGENT_MEMORY_TOOL,
+    SUB_AGENT_MESSAGE_TOOL,
+    SUB_AGENT_PROFILE_TOOLS,
+    SubAgent,
+    SubAgentConfig,
+    _is_tool_unsupported_error,
+    _read_env_key,
+    _safe_log_path,
+)
 
 # ── 拆分：tool_call_extractors + sub_agent 抽出（逐字节搬移）──
 # 同名 re-export 保持兼容（契约见 tests/test_dispatcher_split.py）。
 from agent_core.tool_call_extractors import (  # noqa: F401
-    ExtractedToolCall, ToolCallExtractor, StandardExtractor,
-    DsmlExtractor, ResourceBackend,
+    DsmlExtractor,
+    ExtractedToolCall,
+    ResourceBackend,
+    StandardExtractor,
+    ToolCallExtractor,
 )
-from agent_core.sub_agent import (  # noqa: F401
-    SubAgent, SubAgentConfig,
-    DELEGATE_BLOCKED_TOOLS, _RESOURCE_PATH_TOOLS,
-    SUB_AGENT_PROFILE_TOOLS, SUB_AGENT_MEMORY_TOOL,
-    SUB_AGENT_MESSAGE_TOOL, SUB_AGENT_EXTRA_TOOLS,
-    _safe_log_path, _read_env_key, _is_tool_unsupported_error,
-)
+from emotion.tts_engine import TTSEngine
+from tool_engine.tool_executor import ToolExecutor
+from tool_engine.tool_repair import ToolCallRepair
 
 # RouterEngine agent name → task_type 反向映射
 # 用于 classify_task 委托 RouterEngine 后保持返回格式一致（task_type 字符串）
@@ -104,7 +113,7 @@ class AgentDispatcher:
                 except (OSError, RuntimeError):
                     logger.debug("agent_dispatcher.close_sub_agent_error", exc_info=True)
 
-    async def dispatch_single(self, name: str, task: str, context: str = "", status_callback: Any | None=None, address_term: str = "爸爸", extra_system_prompt: str = "") -> str | None:
+    async def dispatch_single(self, name: str, task: str, context: str = "", status_callback: Any | None=None, address_term: str = "爸爸", extra_system_prompt: str = "", interjections: list | None = None) -> str | None:
         """单子代理调度（原 dispatch 方法）。
 
         保留为独立方法以与并行调度（SubAgentManagerMixin.parallel_dispatch）区分；
@@ -124,6 +133,7 @@ class AgentDispatcher:
             status_callback=status_callback,
             address_term=address_term,
             extra_system_prompt=extra_system_prompt,
+            interjections=interjections,
         )
 
     async def _chat_with_scope(self, agent: SubAgent, message: str, **kwargs: Any) -> str:
@@ -199,12 +209,8 @@ class AgentDispatcher:
     def refresh_all_clients(self) -> int:
         count = 0
         for name, agent in self._agents.items():
-            agent._router = getattr(self._core, "router", None)
-            agent._initialized = agent._router is not None
-            agent._degraded = not agent._initialized
-            if agent._initialized:
+            if agent.refresh_router():
                 count += 1
-                logger.info("sub_agent.router_refreshed", name=name)
         return count
 
     def route_task(self, task_type: str, input_text: str) -> str:
@@ -378,16 +384,24 @@ class AgentDispatcher:
         return {"targets": targets, "mode": "parallel_fanout",
                 "synthesizer": "xiaoda", "verifier": ""}
 
+    _routing_v2_config_cache: tuple[float, dict] | None = None  # (mtime, config)
+
     def _load_routing_v2_config(self) -> dict:
-        """从 config/agent_routing_v2.json 加载多域路由配置。"""
+        """从 config/agent_routing_v2.json 加载多域路由配置（带文件修改时间缓存）。"""
         import json
         from pathlib import Path
 
         config_path = Path(__file__).parent / "config" / "agent_routing_v2.json"
         if config_path.exists():
             try:
+                mtime = config_path.stat().st_mtime
+                if (self._routing_v2_config_cache
+                        and self._routing_v2_config_cache[0] == mtime):
+                    return self._routing_v2_config_cache[1]
                 with open(config_path, encoding="utf-8") as f:
-                    return json.load(f)
+                    result = json.load(f)
+                self._routing_v2_config_cache = (mtime, result)
+                return result
             except (OSError, json.JSONDecodeError, ValueError) as e:
                 logger.warning("agent.routing_v2_config_load_failed", error=str(e))
         return {"single_domain": {}, "multi_domain": {}, "operation_patterns": {}}

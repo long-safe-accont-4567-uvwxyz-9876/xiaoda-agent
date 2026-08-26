@@ -3,11 +3,11 @@
 借鉴 Hermes Agent 的错误分类机制，替代 ModelRouter 中简单的重试/降级逻辑
 """
 
-from enum import Enum
 from dataclasses import dataclass
-from loguru import logger
+from enum import Enum
 
 import openai
+from loguru import logger
 
 
 class FailoverReason(Enum):
@@ -175,7 +175,7 @@ class ErrorClassifier:
                 # P0 修复（2026-08-05）：APITimeoutError 是 APIConnectionError 的子类，
                 # 必须在父类之前检查，否则永远被分类为 CONNECTION_ERROR → 触发重试 →
                 # 60s+ 阻塞（日志 reason=connection_error error=APITimeoutError 铁证）。
-                # 正确分类为 TIMEOUT 后，配合 RETRYABLE_ERRORS 移除 timeout，超时直接降级。
+                # 正确分类为 TIMEOUT 后，超时不进入重试、直接降级。
                 return FailoverReason.TIMEOUT
             if isinstance(exc, openai.APIConnectionError):
                 return FailoverReason.CONNECTION_ERROR

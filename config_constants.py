@@ -2,7 +2,7 @@
 
 内容：模块级环境变量开关与常量表（import 期 os.getenv 求值 + 纯字面量）：
 API 密钥/端点（DEEPSEEK/MIMO/AGNES/ASR/Jina/Reranker，经 get_secret 解密）、
-路由关键词表 AGENT_ROUTE_KEYWORDS、子代理任务映射 AGENT_TASK_MAP、
+子代理任务映射 AGENT_TASK_MAP、
 RAG/检索/流式/熔断/记忆蒸馏等运行开关与阈值、子 Agent 超时、
 CHILD_CHUNK 结构常量、J-Space/情绪分析开关，以及仅被这些常量求值使用的
 辅助工具 get_secret / _safe_positive_float（safe_int/safe_float 从
@@ -34,6 +34,35 @@ from security import credential_vault
 from utils.common import safe_float as _safe_float
 from utils.common import safe_int as _safe_int
 from utils.encrypted_credential import protect_credential
+
+_TRUTHY = ("1", "true", "yes", "on")
+_FALSY = ("0", "false", "off", "no", "")
+
+
+def env_flag(name: str, default: bool = False) -> bool:
+    """读取 *_ENABLED 类环境变量（opt-in 语义，allow-list 判定）。
+
+    未设置 → default；设置时仅 "1"/"true"/"yes"/"on"（大小写不敏感）为真。
+    全仓 *_ENABLED 开关统一走本助手，禁止各模块自写解析
+    （历史上有 == "1" / == "true" / 三套 allow-list 并存的漂移）。
+    """
+    val = os.getenv(name)
+    if val is None:
+        return default
+    return val.strip().lower() in _TRUTHY
+
+
+def env_optout_flag(name: str, default: bool = True) -> bool:
+    """读取默认开启的开关（opt-out 语义，deny-list 判定）。
+
+    未设置 → default；设置时仅 "0"/"false"/"off"/"no"/"" 为假，其余一律为真。
+    与 env_flag 的区别：显式设了垃圾值时 opt-out 视为开启（用户想开但拼错了），
+    opt-in 视为关闭（用户没表达明确意图）。
+    """
+    val = os.getenv(name)
+    if val is None:
+        return default
+    return val.strip().lower() not in _FALSY
 
 
 def get_secret(name: str, default: str = "") -> str:
@@ -86,7 +115,7 @@ def __getattr__(name: str):
 # 默认 False：使用 TCP 对端 request.client.host（最安全）。
 # 设为 True 时从 X-Forwarded-For 末尾取真实 IP，仅在你确信部署在可信反代
 # （如 nginx/Caddy）后才启用，否则攻击者可伪造 XFF 绕过登录限流/白名单。
-TRUST_FORWARDED_FOR = os.getenv("TRUST_FORWARDED_FOR", "").strip().lower() in ("1", "true", "yes", "on")
+TRUST_FORWARDED_FOR = env_flag("TRUST_FORWARDED_FOR", False)
 
 
 # Agnes AI 配置（在 get_provider_config 之前定义，避免前向引用）
@@ -108,49 +137,6 @@ ASR_MODEL = os.getenv("ASR_MODEL", "FunAudioLLM/SenseVoiceSmall")
 # 调用点（_is_simple_task / _is_simple_chat / _should_escalate_to_pro 关键词分支）
 # 已从 message_processor.py 中删除。
 
-# 用于 RouterNode._rule_route：按 Agent 分配的路由关键词
-AGENT_ROUTE_KEYWORDS = {
-    "xiaolian": [
-        "搜索", "搜一下", "查一下", "找一下", "帮我查", "帮我搜", "搜索一下",
-        "查资料", "最新", "新闻", "资讯", "获取网上", "看看有没有",
-        "板块", "盘整", "入场", "股票", "基金", "行情", "大盘", "涨跌",
-        "市值", "财经", "证券", "a股", "港股", "美股", "币圈", "加密货币",
-        "走势", "k线", "技术分析", "基本面", "财报", "市盈率",
-    ],
-    "xiaolang": [
-        "代码", "编程", "写代码", "debug", "调试", "程序", "开发", "部署",
-        "git", "api", "接口", "函数", "脚本", "运行", "执行命令",
-        "巡检", "检查系统", "磁盘", "内存", "cpu", "进程", "服务状态",
-        "日志", "监控", "系统信息", "香橙派", "orange pi", "服务器",
-        "docker", "容器", "网络", "端口", "防火墙", "配置文件",
-        "gpio", "i2c", "spi", "传感器", "led", "舵机", "硬件", "引脚",
-        "串口", "uart", "pwm", "adc", "dac",
-        "摄像头", "拍照", "观察", "识别", "检测",
-        "重启服务", "部署", "服务状态", "系统服务",
-        "重启", "服务",
-    ],
-    "xiaoke": [
-        "研究", "分析", "学术", "论文", "深度", "计算复杂度", "数学证明",
-        "物理", "化学", "生物", "统计", "推导", "公式",
-    ],
-    "xiaoda": [
-        "天气", "气温", "温度", "下雨", "晴天", "阴天",
-        "时间", "几点", "现在几点", "日期", "今天星期几",
-        "翻译", "意思是什么",
-        "语音", "声音", "说话", "朗读", "念给我", "读给我", "听你", "听听", "发语音", "生成语音", "语音回复", "说给我听", "念出来", "tts", "voice",
-        "技能", "能力", "功能", "你会什么", "你能做什么", "你有什么", "列出技能", "列出功能",
-        "画", "生成图", "生成图片", "画一张", "画个", "画一个", "图片生成", "做视频", "生成视频",
-        "表情包", "贴纸",
-        "回忆", "记得", "记忆", "recall", "remember", "记得吗", "上次", "昨天", "前几天", "上周",
-    ],
-    "parallel_trigger": [
-        "全面", "整体", "综合", "各个方面", "多方面", "同时",
-        "全部", "一起", "都检查", "都搜一下", "分别",
-        "全方位", "彻底", "完整", "所有", "各个板块",
-        "巡检", "体检", "诊断", "健康检查", "状况报告",
-    ],
-}
-
 # ── 子代理任务类型映射（EnhancedBeliefRouter 使用） ──
 AGENT_TASK_MAP = {
     "xiaolang": "debug",
@@ -162,7 +148,7 @@ AGENT_TASK_MAP = {
 # ── RAG 优化配置（SiliconFlow 免费常驻） ──
 RERANKER_BASE_URL = os.getenv("RERANKER_BASE_URL", "https://api.siliconflow.cn/v1")
 RERANKER_MODEL = os.getenv("RERANKER_MODEL", "BAAI/bge-reranker-v2-m3")
-RERANKER_ENABLED = os.getenv("RERANKER_ENABLED", "true").lower() in ("1", "true", "yes")
+RERANKER_ENABLED = env_flag("RERANKER_ENABLED", True)
 
 
 def _safe_positive_float(env_val: str | None, default: float) -> float:
@@ -195,7 +181,7 @@ RAG_RRF_RANK_PENALTY = _safe_float(os.getenv("RAG_RRF_RANK_PENALTY"), 1.0)
 # 字面不含多字词（"手机号"），单字匹配是其 FTS 通道唯一命中兜底，降噪即摧毁。
 # 默认 false 且不建议开启；保留开关供未来配合"查询重写"（rewrite_query 已有）
 # 场景下再量化。
-FTS_DROP_CJK_SINGLE = os.getenv("FTS_DROP_CJK_SINGLE", "false").lower() in ("1", "true", "yes")
+FTS_DROP_CJK_SINGLE = env_flag("FTS_DROP_CJK_SINGLE", False)
 
 # FTS CJK 停用词过滤：比 FTS_DROP_CJK_SINGLE 更精准的降噪策略。
 # 只过滤已知高频无意义单字（我/的/了/是/在/有/和/不 等），保留有区分度的单字
@@ -205,33 +191,38 @@ FTS_DROP_CJK_SINGLE = os.getenv("FTS_DROP_CJK_SINGLE", "false").lower() in ("1",
 # 轻微负向（-2.1%），因"我的证件号码"等查询中"我"被过滤后 FTS 信号减弱。
 # 配合查询改写（rewrite_query）后停用词过滤可能更安全——改写后查询已含具体关键词，
 # 不再依赖"我"做 FTS 兜底。默认 false，留开关供后续配合改写再量化。
-FTS_CJK_STOP_WORDS_FILTER = os.getenv("FTS_CJK_STOP_WORDS_FILTER", "false").lower() in ("1", "true", "yes")
+FTS_CJK_STOP_WORDS_FILTER = env_flag("FTS_CJK_STOP_WORDS_FILTER", False)
 
 # Query Transform
-QUERY_TRANSFORM_ENABLED = os.getenv("QUERY_TRANSFORM_ENABLED", "true").lower() in ("1", "true", "yes")
+QUERY_TRANSFORM_ENABLED = env_flag("QUERY_TRANSFORM_ENABLED", True)
 QUERY_EXPAND_COUNT = _safe_int(os.getenv("QUERY_EXPAND_COUNT"), 0)  # 默认关闭多查询扩展（实测不好用），rewrite_query 仍保留
 # HyDE（假设文档嵌入）：开启时生成假设答案文档，与原查询向量混合检索。
 # 默认关闭（HYDE_ENABLED=false）：远程实测 Recall@5 从 78.1% 降至 53.1%（-25%），
 # 假设文档噪声大于收益，与多查询扩展结论一致。
 # 环境变量 HYDE_ENABLED=true 可重新启用，后续换更贴合数据/调参(alpha)可再量化。
-HYDE_ENABLED = os.getenv("HYDE_ENABLED", "false").lower() in ("1", "true", "yes")
+HYDE_ENABLED = env_flag("HYDE_ENABLED", False)
+# HyDE 子集门控（Phase 5 实验卡 hyde-subset-gate，研究文档 §5.2「exact 类禁 HyDE」）：
+#   off       = 仅由 HYDE_ENABLED 总开关决定（默认，保持历史行为）
+#   non_exact = 含精确标识符/数字串/时间词/多跳连接词的查询跳过 HyDE，
+#               仅语义型查询生成假设文档（先验证据：全局开启 Recall@5 -25%）
+HYDE_SUBSET_MODE = os.getenv("HYDE_SUBSET_MODE", "off")
 # 检索扩散开关：False=精准检索（搜什么就是什么，跳过 expand_query 和 _spreading_recall）
 # True=扩散检索（向后兼容，生成额外查询目标 + 概念图扩散）
 # 默认开启：配合 Reranker 精排兜底，扩散召回的结果可被交叉编码器过滤，
 # 仅当 Reranker 不可用时扩散结果才以最低优先级进入最终输出（权重 0.4，RAG_MIN_FINAL_SCORE 兜底）。
-MEMORY_RETRIEVAL_DIFFUSION = os.getenv("MEMORY_RETRIEVAL_DIFFUSION", "true").lower() in ("1", "true", "yes")
+MEMORY_RETRIEVAL_DIFFUSION = env_flag("MEMORY_RETRIEVAL_DIFFUSION", True)
 # 意图分类 LLM 调用：默认开启（GLM-Z1-9B-0414 推理质量高，速度可接受）
 # 设置 INTENT_LLM_CLASSIFY=false 可关闭 LLM 分类，仅用规则匹配（更快）
-INTENT_LLM_CLASSIFY = os.getenv("INTENT_LLM_CLASSIFY", "false").lower() in ("1", "true", "yes")
+INTENT_LLM_CLASSIFY = env_flag("INTENT_LLM_CLASSIFY", False)
 # 意图分类 LLM 调用超时（秒），默认 5.0s（从 2.0s 提升，避免误超时）
 INTENT_CLASSIFY_TIMEOUT = _safe_float(os.getenv("INTENT_CLASSIFY_TIMEOUT"), 15.0)
 
 # Retrieval Optimization (A1/A2/A3)
-RETRIEVAL_SMART_SKIP = os.getenv("RETRIEVAL_SMART_SKIP", "true").lower() in ("1", "true", "yes")
-RETRIEVAL_PARALLEL_TRANSFORM = os.getenv("RETRIEVAL_PARALLEL_TRANSFORM", "true").lower() in ("1", "true", "yes")
-RETRIEVAL_PARALLEL_SEARCH = os.getenv("RETRIEVAL_PARALLEL_SEARCH", "true").lower() in ("1", "true", "yes")
+RETRIEVAL_SMART_SKIP = env_flag("RETRIEVAL_SMART_SKIP", True)
+RETRIEVAL_PARALLEL_TRANSFORM = env_flag("RETRIEVAL_PARALLEL_TRANSFORM", True)
+RETRIEVAL_PARALLEL_SEARCH = env_flag("RETRIEVAL_PARALLEL_SEARCH", True)
 # 查询语义缓存开关：命中缓存时跳过完整检索流水线
-QUERY_CACHE_ENABLED = os.getenv("QUERY_CACHE_ENABLED", "true").lower() in ("1", "true", "yes")
+QUERY_CACHE_ENABLED = env_flag("QUERY_CACHE_ENABLED", True)
 # P3-9: 查询缓存参数配置化（之前硬编码在 QueryCache 默认参数中，无法运行时调节）
 # threshold: 余弦相似度阈值，>= 此值视为命中（0.88 严格匹配，避免误命中返回无关记忆）
 # max_size: LRU 最大条目数（256 足够覆盖活跃话题，过大占用内存）
@@ -243,17 +234,20 @@ QUERY_CACHE_TTL = _safe_int(os.getenv("QUERY_CACHE_TTL"), 300)
 # 过低会误砍仍在进行的 embed/rerank（USB 盘慢时 5s 常超，导致记忆注入为空、回复短），
 # 过高则拖慢整体回复。默认 8s：给予慢速存储足够余量，同时控制最坏延迟。
 MEMORY_RETRIEVE_TIMEOUT = _safe_positive_float(os.getenv("MEMORY_RETRIEVE_TIMEOUT"), 8.0)
+MEMORY_EVIDENCE_TOKEN_BUDGET = _safe_int(
+    os.getenv("MEMORY_EVIDENCE_TOKEN_BUDGET"), 3000
+)
 
 # Rust 热点下沉 PoC 开关：True 时扩散激活直接命中通道走 rust_core 扩展
 # （PyO3 常驻 NodeIndex），扩展缺失/调用失败自动回退纯 Python，业务无感。
 # 默认关闭——需先通过 tests/test_rust_hybrid_poc.py 等价性验证再开启。
-RUST_HYBRID_ENABLED = os.getenv("RUST_HYBRID_ENABLED", "false").lower() in ("1", "true", "yes")
+RUST_HYBRID_ENABLED = env_flag("RUST_HYBRID_ENABLED", False)
 
 # ── 父子Chunk RAG 优化 ──
-PARENT_CHILD_CHUNK_ENABLED = os.getenv("PARENT_CHILD_CHUNK_ENABLED", "true").lower() in ("1", "true", "yes")
+PARENT_CHILD_CHUNK_ENABLED = env_flag("PARENT_CHILD_CHUNK_ENABLED", True)
 # ── KG v2 知识图谱优化 ──
-KG_V2_ENABLED = os.getenv("KG_V2_ENABLED", "false").lower() in ("1", "true", "yes")
-CONTEXTUAL_RETRIEVAL_ENABLED = os.getenv("CONTEXTUAL_RETRIEVAL_ENABLED", "true").lower() in ("1", "true", "yes")
+KG_V2_ENABLED = env_flag("KG_V2_ENABLED", False)
+CONTEXTUAL_RETRIEVAL_ENABLED = env_flag("CONTEXTUAL_RETRIEVAL_ENABLED", True)
 CHILD_CHUNK_OVERLAP_CHARS = _safe_int(os.getenv("CHILD_CHUNK_OVERLAP_CHARS"), 30)
 CHILD_CHUNK_MAX_PER_PARENT = _safe_int(os.getenv("CHILD_CHUNK_MAX_PER_PARENT"), 10)
 CHILD_CHUNK_SEGMENT_MAX_LEN = _safe_int(os.getenv("CHILD_CHUNK_SEGMENT_MAX_LEN"), 200)
@@ -270,31 +264,67 @@ SUB_AGENT_API_RETRY = _safe_int(os.getenv("SUB_AGENT_API_RETRY"), 1)
 
 # ── 性能优化开关 ──────────────────────────────────────────────
 # Task 6: TTS 异步化（方案 B）—— 开启后 TTS 在后台合成，先返回文字回复
-TTS_ASYNC_MODE = os.getenv("TTS_ASYNC_MODE", "true").lower() in ("1", "true", "yes")
+TTS_ASYNC_MODE = env_flag("TTS_ASYNC_MODE", True)
 # Task 7: 流式中间状态推送（方案 C1）—— 开启后推送细粒度思考状态
-STREAM_STATUS_PUSH = os.getenv("STREAM_STATUS_PUSH", "false").lower() in ("1", "true", "yes")
+STREAM_STATUS_PUSH = env_flag("STREAM_STATUS_PUSH", False)
 # Task 9: 简单对话快速路径（方案 E）—— 开启后简单闲聊跳过记忆检索
 # P0：fastpath 机制已彻底取消（用户要求"取消fastpath机制，通道分类性价比太低了"）
 # 环境变量保留读取仅为向后兼容（仍默认 false），但所有调用点已删除，
 # 即使设为 true 也不会触发任何 fastpath 逻辑。
-SIMPLE_CHAT_FASTPATH = os.getenv("SIMPLE_CHAT_FASTPATH", "false").lower() in ("1", "true", "yes")
+SIMPLE_CHAT_FASTPATH = env_flag("SIMPLE_CHAT_FASTPATH", False)
 
 # P0: WebSocket 流式文本推送 —— LLM 流式调用 + 逐 token 推送
-STREAM_TEXT_PUSH = os.getenv("STREAM_TEXT_PUSH", "true").lower() in ("1", "true", "yes")
+STREAM_TEXT_PUSH = env_flag("STREAM_TEXT_PUSH", True)
 # P0: 工具调用中间状态推送（started/completed/failed）
-STREAM_TOOL_STATUS = os.getenv("STREAM_TOOL_STATUS", "true").lower() in ("1", "true", "yes")
+STREAM_TOOL_STATUS = env_flag("STREAM_TOOL_STATUS", True)
+
+# P0: 工具轮结构化流事件。默认关闭；关闭时保留旧文本流/工具非流式路径。
+STRUCTURED_STREAM_EVENTS = env_flag("STRUCTURED_STREAM_EVENTS", False)
+# P0: QQ 群 @ 消息易失上下文缓冲。默认关闭，关闭时保持成员级上下文现状。
+GROUP_CHAT_BUFFER_ENABLED = env_flag("GROUP_CHAT_BUFFER_ENABLED", False)
+# P1 隐私修复：QQ 群回复默认排除主人私聊提炼的个人记忆（personal-boundary），
+# 防止私忆内容经记忆检索注入后进入全群可见回复。
+# 设 true 恢复旧行为（群回复允许注入个人记忆，有泄露风险）。
+GROUP_REPLY_PERSONAL_MEMORY_ENABLED = env_flag("GROUP_REPLY_PERSONAL_MEMORY_ENABLED", False)
+# P0: 写入侧四动作消解发布模式。默认 shadow，不改变记忆可见性。
+MEMORY_RECONCILIATION_MODE = os.getenv(
+    "MEMORY_RECONCILIATION_MODE", "shadow"
+).strip().lower()
+MEMORY_RECONCILIATION_ALLOWED_ACTIONS = os.getenv(
+    "MEMORY_RECONCILIATION_ALLOWED_ACTIONS", ""
+).strip().lower()
+# P1 悬空接线：记忆对账后台轮询循环开关。默认关闭——enqueue 侧事件驱动触发
+# （蒸馏落库后 run_pending_once）已覆盖常规路径，轮询仅兜底重试/积压 job；
+# 开启后由 web/server.py lifespan 启动 reconciliation_worker.run_forever。
+MEMORY_RECONCILIATION_WORKER_ENABLED = env_flag("MEMORY_RECONCILIATION_WORKER_ENABLED", False)
+MEMORY_RECONCILIATION_WORKER_INTERVAL = _safe_float(
+    os.getenv("MEMORY_RECONCILIATION_WORKER_INTERVAL"), 30.0
+)
 
 # Task 12: 熔断器智能恢复配置（P2）
 # COOLDOWN 从 60→30：熔断后恢复更快，避免长时间快速失败拖累用户体验
 CIRCUIT_BREAKER_COOLDOWN = _safe_int(os.getenv("CIRCUIT_BREAKER_COOLDOWN"), 30)
+
+# ── 工具分层注入（2026-08-25 精炼：常驻 48→35，长尾经 search_tools 按需检索）──
+# 依据近 7 天文件日志调用频次画像：mail 七件套/wolfram/视觉摄像/dev_assist 等
+# 零调用且占注入开销 ~41%。延迟工具仍可被模型直接调用（executor 查全量 _tools），
+# 或经 search_tools 元工具按需取回定义。TOOL_TIERING_ENABLED=false 一键回退全量。
+TOOL_TIERING_ENABLED = env_flag("TOOL_TIERING_ENABLED", True)
+TOOL_DEFERRED_NAMES = frozenset({
+    "mail_search", "mail_forward", "mail_send", "mail_reply",
+    "mail_list", "mail_download_attachment",
+    "wolfram_query", "camera_capture", "vision_analyze",
+    "document_reader", "dev_assist", "network_diag",
+    "agnes_video_generate", "echo__echo", "retrieve_context",
+})
 CIRCUIT_BREAKER_HALF_OPEN_PROBES = _safe_int(os.getenv("CIRCUIT_BREAKER_HALF_OPEN_PROBES"), 2)
 CIRCUIT_BREAKER_MAX_COOLDOWN = _safe_int(os.getenv("CIRCUIT_BREAKER_MAX_COOLDOWN"), 300)
 
 # P5: 失败经验→规则闭环 —— 命中规则时是否拒绝调用（true=拒绝，false=仅记录警告日志）
-ERROR_RULE_STRICT_MODE = os.getenv("ERROR_RULE_STRICT_MODE", "true").lower() in ("1", "true", "yes")
+ERROR_RULE_STRICT_MODE = env_flag("ERROR_RULE_STRICT_MODE", True)
 
 # P6: 增量上下文构建与 Prompt Caching —— 开启后拆分系统提示稳定段/动态段并标记缓存
-PROMPT_CACHING_ENABLED = os.getenv("PROMPT_CACHING_ENABLED", "false").lower() in ("1", "true", "yes")
+PROMPT_CACHING_ENABLED = env_flag("PROMPT_CACHING_ENABLED", False)
 
 # RAG Fusion Weights（与 _compute_final_scores 评分公式对齐）
 # bench_memory_recall_vec 实测最优：rerank=0.60 主导排序，importance=0.10 仅微调
@@ -338,7 +368,6 @@ RAG_VEC_SOFT_PENALTY = _safe_float(os.getenv("RAG_VEC_SOFT_PENALTY"), 0.6)
 
 # ── 记忆/情绪阈值 (可环境变量覆盖) ──
 # 情绪触发安慰记忆检索的强度阈值 (0.0~1.0)
-EMOTION_TRIGGER_THRESHOLD = _safe_float(os.getenv("EMOTION_TRIGGER_THRESHOLD"), 0.5)
 # B 级场景粘性阈值: 低于此权重时不重排, 防止低质量闲聊触发重排
 SCENE_STICKINESS_THRESHOLD = _safe_float(os.getenv("SCENE_STICKINESS_THRESHOLD"), 0.5)
 
@@ -352,19 +381,22 @@ MEMORY_WARM_VEC_WEIGHT = _safe_float(os.getenv("MEMORY_WARM_VEC_WEIGHT"), 0.6)
 # ── P3 记忆蒸馏压缩配置 ──
 MAX_EPISODIC_MEMORIES = _safe_int(os.getenv("MAX_EPISODIC_MEMORIES"), 200)
 MEMORY_DISTILL_BATCH = _safe_int(os.getenv("MEMORY_DISTILL_BATCH"), 30)
-MEMORY_DISTILL_ENABLED = os.getenv("MEMORY_DISTILL_ENABLED", "false").lower() in ("1", "true", "yes")
+MEMORY_DISTILL_ENABLED = env_flag("MEMORY_DISTILL_ENABLED", False)
+MEMORY_TYPE_ENRICHMENT_ENABLED = env_flag("MEMORY_TYPE_ENRICHMENT_ENABLED", False)
 
 # ── H1 情景记忆行数上限 (episodic_limiter) ──
 MAX_EPISODIC_ROWS = _safe_int(os.getenv("MAX_EPISODIC_ROWS"), 10000)
 
 
 # ── J-Space 架构优化配置 ──────────────────────────────────────
-ENABLE_J_SPACE_HOOKS = os.getenv("ENABLE_J_SPACE_HOOKS", "true").lower() == "true"
+ENABLE_J_SPACE_HOOKS = env_flag("ENABLE_J_SPACE_HOOKS", True)
 
 # ── emotion_llm 深度情绪分析开关 ──────────────────────────────
 # LLM 深度情绪分析已在 fire-and-forget 模式下运行（不阻塞主路径），
 # 结果异步持久化到 mental_state（primary + PAD + needs）供下次请求使用。
-ENABLE_EMOTION_LLM = os.getenv("ENABLE_EMOTION_LLM", "true").lower() in ("1", "true", "yes")
+ENABLE_EMOTION_LLM = env_flag("ENABLE_EMOTION_LLM", True)
 DIRECTION_REGISTRY_PATH = os.getenv("DIRECTION_REGISTRY_PATH", str(DATA_DIR / "direction_registry.json"))
+# Thompson Sampling 信念持久化库（空串则不持久化、重启归零）
+BELIEF_DB_PATH = os.getenv("BELIEF_DB_PATH", str(DATA_DIR / "beliefs.db"))
 SIGNAL_STREAM_MAX_HISTORY = _safe_int(os.getenv("SIGNAL_STREAM_MAX_HISTORY"), 1000)
 INTERVENTION_DEFAULT_COOLDOWN = _safe_float(os.getenv("INTERVENTION_DEFAULT_COOLDOWN"), 30.0)

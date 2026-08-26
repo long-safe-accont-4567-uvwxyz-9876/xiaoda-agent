@@ -12,11 +12,11 @@
 from __future__ import annotations
 
 import asyncio
+import datetime
 import os
 import time
-import datetime
-from zoneinfo import ZoneInfo
 from typing import TYPE_CHECKING
+from zoneinfo import ZoneInfo
 
 from loguru import logger
 
@@ -183,6 +183,8 @@ class GrowthNarrative:
         result = await self._free.call(messages, temperature=0.7, max_tokens=512)
         if result is not None:
             return result.strip()
+        if self._free.backend != "api":
+            return ""
         try:
             result = await asyncio.wait_for(
                 self.core.router.route(

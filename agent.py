@@ -9,6 +9,7 @@ from typing import Any
 
 from loguru import logger
 
+from config_constants import env_flag
 from utils.common import DEFAULT_WEBUI_PORT
 from utils.common import safe_int as _safe_int
 
@@ -186,7 +187,7 @@ def _resolved_mode(args) -> str:
     if args.cli:
         return "cli"
     # 显式参数优先于环境变量：--cli 已返回，这里才读 WEB_UI_ENABLED（Docker 常见）
-    if os.getenv("WEB_UI_ENABLED", "").lower() in ("true", "1", "yes"):
+    if env_flag("WEB_UI_ENABLED", False):
         return "web"
     if _is_packaged_windows():
         return "desktop" if _webview2_installed() else "web"
@@ -227,8 +228,9 @@ def _correct_sensitive_file_permissions() -> None:
     防止旧文件残留 0644 权限被同机其他用户读取。
     """
     import stat
-    from utils.atomic_write import _restrict_file_permissions_windows
+
     from config import get_credentials_dir
+    from utils.atomic_write import _restrict_file_permissions_windows
     cred_dir = get_credentials_dir()
     sensitive_files = [
         # 项目内遗留副本（应在后续清理，此处先校正权限）

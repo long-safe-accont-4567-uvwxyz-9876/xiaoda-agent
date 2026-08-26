@@ -6,6 +6,7 @@ import { useRouter } from 'vue-router'
 import { api, get } from '../api'
 import Tilt3D from '../components/fx/Tilt3D.vue'
 import DendroEmblem from '../components/fx/DendroEmblem.vue'
+import { wallpaperKind } from '../utils/wallpaper'
 import { t } from '../i18n'
 
 const DEFAULT_BG = '/assets/webui_background.jpg'
@@ -18,6 +19,19 @@ const error = ref('')
 const loading = ref(false)
 const noPassword = ref(false)
 const loginBg = computed(() => agentsStore.mainWallpaper || DEFAULT_BG)
+// 主 Agent 动态壁纸（视频）→ 登录页同步为视频背景；image 走原 background-image
+const loginBgKind = computed(() => wallpaperKind(loginBg.value))
+const bgStyle = computed(() => {
+  if (loginBgKind.value === 'video') return undefined
+  // encodeURI + 引号转义：壁纸 URL 来自服务端配置，防止 ' 提前闭合 url() 造成 CSS 注入面
+  const safeUrl = encodeURI(loginBg.value).replace(/'/g, '%27')
+  return { backgroundImage: `var(--backdrop-tint), url('${safeUrl}')` }
+})
+
+function onLoginVideoError() {
+  // 视频 404/解码失败 → 清空走默认图，避免黑屏
+  agentsStore.setMainWallpaper('')
+}
 
 onMounted(async () => {
   try {
@@ -143,8 +157,19 @@ async function submitRecover() {
 </script>
 
 <template>
-  <div class="login-page app-bg" :style="{ backgroundImage: `var(--backdrop-tint), url('${loginBg}')` }">
-    <Tilt3D :max-x="5" :max-y="7">
+  <div class="login-page app-bg" :style="bgStyle">
+    <video v-if="loginBgKind === 'video'"
+           class="login-bg-video"
+           :src="loginBg"
+           autoplay
+           loop
+           muted
+           playsinline
+           preload="auto"
+           @error="onLoginVideoError"
+    />
+    <div v-if="loginBgKind === 'video'" class="login-bg-tint"></div>
+    <Tilt3D :max-x="5" :max-y="7" class="login-content">
       <div class="login-card glass-panel shimmer-band">
         <span class="vine corner-tl"></span>
         <span class="vine corner-br"></span>
@@ -244,10 +269,35 @@ async function submitRecover() {
 
 <style scoped>
 .login-page {
+  position: relative;
   height: 100vh;
   display: flex;
   align-items: center;
   justify-content: center;
+}
+
+/* 视频壁纸层：铺满 + 与图片路径同款暗色 tint，保证卡片可读性 */
+.login-bg-video {
+  position: absolute;
+  inset: 0;
+  z-index: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.login-bg-tint {
+  position: absolute;
+  inset: 0;
+  z-index: 0;
+  background: var(--backdrop-tint);
+  pointer-events: none;
+}
+
+/* 视频为定位元素会盖住静态内容，内容侧显式提层 */
+.login-content {
+  position: relative;
+  z-index: 1;
 }
 
 .login-card {
@@ -278,12 +328,19 @@ async function submitRecover() {
   font-weight: 700;
   letter-spacing: 3px;
   font-family: 'Noto Serif SC', serif;
+  /* 兜底纯绿：不支持 background-clip:text 的引擎下标题不落黑 */
+  color: var(--dendro);
   background: var(--gradient-dendro, linear-gradient(135deg, #b8ff85, #8fe560 45%, #4fd6a5));
-  -webkit-background-clip: text;
-  background-clip: text;
-  -webkit-text-fill-color: transparent;
-  color: transparent;
   filter: drop-shadow(0 0 14px rgba(143, 229, 96, 0.35));
+}
+
+@supports ((-webkit-background-clip: text) or (background-clip: text)) {
+  .login-title {
+    -webkit-background-clip: text;
+    background-clip: text;
+    -webkit-text-fill-color: transparent;
+    color: transparent;
+  }
 }
 
 .subtitle {
@@ -360,7 +417,7 @@ async function submitRecover() {
   margin: 6px 0 12px;
   padding: 10px 12px;
   border-radius: 8px;
-  background: rgba(0, 0, 0, 0.25);
+  background: rgba(10, 20, 14, 0.45);
 }
 .recover-q-label { font-size: 11.5px; color: var(--moon-dim); }
 .recover-q-text { font-size: 14px; color: var(--moon); line-height: 1.5; word-break: break-all; }

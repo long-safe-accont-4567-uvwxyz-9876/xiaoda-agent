@@ -6,10 +6,12 @@ import {
   NPopconfirm, NProgress, useMessage,
 } from 'naive-ui'
 import { get, post, put, del, api } from '../api'
+import type { AgentInfo } from '../api/types'
 import { getWsClient } from '../api/ws'
 import { useUiStore } from '../stores/ui'
 import { t } from '../i18n'
 import Tilt3D from '../components/fx/Tilt3D.vue'
+import ViewTitleIcon from '../components/fx/ViewTitleIcon.vue'
 import { replaceAgentNames } from '../utils/agentNames'
 
 const message = useMessage()
@@ -44,13 +46,13 @@ const gallery = ref<any[]>([])
 
 onMounted(async () => {
   try {
-    const agents = await get<any[]>('/agents')
-    agentList.value = agents.map(a => ({ name: a.name, display_name: a.display_name || a.name, voice_ref: a.voice_ref }))
+    const agents = await get<AgentInfo[]>('/agents')
+    agentList.value = agents.map(a => ({ name: a.name, display_name: a.display_name || a.name, voice_ref: a.voice_ref ?? null }))
     if (agentList.value.length) selectedAgent.value = agentList.value[0].name
   } catch { /* */ }
   await loadVoices()
   try {
-    const cfg = await get('/media/tts/config')
+    const cfg = await get<{ auto_speak: boolean; default_voice: string }>('/media/tts/config')
     ui.autoSpeak = cfg.auto_speak
     // 默认选择 xiaoda agent（其 voice_ref 由管理区设置）
     if (!ttsAgent.value || !agentList.value.find(a => a.name === ttsAgent.value)) {
@@ -92,7 +94,7 @@ async function synthesize() {
   }
   ttsLoading.value = true
   try {
-    const r = await post('/media/tts', {
+    const r = await post<{ audio_url: string; cached: boolean }>('/media/tts', {
       text: ttsText.value, voice: voiceRef, style: ttsStyle.value || '',
     })
     ttsResult.value = r.audio_url
@@ -114,9 +116,9 @@ async function setAutoSpeak(v: boolean) {
 
 async function loadVoices() {
   try {
-    const v = await get('/media/tts/voices')
+    const v = await get<{ groups: Record<string, Array<{ name: string; voice_ref: string }>>; styles: string[] }>('/media/tts/voices')
     voiceGroups.value = v.groups || {}
-    styles.value = v.styles.map((s: string) => ({ label: s, value: s }))
+    styles.value = (v.styles || []).map(s => ({ label: s, value: s }))
   } catch { /* */ }
 }
 
@@ -143,8 +145,8 @@ function onVoiceFilePick(e: Event) {
 
 async function reloadAgentVoiceRef() {
   try {
-    const agents = await get<any[]>('/agents')
-    agentList.value = agents.map(a => ({ name: a.name, display_name: a.display_name || a.name, voice_ref: a.voice_ref }))
+    const agents = await get<AgentInfo[]>('/agents')
+    agentList.value = agents.map(a => ({ name: a.name, display_name: a.display_name || a.name, voice_ref: a.voice_ref ?? null }))
   } catch { /* */ }
 }
 
@@ -164,7 +166,7 @@ async function setAgentVoice(voiceRef: string | null) {
 async function deleteVoice(name: string) {
   if (!selectedAgent.value) return
   try {
-    await del(`/media/tts/voices/${selectedAgent.value}/${name}`)
+    await del(`/media/tts/voices/${selectedAgent.value}/${name}`, true)
     message.success(t('mediaView.voiceDeleted'))
     await loadVoices()
   } catch (e: any) { message.error(e.message) }
@@ -195,7 +197,7 @@ async function loadTasks() {
 
 async function cancelTask(id: string) {
   try {
-    await del(`/media/tasks/${id}`)
+    await del(`/media/tasks/${id}`, true)
     message.success(t('mediaView.cancelled'))
     loadTasks()
   } catch (e: any) { message.error(e.message) }
@@ -226,7 +228,7 @@ const statusType: Record<string, any> = {
 
 <template>
   <div class="media-view">
-    <h2 class="view-title">🎙 {{ t('mediaView.title') }}</h2>
+    <h2 class="view-title view-title-icon"><ViewTitleIcon name="media" /> {{ t('mediaView.title') }}</h2>
 
     <n-tabs type="line" animated>
       <n-tab-pane name="tts" :tab="t('mediaView.tts')">

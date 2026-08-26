@@ -12,8 +12,8 @@ import asyncio
 import os
 import subprocess
 import sys
-from types import SimpleNamespace
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -37,6 +37,7 @@ class FakeMessage:
 
     async def reply(self, content: str = "", msg_seq: int = 0) -> None:
         self.replies.append({"content": content, "msg_seq": msg_seq})
+        return {"id": "fake_msg"}  # 模拟真实 botpy：成功返回消息 dict（None 会被判为投递不明确）
 
 
 class FlakyMessage:
@@ -53,6 +54,7 @@ class FlakyMessage:
         if self.call_count == self.fail_on_call:
             raise RuntimeError("模拟发送失败")
         self.replies.append({"content": content, "msg_seq": msg_seq})
+        return {"id": "fake_msg"}
 
 
 class FakeResult:
@@ -274,6 +276,7 @@ async def test_sticker_timeout_skips_uncertain_current_segment():
             if self.calls == 1:
                 raise TimeoutError("unknown delivery")
             sent.append(content)
+            return {"id": "fake_msg"}
 
     async def send_media(message, reply, image_path=None, image_url=None):
         sent.append(reply)
@@ -309,6 +312,7 @@ async def test_c2c_stream_uses_passive_first_segment_then_proactive():
 
         async def reply(self, content="", msg_seq=0):
             self.replies.append(content)
+            return {"id": "fake_msg"}
 
     message = Message()
     with patch("qq_bot_adapter.C2CMessage", Message), patch("qq_bot_adapter.asyncio.sleep", AsyncMock()):

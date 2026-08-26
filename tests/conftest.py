@@ -5,6 +5,11 @@ from pathlib import Path
 
 import pytest
 
+# skipif 约定（2026-08-26 平台审计）：reason 必须说明"为什么此环境不适用"。
+# 平台守卫写明目标平台，如 sys.platform != "win32" → "仅 Windows …"；
+# 依赖守卫写明缺失对象（如 "rust_core 扩展未构建"）。不强制统一模板，
+# 禁止无 reason 的裸 skipif。
+
 # 统一设置项目路径
 PROJECT_ROOT = Path(__file__).parent.parent
 if str(PROJECT_ROOT) not in sys.path:
@@ -133,6 +138,7 @@ def _stop_leaked_aiosqlite_connections():
     """
     yield
     import gc
+
     import aiosqlite as _aiosqlite
     gc.collect()  # 打破引用循环，让可回收对象先走 __del__（自带 stop）
     for obj in gc.get_objects():

@@ -59,8 +59,8 @@ datas += _tree_datas(os.path.join(SPECPATH, 'web', 'splash'), os.path.join('web'
 # web/routers/__init__.py (required for package imports in PyInstaller)
 datas.append((os.path.join(SPECPATH, 'web', 'routers', '__init__.py'), os.path.join('web', 'routers')))
 
-# db/schema.sql
-datas.append((os.path.join(SPECPATH, 'db', 'schema.sql'), 'db'))
+# db/schema.sql 已随 fc353d75 删除（孤儿 SQL，迁移收敛于 legacy_migrations），
+# 打包引用同步移除——2026-08-26 定位：此残留导致三平台 CI PyInstaller 全红。
 
 # .env.example
 datas.append((os.path.join(SPECPATH, '.env.example'), '.'))
@@ -196,7 +196,6 @@ hiddenimports = [
     'db.db_notebook',
     'db.db_temporal_memory',
     'db.fts_utils',
-    'db.idempotent_migrator',
     'db.index_manager',
     'db.repair_migration',
     'db.session_store',
@@ -215,15 +214,12 @@ hiddenimports = [
     'memory.context_usage',
     'memory.emotional_memory',
     'memory.episodic_limiter',
-    'memory.fluid_memory',
     'memory.knowledge_graph',
     'memory.learning_manager',
-    'memory.matrix_governance',
     'memory.memory_distiller',
     'memory.memory_manager',
     'memory.notebook_manager',
     'memory.ontology_complexity',
-    'memory.prompt_complexity',
     'memory.query_transform',
     'memory.recall_scheduler',
     'memory.reranker',
@@ -281,8 +277,6 @@ hiddenimports = [
     'tools.domestic_search_tools',
     'transports',
     'transports.agnes_transport',
-    'transports.base',
-    'transports.mimo_transport',
     'utils',
     'utils.atomic_write',
     'utils.credential_pool',
@@ -345,7 +339,6 @@ hiddenimports = [
     'slash_commands',
     'xiaoli_agent',
     'agent_dispatcher',
-    'task_orchestrator',
     'instinct_manager',
     'belief_router',
     'hooks',
@@ -412,14 +405,12 @@ hiddenimports = [
     'core.sla_exporter',
     'core.slo_tracker',
     'core.spontaneous_recall',
-    'core.tiered_cache',
     'core.user_profile_learner',
     'core.xp_system',
     'core.zombie_detector',
 
     # memory sub-modules
     'memory.emotional_memory',
-    'memory.fluid_memory',
     'memory.query_transform',
     'memory.recall_scheduler',
     'memory.reranker',

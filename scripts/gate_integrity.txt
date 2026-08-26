@@ -1,0 +1,13 @@
+# gate_integrity.txt — 门禁自身完整性台账(sha256)
+# 由 scripts/update_gate_hashes.sh 生成;debt_audit.sh 每周比对。
+# 正当修改门禁后必须重跑 update_gate_hashes.sh 并在提交说明注明理由;
+# 台账 hash 与实际不符 = 门禁被绕过/篡改的强信号。
+ebc89ecc39e8a33b41c0cdbe36865af01d84a946de3e09b7548a46707d1cfca5  scripts/check_giant_files.sh
+790f7c66c6969a61684b69c66a1864b8116225c39e6c24eaaa7c10a665d9fec3  scripts/check_todo_ratchet.sh
+ffbc6365b709ccc27a46cc2deafb7ed182fec287b4e76b42c0857367adda2a60  scripts/check_broad_except.sh
+2c6155e1454b96d55af934416013208beff69da76178774309892105df19c504  scripts/check_ruff.sh
+884d425004970a61f25f84e52290cab62c4db6788b37857638036ac39c64c1b9  scripts/check_lazy_imports.py
+14ac83cb7aefd76aab03afdf3b722f138b7c06134efe1e37f4cb791fb781d6db  scripts/debt_audit.sh
+ea7b7e1239d4571887d6f8b1a9065897e7601cf8f6a8a6d6d36684da913d4932  scripts/git-hooks/pre-push
+3500a45ab7fd419db815cd7efe19aed5dc894662b82695caafd71bf1eb24bd3a  scripts/giant_file_allowlist.txt
+2568ef48ab93cd7108026eaf24a28536acb56267f3452ec9b5c50f66397b4702  tests/test_giant_file_ratchet.py

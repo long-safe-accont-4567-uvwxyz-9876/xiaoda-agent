@@ -26,7 +26,7 @@ const emit = defineEmits<{ confirm: []; cancel: [] }>()
         <li>✗ 不可访问目录外文件</li>
         <li>✗ 不可执行危险命令（黑名单始终拦截）</li>
       </ul>
-      <p style="margin-top: 8px; color: #888; font-size: 13px">
+      <p style="margin-top: 8px; color: var(--moon-dim); font-size: 13px">
         切换持久化：重启后自动恢复，可在设置页退出回到默认目录
       </p>
     </div>

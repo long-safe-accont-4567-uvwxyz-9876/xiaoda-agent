@@ -6,10 +6,9 @@
 """
 from __future__ import annotations
 
-import asyncio
-from unittest.mock import AsyncMock, MagicMock
-from pathlib import Path
 import sys
+from pathlib import Path
+from unittest.mock import AsyncMock, MagicMock
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
@@ -69,6 +68,91 @@ async def test_single_channel_sets_rrf_score(channel, score_field, score_val):
     for r in results:
         assert "rrf_score" in r
         assert r["rrf_score"] == score_val
+        assert r["score_kind"] == "source"
+
+
+@pytest.mark.asyncio
+async def test_single_fts_tiny_bm25_score_is_not_treated_as_reranker_score():
+    results = await _call_single_channel(
+        "fts", [{"id": 1, "score": 8.8e-7, "summary": "精确命中"}], k=5
+    )
+    from memory._retrieval_engine import RetrievalEngine
+
+    assert results[0]["source_channel"] == "fts"
+    assert RetrievalEngine._passes_min_relevance(results[0], 0.08) is True
+
+
+@pytest.mark.asyncio
+async def test_reranker_subset_records_omitted_candidates():
+    from memory._retrieval_engine import RecallChannels, RetrievalEngine
+    from memory.retrieval.trace import begin_retrieval_trace, read_retrieval_dropped
+
+    reranker = MagicMock()
+    reranker.available = True
+    reranker.rerank = AsyncMock(return_value=[
+        {"index": 0, "relevance_score": 0.9}
+    ])
+    mm = MagicMock()
+    mm._reranker = reranker
+    mm._reranker_service = None
+    mm._apply_entity_boost = AsyncMock(side_effect=lambda _q, rows, _scope: rows)
+    engine = RetrievalEngine(mm)
+    # MagicMock 子属性默认同步，绑定真实实现让生产代码路径完整执行
+    mm._hybrid_rerank = engine._hybrid_rerank
+    channels = RecallChannels(
+        [{"id": 1, "summary": "one"}, {"id": 2, "summary": "two"}],
+        [], [], [], [], [], [],
+    )
+    begin_retrieval_trace()
+
+    results = await engine._fuse_and_rank(
+        "q", 1, True, "hot", False, 2, channels, None, 0.0
+    )
+
+    assert [row["id"] for row in results] == [1]
+    assert ("2", "reranker_omitted") in read_retrieval_dropped()
+
+
+@pytest.mark.asyncio
+async def test_fusion_records_rerank_limit_and_final_top_k_drops():
+    from memory._retrieval_engine import RecallChannels, RetrievalEngine
+    from memory.retrieval.trace import begin_retrieval_trace, read_retrieval_dropped
+
+    mm = MagicMock()
+    mm._reranker = None
+    mm._reranker_service = None
+    mm._apply_entity_boost = AsyncMock(side_effect=lambda _q, rows, _scope: rows)
+    engine = RetrievalEngine(mm)
+    channels = RecallChannels(
+        [{"id": 1, "summary": "one"}, {"id": 2, "summary": "two"}],
+        [{"id": 3, "summary": "three"}], [], [], [], [], [],
+    )
+    begin_retrieval_trace()
+
+    results = await engine._fuse_and_rank(
+        "q", 1, False, "hot", False, 2, channels, None, 0.0
+    )
+
+    assert len(results) == 1
+    reasons = set(read_retrieval_dropped())
+    assert any(reason == "rerank_limit" for _, reason in reasons)
+    assert any(reason == "top_k" for _, reason in reasons)
+
+
+@pytest.mark.asyncio
+async def test_single_channel_top_k_records_dropped_trace():
+    from memory.retrieval.trace import begin_retrieval_trace, read_retrieval_dropped
+
+    begin_retrieval_trace()
+    await _call_single_channel(
+        "fts",
+        [
+            {"id": 1, "score": 1.0, "summary": "first"},
+            {"id": 2, "score": 0.5, "summary": "second"},
+        ],
+        k=1,
+    )
+    assert read_retrieval_dropped() == (("2", "top_k"),)
 
 
 @pytest.mark.asyncio

@@ -26,8 +26,23 @@ class ConversationSession:
             channel_subject_id=channel_subject_id,
         )
 
+    @property
+    def activation_key(self) -> str:
+        """Return the AgentContext key for this privacy boundary."""
+        if self.source == "qq_group":
+            return self.memory_scope().session_id
+        return self.context_id
+
     def memory_scope(self, request_id: str = "") -> Scope:
-        return Scope(
+        if self.source == "qq_group":
+            group_id = self.session_id.removeprefix("qq_group:")
+            return Scope.group(
+                user_id=self.principal.principal_id,
+                group_id=group_id,
+                agent_id=self.agent_id,
+                request_id=request_id,
+            )
+        return Scope.personal(
             user_id=self.principal.principal_id,
             session_id=self.session_id,
             agent_id=self.agent_id,

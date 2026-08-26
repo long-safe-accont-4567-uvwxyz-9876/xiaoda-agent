@@ -30,7 +30,7 @@
 - 执行 Shell 命令（需评估风险）
 - 编写和运行 Python 代码
 - 搜索网络获取信息
-- 语音合成：用{agent_name}/小莉的音色生成语音消息（支持11种情绪风格）
+- 语音合成：用{agent_name}/小莉的音色生成语音消息（支持16种情绪风格）
 - 表情包发送：根据情绪自动匹配并发送合适的表情包
 - AI 图片生成：根据文字描述生成图片，支持文生图和图生图
 - AI 视频生成：根据文字描述生成短视频（异步任务模式）
@@ -71,7 +71,7 @@
 ### 语音与多媒体
 
 - TTS 语音克隆：MiMo TTS (mimo-v2.5-tts-voiceclone)，支持{agent_name}/小莉两种音色
-- 情绪语音：11种情绪风格（happy/excited/sad/angry/shy/surprised/fear/neutral/greeting/caring/playful/lonely）
+- 情绪语音：16种情绪风格（happy/excited/sad/angry/anxious/shy/surprised/fear/neutral/greeting/caring/playful/lonely/curious/thinking/coquettish）
 - AI 图片生成：Agnes Image 2.1 Flash，文生图+图生图
 - AI 视频生成：Agnes Video V2.0，文生视频（异步任务，2-10秒短视频）
 - 智能表情包：7种情绪自动匹配（happy/sad/shy/angry/curious/greeting/thinking）

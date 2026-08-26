@@ -1,0 +1,10 @@
+# 每周一 09:00 触发债务审计(与 nahida-web 分离,失败不影响主服务)
+[Unit]
+Description=每周触发技术债审计
+
+[Timer]
+OnCalendar=Mon *-*-* 09:00:00
+Persistent=true
+
+[Install]
+WantedBy=timers.target

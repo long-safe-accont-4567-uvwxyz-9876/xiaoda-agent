@@ -6,7 +6,6 @@
 3. [happy] [playful] 等纯情绪词标签被移除
 4. 正常文本不受影响
 """
-import pytest
 from pathlib import Path
 
 PROJECT_ROOT = Path(__file__).parent.parent

@@ -4,7 +4,6 @@ import type { Ref } from 'vue'
 import { NDrawer, NDrawerContent, NButton, NPopconfirm, useMessage } from 'naive-ui'
 import { useChatStore } from '../stores/chat'
 import type { ChatRequestSnapshot } from '../stores/chat'
-import { useAuthStore } from '../stores/auth'
 import { useUiStore } from '../stores/ui'
 import { api, exportSessionDownload } from '../api'
 import { getWsClient } from '../api/ws'
@@ -24,7 +23,6 @@ import { t } from '../i18n'
 defineOptions({ name: 'ChatView' })
 
 const chat = useChatStore()
-const auth = useAuthStore()
 const ui = useUiStore()
 const ws = useWorkspaceStore()
 const message = useMessage()
@@ -243,7 +241,6 @@ async function removeSession(sid: string) {
     message.success(t('chatView.session') + ' ' + t('deleted'))
   } catch (e: any) { message.error(e.message) }
 }
-
 async function startNew() {
   if (loadingSessionId.value) return  // 加载进行中禁止新建，避免与 loadSession 竞态覆盖新会话
   await chat.newSession()
@@ -295,21 +292,25 @@ const emotionColors: Record<string, string> = {
 <template>
   <div class="chat-view">
     <div class="chat-toolbar">
-      <n-button size="tiny" quaternary @click="openSessions">
-        <template #icon><SumeruIcon name="sessions" :size="15" variant="duo" tone="view" interactive /></template>{{ t('chatView.session') }}
-      </n-button>
-      <n-button size="tiny" quaternary @click="startNew">
-        <template #icon><SumeruIcon name="sprout" :size="15" variant="duo" tone="add" interactive /></template>{{ t('chatView.newChat') }}
-      </n-button>
-      <n-button size="tiny" quaternary @click="clearAll">
-        <template #icon><SumeruIcon name="trash" :size="15" variant="duo" tone="del" interactive /></template>{{ t('chatView.clear') }}
-      </n-button>
-      <n-button v-if="chat.sessionId" size="tiny" quaternary
-         @click="exportSessionDownload(chat.sessionId).catch(e => message.error(e.message))">
-        <template #icon><SumeruIcon name="download" :size="15" variant="duo" tone="add" interactive /></template>{{ t('chatView.export') }}
-      </n-button>
-      <ModelSelector style="margin-left: auto" @change="onModelChange" />
-      <span class="session-label">{{ chat.sessionId }}</span>
+      <div class="toolbar-actions">
+        <n-button size="tiny" quaternary @click="openSessions">
+          <template #icon><SumeruIcon name="sessions" :size="15" variant="duo" tone="view" interactive /></template>{{ t('chatView.session') }}
+        </n-button>
+        <n-button size="tiny" quaternary @click="startNew">
+          <template #icon><SumeruIcon name="sprout" :size="15" variant="duo" tone="add" interactive /></template>{{ t('chatView.newChat') }}
+        </n-button>
+        <n-button size="tiny" quaternary @click="clearAll">
+          <template #icon><SumeruIcon name="trash" :size="15" variant="duo" tone="del" interactive /></template>{{ t('chatView.clear') }}
+        </n-button>
+        <n-button v-if="chat.sessionId" size="tiny" quaternary
+           @click="exportSessionDownload(chat.sessionId).catch(e => message.error(e.message))">
+          <template #icon><SumeruIcon name="download" :size="15" variant="duo" tone="add" interactive /></template>{{ t('chatView.export') }}
+        </n-button>
+        <ModelSelector @change="onModelChange" />
+      </div>
+      <div class="toolbar-meta">
+        <span v-if="chat.sessionId" class="session-label" :title="chat.sessionId">{{ chat.sessionId }}</span>
+      </div>
     </div>
 
     <div class="messages-area" ref="messagesEl">
@@ -329,8 +330,8 @@ const emotionColors: Record<string, string> = {
             <ToolCallCard v-for="(tc, i) in msg.toolCalls" :key="i" :call="tc" />
           </div>
 
-          <div v-if="msg.role === 'assistant' && msg.streaming" class="message-content md_body streaming-text">{{ replaceAgentNames(msg.content) }}</div>
-          <div v-else-if="msg.role === 'assistant'" class="message-content md_body"
+          <div v-if="msg.role === 'assistant' && msg.streaming" class="message-content md-body streaming-text">{{ replaceAgentNames(msg.content) }}</div>
+          <div v-else-if="msg.role === 'assistant'" class="message-content md-body"
                v-html="renderMarkdown(replaceAgentNames(msg.content))"></div>
           <div v-else class="message-content plain">
             {{ msg.content }}
@@ -355,9 +356,9 @@ const emotionColors: Record<string, string> = {
             <video v-if="msg.videoUrl" :src="msg.videoUrl" controls class="media-video"></video>
             <audio v-if="msg.audioUrl" :src="msg.audioUrl" controls class="media-audio"></audio>
           </div>
-          <!-- 表情包：贴在气泡尾部，不与产物混淆 -->
-          <img v-if="msg.stickerUrl" :src="msg.stickerUrl + '?token=' + auth.token" class="sticker-img"
-               :title="t('chatView.zoom')" @click="lightboxUrl = msg.stickerUrl + '?token=' + auth.token" />
+          <!-- 表情包：贴在气泡尾部，不与产物混淆（凭据走 HttpOnly cookie，URL 不带 token） -->
+          <img v-if="msg.stickerUrl" :src="msg.stickerUrl" class="sticker-img"
+               :title="t('chatView.zoom')" @click="lightboxUrl = msg.stickerUrl" />
 
           <div class="bubble-footer" v-if="!msg.streaming && msg.content && msg.role !== 'system'">
             <span class="msg-time">{{ fmtTime(msg.timestamp) }}</span>
@@ -417,7 +418,7 @@ const emotionColors: Record<string, string> = {
       />
     </div>
 
-    <n-drawer v-model:show="showSessions" :width="340" placement="left">
+    <n-drawer v-model:show="showSessions" width="min(340px, 92vw)" placement="left">
       <n-drawer-content :title="'📂 ' + t('chatView.history')" closable>
         <div class="session-list" :class="{ 'is-loading': !!loadingSessionId }">
           <div v-for="s in sessions" :key="s.session_id" class="session-item"
@@ -457,7 +458,7 @@ const emotionColors: Record<string, string> = {
     </button>
 
     <!-- J-Space 浮窗抽屉 -->
-    <n-drawer v-model:show="showJSpacePanel" :width="380" placement="right">
+    <n-drawer v-model:show="showJSpacePanel" width="min(380px, 92vw)" placement="right">
       <n-drawer-content :title="t('jspace.floatingPanel')" closable>
         <JSpacePanel :compact="true" />
       </n-drawer-content>
@@ -469,14 +470,14 @@ const emotionColors: Record<string, string> = {
 .jspace-fab {
   position: fixed; bottom: 80px; right: 20px; z-index: 100;
   width: 40px; height: 40px; border-radius: 50%;
-  border: 1px solid var(--moon-border, #333);
-  background: var(--moon-bg-soft, #1a1a2e);
+  border: 1px solid var(--line);
+  background: var(--surface-1);
   color: var(--moon-dim);
   font-size: 18px; cursor: pointer;
   transition: all .2s; display: flex; align-items: center; justify-content: center;
 }
-.jspace-fab:hover { border-color: var(--moon-accent, #7c6fff); color: var(--moon-accent, #7c6fff); }
-.jspace-fab.active { background: var(--moon-accent, #7c6fff); color: #fff; border-color: var(--moon-accent, #7c6fff); }
+.jspace-fab:hover { border-color: var(--line-strong); color: var(--dendro-bright); }
+.jspace-fab.active { background: linear-gradient(135deg, var(--dendro), var(--jade)); color: #0a2414; border-color: var(--dendro); }
 
 .chat-view {
   display: flex;
@@ -487,12 +488,45 @@ const emotionColors: Record<string, string> = {
 
 .chat-toolbar {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
-  gap: 8px;
+  gap: 6px 8px;
+  min-width: 0;
   flex-shrink: 0;
 }
 
+.toolbar-actions,
+.toolbar-meta {
+  display: flex;
+  align-items: center;
+  min-width: 0;
+}
+
+.toolbar-actions {
+  flex: 1 1 auto;
+  flex-wrap: wrap;
+  gap: 2px;
+}
+
+.toolbar-meta {
+  flex: 0 1 auto;
+  gap: 8px;
+  max-width: 100%;
+  margin-left: auto;
+}
+
+.toolbar-meta :deep(.model-chip) {
+  max-width: min(260px, 45vw);
+}
+
 .session-label {
+  display: block;
+  flex: 0 1 180px;
+  min-width: 0;
+  max-width: 180px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
   font-size: 11px;
   color: rgba(242, 247, 238, 0.3);
   font-family: 'JetBrains Mono', monospace;
@@ -522,7 +556,9 @@ const emotionColors: Record<string, string> = {
 
 .message-row {
   display: flex;
-  max-width: 85%;
+  width: fit-content;
+  max-width: min(85%, 900px);
+  min-width: 0;
   animation: slideUp 0.3s var(--ease-smooth);
 }
 .message-row.user { align-self: flex-end; justify-content: flex-end; }
@@ -532,10 +568,13 @@ const emotionColors: Record<string, string> = {
 .message-bubble {
   padding: 10px 16px;
   position: relative;
+  max-width: 100%;
+  min-width: 0;
+  overflow: hidden;
   line-height: 1.65;
   font-size: 14px;
+  overflow-wrap: anywhere;
   word-break: break-word;
-  min-width: 60px;
 }
 
 .message-bubble.user {
@@ -576,11 +615,21 @@ const emotionColors: Record<string, string> = {
 }
 @keyframes blink { 50% { opacity: 0; } }
 
+.message-content {
+  min-width: 0;
+  max-width: 100%;
+}
 .message-content.plain { white-space: pre-wrap; }
 .message-content.streaming-text { white-space: pre-wrap; }
 .user-upload-img {
-  max-width: 240px; max-height: 240px; border-radius: 10px;
-  object-fit: cover; cursor: zoom-in; margin-top: 6px; display: block;
+  width: auto;
+  max-width: min(240px, 100%);
+  max-height: 240px;
+  border-radius: 8px;
+  object-fit: contain;
+  cursor: zoom-in;
+  margin-top: 6px;
+  display: block;
   opacity: 0; transition: opacity 0.3s var(--ease-smooth);
   background: rgba(127, 214, 80, 0.06);
 }
@@ -589,8 +638,12 @@ const emotionColors: Record<string, string> = {
 .tool-calls { margin-bottom: 6px; }
 
 .artifact-block {
+  width: 100%;
+  max-width: 100%;
+  min-width: 0;
   margin-top: 8px;
   padding: 8px 10px;
+  overflow: hidden;
   border: 1px dashed rgba(232, 213, 163, 0.3);
   border-radius: 10px;
   background: rgba(232, 213, 163, 0.04);
@@ -601,17 +654,41 @@ const emotionColors: Record<string, string> = {
   display: block;
   margin-bottom: 6px;
 }
-.media-grid { display: flex; flex-wrap: wrap; gap: 8px; }
+.media-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(160px, 100%), 1fr));
+  gap: 8px;
+  min-width: 0;
+}
 .media-image {
-  max-width: 220px; max-height: 220px; border-radius: 8px; object-fit: cover; cursor: zoom-in;
+  width: 100%;
+  max-width: 220px;
+  height: auto;
+  max-height: 220px;
+  border-radius: 8px;
+  object-fit: contain;
+  cursor: zoom-in;
   opacity: 0; transition: opacity 0.3s var(--ease-smooth);
   background: rgba(127, 214, 80, 0.06);
 }
 .media-image.loaded { opacity: 1; }
-.media-video { max-width: 100%; border-radius: 8px; }
-.media-audio { width: 100%; height: 36px; }
+.media-video {
+  display: block;
+  width: 100%;
+  max-width: 100%;
+  border-radius: 8px;
+}
+.media-audio {
+  display: block;
+  width: 100%;
+  max-width: 100%;
+  min-width: 0;
+  height: 36px;
+}
 .sticker-img {
-  max-width: 160px;
+  width: auto;
+  max-width: min(160px, 100%);
+  height: auto;
   max-height: 160px;
   margin-top: 8px;
   border-radius: 12px;
@@ -643,26 +720,42 @@ const emotionColors: Record<string, string> = {
 
 .bubble-footer {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
-  gap: 6px;
-  margin-top: 6px;
+  gap: 2px;
+  min-height: 28px;
+  margin-top: 4px;
   opacity: 0;
   transition: opacity 0.2s;
 }
-.message-bubble:hover .bubble-footer { opacity: 1; }
-.msg-time { font-size: 11px; color: var(--moon-dim); }
+.message-bubble:hover .bubble-footer,
+.message-bubble:focus-within .bubble-footer { opacity: 1; }
+.msg-time {
+  margin-right: 2px;
+  font-size: 11px;
+  color: var(--moon-dim);
+}
 
 .footer-btn {
+  width: 28px;
+  height: 28px;
   background: none;
   border: none;
+  border-radius: 6px;
   cursor: pointer;
   color: var(--moon-dim);
-  padding: 2px;
+  padding: 0;
   display: inline-flex;
   align-items: center;
-  transition: color 0.2s, transform 0.15s;
+  justify-content: center;
+  flex: 0 0 28px;
+  transition: color 0.2s, transform 0.15s, background 0.2s;
 }
-.footer-btn:hover { color: var(--dendro); transform: scale(1.15); }
+.footer-btn:hover {
+  color: var(--dendro);
+  background: rgba(127, 214, 80, 0.08);
+  transform: scale(1.08);
+}
 .footer-btn.playing { animation: breathe 1s ease-in-out infinite; }
 
 .input-area-wrapper {
@@ -742,13 +835,24 @@ const emotionColors: Record<string, string> = {
 :deep(.md-body p) { margin: 0 0 6px; }
 :deep(.md-body p:last-child) { margin-bottom: 0; }
 :deep(.md-body pre.hljs) {
+  display: block;
+  width: 100%;
+  max-width: 100%;
+  box-sizing: border-box;
   background: rgba(10, 20, 14, 0.8);
   border-radius: 8px;
   padding: 10px 12px;
   overflow-x: auto;
+  white-space: pre;
   margin: 6px 0;
   font-size: 12.5px;
   font-family: 'JetBrains Mono', monospace;
+}
+:deep(.md-body pre code) {
+  display: block;
+  width: max-content;
+  min-width: 100%;
+  box-sizing: border-box;
 }
 :deep(.md-body code:not(pre code)) {
   background: rgba(127, 214, 80, 0.12);
@@ -765,14 +869,95 @@ const emotionColors: Record<string, string> = {
   color: var(--moon-dim);
   margin: 6px 0;
 }
-:deep(.md-body table) { border-collapse: collapse; margin: 6px 0; }
+:deep(.md-body table) {
+  display: block;
+  width: max-content;
+  max-width: 100%;
+  overflow-x: auto;
+  border-collapse: collapse;
+  margin: 6px 0;
+}
 :deep(.md-body th), :deep(.md-body td) {
   border: 1px solid var(--glass-border);
   padding: 4px 10px;
   font-size: 13px;
 }
 
+@media (hover: none), (pointer: coarse) {
+  .bubble-footer { opacity: 1; }
+}
+
 @media (max-width: 768px) {
-  .message-row { max-width: 95%; }
+  .chat-toolbar {
+    align-items: stretch;
+    gap: 4px;
+  }
+
+  .toolbar-actions {
+    flex: 1 1 100%;
+    gap: 0;
+  }
+
+  .toolbar-actions :deep(.n-button) {
+    --n-height: 28px !important;
+    --n-padding: 0 6px !important;
+    font-size: 11px;
+  }
+
+  .toolbar-meta {
+    flex: 1 1 100%;
+    justify-content: flex-end;
+    gap: 6px;
+  }
+
+  .toolbar-meta :deep(.model-chip) {
+    max-width: min(230px, 62vw);
+    min-height: 28px;
+  }
+
+  .session-label {
+    flex-basis: 25vw;
+    max-width: 25vw;
+  }
+
+  .messages-area {
+    padding-inline: 0;
+  }
+
+  .message-row,
+  .message-row.system {
+    max-width: 96%;
+  }
+
+  .message-bubble {
+    padding: 8px 10px;
+  }
+
+  .media-grid {
+    grid-template-columns: repeat(auto-fit, minmax(min(128px, 100%), 1fr));
+  }
+
+  .media-image {
+    max-width: 100%;
+  }
+
+  .jspace-fab {
+    right: 12px;
+    bottom: calc(150px + env(safe-area-inset-bottom, 0px));
+    width: 36px;
+    height: 36px;
+    font-size: 16px;
+  }
+}
+
+@media (max-width: 420px) {
+  .toolbar-actions :deep(.n-button) {
+    --n-padding: 0 4px !important;
+  }
+
+  .session-label {
+    flex-basis: 20vw;
+    max-width: 20vw;
+  }
 }
 </style>

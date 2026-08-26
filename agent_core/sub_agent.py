@@ -15,12 +15,16 @@ import json
 from dataclasses import dataclass, field
 from pathlib import Path
 from types import SimpleNamespace
-from typing import Any, Protocol, runtime_checkable
+from typing import Any
 
 from loguru import logger
 
+from agent_core._shared import TIRED_MSG, _current_request_ctx
+from agent_core.tool_call_extractors import (
+    DsmlExtractor,
+    StandardExtractor,
+)
 from config import get_agent_display_name
-from agent_core._shared import TIRED_MSG
 from core.message import AgentMessage
 from emotion.emoji_config import get_status_msg
 from emotion.tts_engine import TTSEngine
@@ -31,15 +35,7 @@ from tool_engine.tool_registry import to_openai_tools
 from tool_engine.tool_repair import ToolCallRepair
 from utils.credential_pool import CredentialPool
 from utils.llm_cleanup import deduplicate_multi_reply
-from utils.text_utils import has_dsml_tool_calls, humanize, parse_dsml_tool_calls, strip_dsml, strip_reasoning
-
-from agent_core.tool_call_extractors import (
-    ExtractedToolCall,
-    ResourceBackend,
-    StandardExtractor,
-    DsmlExtractor,
-)
-
+from utils.text_utils import humanize, strip_dsml, strip_reasoning
 
 # J-Space Hook: 干预闭环
 try:
@@ -216,14 +212,44 @@ class SubAgent:
     def available(self) -> bool:
         return self._initialized and self._router is not None and not self._degraded
 
+    def refresh_router(self) -> bool:
+        """从 core 重新抓取 router 并刷新就绪/降级状态（热更新后由 dispatcher 调用）。"""
+        self._router = getattr(self._core, "router", None)
+        self._initialized = self._router is not None
+        self._degraded = not self._initialized
+        if self._initialized:
+            logger.info("sub_agent.router_refreshed", name=self.config.name)
+        return self._initialized
+
     @property
     def degraded(self) -> bool:
         """降级模式：探活失败但仍注册，实际调用时回退到主体 agent。"""
         return self._degraded
 
+    @staticmethod
+    def _memory_submission_scope() -> Any | None:
+        request = _current_request_ctx.get()
+        principal = getattr(request, "principal", None)
+        is_owner = (
+            getattr(principal, "is_owner", False) is True
+            or (principal is None and getattr(request, "is_master", False) is True)
+        )
+        if not is_owner:
+            return None
+        try:
+            from memory.scope import current_scope
+
+            return current_scope()
+        except RuntimeError:
+            return None
+
     def _excluded_tool_names(self) -> set[str]:
         """子代理过滤工具时排除的集合：配置排除项 + 画像工具（实例方法拦截）。"""
-        return self.config.excluded_tools | SUB_AGENT_PROFILE_TOOLS
+        return (
+            self.config.excluded_tools
+            | SUB_AGENT_PROFILE_TOOLS
+            | {SUB_AGENT_MEMORY_TOOL}
+        )
 
     def _filtered_tools(self) -> list[dict] | None:
         if not self._tool_executor:
@@ -232,8 +258,8 @@ class SubAgent:
         excluded = self._excluded_tool_names()
         tools = [t for t in all_tools if t["function"]["name"] not in excluded]
 
-        # 子代理专属工具：submit_memory（受控记忆提交，实例方法拦截执行）
-        tools.append({
+        if self._memory_submission_scope() is not None:
+            tools.append({
             "type": "function",
             "function": {
                 "name": SUB_AGENT_MEMORY_TOOL,
@@ -256,7 +282,7 @@ class SubAgent:
                     "required": ["key_points"],
                 },
             },
-        })
+            })
 
         # 子代理专属工具：send_message_to_agent（子代理间直接通信，实例方法拦截执行）
         tools.append({
@@ -295,10 +321,12 @@ class SubAgent:
             return set()
         excluded = self._excluded_tool_names()
         names = {t["function"]["name"] for t in to_openai_tools() if t["function"]["name"] not in excluded}
-        names.update(SUB_AGENT_EXTRA_TOOLS)  # 子代理专属工具
+        names.update({SUB_AGENT_MESSAGE_TOOL})
+        if self._memory_submission_scope() is not None:
+            names.add(SUB_AGENT_MEMORY_TOOL)
         return names
 
-    async def chat(self, message: str, context: str = "", status_callback: Any | None=None, address_term: str = "爸爸", extra_system_prompt: str = "", invocation: Any | None = None) -> str:
+    async def chat(self, message: str, context: str = "", status_callback: Any | None=None, address_term: str = "爸爸", extra_system_prompt: str = "", invocation: Any | None = None, interjections: list | None = None) -> str:
         if self._degraded:
             self._router = getattr(self._core, "router", None)
             if self._router is not None:
@@ -355,13 +383,15 @@ class SubAgent:
         response: str | None = None
         success = False
         try:
-            response = await self._chat_loop(messages, tools, invocation=invocation)
+            response = await self._chat_loop(messages, tools, invocation=invocation,
+                                             interjections=interjections)
             success = True
         except (TimeoutError, OSError, RuntimeError, ValueError) as e:
             logger.warning("sub_agent.chat_failed name={} error={}", self.config.name, str(e))
             if tools and _is_tool_unsupported_error(str(e)):
                 try:
-                    response = await self._chat_loop(messages, None, invocation=invocation)
+                    response = await self._chat_loop(messages, None, invocation=invocation,
+                                                     interjections=interjections)
                     success = True
                 except (TimeoutError, OSError, RuntimeError, ValueError) as e2:
                     logger.warning("sub_agent.fallback_failed name={} error={}", self.config.name, str(e2))
@@ -458,7 +488,11 @@ class SubAgent:
 重要：需要调用工具时必须使用上述DSML格式，不要用其他格式。不需要调用工具时直接回复即可。""")
         return "\n".join(lines)
 
-    async def _chat_loop(self, messages: list[dict], tools: list[dict] | None, invocation: Any | None = None) -> str:
+    @staticmethod
+    def _drain_interjections(interjections: list | None) -> list[dict]:
+        return _drain_interjections(interjections)
+
+    async def _chat_loop(self, messages: list[dict], tools: list[dict] | None, invocation: Any | None = None, interjections: list | None = None) -> list | str:
         """主循环：调用 LLM → 提取工具调用 → 执行 → 反馈，最多 max_rounds 轮。"""
         max_rounds = self.config.max_turns if self.config.max_turns is not None else 5
         working = list(messages)
@@ -479,6 +513,11 @@ class SubAgent:
         tools = self._inject_dsml_if_needed(working, tools, is_reasoning, tool_names)
 
         for round_idx in range(max_rounds):
+            # 后台委托：用户/主代理在执行期插入的指示，下一轮 LLM 前生效
+            for note_msg in _drain_interjections(interjections):
+                working.append(note_msg)
+                logger.info("sub_agent.interjected name={}", self.config.name)
+
             if asyncio.get_running_loop().time() > total_deadline:
                 logger.warning("sub_agent.total_timeout", name=self.config.name)
                 return f"{self.config.display_name}处理超时了，请稍后再试吧～"
@@ -877,6 +916,18 @@ class SubAgent:
             return f"{self.config.display_name}{TIRED_MSG}"
     async def submit_memory(self, key_points: list[str], importance: int = 3) -> str:
         """子代理向主记忆提交关键信息（受控写入）"""
+        scope = self._memory_submission_scope()
+        request = _current_request_ctx.get()
+        principal = getattr(request, "principal", None)
+        is_owner = (
+            getattr(principal, "is_owner", False) is True
+            or (principal is None and getattr(request, "is_master", False) is True)
+        )
+        if not is_owner:
+            return "（拒绝：访客不能提交个人记忆）"
+        if scope is None:
+            return "（拒绝：记忆作用域未绑定）"
+
         # 频率限制：单次任务最多 3 次
         if self._memory_submit_count >= 3:
             return "已达本次任务记忆提交上限（3次）"
@@ -901,6 +952,7 @@ class SubAgent:
                 importance=importance_float,
                 emotion_label="",
                 source="sub_agent",
+                scope=scope,
             )
             # 同步写入向量索引（与 remember 工具保持一致）
             if getattr(mm, "vec", None) and memory_text:
@@ -908,6 +960,10 @@ class SubAgent:
                     await mm.vec.upsert(mem_id, memory_text)
                 except (OSError, RuntimeError, ValueError) as ve:
                     logger.warning("sub_agent.submit_memory.vec_failed", error=str(ve)[:200])
+
+            invalidate = getattr(mm, "invalidate_read_caches", None)
+            if callable(invalidate):
+                invalidate()
 
             self._memory_submit_count += 1
             logger.info("sub_agent.submit_memory", name=self.config.name, count=self._memory_submit_count)
@@ -966,3 +1022,15 @@ class SubAgent:
         if not self.config.voice_ref:
             return None
         return await self._tts.synthesize(text, voice=self.config.voice_ref, style=style, emotion=emotion)
+
+
+def _drain_interjections(queue: list | None) -> list[dict]:
+    """出队全部待消费插话并转为 user 消息（后台委托执行期注入用）。"""
+    if not queue:
+        return []
+    out = []
+    while queue:
+        note = str(queue.pop(0))[:600]
+        out.append({"role": "user",
+                    "content": f"【用户插话】{note}\n请把这条补充纳入接下来的处理。"})
+    return out

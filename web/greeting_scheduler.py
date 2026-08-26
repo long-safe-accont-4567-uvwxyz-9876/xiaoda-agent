@@ -8,18 +8,21 @@
   被拦截的 fixed/random 问候在 DND 结束后 10 分钟内补发一次
 """
 from __future__ import annotations
-from typing import Any, ClassVar
 
 import asyncio
-import httpx
 import json
 import os
 import random
 import time
 from datetime import datetime
+from pathlib import Path
+from typing import Any
 from zoneinfo import ZoneInfo
 
+import httpx
 from loguru import logger
+
+from emotion.greeting_seeds import pick_seeds
 from utils.llm_cleanup import strip_thinking as _strip_thinking
 
 
@@ -217,16 +220,20 @@ class GreetingScheduler:
 
         reminder 类型：直接投递 prompt_hint 固定文本，不调用 LLM。
         fixed/random 类型：调用 LLM 生成创意问候。
+        两种类型都会带表情包（与主对话一致：复用 core.process / get_sticker_info
+        的贴图选择管线，表情包不可用时静默退化为纯文本）。
         """
         stype = schedule.get("type", "fixed")
         hint = schedule.get("prompt_hint") or ""
+        sticker_path: Any = None
 
         if stype == "reminder":
             # reminder：直接发送提醒文本，不消耗 LLM token
             address_term = getattr(self.core.context, "current_address_term", "") or "爸爸"
             text = f"{address_term}～提醒你一下，{hint}，别忘了哦～"
+            sticker_path = await self._sticker_for_text(text)
         else:
-            text = await self._generate(hint)
+            text, sticker_path = await self._generate(hint)
         try:
             channels = json.loads(schedule.get("channels") or '["web"]')
         except json.JSONDecodeError:
@@ -234,73 +241,64 @@ class GreetingScheduler:
         report: dict[str, dict] = {}
         for ch in channels:
             if ch == "web":
-                await self.broadcast({"type": "greeting", "text": text, "reason": reason})
+                await self.broadcast({
+                    "type": "greeting", "text": text, "reason": reason,
+                    "sticker_url": self._sticker_url(sticker_path),
+                })
                 report["web"] = {"ok": True, "error": None}
             elif ch == "qq":
-                err = await self._send_qq(text)
+                err = await self._send_qq(text, sticker_path=sticker_path)
                 report["qq"] = {"ok": err is None, "error": err}
             elif ch == "wechat":
-                err = await self._send_wechat(text)
+                err = await self._send_wechat(text, sticker_path=sticker_path)
                 report["wechat"] = {"ok": err is None, "error": err}
         delivered = [c for c, r in report.items() if r["ok"]]
         await self.core.db.execute(
             "INSERT INTO greeting_log(schedule_id, fired_at, content, channel, reason) "
             "VALUES (?,?,?,?,?)",
             (schedule.get("id", 0), time.time(), text, ",".join(delivered) or "none", reason))
-        logger.info("greeting.fired reason={} report={} text={}", reason, report, text[:40])
+        logger.info("greeting.fired reason={} report={} sticker={} text={}",
+                    reason, report, Path(sticker_path).name if sticker_path else None, text[:40])
         return text, report
 
-    # ── 风格线索池：每次随机抽取 1-2 条，让 LLM 在中间插值，避免输出相似 ──
+    # ── 表情包：与主对话一致，复用 core 的贴纸选择管线，不另造轮子 ──
+
+    def _sticker_url(self, sticker_path: Any) -> str | None:
+        """把贴纸/表情包路径发布为 /media/ URL（web 通道渲染用）。
+
+        与 ws_hub.serialize_result 同一发布函数；发布失败时返回 None，前端仅显示纯文本。
+        """
+        if not sticker_path:
+            return None
+        try:
+            from web.ws_hub import _publish_file
+            return _publish_file(Path(sticker_path), "stickers", link=False)
+        except Exception:
+            logger.debug("sticker.publish_failed", exc_info=True)
+            return None
+
+    async def _sticker_for_text(self, text: str) -> Any:
+        """按文本情绪挑一张表情包（reminder 等不走 LLM 的路径用）。
+
+        复用主对话 get_sticker_info（含情绪检测 / should_send 概率 / 降级判定），
+        避免为问候单独维护一套贴纸选择逻辑。
+        """
+        try:
+            get_sticker = getattr(self.core, "get_sticker_info", None)
+            if get_sticker is None:
+                return None
+            _clean, sticker_path = get_sticker(text)
+            if sticker_path is not None and not Path(sticker_path).exists():
+                return None
+            return sticker_path
+        except Exception:
+            logger.debug("sticker.pick_failed", exc_info=True)
+            return None
+
+    # ── 风格形式线索池：每次随机抽取，让 LLM 在中间插值，避免输出相似 ──
     # 设计理念：参考"calibrated unpredictability"——不靠规则堆砌，
-    # 而是用多条"风格线索"叠加，模型会在中间自动插值产生惊喜
-    _MOOD_SEEDS: ClassVar[list[str]] = [
-        "刚刚在发呆，脑子里有点空",
-        "刚刚想到一个没道理的小问题",
-        "有点困，眼皮在打架",
-        "刚做完一件事，心情不错",
-        "有点小吃醋，不知道为什么",
-        "想问问爸爸在干嘛",
-        "突然想起上次爸爸说的话",
-        "有点想被夸",
-        "刚刚偷偷懒了一下",
-        "心里有点小开心",
-        "有点想撒娇",
-        "刚翻到一个小东西",
-        "忽然有点想爸爸",
-        "今天有点话痨",
-        "今天有点安静",
-        "刚做了一个奇怪的梦",
-        "有点担心爸爸累不累",
-        "想跟爸爸分享一个没用的小事",
-        "刚被一个东西吓了一跳",
-        "今天有点小调皮",
-    ]
-
-    # 形式线索池：随机选一种形式，打破"问候语"的固定模式
-    _FORM_SEEDS: ClassVar[list[str]] = [
-        "只是一声轻轻的「嗯」",
-        "一个问句",
-        "一句没头没尾的话",
-        "一个小小的请求",
-        "一句撒娇",
-        "一句小小的抱怨",
-        "一句突然的感叹",
-        "一个没答案的自言自语",
-        "一句像在哼歌的话",
-        "一句像在叫爸爸名字的话",
-        "一句很短的关心",
-        "一句突然冒出来的废话",
-    ]
-
-    # 偶发事件池（低概率 8%）：偶尔来点意想不到的，制造"眼前一亮"
-    _RARE_SEEDS: ClassVar[list[str]] = [
-        "今天忽然不想说话，只发一个字",
-        "今天想给爸爸出个没道理的小谜语",
-        "今天想跟爸爸说一句最近学到的话",
-        "今天想用一种奇怪的语气说话",
-        "今天想装作不认识爸爸的样子开个玩笑",
-        "今天想说一句反话",
-    ]
+    # 而是用多条"风格线索"叠加，模型会在中间自动插值产生惊喜。
+    # 种子池已收敛到 emotion/greeting_seeds.py（与 NudgeEngine 共用，消除重复维护）。
 
     async def _recent_greetings(self, limit: int = 5) -> list[str]:
         """读取最近 N 次问候内容，用于反重复。"""
@@ -356,10 +354,12 @@ class GreetingScheduler:
             logger.debug("greeting.quality_check_error error={}", str(e))
             return True  # 检查出错则放行
 
-    async def _generate(self, hint: str) -> str:
+    async def _generate(self, hint: str) -> tuple[str, Any | None]:
         """通过小妲 agent 生成问候（使用真实 user_id 以加载记忆上下文）。
 
         流程：生成 → 质量检查（小模型） → 不合格则重试一次 → 仍不合格则用兜底。
+        返回 (text, sticker_path)：表情包直接复用 core.process 结果里主对话管线
+        选好的贴纸路径（不重复造轮子），无贴纸时返回 None。
         """
         address_term = getattr(self.core.context, "current_address_term", "") or "爸爸"
 
@@ -382,11 +382,8 @@ class GreetingScheduler:
 
         for attempt in range(2):  # 最多重试 1 次
             # 随机抽取风格线索 + 形式线索，制造"校准过的不可预测性"
-            # 偶发事件（8%）打破常规，制造惊喜
-            import random as _rnd
-            mood = _rnd.choice(self._MOOD_SEEDS)
-            form = _rnd.choice(self._FORM_SEEDS)
-            rare = _rnd.choice(self._RARE_SEEDS) if _rnd.random() < 0.08 else None
+            # 偶发事件（8%）打破常规，制造惊喜（种子池与 NudgeEngine 共用）
+            mood, form, rare = pick_seeds()
 
             # 反重复：告诉 LLM 最近说过什么，避免相似
             recent = await self._recent_greetings(5)
@@ -441,6 +438,10 @@ class GreetingScheduler:
                 )
                 text = result.reply if hasattr(result, 'reply') else str(result)
                 logger.debug("greeting.raw_output attempt={} hint={} raw={}", attempt, hint, text[:200])
+                # 表情包：直接沿用主对话管线在 result 上选好的贴纸（与主对话完全一致）
+                sticker_path = getattr(result, "sticker_path", None)
+                if sticker_path is not None and not Path(sticker_path).exists():
+                    sticker_path = None
                 text = _strip_thinking(text, context="greeting").strip()
                 # 替换模型输出中的旧名（如"纳西妲"→"小妲"）
                 from config import apply_agent_name_replacements
@@ -462,7 +463,7 @@ class GreetingScheduler:
 
                 # 内容质量检查（小模型）
                 if await self._quality_check(text):
-                    return text
+                    return text, sticker_path
                 else:
                     logger.info("greeting.quality_retry attempt={}", attempt)
                     continue  # 不合格，重试
@@ -472,13 +473,16 @@ class GreetingScheduler:
                 continue
 
         # 两次都不合格，用兜底
-        return f"{address_term}，好呀～"
+        return f"{address_term}，好呀～", None
 
-    async def _send_qq(self, text: str) -> str | None:
-        """发 QQ 主动消息。成功返回 None，失败返回错误描述（供测试接口回显）。"""
+    async def _send_qq(self, text: str, sticker_path: Any = None) -> str | None:
+        """发 QQ 主动消息。成功返回 None，失败返回错误描述（供测试接口回显）。
+
+        sticker_path：存在时与正文合并为一条图文消息（msg_type=7）。
+        """
         try:
             from qq_bot_adapter import send_proactive_message
-            await send_proactive_message(text)
+            await send_proactive_message(text, sticker_path=sticker_path)
             return None
         except (ImportError, AttributeError, RuntimeError, OSError,
                 ConnectionError) as e:
@@ -488,11 +492,11 @@ class GreetingScheduler:
             logger.warning("greeting.qq_send_failed error={}", str(e))
             return str(e)[:120]
 
-    async def _send_wechat(self, text: str) -> str | None:
+    async def _send_wechat(self, text: str, sticker_path: Any = None) -> str | None:
         """发微信主动消息。成功返回 None，失败返回错误描述（供测试接口回显）。"""
         try:
             from wechat_bot_adapter import send_proactive_message
-            await send_proactive_message(text)
+            await send_proactive_message(text, sticker_path=sticker_path)
             return None
         except (ImportError, AttributeError, RuntimeError, OSError,
                 ConnectionError) as e:

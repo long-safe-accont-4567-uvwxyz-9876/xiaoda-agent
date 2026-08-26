@@ -10,7 +10,6 @@ from dataclasses import dataclass
 from typing import Any
 
 from loguru import logger
-
 from prompt_toolkit.application import Application
 from prompt_toolkit.key_binding import KeyBindings
 from prompt_toolkit.layout.containers import Window

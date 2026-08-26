@@ -16,7 +16,6 @@
 """
 from __future__ import annotations
 
-from typing import ClassVar
 import asyncio
 import json
 import os
@@ -24,8 +23,11 @@ import threading
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import ClassVar
 
 from loguru import logger
+
+from config_constants import env_optout_flag
 
 try:
     from utils.atomic_write import atomic_json_write
@@ -100,8 +102,7 @@ class PermanentMemoryEntry:
 
 def _is_enabled() -> bool:
     """检查永久记忆是否启用 (默认开启, 可通过 PERMANENT_MEMORY_ENABLED 关闭)."""
-    val = os.getenv("PERMANENT_MEMORY_ENABLED", "true").strip().lower()
-    return val not in ("0", "false", "off", "no", "")
+    return env_optout_flag("PERMANENT_MEMORY_ENABLED", True)
 
 
 class PermanentMemoryManager:

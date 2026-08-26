@@ -4,8 +4,6 @@
 """
 import inspect
 
-import pytest
-
 
 class TestC1EpisodicMemoriesDDL:
     """C-1: episodic_memories DDL 应包含 content_hash 和 version 列"""
@@ -68,8 +66,11 @@ class TestH4SingleChannelRrfScore:
     """H-4: 单通道检索结果应补充 rrf_score"""
 
     def test_single_channel_has_rrf_score(self):
-        from memory import _retrieval_engine
-        source = inspect.getsource(_retrieval_engine)
+        # 2026-08: _retrieval_engine 拆分为 memory/retrieval 包，
+        # 单通道路径（_resolve_fallback_or_single_channel/_return_single_channel）
+        # 现位于 retrieval/pipeline.py，源码断言随之指向新模块。
+        from memory.retrieval import pipeline
+        source = inspect.getsource(pipeline)
         # 单通道路径应设置 rrf_score
         assert "rrf_score" in source, "单通道结果应补充rrf_score字段"
 

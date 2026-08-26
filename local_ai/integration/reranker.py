@@ -41,8 +41,9 @@ class LocalRerankerService:
         backend = "api" if backend == "auto" else backend
         self._backend = backend if backend in ("local", "api", "off") else "api"
 
-    def set_backend(self, backend: str) -> None:
-        """热更新后端选择（local/api/off；历史值 auto 按 api）。"""
+    def set_backend(self, backend: str, local_model: str | None = None) -> None:
+        """热更新后端选择；local_model 由实例管理器选择契约消费。"""
+        del local_model
         backend = "api" if backend == "auto" else backend
         if backend in ("local", "api", "off"):
             self._backend = backend

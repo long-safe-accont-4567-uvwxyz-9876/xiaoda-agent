@@ -1,5 +1,4 @@
 from __future__ import annotations
-from typing import Any
 
 import asyncio
 import json
@@ -9,14 +8,16 @@ import tempfile
 import time
 import uuid
 from pathlib import Path
+from typing import Any
 
 from fastapi import APIRouter, Depends, File, HTTPException, Query, Request, UploadFile
 from fastapi.responses import PlainTextResponse
 from loguru import logger
 
-from web.schemas import Envelope, ChatRequest, SessionInfo, MessageItem, SlashCommand
-from web.routers.auth import get_current_user
 from emotion.emotion_simple import detect_emotion
+from web.routers.auth import get_current_user
+from web.schemas import ChatRequest, Envelope, MessageItem, SessionInfo, SlashCommand
+from web.upload_utils import read_upload_limited
 
 router = APIRouter(tags=["chat"], dependencies=[Depends(get_current_user)])
 
@@ -192,6 +193,9 @@ async def get_messages(session_id: str, request: Request,
 
 @router.delete("/sessions/{session_id}", response_model=Envelope[dict])
 async def delete_session(session_id: str, request: Request) -> Any:
+    # 删除整段会话历史属不可逆操作，与其他删除类接口一致要求确认头
+    if request.headers.get("X-Confirm") != "yes":
+        raise HTTPException(400, "缺少 X-Confirm: yes 确认头")
     core = request.app.state.core
     await core.db.execute(
         "DELETE FROM conversation_logs WHERE session_id=?", (session_id,))
@@ -202,13 +206,11 @@ async def delete_session(session_id: str, request: Request) -> Any:
 
 @router.post("/sessions/{session_id}/export")
 async def export_session(session_id: str, request: Request) -> Any:
-    # POST + Authorization header 安全下载（token 不再通过 URL 暴露）
-    # 兼容历史 <a href> 调用：仍允许 query token
-    token = request.query_params.get("token") or ""
-    if not token:
-        auth = request.headers.get("Authorization", "")
-        if auth.startswith("Bearer "):
-            token = auth[7:]
+    # POST + Authorization header 安全下载（token 不经 URL 传递）
+    auth = request.headers.get("Authorization", "")
+    if not auth.startswith("Bearer "):
+        raise HTTPException(401, "Missing or invalid Authorization header")
+    token = auth[7:]
     if not token:
         raise HTTPException(401, "Missing or invalid Authorization header")
     # 验证 token
@@ -253,20 +255,20 @@ async def chat(req: ChatRequest, request: Request) -> Any:
             agent=req.agent, app=request.app)
         return Envelope(data=data)
     except (OSError, ValueError, RuntimeError, ConnectionError) as e:
-        logger.error("webui.chat.failed error={}", str(e))
-        return Envelope(ok=False, error={"code": "CHAT_ERROR", "message": str(e)})
-    except Exception as e:
+        logger.error("webui.chat.failed session={} error={}", req.session_id, str(e))
+        return Envelope(ok=False, error={"code": "CHAT_ERROR",
+                                         "message": "生成回复失败，请稍后重试或查看服务端日志"})
+    except Exception:
         logger.exception("chat.chat.unexpected_error")
-        return Envelope(ok=False, error={"code": "CHAT_ERROR", "message": str(e)})
+        return Envelope(ok=False, error={"code": "CHAT_ERROR",
+                                         "message": "生成回复失败，请稍后重试或查看服务端日志"})
 
 
 @router.post("/chat/upload-image", response_model=Envelope[dict])
 async def upload_image(file: UploadFile = File(...)) -> Any:
     if not file.content_type or not file.content_type.startswith("image/"):
         raise HTTPException(400, "仅允许上传图片文件")
-    content = await file.read()
-    if len(content) > MAX_IMAGE_SIZE:
-        raise HTTPException(400, "图片大小不能超过 10MB")
+    content = await read_upload_limited(file, MAX_IMAGE_SIZE, "图片")
     ext = Path(file.filename or "image.png").suffix.lower() or ".png"
     if ext not in _ALLOWED_IMAGE_EXTS:
         raise HTTPException(400, f"不支持的图片格式，仅允许 {', '.join(sorted(_ALLOWED_IMAGE_EXTS))}")
@@ -286,9 +288,7 @@ async def upload_doc(file: UploadFile = File(...)) -> Any:
 
     与 upload-image 分离：文档不走 vision API，而是返回路径供 document_reader 工具读取。
     """
-    content = await file.read()
-    if len(content) > MAX_DOC_SIZE:
-        raise HTTPException(400, "文档大小不能超过 20MB")
+    content = await read_upload_limited(file, MAX_DOC_SIZE, "文档")
     ext = Path(file.filename or "doc.pdf").suffix.lower() or ".pdf"
     if ext not in _ALLOWED_DOC_EXTS:
         raise HTTPException(400, f"不支持的文档格式，仅允许 {', '.join(sorted(_ALLOWED_DOC_EXTS))}")
@@ -333,16 +333,14 @@ def _parse_asr_json_text(text: str) -> str:
             return _json.loads(text).get("text", text)
         except (ValueError, KeyError) as exc:
             logger.debug("chat.json_parse_failed: {}", exc, exc_info=True)
-        except Exception as exc:
+        except Exception:
             logger.exception("chat._parse_asr_json_text.unexpected_error")
     return text
 
 
 @router.post("/chat/speech-to-text", response_model=Envelope[dict])
 async def speech_to_text(file: UploadFile = File(...)) -> Any:
-    content = await file.read()
-    if len(content) > 20 * 1024 * 1024:
-        raise HTTPException(400, "音频大小不能超过 20MB")
+    content = await read_upload_limited(file, 20 * 1024 * 1024, "音频")
 
     try:
         from web.config_service import get_config_service

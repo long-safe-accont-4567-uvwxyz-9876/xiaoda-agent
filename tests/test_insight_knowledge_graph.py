@@ -1,6 +1,8 @@
 """GET /insight/knowledge/graph 端点测试。
 
-覆盖实体聚焦（批量 BFS 路径）与全图概览（LIMIT 80 路径）。
+覆盖实体聚焦与空实体全图模式（均为严格逐层 BFS：2026-08-25 起空实体
+自动选度数最高实体作根，depth 严格生效——旧 LIMIT 80 概览分支已移除，
+它曾导致前端调深度无任何变化）。
 最小 FastAPI app + 内存库，绝不触碰真实数据库。
 """
 from __future__ import annotations
@@ -50,7 +52,9 @@ class _FakeKnowledgeDB:
 def client():
     """真实内存 sqlite + KnowledgeDB：覆盖逐层 BFS 的真实 SQL 路径。"""
     import asyncio
+
     import aiosqlite
+
     from db.db_knowledge import KnowledgeDB
 
     loop = asyncio.new_event_loop()
@@ -171,13 +175,26 @@ def test_graph_entity_focus_edge_cap(client):
     assert max(nums) == 599  # confidence 最高的 r599 必在
 
 
-def test_graph_overview_limit80(client):
+def test_graph_overview_empty_entity_depth_strict(client):
+    """空实体模式：以度数最高者为根（fixture 中=须弥，度3），depth 严格生效。
+
+    回归背景：旧实现该分支固定返回最近 80 条关系、忽略 depth，
+    前端调深度无任何变化。depth=1 不含二跳的「朋友」；depth=2 必含。
+    """
     _auth(client)
-    resp = client.get("/insight/knowledge/graph", params={"entity": "", "depth": 1})
-    assert resp.status_code == 200
-    data = resp.json()["data"]
-    assert len(data["edges"]) <= 80
-    assert all("kind" in n for n in data["nodes"])
+    d1 = client.get("/insight/knowledge/graph",
+                    params={"entity": "", "depth": 1}).json()["data"]
+    n1 = {n["name"] for n in d1["nodes"]}
+    # 根=须弥：一跳邻居 = 小妲(r2)/爸爸(r3)/孤岛(r4)
+    assert {"须弥", "小妲", "爸爸", "孤岛"} <= n1
+    assert "朋友" not in n1  # 朋友在二跳（孤岛→朋友）
+    assert all("kind" in n for n in d1["nodes"])
+
+    d2 = client.get("/insight/knowledge/graph",
+                    params={"entity": "", "depth": 2}).json()["data"]
+    n2 = {n["name"] for n in d2["nodes"]}
+    assert "朋友" in n2
+    assert len(d2["edges"]) > len(d1["edges"])
 
 
 def test_graph_depth_validation(client):

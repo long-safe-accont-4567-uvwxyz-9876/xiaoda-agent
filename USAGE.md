@@ -183,7 +183,7 @@ bash scripts/start.sh
 
 1. 检查 `.env` 文件是否存在，不存在则自动运行配置向导
 2. 检查 `MIMO_API_KEY` 是否已配置，未配置则提示运行向导
-3. 尝试启动 QQ Bot 服务（如果系统中有 `qq-agent` 服务）
+3. 尝试启动 QQ Bot 服务（如果系统中有 `nahida-web` 服务）
 4. 启动 CLI 交互界面
 
 ### 方式二：仅启动 CLI
@@ -312,11 +312,11 @@ streamlit run web/app.py
 python3 qq_bot_adapter.py
 ```
 
-或使用 systemd 服务（如果已配置）：
+或使用 systemd 服务（如果已配置；现行单元为 `nahida-web`，单进程内含 QQ Bot）：
 
 ```bash
-sudo systemctl start qq-agent
-sudo systemctl status qq-agent
+sudo systemctl start nahida-web
+sudo systemctl status nahida-web
 ```
 
 ### QQ 中的使用

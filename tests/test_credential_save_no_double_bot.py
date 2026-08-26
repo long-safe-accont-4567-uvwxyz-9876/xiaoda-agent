@@ -284,7 +284,7 @@ class TestSaveKeysSingleTask:
             mock_reinit_and_restart,
         )
 
-        from web.routers.setup import save_keys, _reinit_tasks
+        from web.routers.setup import _reinit_tasks, save_keys
 
         # 清空已完成的 task
         _reinit_tasks[:] = [t for t in _reinit_tasks if not t.done()]
@@ -332,7 +332,7 @@ class TestSaveKeysSingleTask:
             mock_reinit_and_restart,
         )
 
-        from web.routers.setup import save_keys, _reinit_tasks
+        from web.routers.setup import _reinit_tasks, save_keys
 
         _reinit_tasks[:] = [t for t in _reinit_tasks if not t.done()]
 
@@ -368,7 +368,7 @@ class TestSaveKeysSingleTask:
             mock_reinit_and_restart,
         )
 
-        from web.routers.setup import save_keys, _reinit_tasks
+        from web.routers.setup import _reinit_tasks, save_keys
 
         _reinit_tasks[:] = [t for t in _reinit_tasks if not t.done()]
 
@@ -407,7 +407,7 @@ class TestSaveKeysSingleTask:
             mock_reinit_and_restart,
         )
 
-        from web.routers.setup import save_keys, _reinit_tasks
+        from web.routers.setup import _reinit_tasks, save_keys
 
         _reinit_tasks[:] = [t for t in _reinit_tasks if not t.done()]
 

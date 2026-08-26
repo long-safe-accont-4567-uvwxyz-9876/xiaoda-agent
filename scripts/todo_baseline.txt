@@ -1,0 +1,4 @@
+# TODO/FIXME/HACK 棘轮基线 — 只许随清偿下调,上调须在提交说明登记理由
+# 口径:非测试生产 .py(排除 tests/vendor/dist),grep -cE "\b(TODO|FIXME|HACK)\b"
+# 2026-08-25 初建:3 处(wechat_bot_adapter CDN上传/conflict_supersession v0.7接线/_memory_utils 正则关键词)
+3

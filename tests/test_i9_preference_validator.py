@@ -196,7 +196,7 @@ async def test_run_full_check_returns_report(validator):
 
 def test_report_summary():
     """报告摘要应包含所有层和总体状态"""
-    from core.preference_validator import PreferenceReport, LayerCheck
+    from core.preference_validator import LayerCheck, PreferenceReport
     report = PreferenceReport(
         layers=[
             LayerCheck("L1", True, True, "2 条"),
@@ -216,7 +216,7 @@ def test_report_summary():
 
 def test_report_healthy():
     """所有层健康 + 管线联动正常 → healthy=True"""
-    from core.preference_validator import PreferenceReport, LayerCheck
+    from core.preference_validator import LayerCheck, PreferenceReport
     report = PreferenceReport(
         layers=[
             LayerCheck("L1", True, True),

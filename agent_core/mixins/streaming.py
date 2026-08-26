@@ -11,9 +11,68 @@ from loguru import logger
 
 from agent_core._shared import _stream_finish_reason_var
 from config import STREAM_TEXT_PUSH
+from llm_gateway.stream_protocol import DSMLPreviewFilter, StreamTurnResult
 
 
 class StreamingMixin:
+    async def _stream_llm_turn(
+        self,
+        messages: list,
+        status_callback: Any = None,
+        task_type: str = "chat",
+        *,
+        turn: int = 0,
+        **kwargs: Any,
+    ) -> StreamTurnResult:
+        """Consume one structured model turn while suppressing DSML in previews."""
+        _stream_finish_reason_var.set(None)
+        raw_parts: list[str] = []
+        reasoning_parts: list[str] = []
+        preview_filter = DSMLPreviewFilter()
+        tool_calls = ()
+        finish_reason = None
+        provider = ""
+        model = ""
+        used_fallback = False
+        try:
+            async for event in self.router.chat_stream_events(
+                messages, task_type=task_type, turn=turn, **kwargs,
+            ):
+                provider = event.provider or provider
+                model = event.model or model
+                used_fallback = used_fallback or event.fallback
+                if event.kind == "text_delta" and event.text_delta:
+                    raw_parts.append(event.text_delta)
+                    visible = preview_filter.feed(event.text_delta)
+                    if visible and status_callback:
+                        await status_callback({
+                            "type": "stream_text",
+                            "delta": visible,
+                            "accumulated": "",
+                            "turn": turn,
+                        })
+                elif event.kind == "reasoning_delta" and event.reasoning_delta:
+                    reasoning_parts.append(event.reasoning_delta)
+                elif event.kind == "turn_end":
+                    tool_calls = event.tool_calls
+                    finish_reason = event.finish_reason
+        except Exception:
+            if raw_parts or tool_calls:
+                raise
+            raise
+        raw_text = preview_filter.finish()
+        _stream_finish_reason_var.set(finish_reason)
+        return StreamTurnResult(
+            text=raw_text,
+            tool_calls=tool_calls,
+            finish_reason=finish_reason,
+            reasoning="".join(reasoning_parts),
+            provider=provider,
+            model=model,
+            used_fallback=used_fallback,
+            turn=turn,
+        )
+
     async def _stream_llm_response(self, messages: list, status_callback: Any=None,
                                     task_type: str = "chat", **kwargs: Any) -> str:
         """流式调用 LLM，逐 token 推送给前端。

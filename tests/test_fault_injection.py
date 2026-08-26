@@ -25,15 +25,15 @@ PROJECT_ROOT = Path(__file__).parent.parent
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
+import contextlib
+
+from chaos import verify_degradation
 from chaos.fault_injecting_llm_client import (
     ERROR_FAULT_CODES,
     FaultConfig,
     FaultInjectingLLMClient,
     LLMFaultError,
 )
-from chaos import verify_degradation
-import contextlib
-
 
 # ────────────────────────────────────────────────────────────
 # 辅助: 桩 LLM 客户端

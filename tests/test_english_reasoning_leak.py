@@ -3,9 +3,7 @@
 验证 agnes-2.0-flash 长回复截断时泄漏的英文计划/总结模式能被正确检测和清洗。
 生产样本 conversation_logs id 2107（2026-07-25 记忆回忆任务）。
 """
-import pytest
 from utils.llm_cleanup import has_english_reasoning_leak, strip_english_reasoning_leak
-
 
 # ── 生产样本（简化版） ──────────────────────────────────────────
 PROD_TRUNCATED = """唔……爸爸让小妲回忆这几天发生的事情呀？好，人家乖乖翻一翻记忆的书架～📚✨

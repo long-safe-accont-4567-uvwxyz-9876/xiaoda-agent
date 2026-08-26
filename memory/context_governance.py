@@ -15,10 +15,77 @@ from typing import Any
 
 from loguru import logger
 
+# 哈希口径版本（数据库小任务B-4）：
+#   v1（历史口径）：对完整 summary 全文计算——但 memory_versions.summary_snapshot
+#     按 [:500] 截断存储，>500 字符记忆 verify 时用快照重算必然 mismatch（假阳性）。
+#   v2（当前口径）：对「实际存储快照」summary[:_SNAPSHOT_HASH_LIMIT] 计算，
+#     写入（record_*）与验证（verify_hash_chain）同一口径，长文本链恒 valid。
+# 存量 v1 记录由 migrate_legacy_hashes() 显式修复（不在启动时自动执行）。
+HASH_ALGO_VERSION = "v2-snapshot-500"
+_SNAPSHOT_HASH_LIMIT = 500
+
 
 def compute_content_hash(summary: str) -> str:
-    """SHA-256 of memory summary. Used as version identity + integrity check."""
-    return hashlib.sha256(summary.encode("utf-8")).hexdigest()
+    """SHA-256 of memory summary. Used as version identity + integrity check.
+
+    口径（HASH_ALGO_VERSION=v2）：超过快照上限的文本按实际会存储的截断快照
+    计算——完整文本与其截断快照是同一存储事实，必须得到同一哈希。
+    """
+    return hashlib.sha256(
+        summary[:_SNAPSHOT_HASH_LIMIT].encode("utf-8")).hexdigest()
+
+
+async def migrate_legacy_hashes(conn: Any) -> int:
+    """一次性存量迁移：旧口径（全文哈希）→ 新口径（快照哈希）。
+
+    识别签名：version 行 content_hash == sha256(当前完整 summary) 且
+    != 快照口径重算值——即旧代码按全文计算的产物。不满足签名的差异行
+    （疑似篡改/未知来源）一律不动，交由 verify_hash_chain 报告，保持
+    fail-closed 完整性语义。修复时同步 em.content_hash 与后续版本的
+    prev_hash 链接。幂等：新口径记录不满足签名，重复调用返回 0。
+    由调用方显式触发，不在启动时自动执行。返回修复的 version 行数。
+    """
+    repaired = 0
+    cursor = await conn.execute(
+        "SELECT mv.id, mv.memory_id, mv.content_hash, mv.summary_snapshot, "
+        "em.summary, em.content_hash "
+        "FROM memory_versions mv JOIN episodic_memories em ON em.id = mv.memory_id"
+    )
+    rows = await cursor.fetchall()
+    prev_remap: dict[tuple[int, str], str] = {}
+    for row in rows:
+        row_id, memory_id = row[0], row[1]
+        stored, snapshot = row[2] or "", row[3] or ""
+        summary, em_hash = row[4] or "", row[5] or ""
+        target = compute_content_hash(snapshot)
+        if stored == target:
+            continue  # 已是新口径
+        legacy_sig = hashlib.sha256(summary.encode("utf-8")).hexdigest()
+        if stored != legacy_sig:
+            logger.warning(
+                "governance.legacy_hash_skip_unrecognized",
+                memory_id=memory_id, detail="哈希既非旧口径签名也非新口径")
+            continue
+        await conn.execute(
+            "UPDATE memory_versions SET content_hash=? WHERE id=?",
+            (target, row_id))
+        if em_hash == stored:
+            await conn.execute(
+                "UPDATE episodic_memories SET content_hash=? WHERE id=?",
+                (target, memory_id))
+        prev_remap[(memory_id, stored)] = target
+        repaired += 1
+    # 后续版本的 prev_hash 若指向被修复的旧哈希，重接到新哈希保持链连续
+    for (memory_id, old_hash), new_hash in prev_remap.items():
+        await conn.execute(
+            "UPDATE memory_versions SET prev_hash=? "
+            "WHERE memory_id=? AND prev_hash=?",
+            (new_hash, memory_id, old_hash))
+    await conn.commit()
+    if repaired:
+        logger.info("governance.legacy_hash_migrated",
+                    repaired=repaired, algo=HASH_ALGO_VERSION)
+    return repaired
 
 
 class ContextGovernance:
@@ -77,7 +144,8 @@ class ContextGovernance:
         return content_hash
 
     async def record_version_update(self, memory_id: int, new_summary: str,
-                                      auto_commit: bool = True) -> str | None:
+                                      auto_commit: bool = True,
+                                      strict: bool = False) -> str | None:
         """记录记忆更新版本: 自增 version, prev_hash = 旧 content_hash。
 
         用于 _enrich_memory_async 更新 summary 时保持哈希链连续。
@@ -115,6 +183,8 @@ class ContextGovernance:
         except Exception as e:
             logger.warning("governance.record_update_failed",
                            memory_id=memory_id, error=str(e))
+            if strict:
+                raise
             return None
         return new_hash
 

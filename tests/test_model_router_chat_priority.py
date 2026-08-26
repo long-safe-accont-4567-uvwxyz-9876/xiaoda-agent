@@ -96,8 +96,8 @@ async def test_chat_cancels_active_background_llm_and_enters_provider(monkeypatc
 
 @pytest.mark.asyncio
 async def test_profile_insight_uses_background_llm_route(monkeypatch):
-    from agent_core.message_processor import MessageProcessorMixin
     import core.user_profile_learner as learner_module
+    from agent_core.message_processor import MessageProcessorMixin
 
     learner = MagicMock()
     learner.build_insight_prompt.return_value = "extract profile"
@@ -168,3 +168,67 @@ async def test_background_cancelled_before_sem_acquire_does_not_leak_semaphore(m
     with pytest.raises(asyncio.TimeoutError):
         await acq2
     acq1.cancel()  # 清理
+
+
+@pytest.mark.asyncio
+async def test_chat_cancel_in_preempt_window_restores_idle_and_unblocks_bg(monkeypatch):
+    """chat 抢占窗口内被取消，_chat_idle 必须恢复 set，后台任务不得死锁。
+
+    根因：route() 的 chat 分支 ``_chat_idle.clear()`` 原先位于任何 try/finally 之外，
+    其后有 ``await asyncio.sleep(0)``。调用方（main_path.py）用
+    ``asyncio.wait_for(route("chat"), LLM_CALL_TIMEOUT)`` 包裹；超时取消若恰好落在
+    clear 之后、主 try 之前，finally 的 ``set()`` 不会执行，_chat_idle 永久保持
+    cleared → memory_encoding/emotion_analysis 等后台 LLM 任务全部死锁在
+    ``_chat_idle.wait()``，静默饥饿。
+
+    触发方式：用可门控的假 sleep 替换全局 asyncio.sleep，把取消精确注入
+    clear 之后的 await 窗口内。
+    """
+    from model_router import ModelRouter
+
+    router = ModelRouter.__new__(ModelRouter)
+    router._registry = _Registry()
+    router.TASK_TIMEOUTS = {"chat": 60, "memory_encoding": 30}
+    router._cache_stats = {"total_calls": 0}
+    router._chat_idle = asyncio.Event()
+    router._chat_idle.set()
+    router._bg_llm_semaphore = asyncio.Semaphore(1)
+    router._active_bg_llm_tasks = set()
+    router._apply_caching_headers = lambda headers: headers
+
+    entered_window = asyncio.Event()
+    proceed = asyncio.Event()
+
+    async def gated_sleep(*args, **kwargs):
+        # 走到这里说明 clear() 已执行、尚未进入主 try —— 正是取消安全缺口窗口
+        entered_window.set()
+        await proceed.wait()
+
+    monkeypatch.setattr(asyncio, "sleep", gated_sleep)
+
+    async def provider_call(*args, **kwargs):
+        return "bg-ok"
+
+    monkeypatch.setattr(router, "_route_with_retry", provider_call)
+
+    chat = asyncio.create_task(
+        router.route("chat", [{"role": "user", "content": "hi"}])
+    )
+    await entered_window.wait()  # 已过 clear()，停在窗口内
+    chat.cancel()
+    proceed.set()  # 唤醒后 CancelledError 在窗口内的 await 点抛出
+    with pytest.raises(asyncio.CancelledError):
+        await chat
+    assert chat.cancelled()
+
+    # (a) 取消后 _chat_idle 必须恢复 set（bug 存在时永久保持 cleared）
+    assert router._chat_idle.is_set(), \
+        "_chat_idle 在抢占窗口内被取消后必须恢复 set，否则后台任务死锁"
+
+    # (b) 后台任务能继续获得信号量并执行完毕（死锁存在时这里 TimeoutError）
+    bg_result = await asyncio.wait_for(
+        router.route("memory_encoding", [{"role": "user", "content": "bg"}]),
+        timeout=5,
+    )
+    assert bg_result == "bg-ok"
+    assert not router._bg_llm_semaphore.locked(), "后台完成后 semaphore 必须释放"

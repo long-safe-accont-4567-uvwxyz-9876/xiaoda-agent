@@ -1,16 +1,16 @@
-from typing import Any
+import datetime
+import json
 import os
 import re
-import json
-import datetime
 import time as _time
+from typing import Any
+
 import httpx
 from loguru import logger
 
-from db.db_notebook import NotebookDB
 from config import get_agent_display_name
+from db.db_notebook import NotebookDB
 from utils.http_pool import get_shared_client
-
 
 AUTO_NOTE_PROMPT_TEMPLATE = """你是{agent_name}。刚刚和{address_term}进行了一轮对话。
 
@@ -255,9 +255,9 @@ class NotebookManager:
         return await self.notebook.get_notebook_notes(limit=limit)
 
     def _parse_task_time(self, time_str: str) -> float:
-        from datetime import datetime
-        from zoneinfo import ZoneInfo
         import os
+        from datetime import datetime, timedelta
+        from zoneinfo import ZoneInfo
         tz_name = os.getenv("NUDGE_TIMEZONE", "Asia/Shanghai")
         try:
             tz = ZoneInfo(tz_name)
@@ -276,23 +276,23 @@ class NotebookManager:
                 days_to_next_monday = (7 - now.weekday()) % 7
                 if days_to_next_monday == 0:
                     days_to_next_monday = 7
-                next_monday = now + datetime.timedelta(days=days_to_next_monday)
+                next_monday = now + timedelta(days=days_to_next_monday)
                 target = next_monday.replace(hour=0, minute=0, second=0, microsecond=0)
-                target = target + datetime.timedelta(days=dow)
+                target = target + timedelta(days=dow)
                 return target.timestamp()
             if f"这周{cn}" in original or f"本周{cn}" in original:
                 days_since_monday = now.weekday()
-                this_monday = now - datetime.timedelta(days=days_since_monday)
+                this_monday = now - timedelta(days=days_since_monday)
                 target = this_monday.replace(hour=0, minute=0, second=0, microsecond=0)
-                target = target + datetime.timedelta(days=dow)
+                target = target + timedelta(days=dow)
                 if target > now:
                     return target.timestamp()
                 return 0.0
 
         if "后天" in time_str:
-            base = now + datetime.timedelta(days=2)
+            base = now + timedelta(days=2)
         elif "明天" in time_str or "明早" in time_str or "明晚" in time_str:
-            base = now + datetime.timedelta(days=1)
+            base = now + timedelta(days=1)
         else:
             base = now
 
@@ -302,13 +302,16 @@ class NotebookManager:
             time_str = time_str.replace(prefix, "").strip()
 
         cn_num = {"零": 0, "一": 1, "二": 2, "三": 3, "四": 4, "五": 5, "六": 6, "七": 7, "八": 8, "九": 9,
+                  "两": 2,
                   "十": 10, "十一": 11, "十二": 12, "十三": 13, "十四": 14, "十五": 15,
                   "十六": 16, "十七": 17, "十八": 18, "十九": 19, "二十": 20,
+                  "三十": 30, "四十": 40, "五十": 50,
                   "二十一": 21, "二十二": 22, "二十三": 23}
-        for cn, num in cn_num.items():
+        for cn, num in sorted(cn_num.items(), key=lambda kv: len(kv[0]), reverse=True):
             if cn in time_str:
                 time_str = time_str.replace(cn, str(num))
-                break
+        time_str = time_str.replace("半", ":30")
+        time_str = re.sub(r"点(?=\d)", ":", time_str)
 
         try:
             parts = time_str.split(":")
@@ -322,7 +325,7 @@ class NotebookManager:
         except (ValueError, IndexError):
             logger.debug("notebook_manager.timestamp_parse_failed", exc_info=True)
 
-        for cn, num in cn_num.items():
+        for cn, num in sorted(cn_num.items(), key=lambda kv: len(kv[0]), reverse=True):
             if time_str.strip() == cn or time_str.strip().startswith(cn):
                 hour = num
                 if is_pm and hour < 12:

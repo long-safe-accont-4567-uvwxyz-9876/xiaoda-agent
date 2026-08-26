@@ -1,0 +1,443 @@
+{
+  "version": "xiaoda-retrieval-zh-v1",
+  "frozen_at": "2026-08-24",
+  "dataset_kind": "human_labeled_private_rag_seed",
+  "description": "中文私域记忆检索冻结种子集；evidence_ids 对应评测夹具中的稳定证据 ID。 | v1.1: 每维度新增可执行变体案例（12→20）",
+  "evidence_fixtures": [
+    {
+      "evidence_id": "M:identity:1",
+      "summary": "用户的证件号码是 110105199001011234",
+      "scope": {
+        "user_id": "eval-alice",
+        "agent_id": "xiaoda"
+      }
+    },
+    {
+      "evidence_id": "M:bob:birthday",
+      "summary": "Bob 的生日是 8 月 20 日",
+      "scope": {
+        "user_id": "eval-bob",
+        "agent_id": "xiaoda"
+      }
+    },
+    {
+      "evidence_id": "M:alice:birthday",
+      "summary": "Alice 的生日是 3 月 15 日",
+      "scope": {
+        "user_id": "eval-alice",
+        "agent_id": "xiaoda"
+      }
+    },
+    {
+      "evidence_id": "M:backend-stack:1",
+      "summary": "FastAPI 项目使用 SQLAlchemy ORM 管理数据库 session",
+      "scope": {
+        "user_id": "eval-alice",
+        "agent_id": "xiaoda"
+      }
+    },
+    {
+      "evidence_id": "M:alice:phone",
+      "summary": "用户的手机号码是 13800138000",
+      "scope": {
+        "user_id": "eval-alice",
+        "agent_id": "xiaoda"
+      }
+    },
+    {
+      "evidence_id": "M:project-nightingale:1",
+      "summary": "内部代号夜莺的项目是数据库迁移平台，由数据组负责",
+      "scope": {
+        "user_id": "eval-alice",
+        "agent_id": "xiaoda"
+      }
+    },
+    {
+      "evidence_id": "M:sister:cat-owner",
+      "summary": "用户的姐姐养了一只猫",
+      "scope": {
+        "user_id": "eval-alice",
+        "agent_id": "xiaoda"
+      }
+    },
+    {
+      "evidence_id": "M:sister:cat-name",
+      "summary": "姐姐的那只猫名字叫汤圆",
+      "scope": {
+        "user_id": "eval-alice",
+        "agent_id": "xiaoda"
+      }
+    },
+    {
+      "evidence_id": "M:drink:v1",
+      "summary": "用户以前最喜欢喝的饮料是冰可乐",
+      "scope": {
+        "user_id": "eval-alice",
+        "agent_id": "xiaoda"
+      }
+    },
+    {
+      "evidence_id": "M:drink:v2",
+      "summary": "用户现在的饮料偏好改成了无糖气泡水，不再喝可乐",
+      "scope": {
+        "user_id": "eval-alice",
+        "agent_id": "xiaoda"
+      }
+    },
+    {
+      "evidence_id": "M:alice:passport",
+      "summary": "用户的护照号码是 E12345678",
+      "scope": {
+        "user_id": "eval-alice",
+        "agent_id": "xiaoda"
+      }
+    },
+    {
+      "evidence_id": "M:carol:passport",
+      "summary": "Carol 的护照号码是 E87654321",
+      "scope": {
+        "user_id": "eval-carol",
+        "agent_id": "xiaoda"
+      }
+    },
+    {
+      "evidence_id": "M:api-order-conflict:1",
+      "summary": "调用 /v1/orders 接口返回 ORDER_409_CONFLICT 错误码表示库存冲突",
+      "scope": {
+        "user_id": "eval-alice",
+        "agent_id": "xiaoda"
+      }
+    },
+    {
+      "evidence_id": "KG:group-a:deadline",
+      "summary": "群A接龙报名截止时间定为周五晚上八点",
+      "scope": {
+        "user_id": "eval-alice",
+        "agent_id": "xiaoda",
+        "session_id": "qq_group:eval-alice:group-a"
+      }
+    },
+    {
+      "evidence_id": "KG:group-b:deadline",
+      "summary": "群B接龙报名截止时间是下周三中午十二点",
+      "scope": {
+        "user_id": "eval-alice",
+        "agent_id": "xiaoda",
+        "session_id": "qq_group:eval-alice:group-b"
+      }
+    }
+  ],
+  "cases": [
+    {
+      "id": "exact-identifier-001",
+      "category": "exact_identifier",
+      "query": "我的证件号码是多少",
+      "scope": {
+        "user_id": "eval-alice",
+        "agent_id": "xiaoda"
+      },
+      "expect_relevance": {
+        "M:identity:1": 3
+      },
+      "unanswerable": false,
+      "preserved_literals": [
+        "证件号码"
+      ],
+      "executable_gate": true
+    },
+    {
+      "id": "semantic-preference-001",
+      "category": "semantic_rewrite",
+      "query": "我饮食方面有哪些忌口",
+      "scope": {
+        "user_id": "eval-alice",
+        "agent_id": "xiaoda"
+      },
+      "expect_relevance": {
+        "M:preference:1": 3,
+        "M:breakfast:1": 1
+      },
+      "unanswerable": false,
+      "executable_gate": false
+    },
+    {
+      "id": "coreference-001",
+      "category": "coreference",
+      "query": "那个方案最后怎么定的",
+      "context": "上一轮正在讨论 PLC 编程助手方案",
+      "scope": {
+        "user_id": "eval-alice",
+        "agent_id": "xiaoda"
+      },
+      "expect_relevance": {
+        "M:plc-decision:1": 3
+      },
+      "unanswerable": false,
+      "executable_gate": false
+    },
+    {
+      "id": "temporal-hours-001",
+      "category": "temporal",
+      "query": "三小时前我说了什么",
+      "scope": {
+        "user_id": "eval-alice",
+        "agent_id": "xiaoda"
+      },
+      "expect_relevance": {
+        "C:alice:recent:1": 3
+      },
+      "unanswerable": false,
+      "executable_gate": false
+    },
+    {
+      "id": "negation-current-001",
+      "category": "negation_and_current_fact",
+      "query": "我现在还住在北京吗",
+      "scope": {
+        "user_id": "eval-alice",
+        "agent_id": "xiaoda"
+      },
+      "expect_relevance": {
+        "KG:residence:shanghai:v2": 3,
+        "KG:residence:beijing:v1": 1
+      },
+      "unanswerable": false,
+      "forbidden_claims": [
+        "用户当前住在北京"
+      ],
+      "executable_gate": false
+    },
+    {
+      "id": "multihop-001",
+      "category": "multi_hop",
+      "query": "我大学室友后来在哪座城市做什么工作",
+      "scope": {
+        "user_id": "eval-alice",
+        "agent_id": "xiaoda"
+      },
+      "expect_relevance": {
+        "M:roommate:city": 3,
+        "M:roommate:job": 3
+      },
+      "unanswerable": false,
+      "executable_gate": false
+    },
+    {
+      "id": "conflict-001",
+      "category": "conflict",
+      "query": "我对咖啡的偏好前后有什么变化",
+      "scope": {
+        "user_id": "eval-alice",
+        "agent_id": "xiaoda"
+      },
+      "expect_relevance": {
+        "M:coffee:v1": 2,
+        "M:coffee:v2": 3
+      },
+      "unanswerable": false,
+      "executable_gate": false
+    },
+    {
+      "id": "unanswerable-001",
+      "category": "unanswerable",
+      "query": "我的量子纠缠实验编号是多少",
+      "scope": {
+        "user_id": "eval-alice",
+        "agent_id": "xiaoda"
+      },
+      "expect_relevance": {},
+      "unanswerable": true,
+      "executable_gate": false
+    },
+    {
+      "id": "scope-isolation-001",
+      "category": "scope_isolation",
+      "query": "我的生日是哪天",
+      "scope": {
+        "user_id": "eval-bob",
+        "agent_id": "xiaoda"
+      },
+      "expect_relevance": {
+        "M:bob:birthday": 3
+      },
+      "forbidden_evidence_ids": [
+        "M:alice:birthday"
+      ],
+      "unanswerable": false,
+      "executable_gate": true
+    },
+    {
+      "id": "mixed-code-001",
+      "category": "mixed_zh_code",
+      "query": "我在 FastAPI 项目里用哪个 ORM 管理 session",
+      "scope": {
+        "user_id": "eval-alice",
+        "agent_id": "xiaoda"
+      },
+      "expect_relevance": {
+        "M:backend-stack:1": 3
+      },
+      "unanswerable": false,
+      "preserved_literals": [
+        "FastAPI",
+        "ORM",
+        "session"
+      ],
+      "executable_gate": true
+    },
+    {
+      "id": "group-scope-001",
+      "category": "group_scope_isolation",
+      "query": "这个群最后定了什么活动",
+      "scope": {
+        "user_id": "eval-alice",
+        "agent_id": "xiaoda",
+        "session_id": "qq_group:eval-alice:group-a"
+      },
+      "expect_relevance": {
+        "KG:group-a:activity": 3
+      },
+      "forbidden_evidence_ids": [
+        "KG:group-b:activity"
+      ],
+      "unanswerable": false,
+      "executable_gate": false
+    },
+    {
+      "id": "typo-alias-001",
+      "category": "typo_and_alias",
+      "query": "我常去的那家川采馆叫啥",
+      "scope": {
+        "user_id": "eval-alice",
+        "agent_id": "xiaoda"
+      },
+      "expect_relevance": {
+        "M:restaurant:1": 3
+      },
+      "unanswerable": false,
+      "executable_gate": false
+    },
+    {
+      "id": "exact-identifier-002",
+      "category": "exact_identifier",
+      "query": "我的手机号码是多少",
+      "scope": {
+        "user_id": "eval-alice",
+        "agent_id": "xiaoda"
+      },
+      "expect_relevance": {
+        "M:alice:phone": 3
+      },
+      "unanswerable": false,
+      "preserved_literals": [
+        "手机号码"
+      ],
+      "executable_gate": true
+    },
+    {
+      "id": "coreference-002",
+      "category": "coreference",
+      "query": "夜莺项目是做什么的",
+      "scope": {
+        "user_id": "eval-alice",
+        "agent_id": "xiaoda"
+      },
+      "expect_relevance": {
+        "M:project-nightingale:1": 3
+      },
+      "unanswerable": false,
+      "executable_gate": true
+    },
+    {
+      "id": "multihop-002",
+      "category": "multi_hop",
+      "query": "我姐姐养的猫叫什么名字",
+      "scope": {
+        "user_id": "eval-alice",
+        "agent_id": "xiaoda"
+      },
+      "expect_relevance": {
+        "M:sister:cat-owner": 3,
+        "M:sister:cat-name": 3
+      },
+      "unanswerable": false,
+      "executable_gate": true
+    },
+    {
+      "id": "conflict-002",
+      "category": "conflict",
+      "query": "我现在平时喝什么饮料",
+      "scope": {
+        "user_id": "eval-alice",
+        "agent_id": "xiaoda"
+      },
+      "expect_relevance": {
+        "M:drink:v1": 2,
+        "M:drink:v2": 3
+      },
+      "unanswerable": false,
+      "executable_gate": true
+    },
+    {
+      "id": "scope-isolation-002",
+      "category": "scope_isolation",
+      "query": "我的护照号码是多少",
+      "scope": {
+        "user_id": "eval-alice",
+        "agent_id": "xiaoda"
+      },
+      "expect_relevance": {
+        "M:alice:passport": 3
+      },
+      "forbidden_evidence_ids": [
+        "M:carol:passport"
+      ],
+      "unanswerable": false,
+      "executable_gate": true
+    },
+    {
+      "id": "mixed-code-002",
+      "category": "mixed_zh_code",
+      "query": "/v1/orders 接口报 ORDER_409_CONFLICT 是什么意思",
+      "scope": {
+        "user_id": "eval-alice",
+        "agent_id": "xiaoda"
+      },
+      "expect_relevance": {
+        "M:api-order-conflict:1": 3
+      },
+      "unanswerable": false,
+      "executable_gate": true
+    },
+    {
+      "id": "group-scope-002",
+      "category": "group_scope_isolation",
+      "query": "群里接龙报名什么时候截止",
+      "scope": {
+        "user_id": "eval-alice",
+        "agent_id": "xiaoda",
+        "session_id": "qq_group:eval-alice:group-a"
+      },
+      "expect_relevance": {
+        "KG:group-a:deadline": 3
+      },
+      "forbidden_evidence_ids": [
+        "KG:group-b:deadline"
+      ],
+      "unanswerable": false,
+      "executable_gate": true
+    },
+    {
+      "id": "unanswerable-002",
+      "category": "unanswerable",
+      "query": "我上次说自己对青霉素过敏，是哪一年查出来的",
+      "scope": {
+        "user_id": "eval-alice",
+        "agent_id": "xiaoda"
+      },
+      "expect_relevance": {},
+      "unanswerable": true,
+      "executable_gate": true
+    }
+  ]
+}

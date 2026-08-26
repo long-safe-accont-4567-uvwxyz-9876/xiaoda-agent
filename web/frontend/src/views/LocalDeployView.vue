@@ -6,7 +6,9 @@ import DeploymentsTab from '../components/local-ai/DeploymentsTab.vue'
 import DownloadTasksTab from '../components/local-ai/DownloadTasksTab.vue'
 import InstalledModelsTab from '../components/local-ai/InstalledModelsTab.vue'
 import ModelMarketTab from '../components/local-ai/ModelMarketTab.vue'
+import PromptProfilesTab from '../components/local-ai/PromptProfilesTab.vue'
 import SystemModelNodesTab from '../components/local-ai/SystemModelNodesTab.vue'
+import ViewTitleIcon from '../components/fx/ViewTitleIcon.vue'
 import { useLocalAiStore } from '../stores/localAi'
 import { t } from '../i18n'
 
@@ -33,7 +35,7 @@ onBeforeUnmount(() => store.disconnectWebSocket())
 
 <template>
   <div class="local-deploy-view">
-    <header class="view-header"><div><h2>🖥️ {{ t('localDeployView.title') }}</h2><p>{{ summary }}</p></div><n-button :loading="store.loading" @click="load">{{ t('refresh') }}</n-button></header>
+    <header class="view-header"><div><h2 class="view-title view-title-icon"><ViewTitleIcon name="local-deploy" /> {{ t('localDeployView.title') }}</h2><p>{{ summary }}</p></div><n-button :loading="store.loading" @click="load">{{ t('refresh') }}</n-button></header>
     <n-alert v-if="store.error" type="error" :title="t('localDeployView.loadFailed')">{{ store.error }}</n-alert>
     <n-spin :show="store.loading && !store.devices.length && !store.catalog.length">
       <n-tabs v-model:value="activeTab" type="line" animated display-directive="show" class="local-ai-tabs">
@@ -42,6 +44,7 @@ onBeforeUnmount(() => store.disconnectWebSocket())
         <n-tab-pane name="installed" :tab="t('localDeployView.tabInstalled')"><InstalledModelsTab /></n-tab-pane>
         <n-tab-pane name="devices" :tab="t('localDeployView.tabDevicesShort')"><ComputeDevicesTab /></n-tab-pane>
         <n-tab-pane name="nodes" :tab="t('localDeployView.tabNodes')"><SystemModelNodesTab /></n-tab-pane>
+        <n-tab-pane name="prompts" :tab="t('localDeployView.tabPrompts')"><PromptProfilesTab /></n-tab-pane>
         <n-tab-pane name="downloads" :tab="t('localDeployView.tabDownloads')"><DownloadTasksTab /></n-tab-pane>
       </n-tabs>
     </n-spin>

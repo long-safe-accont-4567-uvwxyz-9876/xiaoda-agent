@@ -9,6 +9,14 @@ INSTALL_DIR="${INSTALL_DIR:-$HOME/.xiaoda-agent}"
 SERVICE_NAME="xiaoda-agent"
 SERVICE_FILE="/etc/systemd/system/${SERVICE_NAME}.service"
 
+# 服务运行用户（由 resolve_service_user 解析后写死进 unit，避免服务以 root 运行）
+SERVICE_USER=""
+SERVICE_GROUP=""
+SERVICE_HOME=""
+# 用户数据目录（与 config.py 的 ~/.ai-agent 对齐；以服务用户 home 为准）
+DATA_DIR=""
+FORCE=0
+
 RED='\033[0;31m'
 GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
@@ -55,22 +63,27 @@ ENVEOF
     fi
 
     # 创建用户数据目录（与 config.py 中 _resolve_data_path 的目录结构对齐）
-    mkdir -p "$HOME/.ai-agent/data/db" \
-             "$HOME/.ai-agent/data/logs" \
-             "$HOME/.ai-agent/data/credentials" \
-             "$HOME/.ai-agent/data/config" \
-             "$HOME/.ai-agent/data/config/workspace" \
-             "$HOME/.ai-agent/data/config/agents" \
-             "$HOME/.ai-agent/data/stickers" \
-             "$HOME/.ai-agent/data/xiaoli-stickers" \
-             "$HOME/.ai-agent/data/agent-stickers" \
-             "$HOME/.ai-agent/data/media" \
-             "$HOME/.ai-agent/data/files" \
-             "$HOME/.ai-agent/data/voice_refs" \
-             "$HOME/.ai-agent/data/memory_state" \
-             "$HOME/.ai-agent/data/plugins" \
-             "$HOME/.ai-agent/data/workspace"
-    info "用户数据目录已创建"
+    # 注意：以服务运行用户的 home 为准（root 执行时 $HOME=/root 会导致数据写错位置）
+    mkdir -p "$DATA_DIR/data/db" \
+             "$DATA_DIR/data/logs" \
+             "$DATA_DIR/data/credentials" \
+             "$DATA_DIR/data/config" \
+             "$DATA_DIR/data/config/workspace" \
+             "$DATA_DIR/data/config/agents" \
+             "$DATA_DIR/data/stickers" \
+             "$DATA_DIR/data/xiaoli-stickers" \
+             "$DATA_DIR/data/agent-stickers" \
+             "$DATA_DIR/data/media" \
+             "$DATA_DIR/data/files" \
+             "$DATA_DIR/data/voice_refs" \
+             "$DATA_DIR/data/memory_state" \
+             "$DATA_DIR/data/plugins" \
+             "$DATA_DIR/data/workspace"
+    if [ -n "$SERVICE_USER" ] && [ "$SERVICE_USER" != "root" ]; then
+        chown -R "$SERVICE_USER:$SERVICE_GROUP" "$DATA_DIR" 2>/dev/null || \
+            warn "无法将 $DATA_DIR 归属到 $SERVICE_USER，服务可能无写入权限"
+    fi
+    info "用户数据目录已创建 ($DATA_DIR)"
 }
 
 # ── 配置 xiaoda CLI 命令到 PATH ───────────────────────────
@@ -128,12 +141,58 @@ setup_cli_command() {
     fi
 }
 
+# ── 解析服务运行用户（非 root）────────────────────────────
+# systemd unit 必须写死 User=，否则 WebUI 的 pty.fork 终端等能力会以 root 运行。
+resolve_service_user() {
+    local candidate=""
+    # 优先 SUDO_USER（sudo/su 提权安装时还原真实用户），其次 logname，再退到当前用户
+    if [ -n "${SUDO_USER:-}" ] && [ "${SUDO_USER}" != "root" ]; then
+        candidate="${SUDO_USER}"
+    elif command -v logname &>/dev/null && [ -n "$(logname 2>/dev/null)" ] && [ "$(logname 2>/dev/null)" != "root" ]; then
+        candidate="$(logname 2>/dev/null)"
+    elif [ "$(id -un)" != "root" ]; then
+        candidate="$(id -un)"
+    fi
+
+    if [ -z "$candidate" ]; then
+        # 纯 root 环境（如容器/CI）：无可用非 root 用户
+        if [ "$FORCE" -eq 1 ]; then
+            warn "--force 已指定：服务将以 root 运行（不推荐）"
+            SERVICE_USER="root"
+            SERVICE_GROUP="root"
+            SERVICE_HOME="${INSTALL_DIR}"
+        else
+            error "当前以 root 身份安装且未解析到真实用户，服务将以 root 运行（安全隐患）。请用普通用户执行本脚本，或显式传入 --force 以确认继续。"
+        fi
+    else
+        # 校验用户与组真实存在
+        if ! id "$candidate" &>/dev/null; then
+            error "解析到的用户 $candidate 不存在，无法配置服务"
+        fi
+        SERVICE_USER="$candidate"
+        SERVICE_GROUP="$(id -gn "$candidate")"
+        SERVICE_HOME="$(getent passwd "$SERVICE_USER" | cut -d: -f6)"
+        if [ -z "$SERVICE_HOME" ]; then
+            error "无法确定 $SERVICE_USER 的 home 目录"
+        fi
+        info "服务将以 ${SERVICE_USER}(${SERVICE_GROUP}) 运行，home=${SERVICE_HOME}"
+    fi
+
+    DATA_DIR="$SERVICE_HOME/.ai-agent"
+
+    if [ "$SERVICE_USER" = "root" ] || [ -z "$SERVICE_USER" ]; then
+        DATA_DIR="${HOME}/.ai-agent"
+    fi
+}
+
 # ── 创建 systemd 服务 ─────────────────────────────────────
 setup_service() {
     if [ ! -d /etc/systemd/system ]; then
         warn "未检测到 systemd，跳过服务创建。请手动运行: bash $INSTALL_DIR/scripts/start-linux.sh --web"
         return
     fi
+
+    resolve_service_user
 
     sudo tee "$SERVICE_FILE" > /dev/null <<EOF
 [Unit]
@@ -142,6 +201,10 @@ After=network.target
 
 [Service]
 Type=simple
+# 以真实用户运行：WebUI 带 pty.fork 终端，root 运行等于交出整台机器
+User=$SERVICE_USER
+Group=$SERVICE_GROUP
+Environment=HOME=$SERVICE_HOME
 WorkingDirectory=$INSTALL_DIR
 ExecStart=$INSTALL_DIR/scripts/start-linux.sh --web --host 127.0.0.1 --port \${WEBUI_PORT}
 Restart=on-failure
@@ -150,6 +213,12 @@ RestartSec=5
 RestartPreventExitStatus=0
 Environment=PYTHONUNBUFFERED=1
 EnvironmentFile=$INSTALL_DIR/.env
+# ── 沙箱加固：限制 root 提权 / 文件系统 / tmp 写入 ──
+NoNewPrivileges=true
+ProtectSystem=full
+PrivateTmp=true
+ProtectHome=read-only
+ReadWritePaths=$DATA_DIR
 
 [Install]
 WantedBy=multi-user.target
@@ -162,6 +231,11 @@ EOF
 }
 
 # ── 主流程 ────────────────────────────────────────────────
+usage() {
+    echo "用法: bash install-linux.sh [--force] [xiaoda-agent-linux-x86_64-vX.X.X.tar.gz]"
+    echo "  --force   root 环境且无可用普通用户时，强制以 root 安装服务（不推荐）"
+}
+
 main() {
     echo ""
     echo "  ╔══════════════════════════════════════╗"
@@ -169,17 +243,33 @@ main() {
     echo "  ╚══════════════════════════════════════╝"
     echo ""
 
+    # 参数解析：--force（root 运行服务的显式确认）+ 可选 tarball 路径
+    local args=()
+    local arg
+    for arg in "$@"; do
+        case "$arg" in
+            --force|-f) FORCE=1 ;;
+            -h|--help)  usage; return 0 ;;
+            *)          args+=("$arg") ;;
+        esac
+    done
+
     check_deps
 
     # 查找 tar.gz — 支持 .run 自解压和直接指定两种方式
     local tarball=""
-    if [ -n "${1:-}" ] && [ -f "${1:-}" ]; then
-        tarball="$1"
+    if [ ${#args[@]} -gt 0 ] && [ -n "${args[0]}" ] && [ -f "${args[0]}" ]; then
+        tarball="${args[0]}"
     else
         # 检查是否为 .run 自解压（内嵌 __ARCHIVE__ 标记）
-        if grep -q '__ARCHIVE__' "$0" 2>/dev/null; then
+        # 2026-08-24 修复：必须只匹配整行 `__ARCHIVE__` 且取「最后一次」命中。
+        # 原实现 grep -n '__ARCHIVE__' | head -1 是非锚定 + 首个命中——脚本头部
+        # 注释里出现的 __ARCHIVE__ 字样会被误当 marker，tail 从注释处开始输出
+        # 纯文本，tar 解压必坏。打包端在拼接 payload 前追加独立一行 __ARCHIVE__，
+        # 因此真实 marker 永远是最后一个锚定命中。
+        if grep -q '^__ARCHIVE__$' "$0" 2>/dev/null; then
             local archive_line
-            archive_line=$(grep -n '__ARCHIVE__' "$0" | head -1 | cut -d: -f1)
+            archive_line=$(grep -n '^__ARCHIVE__$' "$0" | tail -1 | cut -d: -f1)
             local tmp_tarball=$(mktemp /tmp/xiaoda-agent-XXXXXX.tar.gz)
             tail -n +$((archive_line + 1)) "$0" > "$tmp_tarball"
             tarball="$tmp_tarball"
@@ -195,6 +285,7 @@ main() {
     fi
 
     info "安装包: $tarball"
+    resolve_service_user
     install_agent "$tarball"
     setup_cli_command
     setup_service

@@ -23,6 +23,8 @@ from typing import Any
 import httpx
 from loguru import logger
 
+from config_constants import env_flag
+
 _BASE_URL = "https://api.anysearch.com"
 _REQUEST_TIMEOUT = 8.0
 _CLIENT_HEADER = {"X-Anysearch-Client": "ai-agent/1.0"}
@@ -63,7 +65,7 @@ def anysearch_available() -> bool:
         return False
     if os.getenv("ANYSEARCH_API_KEY", "").strip():
         return True
-    return os.getenv("ANYSEARCH_ENABLED", "").strip().lower() in ("1", "true", "yes", "on")
+    return env_flag("ANYSEARCH_ENABLED", False)
 
 
 def _http_post_json(path: str, payload: dict[str, Any]) -> dict[str, Any]:

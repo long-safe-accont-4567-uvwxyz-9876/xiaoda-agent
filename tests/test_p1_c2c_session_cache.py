@@ -9,9 +9,8 @@ P1-2: stale session_id 不失效 — 缓存的 session_id 失效后仍被使用
 3. 提供 _invalidate_c2c_session(openid) 方法供外部清理
 4. agent.process 抛错时调用 invalidation，下次重新查 DB
 """
-import asyncio
 import time
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 

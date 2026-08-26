@@ -1,11 +1,13 @@
-from typing import Any
 import asyncio
 import time
 import uuid
-from tool_engine.tool_registry import register_tool, ToolPermission, ToolResult
+from typing import Any
+
 from loguru import logger
-from utils.metrics import metrics
+
 from memory.scope import current_scope_or_default
+from tool_engine.tool_registry import ToolPermission, ToolResult, register_tool
+from utils.metrics import metrics
 
 # 模块级 MemoryManager 单例（由 agent_core.init() 注入）
 _memory_manager = None
@@ -105,13 +107,15 @@ async def recall(query: str, top_k: int = 8) -> ToolResult:
         # 不起来"，而非失去记忆上下文臆造回复导致雪崩。
         # 不透明请求标识：用于跨日志行关联，不记录 query 原文以避免泄漏用户隐私
         req_id = uuid.uuid4().hex[:8]
+        request_scope = current_scope_or_default()
         try:
             results = await asyncio.wait_for(
                 mm.retrieve_memories(
                     query,
                     k=top_k,
                     apply_min_score=False,
-                    scope=current_scope_or_default(),
+                    scope=request_scope,
+                    conv_user_id=request_scope.user_id,
                 ),
                 timeout=10.0,
             )
@@ -222,8 +226,14 @@ async def forget(query: str) -> ToolResult:
         if mem_id is None:
             return ToolResult.fail("无法定位要删除的记忆 ID")
 
-        # 统一删除：先删向量，再删记忆
-        await mm.memory.delete_memory_with_vector(mem_id, vector_store=mm.vec)
+        if target.get("is_raw"):
+            await mm.memory.hard_delete_raw_for_user_request(
+                mem_id, vector_store=mm.vec,
+            )
+        else:
+            await mm.memory.delete_memory_with_vector(
+                mem_id, vector_store=mm.vec,
+            )
         metrics.inc("memory.forget.success")
         logger.info("memory_tool.forgotten", mem_id=mem_id, summary=target.get("summary", "")[:50])
         return ToolResult.ok("已忘记相关内容")

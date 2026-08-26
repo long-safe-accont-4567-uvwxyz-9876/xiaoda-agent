@@ -1,10 +1,11 @@
 """Scope 三级隔离测试：user_id/session_id/agent_id 过滤逻辑"""
-import asyncio
+import sys
 import time
-import pytest
+from dataclasses import FrozenInstanceError
 from pathlib import Path
 
-import sys
+import pytest
+
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from memory.scope import Scope
@@ -49,7 +50,14 @@ class TestScopeDataclass:
         params = scope.to_sql_params()
         assert "alice" in params
         assert "xiaoli" in params
-        assert len(params) == 2
+        assert params[-1] == "qq_group:%"
+        assert len(params) == 3
+
+    def test_scope_is_immutable(self):
+        scope = Scope.group(user_id="alice", group_id="group-a")
+
+        with pytest.raises(FrozenInstanceError):
+            scope.session_id = "qq_group:group-b"
 
 
 class TestScopeDBIntegration:
@@ -148,3 +156,79 @@ class TestScopeDBIntegration:
         assert mem["is_raw"] == 1
         assert mem["user_id"] == "charlie"
         await db.close()
+
+    async def test_same_user_private_and_qq_groups_are_isolated(self, scoped_db):
+        """同一用户的私聊、群 A、群 B 互不检索，私聊仍跨 session 共享。"""
+        private_one = Scope.personal(
+            user_id="alice", session_id="private-session-1", agent_id="xiaoda"
+        )
+        private_two = Scope.personal(
+            user_id="alice", session_id="private-session-2", agent_id="xiaoda"
+        )
+        group_a = Scope.group(
+            user_id="alice", group_id="group-a", agent_id="xiaoda"
+        )
+        group_b = Scope.group(
+            user_id="alice", group_id="group-b", agent_id="xiaoda"
+        )
+
+        for summary, scope in (
+            ("boundary private one", private_one),
+            ("boundary private two", private_two),
+            ("boundary group a", group_a),
+            ("boundary group b", group_b),
+        ):
+            await scoped_db.memory.insert_episodic_memory(summary=summary, scope=scope)
+
+        private_results = await scoped_db.memory.search_memories_fts_scoped(
+            "boundary", scope=private_two, limit=10
+        )
+        group_a_results = await scoped_db.memory.search_memories_fts_scoped(
+            "boundary", scope=group_a, limit=10
+        )
+        group_b_results = await scoped_db.memory.search_memories_fts_scoped(
+            "boundary", scope=group_b, limit=10
+        )
+
+        assert {row["summary"] for row in private_results} == {
+            "boundary private one",
+            "boundary private two",
+        }
+        assert [row["summary"] for row in group_a_results] == ["boundary group a"]
+        assert [row["summary"] for row in group_b_results] == ["boundary group b"]
+
+    async def test_time_entity_and_child_channels_apply_group_boundary_before_limit(
+        self, scoped_db
+    ):
+        scopes = {
+            "private": Scope.personal("alice", "private-session"),
+            "group-a": Scope.group("alice", "group-a"),
+            "group-b": Scope.group("alice", "group-b"),
+        }
+        memory_ids = {}
+        for label, scope in scopes.items():
+            memory_ids[label] = await scoped_db.memory.insert_episodic_memory(
+                summary=f"shared evidence {label}", scope=scope
+            )
+            await scoped_db.memory.insert_child_chunk(
+                memory_ids[label], f"child evidence {label}"
+            )
+        entity_id = await scoped_db.memory.insert_memory_entity("shared-entity")
+        for memory_id in memory_ids.values():
+            await scoped_db.memory.insert_entity_memory_link(entity_id, memory_id)
+
+        now = time.time()
+        for label, scope in scopes.items():
+            by_time = await scoped_db.memory.search_memories_by_time_scoped(
+                0, now + 1, scope=scope, limit=1
+            )
+            by_entity = await scoped_db.memory.get_memories_by_entity_names_scoped(
+                ["shared-entity"], scope=scope, limit=1, is_raw=None
+            )
+            child = await scoped_db.memory.search_child_fts(
+                "child evidence", limit=1, scope=scope
+            )
+
+            assert [row["id"] for row in by_time] == [memory_ids[label]]
+            assert [row["id"] for row in by_entity] == [memory_ids[label]]
+            assert [row["parent_id"] for row in child] == [memory_ids[label]]

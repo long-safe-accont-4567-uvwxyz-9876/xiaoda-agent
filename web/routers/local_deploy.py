@@ -17,10 +17,16 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 from loguru import logger
 
 from web.config_service import get_config_service
+from web.prompt_golden_cases import golden_cases_for_node
 from web.routers.auth import get_current_user
 from web.schemas import Envelope
 
 router = APIRouter(tags=["local-deploy"], dependencies=[Depends(get_current_user)])
+
+_NODE_UPDATE_LOCK = asyncio.Lock()
+
+# prompt AB 跑分防重复触发：per-prompt 锁，同一 profile 同时只允许一轮跑分
+_AB_RUN_LOCKS: dict[str, asyncio.Lock] = {}
 
 # 设备探测缓存：5 分钟有效，避免每次刷新页面都 spawn runner 探测 NPU
 _DEVICE_CACHE: dict[str, Any] = {"ts": 0.0, "data": None}
@@ -497,50 +503,121 @@ async def local_deploy_set_model_node(request: Request, body: dict) -> Any:
     选择 local 时可附 local_model 指定具体本地模型（如已安装的 bge 仓库）。
     """
     from web.local_deploy_nodes import (
+        NODES,
         apply_to_runtime,
         ensure_local_instance,
         get_backend,
         get_local_model,
         set_backend,
         stop_node_instance,
+        validate_local_selection,
     )
     node_id = str((body or {}).get("node_id", "")).strip()
     backend = str((body or {}).get("backend", "")).strip().lower()
-    local_model = (body or {}).get("local_model")
-    local_model = str(local_model).strip() if local_model is not None else None
-    prev_backend = get_backend(get_config_service(), node_id)
-    prev_model = get_local_model(get_config_service(), node_id)
-    try:
-        normalized = set_backend(
-            get_config_service(), node_id, backend, local_model=local_model
-        )
-    except ValueError as e:
-        raise HTTPException(status_code=422, detail=str(e)) from e
-    core = getattr(request.app.state, "core", None)
-    vs = _get_vector_store(request)
-    if core is not None:
-        # 常驻服务：切本地 → 启动对应模型实例；切 API → 关闭本地推理实例
-        if normalized == "local" and local_model:
-            # 切换到新的本地模型：先停旧模型释放内存（全局共享，只保留一份权重）
-            if prev_backend == "local" and prev_model and prev_model != local_model:
-                await stop_node_instance(core, node_id, prev_model)
-            await ensure_local_instance(core, node_id, local_model)
-        elif normalized == "api" and prev_backend == "local" and prev_model:
-            await stop_node_instance(core, node_id, prev_model)
-        # 热生效（embedding 引擎切换走线程池，避免阻塞事件循环）
-        if node_id == "embedding":
-            from web.local_deploy_nodes import apply_to_runtime as _apply
-            await asyncio.to_thread(_apply, core, vs, node_id, normalized)
-        else:
-            apply_to_runtime(core, vs, node_id, normalized, app=request.app, local_model=local_model)
-    # 持久化规则：节点选择变更后重算——仅「引擎已启动 + 任一节点选 local」才
-    # 持久化 local；缺一（如引擎未启动）则回退 remote，重启默认 API
-    _persist_embed_mode_by_rule(vs)
-    return Envelope(data={
-        "node_id": node_id,
-        "backend": normalized,
-        "effective": get_backend(get_config_service(), node_id),
-    })
+    requested_model = (body or {}).get("local_model")
+    requested_model = str(requested_model).strip() if requested_model is not None else None
+
+    async with _NODE_UPDATE_LOCK:
+        cfg = get_config_service()
+        node = next((item for item in NODES if item["id"] == node_id), None)
+        if node is None:
+            raise HTTPException(status_code=422, detail=f"unknown model node: {node_id}")
+        if backend not in {"local", "api", "off"}:
+            raise HTTPException(status_code=422, detail=f"invalid backend: {backend}")
+
+        prev_backend = get_backend(cfg, node_id)
+        prev_model = get_local_model(cfg, node_id)
+        local_model = requested_model or prev_model or node.get("local_model") or None
+        core = getattr(request.app.state, "core", None)
+        vs = _get_vector_store(request)
+        manager = getattr(core, "local_ai_instances", None) if core is not None else None
+        prepared_instance = None
+        prepared_new = False
+        old_selection = None
+        old_generation = None
+        committed_generation = None
+        selection_purpose = None
+
+        if backend == "local":
+            if core is None:
+                raise HTTPException(status_code=409, detail="Agent core is not initialized")
+            try:
+                registry_id = await validate_local_selection(core, node, local_model or "")
+                existing = manager.instance_for_model(registry_id) if manager is not None else None
+                prepared_instance = await ensure_local_instance(
+                    core, node_id, local_model or "", required=True, select=False
+                )
+                prepared_new = existing is None and prepared_instance is not None
+                if node["model_purpose"] in {"embedding", "reranker"}:
+                    from local_ai.contracts import ModelPurpose
+                    selection_purpose = ModelPurpose(node["model_purpose"])
+                    old_selection = manager.selection_identity(selection_purpose)
+                    old_generation = manager.selection_generation(selection_purpose)
+            except ValueError as e:
+                raise HTTPException(status_code=422, detail=str(e)) from e
+
+        try:
+            normalized = set_backend(cfg, node_id, backend, local_model=local_model)
+            if prepared_instance is not None and selection_purpose is not None:
+                committed_generation = manager.select_instance(
+                    selection_purpose, prepared_instance.id,
+                    expected_generation=old_generation,
+                )
+            if core is not None:
+                if node_id == "embedding":
+                    await asyncio.to_thread(
+                        apply_to_runtime, core, vs, node_id, normalized,
+                        request.app, local_model, True,
+                    )
+                else:
+                    apply_to_runtime(
+                        core, vs, node_id, normalized, app=request.app,
+                        local_model=local_model, strict=True,
+                    )
+        except (OSError, RuntimeError, ValueError, ImportError) as original_error:
+            rollback_errors: list[str] = []
+            try:
+                set_backend(cfg, node_id, prev_backend, local_model=prev_model)
+            except Exception as rollback_error:
+                rollback_errors.append(f"config: {rollback_error}")
+            if manager is not None and selection_purpose is not None \
+                    and committed_generation is not None:
+                try:
+                    previous_id = old_selection[0] if old_selection else None
+                    manager.select_instance(
+                        selection_purpose, previous_id,
+                        expected_generation=committed_generation,
+                    )
+                except Exception as rollback_error:
+                    rollback_errors.append(f"selection: {rollback_error}")
+            if core is not None:
+                try:
+                    apply_to_runtime(
+                        core, vs, node_id, prev_backend, app=request.app,
+                        local_model=prev_model, strict=False,
+                    )
+                except Exception as rollback_error:
+                    rollback_errors.append(f"runtime: {rollback_error}")
+            if prepared_new and manager is not None and prepared_instance is not None:
+                try:
+                    await manager.stop(prepared_instance.id)
+                except Exception as rollback_error:
+                    rollback_errors.append(f"cleanup: {rollback_error}")
+            detail = f"节点切换失败: {original_error}"
+            if rollback_errors:
+                detail += f"; 回滚异常: {'; '.join(rollback_errors)}"
+            raise HTTPException(status_code=409, detail=detail) from original_error
+
+        if core is not None and prev_backend == "local" and prev_model \
+                and (normalized != "local" or prev_model != local_model):
+            await stop_node_instance(core, node_id, prev_model, cfg=cfg)
+        _persist_embed_mode_by_rule(vs)
+        return Envelope(data={
+            "node_id": node_id,
+            "backend": normalized,
+            "local_model": local_model,
+            "effective": get_backend(cfg, node_id),
+        })
 
 
 @router.get("/local-deploy/logs", response_model=Envelope[list[str]])
@@ -568,3 +645,275 @@ async def local_deploy_logs(request: Request, limit: int = 60, topic: str = "dep
     lines = [ln.rstrip("\n") for ln in tail
              if any(k in ln.lower() for k in keywords)][-n:]
     return Envelope(data=lines)
+
+
+def _prompt_node_for(prompt_id: str) -> str | None:
+    from web.prompt_profiles import NODE_PROMPT_PROFILES
+
+    for node_id, profiles in NODE_PROMPT_PROFILES.items():
+        if any(profile.prompt_id == prompt_id for profile in profiles):
+            return node_id
+    return None
+
+
+def _get_prompt_repository() -> Any:
+    from web.prompt_profile_repository import PromptProfileRepository
+
+    return PromptProfileRepository(get_config_service())
+
+
+def _prompt_audit() -> Any:
+    from web.prompt_audit import get_prompt_audit
+
+    return get_prompt_audit()
+
+
+@router.get("/local-deploy/prompt-profiles/{prompt_id}/audit",
+            response_model=Envelope[list[dict]])
+async def get_prompt_audit_log(prompt_id: str, limit: int = 30) -> Any:
+    """该提示词的治理事件留痕：ab-run/stage/promote/rollback 摘要（最新在后）。"""
+    return Envelope(data=_prompt_audit().recent(limit=min(max(limit, 1), 200),
+                                                prompt_id=prompt_id))
+
+
+def _serialize_golden_case(case: Any) -> dict[str, Any]:
+    return {
+        "case_id": case.case_id,
+        "variables": dict(case.variables),
+        "required_fields": list(case.required_fields),
+        "expect_contains": list(case.expect_contains),
+        "expect_absent": list(case.expect_absent),
+        "evidence_check": bool(case.evidence_quote_field),
+    }
+
+
+@router.get("/local-deploy/prompt-profiles/{node_id}", response_model=Envelope[dict])
+async def get_prompt_profiles(node_id: str) -> Any:
+    """节点的提示词 profile 概览：版本/哈希/status、golden cases 与 staged override。"""
+    from web.node_registry import NODES
+    from web.prompt_profiles import profiles_for_node
+
+    if not any(node["id"] == node_id for node in NODES):
+        raise HTTPException(status_code=404, detail=f"unknown model node: {node_id}")
+    profiles = profiles_for_node(node_id)
+    if not profiles:
+        raise HTTPException(status_code=404, detail=f"node has no generative prompts: {node_id}")
+
+    repository = _get_prompt_repository()
+    cfg = repository._config
+    items = []
+    for profile in profiles:
+        summary = profile.public_summary()
+        summary["staged"] = isinstance(
+            cfg.get(f"prompt_profiles.staging.{profile.prompt_id}"), dict
+        )
+        production = cfg.get(f"prompt_profiles.production.{profile.prompt_id}")
+        summary["overridden"] = isinstance(production, dict)
+        items.append(summary)
+    cases = golden_cases_for_node(node_id)
+    return Envelope(data={
+        "node_id": node_id,
+        "profiles": items,
+        "golden_cases": [_serialize_golden_case(c) for c in cases],
+    })
+
+
+@router.post("/local-deploy/prompt-profiles/{prompt_id}/stage", response_model=Envelope[dict])
+async def stage_prompt_profile(prompt_id: str, body: dict) -> Any:
+    try:
+        staged = _get_prompt_repository().stage({**(body or {}), "prompt_id": prompt_id})
+    except ValueError as e:
+        raise HTTPException(status_code=422, detail=str(e)) from e
+    _prompt_audit().append({
+        "event": "stage",
+        "prompt_id": prompt_id,
+        "version": staged.get("version"),
+        "template_hash": staged.get("template_hash"),
+    })
+    return Envelope(data=staged)
+
+
+@router.post("/local-deploy/prompt-profiles/{prompt_id}/promote", response_model=Envelope[dict])
+async def promote_prompt_profile(request: Request, prompt_id: str, body: dict) -> Any:
+    if request.headers.get("X-Confirm") != "yes":
+        raise HTTPException(status_code=400, detail="缺少 X-Confirm: yes 确认头")
+    report = (body or {}).get("ab_report")
+    if report is not None and not isinstance(report, dict):
+        raise HTTPException(status_code=422, detail="ab_report must be an object")
+    force = bool((body or {}).get("force"))
+    try:
+        promoted = _get_prompt_repository().promote(
+            prompt_id, ab_report=report, force=force)
+    except ValueError as e:
+        raise HTTPException(status_code=422, detail=str(e)) from e
+    _prompt_audit().append({
+        "event": "promote",
+        "prompt_id": prompt_id,
+        "version": promoted.get("version"),
+        "template_hash": promoted.get("template_hash"),
+        "gated": report is not None,
+        "forced": force,
+    })
+    logger.info("prompt_profile.promoted", prompt_id=prompt_id,
+                version=promoted.get("version"), gated=report is not None,
+                forced=force)
+    return Envelope(data=promoted)
+
+
+@router.post("/local-deploy/prompt-profiles/{prompt_id}/rollback", response_model=Envelope[dict])
+async def rollback_prompt_profile(request: Request, prompt_id: str) -> Any:
+    if request.headers.get("X-Confirm") != "yes":
+        raise HTTPException(status_code=400, detail="缺少 X-Confirm: yes 确认头")
+    try:
+        previous = _get_prompt_repository().rollback(prompt_id)
+    except ValueError as e:
+        raise HTTPException(status_code=409, detail=str(e)) from e
+    _prompt_audit().append({
+        "event": "rollback",
+        "prompt_id": prompt_id,
+        "restored_version": previous.get("version"),
+    })
+    return Envelope(data=previous)
+
+
+@router.post("/local-deploy/prompt-profiles/{prompt_id}/ab-eval", response_model=Envelope[dict])
+async def ab_eval_prompt_profile(prompt_id: str, body: dict) -> Any:
+    """同一批 golden cases 上对比 baseline/candidate 两份输出，返回报告与门禁结论。"""
+    from web.prompt_ab import compare_runs, promote_gate
+
+    data = body or {}
+    node_id = _prompt_node_for(prompt_id)
+    if node_id is None:
+        raise HTTPException(status_code=404, detail=f"unknown prompt profile: {prompt_id}")
+    cases = golden_cases_for_node(node_id)
+    if not cases:
+        raise HTTPException(status_code=409, detail=f"no golden cases for node: {node_id}")
+    baseline = data.get("baseline_outputs")
+    candidate = data.get("candidate_outputs")
+    if not isinstance(baseline, dict) or not isinstance(candidate, dict):
+        raise HTTPException(
+            status_code=422,
+            detail="baseline_outputs and candidate_outputs must be objects keyed by case_id",
+        )
+    report = compare_runs(
+        cases,
+        {str(k): str(v) for k, v in baseline.items()},
+        {str(k): str(v) for k, v in candidate.items()},
+        baseline_label=str(data.get("baseline_label") or "baseline"),
+        candidate_label=str(data.get("candidate_label") or "candidate"),
+    )
+    passed, reasons = promote_gate(report)
+    return Envelope(data={
+        "prompt_id": prompt_id,
+        "node_id": node_id,
+        "report": report,
+        "gate": {"passed": passed, "reasons": reasons},
+    })
+
+
+@router.post("/local-deploy/prompt-profiles/{prompt_id}/ab-run", response_model=Envelope[dict])
+async def ab_run_prompt_profile(request: Request, prompt_id: str, body: dict | None = None) -> Any:
+    """真实模型执行 golden cases：内置模板 vs staged override，产出报告与门禁结论。
+
+    body.backends 可选 current/api/local（默认 current）；多后端时逐路独立
+    跑分并要求门禁全部通过（本地/API 分开评分）。
+    """
+    from web.prompt_ab_runner import (
+        SWEEP_BACKENDS,
+        run_prompt_ab,
+        run_prompt_ab_multi,
+        run_prompt_ab_sweep,
+    )
+    from web.prompt_profiles import profile_by_id
+
+    profile = profile_by_id(prompt_id)
+    if profile is None:
+        raise HTTPException(status_code=404, detail=f"unknown prompt profile: {prompt_id}")
+    if not profile.template_refs:
+        raise HTTPException(
+            status_code=409,
+            detail=f"prompt not bound to builtin templates; cannot auto-run: {prompt_id}",
+        )
+    data = body or {}
+    backends = data.get("backends")
+    if backends is None:
+        backends = ["current"]
+    if not isinstance(backends, list) or not backends or \
+            not all(b in SWEEP_BACKENDS for b in backends):
+        raise HTTPException(
+            status_code=422,
+            detail=f"backends must be a non-empty subset of {list(SWEEP_BACKENDS)}",
+        )
+    raw_runs = data.get("runs")
+    if raw_runs is None:
+        runs = 1
+    else:
+        # 严格校验：0/""/bool 等 falsy 值不得被 `or 1` 吞成合法轮次
+        if isinstance(raw_runs, bool) or not isinstance(raw_runs, int):
+            raise HTTPException(status_code=422, detail="runs must be an integer")
+        runs = raw_runs
+    if runs < 1 or runs > 5:
+        raise HTTPException(status_code=422, detail="runs must be within 1..5")
+    if len(backends) > 1 and runs > 1:
+        raise HTTPException(
+            status_code=422,
+            detail="runs>1 with multiple backends is not supported yet; "
+                   "run each backend separately",
+        )
+    core = getattr(request.app.state, "core", None)
+    node_local_model = None
+    if "current" in backends or "local" in backends:
+        if core is None or getattr(core, "router", None) is None:
+            raise HTTPException(status_code=409, detail="Agent core/router is not initialized")
+    if "local" in backends:
+        cfg = get_config_service()
+        node_local_model = cfg.get(f"local_deploy.node_models.{_prompt_node_for(prompt_id) or ''}")
+        node_local_model = str(node_local_model) if node_local_model else None
+    repository = _get_prompt_repository()
+    ab_lock = _AB_RUN_LOCKS.setdefault(prompt_id, asyncio.Lock())
+    if ab_lock.locked():
+        raise HTTPException(status_code=409, detail="prompt AB run already in progress")
+    try:
+        async with ab_lock:
+            if len(backends) == 1 and runs > 1:
+                result = await run_prompt_ab_multi(
+                    core, repository, prompt_id, runs=runs, backend=backends[0],
+                    node_local_model=node_local_model,
+                )
+            elif len(backends) == 1 and backends[0] == "current":
+                result = await run_prompt_ab(core, repository, prompt_id)
+            else:
+                result = await run_prompt_ab_sweep(
+                    core, repository, prompt_id, tuple(backends),
+                    node_local_model=node_local_model,
+                )
+    except ValueError as e:
+        raise HTTPException(status_code=422, detail=str(e)) from e
+    except RuntimeError as e:
+        _prompt_audit().append({
+            "event": "ab_run_infra_failure",
+            "prompt_id": prompt_id,
+            "backends": backends,
+            "runs": runs,
+            "error": str(e),
+        })
+        raise HTTPException(status_code=409, detail=str(e)) from e
+    _prompt_audit().append({
+        "event": "ab_run",
+        "prompt_id": prompt_id,
+        "backends": backends,
+        "runs": runs,
+        "gate_passed": result["gate"]["passed"],
+        "gate_reasons": result["gate"]["reasons"],
+        "rates": {
+            s["backend"]: {
+                "baseline_schema": s["report"]["baseline"]["schema_rate"],
+                "candidate_schema": s["report"]["candidate"]["schema_rate"],
+                "baseline_golden": s["report"]["baseline"]["golden_rate"],
+                "candidate_golden": s["report"]["candidate"]["golden_rate"],
+            } for s in (result["sweeps"] if "sweeps" in result else [result])
+        },
+    })
+    logger.info("prompt_profile.ab_run", prompt_id=prompt_id,
+                backends=backends, runs=runs, gate_passed=result["gate"]["passed"])
+    return Envelope(data=result)

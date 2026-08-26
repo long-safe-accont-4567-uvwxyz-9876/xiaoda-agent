@@ -7,8 +7,8 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from core.event_bus import event_bus
 from agent_core._shared import ProcessResult
+from core.event_bus import event_bus
 
 
 def test_event_bus_has_no_user_after_unbind():
@@ -24,8 +24,8 @@ async def test_qq_adapter_binds_qq_user_during_process():
     验证真实适配器行为：_process_c2c_reply 调用 agent.process 前 bind QQUser，
     process 返回后（finally）unbind。在 process 执行期间 bound_user 应为 QQUser 实例。
     """
-    from qq_bot_adapter import AIQQBot
     from agent_core.user_qq import QQUser
+    from qq_bot_adapter import AIQQBot
 
     event_bus.unbind_user()  # 清理前序状态
 
@@ -43,8 +43,10 @@ async def test_qq_adapter_binds_qq_user_during_process():
     bot.agent.process = AsyncMock(side_effect=fake_process)
 
     class FakeMessage:
-        async def reply(self, content: str = "", msg_seq: int = 0) -> None:
-            pass
+        async def reply(self, content: str = "", msg_seq: int = 0) -> dict:
+            # 模拟真实 botpy：成功返回消息 dict（None 会被判为投递不明确，
+            # 导致 ACK 路径在 agent.process 之前中断）
+            return {"id": "fake_msg"}
 
     message = FakeMessage()
 
@@ -76,8 +78,8 @@ async def test_web_adapter_binds_web_user_during_process():
     验证真实适配器行为：_handle_chat 调用 process_and_serialize（内部调 core.process）
     前 bind WebUser，完成后（finally）unbind。在 process 执行期间 bound_user 应为 WebUser。
     """
-    from web.ws_hub import _handle_chat, manager
     from agent_core.user_web import WebUser
+    from web.ws_hub import _handle_chat, manager
 
     event_bus.unbind_user()  # 清理前序状态
 

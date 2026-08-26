@@ -5,6 +5,7 @@ import { NButton, NTag, NPopconfirm, NSpin, NInput, NEmpty, NTabs, NTabPane, NMo
 import { get, post, put } from '../api'
 import { t, tf } from '../i18n'
 import Tilt3D from '../components/fx/Tilt3D.vue'
+import ViewTitleIcon from '../components/fx/ViewTitleIcon.vue'
 
 const message = useMessage()
 const plugins = ref<any[]>([])
@@ -213,7 +214,7 @@ onMounted(() => { load(); loadMarket() })
 <template>
   <div class="plugins-view">
     <div class="view-header">
-      <h2>🧩 {{ t('pluginsView.title') }}</h2>
+      <h2 class="view-title view-title-icon"><ViewTitleIcon name="plugins" /> {{ t('pluginsView.title') }}</h2>
       <n-button type="primary" :loading="discovering" @click="discoverPlugins"><SumeruIcon name="search" :size="14" variant="duo" tone="view" interactive /> {{ t('pluginsView.scan') }}</n-button>
     </div>
 

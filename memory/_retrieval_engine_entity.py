@@ -18,8 +18,12 @@ from memory._memory_utils import _extract_entities
 class EntityKgBoostMixin:
     """实体召回 + Entity Boost + KG 上下文增强方法组。"""
 
-    async def _apply_kg_context_enhance(self, results: list[dict]) -> None:
-        """KG 上下文增强：对 top-2 记忆提取实体并补充相关知识点。"""
+    async def _apply_kg_context_enhance(
+        self, results: list[dict], scope: Any | None = None
+    ) -> None:
+        """Add KG v1 context only where its unpartitioned facts are allowed."""
+        if scope is not None and scope.boundary.value == "conversation":
+            return
         if not (self._mm.kg and results):
             return
         try:

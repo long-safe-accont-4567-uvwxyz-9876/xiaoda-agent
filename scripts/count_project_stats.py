@@ -57,10 +57,11 @@ ROUTER_DECORATOR_RE = re.compile(
     re.IGNORECASE,
 )
 
-# SQL 语句正则（行首匹配，大小写不敏感）
-CREATE_TABLE_RE = re.compile(r"^\s*CREATE\s+TABLE\b", re.IGNORECASE)
-CREATE_VIRTUAL_TABLE_RE = re.compile(r"^\s*CREATE\s+VIRTUAL\s+TABLE\b", re.IGNORECASE)
-CREATE_INDEX_RE = re.compile(r"^\s*CREATE\s+(?:UNIQUE\s+)?INDEX\b", re.IGNORECASE)
+# SQL 语句正则（行首匹配，大小写不敏感；允许 SQL 字符串前的引号——
+# DDL 单一事实源为 db/ddl_schema.py 内嵌字符串，行首形如 `  "CREATE INDEX ...`）
+CREATE_TABLE_RE = re.compile(r'^\s*"?CREATE\s+TABLE\b', re.IGNORECASE)
+CREATE_VIRTUAL_TABLE_RE = re.compile(r'^\s*"?CREATE\s+VIRTUAL\s+TABLE\b', re.IGNORECASE)
+CREATE_INDEX_RE = re.compile(r'^\s*"?CREATE\s+(?:UNIQUE\s+)?INDEX\b', re.IGNORECASE)
 
 # HTTP 方法列表（与 ROUTER_DECORATOR_RE 中的分组保持顺序一致）
 HTTP_METHODS: list[str] = ["get", "post", "put", "delete", "patch"]
@@ -428,7 +429,9 @@ def collect_stats(root: Path) -> dict:
     """
     root = Path(root)
     routers_dir = root / "web" / "routers"
-    schema_path = root / "db" / "schema.sql"
+    # schema.sql 已删（fc353d75），表结构单一事实源为 db/ddl_schema.py 内嵌 DDL；
+    # count_db_tables 的正则按行匹配，对 Python 源码中的 SQL 字符串同样生效
+    schema_path = root / "db" / "ddl_schema.py"
     emotion_enum_path = root / "emotion" / "emotion_enum.py"
     manifest_path = root / "tools" / "_builtin_manifest.py"
     tests_dir = root / "tests"

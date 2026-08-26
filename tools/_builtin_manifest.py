@@ -3,6 +3,8 @@
 本模块仅依赖标准库与 ``tool_engine.tool_registry.ToolPermission``，**不得** import
 任何 ``tools.*`` 子模块或其它重依赖（httpx/selenium/PIL/primp 等），以保证冷启动
 时 ``register_builtin_tools_lazy()`` 登记元数据不触发重依赖加载。
+例外：``emotion.emotion_enum`` 为零重依赖的单一事实源模块（词表派生用），
+其导入不触发任何工具/模型栈加载。
 
 每条目字段对应 ``register_lazy_tool`` 的入参，元数据从各 tools 模块 ``@register_tool``
 装饰器参数原样复制。``web_browse`` 在 ``web_browse_tools`` 与 ``web_browse_enhanced``
@@ -13,10 +15,11 @@ from __future__ import annotations
 from typing import Any
 
 from config import get_agent_display_name
+from emotion.emotion_enum import EMOTION_VOCAB_SLASH
 from tool_engine.tool_registry import ToolPermission
 
 _NAHIDA_DN = get_agent_display_name('xiaoda')
-_KELI_DN = get_agent_display_name('xiaoli')
+_XIAOLI_DN = get_agent_display_name('xiaoli')
 
 BUILTIN_TOOLS: list[dict[str, Any]] = [
     # ── tools.file_tools_v2 ──────────────────────────────────────────
@@ -146,7 +149,7 @@ BUILTIN_TOOLS: list[dict[str, Any]] = [
     },
     {
         "name": "call_xiaoda",
-        "description": f"向{_NAHIDA_DN}姐姐求助。当{_KELI_DN}遇到不懂的问题、需要深度分析、或需要{_NAHIDA_DN}姐姐亲自回答时使用此工具。{_NAHIDA_DN}姐姐是须弥的草神，温柔聪慧，擅长深度思考和分析。",
+        "description": f"向{_NAHIDA_DN}姐姐求助。当{_XIAOLI_DN}遇到不懂的问题、需要深度分析、或需要{_NAHIDA_DN}姐姐亲自回答时使用此工具。{_NAHIDA_DN}姐姐是须弥的草神，温柔聪慧，擅长深度思考和分析。",
         "schema": {
             "type": "object",
             "properties": {
@@ -947,6 +950,37 @@ BUILTIN_TOOLS: list[dict[str, Any]] = [
         "max_frequency": 10,
         "module_path": "tools.mail_tools",
         "func_name": "mail_download_attachment",
+    },
+    # ── tools.tts_tools ──────────────────────────────────────────────
+    {
+        "name": "synthesize_voice",
+        "description": (
+            "将文字合成为语音消息并发送给用户。"
+            "适用场景：用户明确要求听语音（如'读给我听''发语音'）、"
+            "情感丰富的回复（如安慰、撒娇、讲故事）、用户开启了语音模式。"
+            "不适用场景：纯代码/命令输出、极短回复（如'嗯''好的'）、"
+            "包含大量 URL 或技术参数的内容。"
+            "调用时传入要朗读的文本，可选传入情绪以调整语音风格。"
+        ),
+        "schema": {
+            "type": "object",
+            "properties": {
+                "text": {
+                    "type": "string",
+                    "description": "要合成为语音的文本内容（应为自然语言，不含代码/URL/标签）",
+                },
+                "emotion": {
+                    "type": "string",
+                    "description": f"情绪风格（可选）：{EMOTION_VOCAB_SLASH}。"
+                                   "运行时会自动归一到语音风格，传枚举值即可。",
+                },
+            },
+            "required": ["text"],
+        },
+        "permission": ToolPermission.READ_ONLY,
+        "category": "general",
+        "module_path": "tools.tts_tools",
+        "func_name": "synthesize_voice",
     },
     # ── memory.context_compressor ────────────────────────────────────
     {

@@ -12,8 +12,7 @@ from collections import defaultdict
 
 import pytest
 
-from memory.spreading_activation import SpreadingActivationEngine
-from tests.test_spreading_activation import engine  # noqa: F401  复用 fixture
+from tests.test_spreading_activation import engine  # noqa: F401,F811  复用 fixture
 
 try:
     from memory import rust_hybrid
@@ -121,7 +120,7 @@ def test_rust_index_unicode_and_case():
 
 
 @pytest.mark.asyncio
-async def test_engine_recall_matches_python_when_rust_enabled(engine, monkeypatch):
+async def test_engine_recall_matches_python_when_rust_enabled(engine, monkeypatch):  # noqa: F811  engine 为 pytest fixture 注入
     """开关打开时 _get_rust_index 路径与纯 Python 参考实现一致。"""
     now = "2026-07-10T12:00:00+08:00"
     await engine.db.insert_node(
@@ -228,7 +227,7 @@ def test_rust_spreading_threshold_prunes():
 
 
 @pytest.mark.asyncio
-async def test_engine_spreading_channel_matches_python(engine, monkeypatch):
+async def test_engine_spreading_channel_matches_python(engine, monkeypatch):  # noqa: F811  engine 为 pytest fixture 注入
     """引擎集成：开关打开时 _spreading_channel 与纯 Python 参考一致。"""
     now = "2026-07-10T12:00:00+08:00"
     for nid, text, keys in [("g1", "节点一", ["甲", "乙"]),
@@ -360,7 +359,6 @@ def _swap_module(monkeypatch, stub):
 def test_contract_stale_binary_without_nodeindex_falls_back(monkeypatch):
     """可导入但缺 NodeIndex 的陈旧二进制 → 视同不可用（None），
     RustNodeIndex 抛 RuntimeError 而非 AttributeError。"""
-    import sys
     import types
 
     _swap_module(monkeypatch, types.ModuleType("rust_core"))
@@ -372,7 +370,6 @@ def test_contract_stale_binary_without_nodeindex_falls_back(monkeypatch):
 
 def test_contract_version_mismatch_falls_back(monkeypatch):
     """版本号不一致（异机拷贝/新旧错配的二进制）→ 视同不可用。"""
-    import sys
     import types
 
     stale = types.ModuleType("rust_core")
@@ -386,7 +383,6 @@ def test_contract_version_mismatch_falls_back(monkeypatch):
 def test_contract_missing_method_falls_back(monkeypatch):
     """类存在但方法缺失（如旧版只有 direct_channel 无 spreading_channel）
     的部分陈旧二进制 → 同样拒绝，防调用点 AttributeError。"""
-    import sys
     import types
 
     partial = types.ModuleType("rust_core")
@@ -411,3 +407,46 @@ def test_contract_current_binary_satisfies():
     assert rc.CONTRACT_VERSION == rust_hybrid.RUST_CORE_CONTRACT_VERSION
     for m in ("direct_channel", "load_edges", "spreading_channel", "size"):
         assert hasattr(rc.NodeIndex, m)
+
+
+@pytest.mark.asyncio
+async def test_engine_recall_full_pipeline_ab_equivalence(engine, monkeypatch):  # noqa: F811
+    """全链路终榜 A/B：同一图数据上开关两侧 recall() 终榜逐位一致。
+
+    补 2026-08-25 审计缺口：此前仅对比 direct_channel 单通道输出，
+    未覆盖 direct→spreading→RRF 融合 的完整链路终榜等价。
+    两侧用不同 cache_namespace 规避 recall LRU 缓存串场。
+    """
+    now = "2026-07-10T12:00:00+08:00"
+    specs = [
+        ("n1", ["纳西妲", "草神"], "纳西妲是草神，守护须弥"),
+        ("n2", ["草神", "智慧"], "草神掌管智慧"),
+        ("n3", ["智慧", "学院"], "学院研究智慧与学问"),
+        ("n4", ["编程", "代码"], "用户喜欢编程和写代码"),
+        ("n5", ["编程", "调试"], "调试代码是日常"),
+        ("n6", ["天气"], "今天天气晴朗无关节点"),
+    ]
+    for nid, keys, text in specs:
+        await engine.db.insert_node(
+            id=nid, text=text, keys=json.dumps(keys), created=now,
+            last_accessed=now, valid_from=now)
+    for s, t in [("n1", "n2"), ("n2", "n3"), ("n4", "n5")]:
+        await engine.db.create_edge(s, t)
+
+    async def run_once(enabled: bool, ns: str):
+        monkeypatch.setattr(rust_hybrid, "RUST_HYBRID_ENABLED", enabled)
+        monkeypatch.setattr(rust_hybrid, "RUST_HYBRID_MIN_NODES", 1)
+        # 强制重建常驻索引，防跨侧缓存污染
+        engine._rust_index = None
+        engine._rust_node_ids = frozenset()
+        return await engine.recall(query="纳西妲的智慧和学院的学问",
+                                   top_k=6, cache_namespace=ns)
+
+    py_res = await run_once(False, "ab_py")
+    rust_res = await run_once(True, "ab_rust")
+
+    assert py_res, "Python 侧终榜为空——夹具需先保证链路有产出"
+    assert [r["id"] for r in py_res] == [r["id"] for r in rust_res], \
+        f"终榜 id 序分叉:\npy   ={[r['id'] for r in py_res]}\nrust ={[r['id'] for r in rust_res]}"
+    for a, b in zip(py_res, rust_res):
+        assert abs(a["score"] - b["score"]) < 1e-9

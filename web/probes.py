@@ -145,7 +145,15 @@ async def probe_vector(core: Any) -> dict:
     try:
         if not core.memory:
             return {"ok": False, "latency_ms": 0, "error": "MemoryManager 未初始化"}
-        results = await core.memory.retrieve_memories("测试", k=1)
+        # 显式绑定探针专用 scope：API 上下文没有 chat 流的 scope contextvar，
+        # 不传会触发 current_scope() RuntimeError("memory request scope is not bound")
+        from memory.scope import Scope
+        # record_access=False 只读探测：不触发 FSRS/touch 写副作用，
+        # 避免探针污染真实用户记忆的生命周期状态
+        results = await core.memory.retrieve_memories(
+            "测试", k=1, scope=Scope(session_id="health-probe"),
+            record_access=False,
+        )
         return {"ok": True, "latency_ms": int((time.time() - t0) * 1000),
                 "hits": len(results)}
     except (RuntimeError, OSError, ValueError) as e:

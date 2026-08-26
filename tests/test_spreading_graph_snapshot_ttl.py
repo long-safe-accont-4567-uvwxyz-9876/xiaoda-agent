@@ -81,7 +81,6 @@ async def test_cold_start_builds_inline():
 @pytest.mark.asyncio
 async def test_concurrent_cold_start_share_one_build():
     """并发冷启动共享同一个重建任务（只调一次 get_edge_snapshot）。"""
-    import time as _time
 
     eng = _make_engine({"a": {"b": 1.0}})
 

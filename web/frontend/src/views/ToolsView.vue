@@ -8,6 +8,7 @@ import {
 import { get, put, post, del } from '../api'
 import { t, tf } from '../i18n'
 import Tilt3D from '../components/fx/Tilt3D.vue'
+import ViewTitleIcon from '../components/fx/ViewTitleIcon.vue'
 
 const message = useMessage()
 const tools = ref<any[]>([])
@@ -304,7 +305,7 @@ async function testSkill(item: any) {
 <template>
   <div class="tools-view">
     <div class="view-header">
-      <h2>🛠 {{ t('toolsView.title') }}</h2>
+      <h2 class="view-title view-title-icon"><ViewTitleIcon name="tools" /> {{ t('toolsView.title') }}</h2>
       <span class="count">{{ t('toolsView.total') }} {{ tools.length }} {{ t('toolsView.toolsUnit') }}</span>
       <span v-if="search || categoryFilter || sourceFilter" class="count">
         （{{ t('toolsView.filterLabel') }}: {{ filtered.length }}）
@@ -353,7 +354,7 @@ async function testSkill(item: any) {
           <Tilt3D v-for="tool in filtered" :key="tool.name">
           <div class="tool-row glass-panel"
                :class="{ disabled: !tool.enabled }">
-            <span class="perm-dot" :style="{ background: permColor[tool.permission] || '#9ca3af' }"
+            <span class="perm-dot" :style="{ background: permColor[tool.permission] || 'var(--moon-faint)' }"
                   :title="`${t('toolsView.permLevel')} ${tool.permission}`"></span>
             <div class="tool-main">
               <div class="tool-title">

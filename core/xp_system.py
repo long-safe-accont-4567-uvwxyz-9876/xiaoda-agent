@@ -27,6 +27,8 @@ from pathlib import Path
 
 from loguru import logger
 
+from config_constants import env_flag
+
 # 延迟导入 DATA_DIR, 避免 config 模块在测试中导入失败时影响本模块
 try:
     from config import DATA_DIR
@@ -240,7 +242,7 @@ class XPState:
 
 def _is_xp_enabled() -> bool:
     """检查 XP 系统是否启用 (默认开启, 可通过 XP_SYSTEM_ENABLED 关闭)"""
-    return os.getenv("XP_SYSTEM_ENABLED", "true").lower() in ("1", "true", "yes")
+    return env_flag("XP_SYSTEM_ENABLED", True)
 
 
 def _push_levelup_event(user_id: str, old_level: XPLevel,
@@ -267,7 +269,7 @@ def _push_levelup_event(user_id: str, old_level: XPLevel,
         "xp": int(xp),
     }
     try:
-        loop = asyncio.get_running_loop()
+        asyncio.get_running_loop()
     except RuntimeError:
         # 无运行中的事件循环 (sync 上下文), 仅记录日志, 不推送
         logger.info(

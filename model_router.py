@@ -64,12 +64,12 @@ from model_router_config import (  # noqa: F401,E402
     translate_model_for_provider,
 )
 
-# ── Phase 2 拆分：ModelRouteRegistry 抽为 model_router_registry（逐字节搬移） ──
-from model_router_registry import ModelRouteRegistry as ModelRouteRegistry  # noqa: F401,E402
 # FALLBACK_ROUTE 数据已下沉 model_router_registry（llm_gateway 契约要求网关不得反向
 # import 门面）；此处同名 re-export 维持旧 import 路径（tests/web 路由仍从这取）。
 from model_router_registry import FALLBACK_ROUTE  # noqa: F401,E402
-from transports import AgnesTransport, MiMoTransport, ProviderTransport
+
+# ── Phase 2 拆分：ModelRouteRegistry 抽为 model_router_registry（逐字节搬移） ──
+from model_router_registry import ModelRouteRegistry as ModelRouteRegistry  # noqa: F401,E402
 
 # 根因修复：agnes API connect=5s 过短导致 APIConnectionError，统一从 agnes_transport 引入共享 httpx 配置
 from transports.agnes_transport import AGNES_HTTP_TIMEOUT, _get_agnes_http_client
@@ -100,38 +100,17 @@ MODEL_PREFERENCES = {
     "mimo": {"label": "MiMo 模式", "desc": "使用小米 MiMo-V2.5 模型"},
 }
 
-# P0 修复（2026-08-05 用户要求"10秒内响应"）：移除 'timeout'。
+# P0 修复（2026-08-05 用户要求"10秒内响应"）：超时不重试，直接降级。
 # 根因：agnes APITimeoutError 被错误分类为 connection_error（APITimeoutError 是
 #   APIConnectionError 子类，已在 error_classifier 修复检查顺序）→ 触发重试 →
 #   30s+30s=60s 阻塞（日志 main_path=67214ms 铁证）。
-# 移除 timeout 后：agnes 超时直接降级，不双倍等待。agnes 正常 6-7s，read=8s
+# 修复后：agnes 超时直接降级，不双倍等待。agnes 正常 6-7s，read=8s
 # 覆盖正常耗时；偶发超时降级返回提示，比等 60s 好。
-# connection_error 保留重试（握手失败重试有意义，且 connect 慢的情况少见）。
-RETRYABLE_ERRORS = {'rate_limit', 'connection_error'}
+# （原 RETRYABLE_ERRORS 常量全仓零引用，已随死符号清理删除。）
 # MAX_RETRIES 已随执行链搬入 llm_gateway/router_execution.py（顶部同名 re-export）
 # per-provider LLM 调用并发上限：agnes 支持最多 3 并发，统一各 provider 上限为 3，
 # 取代原先 asyncio.Lock 的串行（1 并发）。凭证轮换/客户端刷新仍走 _get_credential_lock 串行。
 MAX_PROVIDER_CONCURRENCY = 3
-
-
-def list_discovered_model_ids() -> list[str]:
-    """返回所有已发现模型的 'provider/model' 标识（供 CLI /model 参数补全）。
-
-    与 GET /models/discover 一致，动态枚举（非硬编码）。模型发现缓存为空时返回空列表。
-    """
-    ids: list[str] = []
-    try:
-        from web._discovery_cache import _cache as _disc_cache
-        _data = (_disc_cache.get("data") or []) if _disc_cache else []
-        for _pg in _data:
-            _provider = _pg.get("provider", "")
-            for _m in (_pg.get("models") or []):
-                _mid = _m.get("id", "")
-                if _provider and _mid:
-                    ids.append(f"{_provider}/{_mid}")
-    except (ImportError, KeyError, ValueError, OSError):
-        logger.debug("router.discovered_model_ids_failed", exc_info=True)
-    return sorted(ids)
 
 
 class ModelRouter(ExecutionMixin, CostTrackingMixin, ClientLifecycleMixin, FallbackChainMixin):
@@ -239,15 +218,12 @@ class ModelRouter(ExecutionMixin, CostTrackingMixin, ClientLifecycleMixin, Fallb
         self._request_count = 0
         self._cached_tokens_total = 0
 
-        self._transports: dict[str, ProviderTransport] = {}
-        mimo = MiMoTransport()
-        if mimo.is_available():
-            self._transports["mimo"] = mimo
-        agnes = AgnesTransport()
-        if agnes.is_available():
-            self._transports["agnes"] = agnes
-        logger.info("router.transports", available=list(self._transports.keys()))
-    def set_local_transport(self, transport: ProviderTransport) -> None:
+        # 双 transport 栈（MiMo/Agnes Transport 类注册）已移除：_transports 唯一
+        # 生产读取点是 local-ort（router_execution._stream_local_chat /
+        # provider_service），经 set_local_transport 注册，见 core/bootstrap.py。
+        self._transports: dict[str, Any] = {}
+
+    def set_local_transport(self, transport: Any) -> None:
         self._transports[_LOCAL_ORT_PROVIDER] = transport
 
     def _get_provider_call_semaphore(self, provider: str) -> asyncio.Semaphore:
@@ -308,7 +284,7 @@ class ModelRouter(ExecutionMixin, CostTrackingMixin, ClientLifecycleMixin, Fallb
         """返回所有可用 transport 名称"""
         return list(self._transports.keys())
 
-    def get_transport(self, provider: str) -> ProviderTransport | None:
+    def get_transport(self, provider: str) -> Any | None:
         """获取指定提供商的 Transport"""
         return self._transports.get(provider)
 
@@ -661,19 +637,27 @@ class ModelRouter(ExecutionMixin, CostTrackingMixin, ClientLifecycleMixin, Fallb
                 metrics.observe("router.bg_llm_yield_ms", _yield_ms)
         elif task_type == "chat":
             self._chat_idle.clear()
-            # 可观测性：主 chat 抢占——取消所有未完成的后台 LLM 任务
-            _cancelled = 0
-            for _bg_task in tuple(self._active_bg_llm_tasks):
-                if _bg_task is not _current_task and not _bg_task.done():
-                    _bg_task.cancel()
-                    _cancelled += 1
-            await asyncio.sleep(0)
-            if _cancelled > 0:
-                logger.warning("router.chat_preempt_cancelled",
-                               cancelled_bg=_cancelled,
-                               remaining_bg=len(self._active_bg_llm_tasks))
-                metrics.inc("router.chat_preempt_count")
-                metrics.observe("router.chat_preempt_cancelled_n", _cancelled)
+            # 取消安全修复：clear() 与下方主 try(:685) 之间存在 await 窗口（sleep(0)），
+            # wait_for 超时取消若恰好落在窗口内，函数不会进入主 try 的 finally，
+            # _chat_idle 将永久保持 cleared → 所有后台 LLM 任务死锁在 _chat_idle.wait()。
+            # 故此窗口内的任何异常退出路径必须先 set 回再抛出。
+            try:
+                # 可观测性：主 chat 抢占——取消所有未完成的后台 LLM 任务
+                _cancelled = 0
+                for _bg_task in tuple(self._active_bg_llm_tasks):
+                    if _bg_task is not _current_task and not _bg_task.done():
+                        _bg_task.cancel()
+                        _cancelled += 1
+                await asyncio.sleep(0)
+                if _cancelled > 0:
+                    logger.warning("router.chat_preempt_cancelled",
+                                   cancelled_bg=_cancelled,
+                                   remaining_bg=len(self._active_bg_llm_tasks))
+                    metrics.inc("router.chat_preempt_count")
+                    metrics.observe("router.chat_preempt_cancelled_n", _cancelled)
+            except BaseException:
+                self._chat_idle.set()
+                raise
 
         if _is_bg_llm and _current_task is not None:
             self._active_bg_llm_tasks.add(_current_task)

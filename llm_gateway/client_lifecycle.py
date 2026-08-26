@@ -52,6 +52,42 @@ class ClientLifecycleMixin:
         """
         return self._credential_locks.setdefault(provider, asyncio.Lock())
 
+    def _active_api_key(self, provider: str) -> str:
+        """当前实际承载该 provider 流量的客户端所用的 API Key。
+
+        凭证池归因锚点：客户端是单例、内嵌构建时的 api_key，出错/成功上报时
+        读它即可精确归因到池中对应凭证，替代"最近使用"启发式（多凭证并发
+        在途时会误伤健康凭证）。取不到（客户端未建/key 属性缺失）返回空串，
+        调用方退回旧启发式。
+        """
+        try:
+            if provider == "agnes":
+                client = self._agnes_client
+            elif provider == "mimo":
+                client = self._client
+            else:
+                client = self.get_custom_client(provider)
+            return str(getattr(client, "api_key", "") or "")
+        except (AttributeError, KeyError, TypeError):  # 归因失败不允许影响主流程
+            return ""
+
+    def _active_api_key(self, provider: str) -> str:
+        """当前实际承载流量的客户端所持有的 API Key。
+
+        凭证池归因锚点：出错/成功上报时用 Key 精确匹配池内凭证，
+        替代"最近使用"启发式（多凭证并发在途时会误伤健康凭证）。
+        """
+        try:
+            if provider == "agnes":
+                client = self._agnes_client
+            elif provider == "mimo":
+                client = self._client
+            else:
+                client = self.get_custom_client(provider)
+            return str(getattr(client, "api_key", "") or "")
+        except (AttributeError, TypeError):
+            return ""
+
     def _register_credential_pool_providers(self) -> None:
         """从凭证池主动注册非 mimo/agnes 的 Provider 到 _custom_clients。
 

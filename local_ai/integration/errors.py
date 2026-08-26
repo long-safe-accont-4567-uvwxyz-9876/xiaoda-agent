@@ -46,6 +46,17 @@ def is_structured_local_unavailable(error: BaseException) -> bool:
         seen.add(id(current))
         if isinstance(current, LocalModelUnavailableError):
             return True
+        code = getattr(current, "code", "")
+        error_code = getattr(current, "error_code", None)
+        stable_code = getattr(error_code, "code", error_code)
+        if (
+            isinstance(code, str) and code.startswith("local_") and code.endswith("_unavailable")
+        ) or (
+            isinstance(stable_code, str)
+            and stable_code.startswith("local_")
+            and stable_code.endswith("_unavailable")
+        ):
+            return True
         current = current.__cause__ or current.__context__
     return False
 

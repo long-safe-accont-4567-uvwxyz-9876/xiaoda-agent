@@ -92,30 +92,44 @@ try {
     $tmp = [System.IO.Path]::GetTempPath() + '\' + $asset.name
     Invoke-WebRequest -Uri $asset.browser_download_url -OutFile $tmp -TimeoutSec 120
 
-    # ── Step 2: SHA256 校验 ──
+    # ── Step 2: SHA256 校验（fail-closed）──
+    # 2026-08-24：校验文件缺失/下载失败/格式非法一律中止更新，不再跳过校验继续安装。
+    # 原实现 catch 块只告警——发布资产缺 .sha256 时攻击者篡改下载源即可绕过完整性校验。
     Write-Host "  Download complete, verifying SHA256..."
     $sha256Url = $asset.browser_download_url + '.sha256'
     $sha256File = $tmp + '.sha256'
-    $sha256Ok = $false
     try {
         Invoke-WebRequest -Uri $sha256Url -OutFile $sha256File -TimeoutSec 15 -ErrorAction Stop
-        $expected = (Get-Content $sha256File -First 1) -split '\s+' | Select-Object -First 1
-        $actual = (Get-FileHash -Path $tmp -Algorithm SHA256).Hash.ToLower()
-        if ($expected -ne $actual) {
-            Write-Host "  SHA256 verification FAILED! Aborting update."
-            Write-Host "  Expected: $expected"
-            Write-Host "  Actual:   $actual"
-            Remove-Item -Force $tmp -ErrorAction SilentlyContinue
-            Remove-Item -Force $sha256File -ErrorAction SilentlyContinue
-            exit 1
-        }
-        Write-Host "  SHA256 verification passed"
-        $sha256Ok = $true
     } catch {
-        if (-not $sha256Ok) {
-            Write-Host "  Warning: SHA256 file not found, skipping verification"
-        }
+        Write-Host "  Update FAILED: SHA256 checksum file not available ($sha256Url). Aborting (fail-closed)."
+        Remove-Item -Force $tmp -ErrorAction SilentlyContinue
+        Remove-Item -Force $sha256File -ErrorAction SilentlyContinue
+        exit 1
     }
+    if (-not (Test-Path $sha256File) -or (Get-Item $sha256File).Length -eq 0) {
+        Write-Host "  Update FAILED: SHA256 checksum file is empty. Aborting."
+        Remove-Item -Force $tmp -ErrorAction SilentlyContinue
+        Remove-Item -Force $sha256File -ErrorAction SilentlyContinue
+        exit 1
+    }
+    $expected = ((Get-Content $sha256File -First 1) -split '\s+' | Select-Object -First 1).ToLower()
+    # 合法 sha256 = 64 位十六进制；否则视为格式损坏，拒绝安装
+    if ($expected -notmatch '^[0-9a-f]{64}$') {
+        Write-Host "  Update FAILED: SHA256 checksum file has invalid format. Aborting."
+        Remove-Item -Force $tmp -ErrorAction SilentlyContinue
+        Remove-Item -Force $sha256File -ErrorAction SilentlyContinue
+        exit 1
+    }
+    $actual = (Get-FileHash -Path $tmp -Algorithm SHA256).Hash.ToLower()
+    if ($expected -ne $actual) {
+        Write-Host "  SHA256 verification FAILED! Aborting update."
+        Write-Host "  Expected: $expected"
+        Write-Host "  Actual:   $actual"
+        Remove-Item -Force $tmp -ErrorAction SilentlyContinue
+        Remove-Item -Force $sha256File -ErrorAction SilentlyContinue
+        exit 1
+    }
+    Write-Host "  SHA256 verification passed"
 
     # ── Step 3: 解压并检查 tar 退出码 ──
     Write-Host "  Download complete, extracting..."

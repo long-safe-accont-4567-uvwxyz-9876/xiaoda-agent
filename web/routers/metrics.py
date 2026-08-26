@@ -26,10 +26,10 @@ from fastapi.responses import JSONResponse
 from loguru import logger
 from prometheus_client import (
     CONTENT_TYPE_LATEST,
+    REGISTRY,
     Counter,
     Gauge,
     Histogram,
-    REGISTRY,
     generate_latest,
 )
 from prometheus_client.core import (
@@ -44,7 +44,6 @@ from utils.metrics import metrics as _utils_metrics
 # 登录鉴权依赖: /metrics 在反代部署下 request.client.host 恒为 127.0.0.1,
 # 仅靠 localhost 判断会把公网请求误判为 localhost, 因此必须叠加 token 认证.
 from web.routers.auth import get_current_user
-
 
 router = APIRouter(tags=["metrics"], dependencies=[Depends(get_current_user)])
 

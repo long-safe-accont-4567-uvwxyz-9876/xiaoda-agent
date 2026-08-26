@@ -27,9 +27,9 @@ from agent_core._shared import (
     UserIdentity,
     _current_request_ctx,
 )
-from agent_core.shared_blackboard import SharedBlackboard
 from agent_core.conversation_session import ConversationSession
 from agent_core.principal import ChannelIdentity, Principal, PrincipalResolver
+from agent_core.shared_blackboard import SharedBlackboard
 from agent_dispatcher import AgentDispatcher
 from config import FILE_DIR, STICKER_DIR, XIAOLI_STICKER_DIR, build_system_prompt
 from core.lazy_loader import LazyLoader
@@ -61,7 +61,6 @@ from xiaoli_agent import XiaoliAgent
 
 if TYPE_CHECKING:
     from instinct_manager import InstinctManager
-    from task_orchestrator import TaskGraph
 
 # 各 Mixin 从 agent_core._shared 导入共享类型, 不再依赖 agent_core.core 完成初始化,
 # 因此可以安全导入 Mixin (不再有循环导入风险).
@@ -110,7 +109,7 @@ class AgentCore(MessageProcessorMixin, ToolExecutorMixin, SubAgentManagerMixin):
         self._context_lock = asyncio.Lock()
         # HITL 高危操作审批接线：owner 白名单自动通过，非 owner 高危工具走审批门禁
         # （默认无推送通道时 fail-closed 超时拒绝，堵住高危工具无审批直接放行的安全缺口）。
-        from security.human_approval import get_approval_gate, HumanApprovalApprover
+        from security.human_approval import HumanApprovalApprover, get_approval_gate
         _approval_gate = get_approval_gate()
         for _owner in _owner_ids:
             _approval_gate.register_auto_approve_user(_owner)
@@ -143,7 +142,6 @@ class AgentCore(MessageProcessorMixin, ToolExecutorMixin, SubAgentManagerMixin):
             delegate_callback=self._xiaoda_delegate_for_xiaoli,
             core=self,
         )
-        self._task_graph: TaskGraph | None = None
         self._agent_route_configs: dict = {}
         self._sticker_managers: dict = {}  # name → StickerManager (动态缓存)
         self._tool_call_handler = ToolCallHandler(self.tool_executor, self.tool_repair, self._clean_reply, self.context, self.router, xiaoli_delegate=self.delegate_to_xiaoli, agent_name="xiaoda", personality_file=self._get_xiaoda_personality_file(), tool_execute_callback=self._execute_tool_with_hooks)
@@ -173,8 +171,9 @@ class AgentCore(MessageProcessorMixin, ToolExecutorMixin, SubAgentManagerMixin):
         self._circuit_breaker = CircuitBreaker()
         # 启用 SmartErrorHandler + FailureTrigger（失败触发器与反思闭环）
         self._smart_error_handler = SmartErrorHandler(db=self.db, dispatcher=self.dispatcher)
+        # memory_db 此时必为 None（self.memory 尚未初始化），
+        # 由 core.bootstrap 在 memory 就绪后调用 _failure_trigger.bind_memory() 接线
         self._failure_trigger = FailureTrigger(
-            memory_db=self.memory.memory if self.memory else None,
             learning_manager=self._smart_error_handler,
         )
         # 将失败触发器注入钩子引擎，供 fire_post_tool_use_failure 使用
@@ -345,7 +344,9 @@ class AgentCore(MessageProcessorMixin, ToolExecutorMixin, SubAgentManagerMixin):
                       status_callback: Any=None,
                       image_data: list[dict] | None = None,
                       is_master: bool = True,
-                      system_context: str = "") -> ProcessResult:
+                      system_context: str = "",
+                      user_context_token_callback: Any = None,
+                      interjections: list | None = None) -> ProcessResult:
         """处理用户输入并返回回复结果 (统一入口, 含身份解析与上下文管理).
 
         Args:
@@ -387,8 +388,6 @@ class AgentCore(MessageProcessorMixin, ToolExecutorMixin, SubAgentManagerMixin):
                          original=is_master, resolved=identity.is_owner,
                          source=source, user_id=user_id)
         is_master = identity.is_owner
-        # 设置上下文的动态称谓
-        self.context.current_address_term = identity.address_term
         # 跨平台共用上下文：若当前 source 平台被配置为共享上下文且非"群聊非主人"，
         # 将 user_id 重映射为统一共享键，使该平台与其他共享平台读/写同一份历史。
         # 身份(is_master/称谓)已在上面用原始 user_id 解析完成，不受重映射影响。
@@ -419,15 +418,18 @@ class AgentCore(MessageProcessorMixin, ToolExecutorMixin, SubAgentManagerMixin):
         ctx = RequestContext(
             session_id=session_id,
             user_openid=user_openid,
+            channel=source,
             user_id=user_id,
             user_input=user_input,
             status_callback=status_callback,
             is_master=is_master,
+            interjections=interjections,
         )
         ctx.identity = identity
         ctx.principal = principal
         ctx.conversation_session = conversation_session
         ctx.system_context = system_context  # P0 新增：系统上下文（不入库）
+        ctx.user_context_token_callback = user_context_token_callback
         _ctx_token = _current_request_ctx.set(ctx)
         from memory.scope import bind_scope, reset_scope
         _scope_token = bind_scope(memory_scope)
@@ -479,9 +481,94 @@ class AgentCore(MessageProcessorMixin, ToolExecutorMixin, SubAgentManagerMixin):
         不同用户并发场景罕见，串行处理 LLM 调用不会比并发慢太多）。
         """
         async with self._context_lock:
+            identity = getattr(ctx, "identity", None)
+            address_term = getattr(identity, "address_term", "")
+            await self.context.switch_user_context(
+                ctx.conversation_session.activation_key,
+                address_term=address_term,
+            )
             return await self._process_impl(ctx, user_input, user_id, source, user_openid, session_id,
                                             status_callback, image_data, is_master,
                                             system_context=system_context)
+
+    async def dispatch_web_sub_agent(
+        self,
+        agent: str,
+        user_input: str,
+        *,
+        session_id: str = "",
+        status_callback: Any = None,
+        user_id: str = "webui",
+        interjections: list | None = None,
+    ) -> ProcessResult:
+        """在统一上下文锁内执行 Web 直达子代理完整生命周期。"""
+        async with self._context_lock:
+            principal = self._resolve_principal(user_id, source="web")
+            context_id = self._resolve_shared_context_id(
+                user_id,
+                "web",
+                principal.is_owner,
+            )
+            identity = UserIdentity(
+                is_owner=principal.is_owner,
+                display_name=principal.display_name,
+                address_term=principal.address_term,
+            )
+            conversation_session = self._build_conversation_session(
+                principal=principal,
+                context_id=context_id,
+                session_id=session_id,
+                source="web",
+                channel_subject_id=principal.principal_id,
+            )
+            token = await self.context.switch_user_context(
+                context_id,
+                address_term=identity.address_term,
+            )
+            if token is None:
+                raise RuntimeError("web user context activation failed")
+
+            ctx = RequestContext(
+                session_id=session_id,
+                user_id=context_id,
+                channel="ws",
+                user_input=user_input,
+                status_callback=status_callback,
+                is_master=principal.is_owner,
+                interjections=interjections,
+            )
+            ctx.identity = identity
+            ctx.principal = principal
+            ctx.conversation_session = conversation_session
+            ctx.user_context_token = token
+
+            import uuid
+
+            from memory.scope import bind_scope, reset_scope
+            request_ctx_token = _current_request_ctx.set(ctx)
+            scope_token = bind_scope(
+                conversation_session.memory_scope(uuid.uuid4().hex)
+            )
+            try:
+                trace = logger.bind(
+                    trace_id=uuid.uuid4().hex[:12],
+                    principal_id=principal.principal_id,
+                    context_id=context_id,
+                    source="web",
+                    agent=agent,
+                )
+                return await self._dispatch_single_sub_agent(
+                    agent,
+                    user_input,
+                    user_id=context_id,
+                    source="web",
+                    session_id=session_id,
+                    trace=trace,
+                    ctx=ctx,
+                )
+            finally:
+                reset_scope(scope_token)
+                _current_request_ctx.reset(request_ctx_token)
 
     async def process_text(self, user_input: str, user_openid: str = "cli", session_id: str = "cli") -> str:
         """处理纯文本输入并直接返回回复字符串 (CLI/Web 便捷入口)."""

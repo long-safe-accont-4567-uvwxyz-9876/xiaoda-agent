@@ -249,8 +249,7 @@ def test_credential_pool_free_providers_delegate_to_catalog(monkeypatch, alias, 
 @pytest.mark.parametrize("alias", ["MODELSCOPE_ACCESS_TOKEN", "MODELSCOPE_API_KEY"])
 @pytest.mark.asyncio
 async def test_setup_validates_each_modelscope_alias(monkeypatch, alias: str):
-    from web.routers import setup
-    from web.routers import setup_key_probes
+    from web.routers import setup, setup_key_probes
 
     async def validate(value):
         return True, value

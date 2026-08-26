@@ -1,8 +1,10 @@
 import asyncio
 import os
 import pathlib
+
 from loguru import logger
-from tool_engine.tool_registry import register_tool, ToolPermission, ToolResult
+
+from tool_engine.tool_registry import ToolPermission, ToolResult, register_tool
 
 _DEFAULT_PROJECT_DIR = os.path.expanduser("~/ai-agent")
 
@@ -17,7 +19,7 @@ def _truncate(text: str, limit: int = _CONTENT_LIMIT) -> str:
 
 
 PROTECTED_SERVICES = {"sshd", "systemd", "systemd-journald", "systemd-logind", "systemd-udevd", "dbus", "cron", "rsyslog", "networking", "NetworkManager", "ufw"}
-AGENT_SERVICES = {"xiaoda-web", "qq-agent", "napcat", "qqbot", "nginx", "frpc", "docker"}
+AGENT_SERVICES = {"nahida-web", "xiaoda-web", "qq-agent", "napcat", "qqbot", "nginx", "frpc", "docker"}
 
 
 async def _run_cmd(args: list[str], timeout: int = 30, cwd: str | None = None) -> tuple[int, str, str]:

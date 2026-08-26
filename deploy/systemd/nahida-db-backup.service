@@ -1,0 +1,8 @@
+[Unit]
+Description=nahida 生产库热备份（sqlite3 backup API + 完整性校验 + 轮转）
+After=local-fs.target
+
+[Service]
+Type=oneshot
+User=orangepi
+ExecStart=/home/orangepi/ai-agent/scripts/db_backup.sh

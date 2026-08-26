@@ -5,9 +5,9 @@
    但 to_openai_tools() 仍返回完整工具列表（含 web_browse 等已知工具）。
 2. 首次调用懒注册工具时按需解析 func 并返回正确结果，二次调用复用缓存（_lazy 置 False）。
 """
-import sys
 import asyncio
 import subprocess
+import sys
 from pathlib import Path
 
 import pytest
@@ -32,10 +32,14 @@ def test_cold_start_does_not_import_tools_submodules():
         "register_builtin_tools_lazy()\n"
         "tools = to_openai_tools()\n"
         "names = [t['function']['name'] for t in tools]\n"
+        "from tool_engine.tool_registry import list_tools as _lt\n"
+        "_all_registered = {t['name'] for t in _lt()}\n"
         "assert tools, 'to_openai_tools returned empty'\n"
         "assert 'web_browse' in names, f'web_browse missing: {names}'\n"
         "assert 'shell_command' in names, f'shell_command missing'\n"
-        "assert 'mail_list' in names, f'mail_list missing'\n"
+        # 2026-08-25 工具分层：mail_list 转入按需模式（不在注入列表），但必须仍登记在册
+        "assert 'mail_list' in _all_registered, f'mail_list not registered'\n"
+        "assert 'mail_list' not in names, f'mail_list should be deferred'\n"
         # 关键：登记元数据不应 import 任何 tools.* 子模块
         "assert 'tools.web_browse_tools' not in sys.modules, 'web_browse_tools eagerly imported'\n"
         "assert 'tools.web_browse_enhanced' not in sys.modules, 'web_browse_enhanced eagerly imported'\n"
@@ -60,10 +64,13 @@ def test_cold_start_does_not_import_tools_submodules():
 
 def test_lazy_tool_resolve_and_cache():
     """首次调用懒注册工具解析 func 并返回结果，二次调用复用缓存。"""
-    from tool_engine.tool_registry import (
-        register_lazy_tool, get_tool, unregister_tool, ToolPermission,
-    )
     from tool_engine.tool_executor import ToolExecutor
+    from tool_engine.tool_registry import (
+        ToolPermission,
+        get_tool,
+        register_lazy_tool,
+        unregister_tool,
+    )
 
     tool_name = "_test_lazy_dummy_42"
     register_lazy_tool(
@@ -107,10 +114,12 @@ def test_lazy_tool_resolve_and_cache():
 
 def test_lazy_resolve_failure_returns_fail():
     """懒解析失败（模块不存在）时 ToolExecutor 返回 fail 而非抛异常。"""
-    from tool_engine.tool_registry import (
-        register_lazy_tool, unregister_tool, ToolPermission,
-    )
     from tool_engine.tool_executor import ToolExecutor
+    from tool_engine.tool_registry import (
+        ToolPermission,
+        register_lazy_tool,
+        unregister_tool,
+    )
 
     tool_name = "_test_lazy_missing_module"
     register_lazy_tool(
@@ -132,7 +141,7 @@ def test_lazy_resolve_failure_returns_fail():
 
 
 def test_sub_agents_do_not_receive_profile_tools_without_agent_scope_binding():
-    from agent_dispatcher import SubAgentConfig, SubAgent
+    from agent_dispatcher import SubAgent, SubAgentConfig
 
     agent = object.__new__(SubAgent)
     agent._tool_executor = object()
@@ -144,7 +153,7 @@ def test_sub_agents_do_not_receive_profile_tools_without_agent_scope_binding():
 
 @pytest.mark.asyncio
 async def test_sub_agent_rejects_fabricated_profile_tool_call():
-    from agent_dispatcher import ExtractedToolCall, SubAgentConfig, SubAgent
+    from agent_dispatcher import ExtractedToolCall, SubAgent, SubAgentConfig
 
     class Executor:
         called = False

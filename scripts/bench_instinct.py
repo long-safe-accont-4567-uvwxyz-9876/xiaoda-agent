@@ -17,6 +17,7 @@ import time
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import aiosqlite
+
 from instinct_manager import InstinctManager
 
 # 6 条 active 本能（模拟生产 top 6）
@@ -258,7 +259,7 @@ async def main():
     await db.close()
 
     # ── 场景 8: learning_feedback.record（同步方法在 async 调用，_lessons 空）──
-    from core.learning_feedback import LearningFeedbackLoop, LearningEvent, EventType, Lesson
+    from core.learning_feedback import EventType, LearningEvent, LearningFeedbackLoop, Lesson
     lf_loop = LearningFeedbackLoop(persist_path=None)
 
     async def op_lf_record_empty():
@@ -328,9 +329,10 @@ async def main():
     await bench("jieba_blocking", op_jieba_blocking, iterations=30)
 
     # ── 场景 13: xp_system.add_chat_xp（to_thread 隔离，写 JSON 不阻塞）──
-    from pathlib import Path
-    from core.xp_system import XPSystem
     import tempfile
+    from pathlib import Path
+
+    from core.xp_system import XPSystem
     with tempfile.TemporaryDirectory() as _xp_tmp:
         _xp_bench = XPSystem(data_dir=Path(_xp_tmp))
 

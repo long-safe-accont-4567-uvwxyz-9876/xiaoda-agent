@@ -3,18 +3,19 @@
 流程：编码 → 提取实体 → 蒸馏 → 检索 → Entity Boost
 """
 import asyncio
-import time
-import pytest
 import sys
+import time
 from pathlib import Path
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock
+
+import pytest
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from memory.scope import Scope
-from memory.entity_extractor import EntityExtractor, Entity
+from memory.entity_extractor import EntityExtractor
 from memory.entity_store import EntityStore
 from memory.memory_distiller import MemoryDistiller
+from memory.scope import Scope
 
 
 @pytest.fixture
@@ -81,8 +82,18 @@ class TestEndToEndMemoryFlow:
         }
         await mgr.encode_memory(context, scope=scope)
 
-        # 等待异步实体提取任务完成（jieba 初始化 + DB 操作需要时间）
-        await asyncio.sleep(1.5)
+        # 等待最终实体链接契约，而非仅等待中间实体行。
+        link_rows = []
+        for _ in range(50):
+            await asyncio.sleep(0.1)
+            cursor = await db._conn.execute(
+                "SELECT l.* FROM entity_memory_links l "
+                "JOIN memory_entities e ON e.id=l.entity_id "
+                "WHERE e.name='Python'"
+            )
+            link_rows = await cursor.fetchall()
+            if link_rows:
+                break
 
         # 2. 验证原始记忆写入（is_raw=1）
         cursor = await db._conn.execute(
@@ -91,19 +102,7 @@ class TestEndToEndMemoryFlow:
         raw_rows = await cursor.fetchall()
         assert len(raw_rows) >= 1
 
-        # 3. 验证实体提取（Python → IDENTIFIER）
-        cursor = await db._conn.execute(
-            "SELECT * FROM memory_entities WHERE name='Python'"
-        )
-        entity_rows = await cursor.fetchall()
-        assert len(entity_rows) >= 1
-
-        # 4. 验证实体链接（entity_memory_links 有记录）
-        cursor = await db._conn.execute(
-            "SELECT * FROM entity_memory_links WHERE entity_id=?",
-            (entity_rows[0]["id"],),
-        )
-        link_rows = await cursor.fetchall()
+        # 3. 验证实体提取与反向链接最终完成
         assert len(link_rows) >= 1
 
         # 5. 检索 "Python" 相关记忆（include_raw=True 因为原始记忆是 is_raw=1）
@@ -259,3 +258,13 @@ class TestEndToEndMemoryFlow:
         refined_rows = await cursor.fetchall()
         assert len(refined_rows) >= 1
         assert "蒸馏" in refined_rows[0]["summary"]
+
+
+async def test_bootstrap_injects_entity_components():
+    """R1-1 回归：生产 bootstrap 必须注入 entity_store/extractor（否则实体路恒空）。"""
+    import inspect
+
+    from core import bootstrap
+    src = inspect.getsource(bootstrap)
+    assert "EntityExtractor(router=None)" in src, "bootstrap 应注入规则模式 EntityExtractor"
+    assert "EntityStore(" in src, "bootstrap 应注入 EntityStore"

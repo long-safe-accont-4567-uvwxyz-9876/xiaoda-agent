@@ -13,7 +13,6 @@ from __future__ import annotations
 
 import re
 
-
 # ── FTS5 预分词相关正则 ──
 _CJK_RANGE = re.compile(r'[\u4e00-\u9fff\u3400-\u4dbf]')
 _KEYWORD_SPLIT = re.compile(r'[^\w]+')

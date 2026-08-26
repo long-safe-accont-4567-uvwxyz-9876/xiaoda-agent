@@ -1,9 +1,25 @@
 import { t } from '../i18n'
 import type {
-  AgentInfo, AgentPermissions, ChatMessageItem, JSpaceInterventions,
-  KnowledgeGraphData, KnowledgeEntityRow, LearningRow, InstinctRow,
-  NoteRow, SessionInfo, SetupKeyInfo, SystemStatus,
-  WorkflowReview, WorkflowRevisionInfo, WorkflowRun, WorkflowRunSnapshot,
+  AgentInfo, AgentPermissions, ChatMessageItem,
+  IntentFactorResult, JSpaceConfig, JSpaceDirection, JSpaceInterventions,
+  JSpaceSignalEntry, JSpaceStatus,
+  KnowledgeGraphData, KnowledgeEntityRow, KnowledgeRelationRow,
+  NoteRow, SessionInfo, SetupKeyInfo, SystemConfig, SystemStatus,
+  Workflow, WorkflowNode, WorkflowReview, WorkflowRevisionInfo,
+  WorkflowRun, WorkflowRunSnapshot, WorkflowSummary,
+  XpLevelConfig, XpState,
+} from './types'
+
+// 类型统一在 types.ts 建档；此处转发导出保持既有 `from '../api'` 导入兼容
+export type {
+  AgentInfo, AgentPermissions, ChatMessageItem, IntentFactorResult,
+  JSpaceConfig, JSpaceDirection, JSpaceInterventions, JSpaceSignalEntry,
+  JSpaceStatus, KnowledgeGraphData, KnowledgeEntityRow, KnowledgeRelationRow,
+  LearningRow, InstinctRow,
+  NoteRow, SessionInfo, SetupKeyInfo, SystemConfig, SystemStatus,
+  Workflow, WorkflowNode, WorkflowNodeType, WorkflowReview, WorkflowRevisionInfo,
+  WorkflowRun, WorkflowRunSnapshot, WorkflowSummary,
+  XpHistoryEntry, XpLevelConfig, XpState,
 } from './types'
 
 const BASE = '/api/v1'
@@ -14,6 +30,12 @@ interface ApiEnvelope<T> {
   error?: { code: string; message: string }
 }
 
+/** FastAPI 校验失败时返回的 {detail: ...} 错误体（非标准信封） */
+interface ApiDetailError {
+  detail?: unknown
+}
+
+// 泛型无默认值：调用点必须显式声明响应类型，杜绝 any 隐式扩散
 async function request<T>(path: string, options?: RequestInit, confirm = false,
                           extraHeaders?: Record<string, string>): Promise<T> {
   const token = localStorage.getItem('token')
@@ -57,11 +79,20 @@ async function request<T>(path: string, options?: RequestInit, confirm = false,
     throw new Error(`HTTP ${res.status}`)
   }
   if (!res.ok || !body.ok) {
-    let msg: any = body?.error?.message
-    if (!msg && (body as any)?.detail) {
-      const d = (body as any).detail
+    let msg: string | undefined = body?.error?.message
+    if (!msg && (body as ApiDetailError)?.detail !== undefined) {
+      const d = (body as ApiDetailError).detail
       // 兼容结构化 detail（如 {code, message}）与纯字符串 detail
-      msg = typeof d === 'string' ? d : (d?.message || d?.code || JSON.stringify(d))
+      if (typeof d === 'string') {
+        msg = d
+      } else if (d && typeof d === 'object') {
+        const rec = d as Record<string, unknown>
+        msg = rec.message !== undefined ? String(rec.message)
+          : rec.code !== undefined ? String(rec.code)
+            : JSON.stringify(d)
+      } else {
+        msg = String(d)
+      }
     }
     if (!msg) msg = `HTTP ${res.status}`
     throw new Error(typeof msg === 'string' ? msg : JSON.stringify(msg))
@@ -69,14 +100,14 @@ async function request<T>(path: string, options?: RequestInit, confirm = false,
   return body.data as T
 }
 
-export const get = <T = any>(path: string) => request<T>(path)
-export const post = <T = any>(path: string, body?: unknown, confirm = false) =>
+export const get = <T>(path: string) => request<T>(path)
+export const post = <T = void>(path: string, body?: unknown, confirm = false) =>
   request<T>(path, { method: 'POST', body: body !== undefined ? JSON.stringify(body) : undefined }, confirm)
-export const put = <T = any>(path: string, body?: unknown, confirm = false) =>
+export const put = <T = void>(path: string, body?: unknown, confirm = false) =>
   request<T>(path, { method: 'PUT', body: JSON.stringify(body ?? {}) }, confirm)
-export const patch = <T = any>(path: string, body?: unknown, extraHeaders?: Record<string, string>) =>
+export const patch = <T = void>(path: string, body?: unknown, extraHeaders?: Record<string, string>) =>
   request<T>(path, { method: 'PATCH', body: JSON.stringify(body ?? {}) }, false, extraHeaders)
-export const del = <T = any>(path: string, confirm = false) =>
+export const del = <T = void>(path: string, confirm = false) =>
   request<T>(path, { method: 'DELETE' }, confirm)
 
 /** 通用文件上传（FormData POST），统一 token 注入与错误处理 */
@@ -87,41 +118,17 @@ async function uploadFile<T>(url: string, formData: FormData, errorMsg = 'Upload
     headers: { ...(token ? { Authorization: `Bearer ${token}` } : {}) },
     body: formData,
   })
-  const body = await res.json()
+  interface UploadEnvelope {
+    ok: boolean
+    data?: T | null
+    error?: { message?: string }
+  }
+  const body: UploadEnvelope = await res.json().catch(() => ({ ok: false }) as UploadEnvelope)
   if (!res.ok || !body.ok) throw new Error(body?.error?.message || errorMsg)
   return body.data as T
 }
 
-// ── 工作流类型 ──
-export interface WorkflowNode {
-  id: string
-  type: 'tool' | 'skill' | 'mcp' | 'agent' | 'model' | 'step'
-  ref?: string
-  label: string
-  params?: Record<string, any>
-  note?: string
-  expect?: string
-}
-
-export interface Workflow {
-  id: string
-  name: string
-  description: string
-  version: string
-  enabled: boolean
-  nodes: WorkflowNode[]
-  edges: [string, string][]
-  trigger: string
-}
-
-export interface WorkflowSummary {
-  id: string
-  name: string
-  description: string
-  enabled: boolean
-  node_count: number
-  version: string
-}
+// ── 工作流类型见 types.ts（Workflow/WorkflowNode/WorkflowSummary）──
 
 export const api = {
   login: (password: string) =>
@@ -144,7 +151,7 @@ export const api = {
   getStatus: () => get<SystemStatus>('/system/status'),
   getSessions: () => get<SessionInfo[]>('/sessions'),
   createSession: () => post<{ session_id: string }>('/sessions'),
-  deleteSession: (id: string) => del(`/sessions/${id}`),
+  deleteSession: (id: string) => del(`/sessions/${id}`, true),
   getMessages: (sessionId: string, before = 0, limit = 50) =>
     get<ChatMessageItem[]>(`/sessions/${sessionId}/messages?before=${before}&limit=${limit}`),
   getCommands: () => get<Array<{ name: string; description: string; owner_only: boolean }>>('/commands'),
@@ -163,11 +170,12 @@ export const api = {
 
   // Setup wizard APIs（首次运行时后端免认证；非首次需 token，统一走 request()
   // 以自动处理 X-New-Token 滑动续期，token 失效时引导重新登录而非裸 401 报错）
-  getSetupFirstRun: async () => {
+  getSetupFirstRun: async (): Promise<{ first_run: boolean; profile_done: boolean }> => {
+    interface FirstRunEnvelope { ok: boolean; data?: { first_run?: boolean; profile_done?: boolean }; error?: { message?: string } }
     const res = await fetch(`${BASE}/setup/first-run`)
-    const body = await res.json().catch(() => ({}))
+    const body: FirstRunEnvelope = await res.json().catch(() => ({ ok: false }) as FirstRunEnvelope)
     if (!res.ok || !body.ok) throw new Error(body?.error?.message || `HTTP ${res.status}`)
-    return body.data
+    return { first_run: body.data?.first_run !== false, profile_done: body.data?.profile_done !== false }
   },
 
   getSetupKeys: () => get<{ keys: SetupKeyInfo[] }>('/setup/keys'),
@@ -176,16 +184,16 @@ export const api = {
     post<{ success: boolean; message: string }>('/setup/test-key', { key_name: keyName, key_value: keyValue, ...(extra ? { extra } : {}) }),
 
   saveSetupKeys: (keys: Record<string, string>, testRequired = false, extra: Record<string, unknown> = {}) =>
-    post<unknown>('/setup/keys', { keys, test_required: testRequired, ...extra }),
+    post<void>('/setup/keys', { keys, test_required: testRequired, ...extra }),
 
   getSetupUserProfile: () => get<Record<string, string>>('/setup/user-profile'),
 
   saveSetupUserProfile: (fields: Record<string, string>) =>
-    post<unknown>('/setup/user-profile', fields),
+    post<void>('/setup/user-profile', fields),
 
   // Custom provider (needs auth)
   createProvider: (data: { id: string; label: string; format: string; base_url: string; default_model: string; api_key: string }) =>
-    post('/models/providers', data),
+    post<void>('/models/providers', data),
 
   // ── 表情包管理 ──
   listStickers: (agentName: string) =>
@@ -235,7 +243,7 @@ export const api = {
   getWorkflow: (id: string) => get<Workflow>('/workflows/' + id),
   createWorkflow: (data: Workflow) => post<Workflow>('/workflows', data),
   updateWorkflow: (id: string, data: Workflow) => put<Workflow>('/workflows/' + id, data),
-  deleteWorkflow: (id: string) => del<void>('/workflows/' + id),
+  deleteWorkflow: (id: string) => del<void>('/workflows/' + id, true),
   previewWorkflow: (id: string) => get<{prompt: string}>('/workflows/' + id + '/preview'),
 
   listWorkflowRuns: (wfId: string) => get<WorkflowRun[]>(`/workflows/${wfId}/runs`),
@@ -304,8 +312,10 @@ export const deleteMemory = (id: number) =>
   del<{ deleted: number }>(`/insight/memories/${id}`, true)
 
 // ── 笔记管理 ──
-export const getNotes = (params?: Record<string, any>) =>
-  get<NoteRow[]>('/insight/notebook' + (params ? '?' + new URLSearchParams(params as any).toString() : ''))
+export const getNotes = (params?: Record<string, string | number | boolean>) =>
+  get<NoteRow[]>('/insight/notebook' + (params ? '?' + new URLSearchParams(
+    Object.entries(params).map(([k, v]) => [k, String(v)])
+  ).toString() : ''))
 
 export const createNote = (data: { content: string; kind?: string; tags?: string; importance?: number }) =>
   post<{ id: number }>('/insight/notebook', data)
@@ -356,46 +366,14 @@ export const listKnowledgeEntities = (limit = 200) =>
   get<KnowledgeEntityRow[]>(`/insight/knowledge/entities?limit=${limit}`)
 
 export const listKnowledgeRelations = (limit = 200) =>
-  get<Array<{ id?: string; from: string; to: string; relation: string; [key: string]: any }>>(`/insight/knowledge/relations?limit=${limit}`)
-
-// ── XP 亲密度 ──
-export interface XpHistoryEntry {
-  timestamp: string
-  amount: number
-  source: string
-  description: string
-}
-
-export interface XpLevelConfig {
-  level: number
-  threshold: number
-  label: string
-  tone: string
-  proactivity: number
-  emotional_richness: number
-  guidance: string
-}
-
-export interface XpState {
-  user_id: string
-  xp: number
-  level: number
-  level_label: string
-  next_level_xp: number
-  progress: number
-  history: XpHistoryEntry[]
-  milestones: Record<string, string>
-  first_seen_at: string
-  last_chat_at: string
-  level_config: XpLevelConfig
-}
+  get<KnowledgeRelationRow[]>(`/insight/knowledge/relations?limit=${limit}`)
 
 export async function getXpState(): Promise<XpState> {
-  return get('/insight/xp')
+  return get<XpState>('/insight/xp')
 }
 
 export async function getXpLevels(): Promise<{ levels: XpLevelConfig[] }> {
-  return get('/insight/xp/levels')
+  return get<{ levels: XpLevelConfig[] }>('/insight/xp/levels')
 }
 
 export const updateKnowledgeRelation = (id: string, data: { relation: string }) =>
@@ -407,44 +385,7 @@ export const getKnowledgeGraph = (entity = '', depth: number | null | undefined 
   return get<KnowledgeGraphData>(`/insight/knowledge/graph?entity=${encodeURIComponent(entity)}&depth=${d}`)
 }
 
-// ── J-Space API ──
-export interface JSpaceStatus {
-  enabled: boolean
-  signal_stream: { active: boolean; buffer_size: number }
-  direction_registry: { active: boolean; directions: string[] }
-  intervention_loop: { active: boolean; rules_count: number }
-  structured_blackboard: { active: boolean }
-  enhanced_router: { active: boolean }
-  intent_decomposer: { active: boolean; use_llm: boolean }
-}
-
-export interface JSpaceSignalEntry {
-  signal_type: string
-  value: number
-  source: string
-  timestamp: number
-  meta: Record<string, unknown>
-}
-
-export interface JSpaceDirection {
-  dimensions: Record<string, number>
-  source: string
-  magnitude: number
-}
-
-export interface JSpaceConfig {
-  enabled: boolean
-  signal_max_history: number
-  intent_use_llm: boolean
-  intent_llm_timeout: number
-}
-
-export interface IntentFactorResult {
-  name: string
-  activation: number
-  evidence: string
-  confidence: number
-}
+// J-Space 类型见 types.ts
 
 export const jspaceGetStatus = () => get<JSpaceStatus>('/jspace/status')
 export const jspaceGetSignals = (signal_type = '', last_n = 50) =>

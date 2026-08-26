@@ -1,25 +1,26 @@
 from __future__ import annotations
 
+import asyncio
 import contextlib
 import os
 import shutil
-import asyncio
 from pathlib import Path
-from types import SimpleNamespace
 from typing import Any
 from zoneinfo import ZoneInfo
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 from loguru import logger
 
-from web.routers.auth import get_current_user, _get_client_ip, _is_private_ip
+from config import get_base_url_for_provider
+from web.routers.auth import _get_client_ip, _is_private_ip, get_current_user
 from web.schemas import Envelope
-from config import get_base_url_for_provider, get_default_model_for_provider
 
-# test-key 速率限制：每 IP 最多 10 次/分钟
-_test_key_timestamps: list[float] = []
+# test-key 速率限制：每 IP 最多 10 次/分钟（按 IP 分桶，全局窗口会让
+# 多用户互相挤占配额）
+_test_key_timestamps: dict[str, list[float]] = {}
 _TEST_KEY_RATE_LIMIT = 10
 _TEST_KEY_RATE_WINDOW = 60.0
+_TEST_KEY_MAX_TRACKED_IPS = 256  # 桶数上限，防伪造 IP 撑爆内存
 _test_key_lock = asyncio.Lock()
 
 
@@ -119,6 +120,7 @@ def _is_profile_done() -> bool:
     """
     try:
         import re as _re_local
+
         from config import WORKSPACE_DIR
         user_md = WORKSPACE_DIR / "USER.md"
         if not user_md.exists():
@@ -231,7 +233,8 @@ async def get_first_run() -> Any:
         first_run = is_first_run()
     except (OSError, KeyError, ValueError, RuntimeError, TypeError) as e:
         logger.error("setup.first_run_import_failed error={}", str(e))
-        first_run = _check_first_run_from_env()
+        # .env 同步读下放线程池（全仓 asyncio.to_thread 惯例）
+        first_run = await asyncio.to_thread(_check_first_run_from_env)
     except Exception:
         logger.exception("setup.get_first_run.unexpected_error")
 
@@ -269,12 +272,26 @@ _FALLBACK_OPTIONAL_KEYS_META = [
 
 # ── Key 探针库拆分（2026-08-22 P1）：实现见 setup_key_probes.py，此处 re-export 保持兼容 ──
 from web.routers.setup_key_probes import (  # noqa: F401
-    _test_get_with_bearer, _test_mimo, _test_qqbot, _test_siliconflow_embed,
-    _test_siliconflow, _test_openrouter, _test_deepseek, _test_agnes,
-    _test_wolframalpha, _test_modelscope, _test_tavily, _test_github,
-    _test_ollama, _test_llama_cpp, _test_key_by_catalog, _test_key_by_name,
-    _test_anysearch, test_single_key,
+    _test_agnes,
+    _test_anysearch,
+    _test_deepseek,
+    _test_get_with_bearer,
+    _test_github,
+    _test_key_by_catalog,
+    _test_key_by_name,
+    _test_llama_cpp,
+    _test_mimo,
+    _test_modelscope,
+    _test_ollama,
+    _test_openrouter,
+    _test_qqbot,
+    _test_siliconflow,
+    _test_siliconflow_embed,
+    _test_tavily,
+    _test_wolframalpha,
+    test_single_key,
 )
+
 
 def _build_key_list(items: list[dict], current: dict[str, str], required: bool) -> list[dict[str, Any]]:
     """将 key 元数据列表组装为带脱敏值和配置状态的响应列表。"""
@@ -298,7 +315,7 @@ def _build_key_list(items: list[dict], current: dict[str, str], required: bool) 
 def _load_key_definitions() -> tuple[list[dict], list[dict], Any]:
     """加载 key 定义（优先从 setup_wizard，降级到硬编码列表）。"""
     try:
-        from setup_wizard import REQUIRED_KEYS, OPTIONAL_KEYS, _load_env_values
+        from setup_wizard import OPTIONAL_KEYS, REQUIRED_KEYS, _load_env_values
         logger.info("setup.keys.import_ok")
         return REQUIRED_KEYS, OPTIONAL_KEYS, _load_env_values
     except (OSError, KeyError, ValueError, RuntimeError, TypeError) as e:
@@ -339,14 +356,21 @@ _TIMEOUT = 10.0
 async def test_key(body: dict, request: Request) -> Any:
     """测试 API Key 是否有效。"""
     import time
-    client_ip = request.client.host if request.client else "unknown"
+    # 按 IP 分桶限流（client_ip 此前是死赋值，全局窗口会让多用户互相挤占配额）
+    client_ip = _get_client_ip(request)
     now = time.monotonic()
     async with _test_key_lock:
-        recent = [t for t in _test_key_timestamps if now - t < _TEST_KEY_RATE_WINDOW]
-        _test_key_timestamps[:] = recent
+        recent = [t for t in _test_key_timestamps.get(client_ip, [])
+                  if now - t < _TEST_KEY_RATE_WINDOW]
+        if recent:
+            _test_key_timestamps[client_ip] = recent
+        else:
+            _test_key_timestamps.pop(client_ip, None)
+            while len(_test_key_timestamps) >= _TEST_KEY_MAX_TRACKED_IPS:
+                _test_key_timestamps.pop(next(iter(_test_key_timestamps)))
         if len(recent) >= _TEST_KEY_RATE_LIMIT:
             return Envelope(ok=False, error={"code": "RATE_LIMITED", "message": "测试频率过高，请稍后再试"})
-        _test_key_timestamps.append(now)
+        _test_key_timestamps.setdefault(client_ip, []).append(now)
 
     key_name = body.get("key_name", "")
     key_value = body.get("key_value", "")
@@ -420,8 +444,12 @@ async def save_keys(body: dict) -> Any:
     """将提供的 Key-Value 写入 .env 文件。"""
     try:
         from setup_wizard import (
-            ENV_PATH, ENV_EXAMPLE_PATH, REQUIRED_KEYS,
-            _parse_env_lines, _write_env, _load_env_values,
+            ENV_EXAMPLE_PATH,
+            ENV_PATH,
+            REQUIRED_KEYS,
+            _load_env_values,
+            _parse_env_lines,
+            _write_env,
         )
 
         updates = body.get("keys")
@@ -441,7 +469,8 @@ async def save_keys(body: dict) -> Any:
 
         provider_snapshots = await _auto_register_providers(updates)
         try:
-            _write_env_file(updates, ENV_PATH, ENV_EXAMPLE_PATH, _parse_env_lines, _load_env_values, _write_env)
+            # .env 同步写下放线程池（全仓 asyncio.to_thread 惯例）
+            await asyncio.to_thread(_write_env_file, updates, ENV_PATH, ENV_EXAMPLE_PATH, _parse_env_lines, _load_env_values, _write_env)
         except (OSError, ValueError, RuntimeError):
             await _rollback_auto_registered_providers(provider_snapshots)
             raise
@@ -540,6 +569,7 @@ def _write_env_file(updates: Any, ENV_PATH: Any, ENV_EXAMPLE_PATH: Any, _parse_e
 async def _reload_env_and_cache(updates: Any, ENV_PATH: Any) -> None:
     """重新加载环境变量、清除模型发现缓存。"""
     import os
+
     from dotenv import load_dotenv
     load_dotenv(ENV_PATH, override=True)
     # 兜底：直接写入 os.environ
@@ -561,13 +591,19 @@ async def _reload_env_and_cache(updates: Any, ENV_PATH: Any) -> None:
 def _reset_credential_pool(updates: Any) -> None:
     """重置凭证池中所有 DEAD 凭证，并替换为新 Key。"""
     try:
-        from utils.credential_pool import get_credential_pool, Credential
+        from config_providers import get_provider_env_prefix
+        from utils.credential_pool import Credential, get_credential_pool
+
         pool = get_credential_pool()
+        # base_url 单一来源：provider catalog（agnes 特例：池内凭证不带 base_url，
+        # 默认端点由 agnes_transport 自管，故保留空串——与原实现一致）
         _PROVIDER_KEY_MAP = {
-            "SILICONFLOW_API_KEY": ("siliconflow", "https://api.siliconflow.cn/v1"),
-            "OPENROUTER_API_KEY": ("openrouter", "https://openrouter.ai/api/v1"),
-            "MIMO_API_KEY": ("mimo", get_base_url_for_provider("mimo")),
-            "DEEPSEEK_API_KEY": ("deepseek", "https://api.deepseek.com/v1"),
+            **{
+                f"{get_provider_env_prefix(pid)}_API_KEY": (
+                    pid, get_base_url_for_provider(pid).rstrip("/")
+                )
+                for pid in ("mimo", "siliconflow", "openrouter", "deepseek")
+            },
             "AGNES_API_KEY": ("agnes", ""),
         }
         for env_key, (provider, base_url) in _PROVIDER_KEY_MAP.items():
@@ -600,6 +636,7 @@ def _reset_credential_pool(updates: Any) -> None:
 def _update_config_and_refresh_clients(updates: Any) -> None:
     """更新 config 模块变量并刷新 router/TTS/子 Agent 客户端。"""
     import os
+
     import config
     from utils.encrypted_credential import protect_credential
     config.MIMO_API_KEY = protect_credential(updates.get("MIMO_API_KEY", os.getenv("MIMO_API_KEY", "")))
@@ -709,43 +746,56 @@ async def _reinit_and_maybe_restart_qq(qq_changed: bool) -> None:
         _reinit_tasks[:] = [t for t in _reinit_tasks if not t.done()]
 
 
-# 已知 Provider 映射 — 有 API Key 即自动注册
-_KNOWN_PROVIDERS = {
-    "MIMO_API_KEY": {
-        "id": "mimo", "label": "小米 MiMo", "format": "openai",
-        "base_url": get_base_url_for_provider("mimo"), "builtin": True,
-    },
-    "SILICONFLOW_API_KEY": {
-        "id": "siliconflow", "label": "SiliconFlow 硅基流动", "format": "openai",
-        "base_url": "https://api.siliconflow.cn/v1",
-    },
-    "DEEPSEEK_API_KEY": {
-        "id": "deepseek", "label": "DeepSeek", "format": "openai",
-        "base_url": "https://api.deepseek.com/v1",
-    },
-    "OPENROUTER_API_KEY": {
-        "id": "openrouter", "label": "OpenRouter", "format": "openai",
-        "base_url": "https://openrouter.ai/api/v1",
-    },
-    "MODELSCOPE_API_KEY": {
-        "id": "modelscope", "label": "ModelScope 魔搭", "format": "openai",
-        "base_url": "https://api-inference.modelscope.cn/v1",
-    },
-    "AGNES_API_KEY": {
-        "id": "agnes", "label": "Agnes AI", "format": "openai",
-        # CodeRabbit 一致性修复：与 setup.py:346 / config.py:543 / server.py:58 一致，
-        # 用 AGNES_BASE_URL env 作为单一来源，私有化部署时 env 覆盖默认值
-        "base_url": os.getenv("AGNES_BASE_URL", "https://apihub.agnes-ai.cn/v1"),
-    },
-    "OLLAMA_BASE_URL": {
-        "id": "ollama", "label": "Ollama 本地大模型", "format": "openai",
-        "base_url": "http://localhost:11434/v1",
-    },
-    "LLAMA_CPP_BASE_URL": {
-        "id": "llama.cpp", "label": "llama.cpp 本地接口", "format": "openai",
-        "base_url": "http://localhost:8080/v1",
-    },
-}
+# 已知 Provider 映射（有 API Key 即自动注册）— 字段单一来源：provider catalog。
+# 本模块只叠加展示顺序与「本地 URL 型 provider 走 *_BASE_URL」的注册策略。
+_SETUP_PROVIDER_ORDER = (
+    "mimo", "siliconflow", "deepseek", "openrouter",
+    "modelscope", "agnes", "ollama", "llama.cpp",
+)
+_URL_KEYED_LOCAL_PROVIDERS = frozenset({"ollama", "llama.cpp"})
+
+
+def _derive_known_providers() -> dict[str, dict[str, Any]]:
+    """从 provider catalog 派生「有 Key 即自动注册」表。
+
+    id/base_url/label/env 别名全部来自 config.get_provider_catalog()；
+    env 键选择规则：优先 {ID}_API_KEY 别名（向导表单字段名契约），否则首个别名。
+    catalog 加载失败（元数据 JSON 缺失，降级为空 catalog）时返回空表，不炸。
+    """
+    from config import get_provider_catalog
+    from config_providers import get_provider_env_prefix, get_provider_label
+    from llm_gateway.contracts import ProviderProtocol
+
+    catalog = get_provider_catalog()
+    derived: dict[str, dict[str, Any]] = {}
+    for pid in _SETUP_PROVIDER_ORDER:
+        try:
+            definition = catalog.get(pid)
+        except KeyError:
+            continue
+        aliases = definition.auth.environment_aliases
+        env_prefix = get_provider_env_prefix(pid)
+        if pid in _URL_KEYED_LOCAL_PROVIDERS:
+            env_key = f"{env_prefix}_BASE_URL"
+        else:
+            env_key = next(
+                (alias for alias in aliases if alias == f"{env_prefix}_API_KEY"),
+                aliases[0] if aliases else "",
+            )
+        if not env_key:
+            continue
+        derived[env_key] = {
+            "id": pid,
+            "label": get_provider_label(pid),
+            # ollama 协议本地端点同样走 OpenAI 兼容客户端（与 ProviderService._record 规则一致）
+            "format": "anthropic" if definition.protocol is ProviderProtocol.ANTHROPIC else "openai",
+            "base_url": get_base_url_for_provider(pid).rstrip("/"),
+            "builtin": definition.builtin,
+        }
+    return derived
+
+
+_KNOWN_PROVIDERS = _derive_known_providers()
 
 
 async def _auto_register_providers(updates: dict) -> list[Any]:
@@ -846,10 +896,10 @@ async def _rollback_auto_registered_providers(
 
 # ── USER.md 个人资料配置 ────────────────────────────────────
 
-import re as _re
-import time as _time
 import platform as _platform
+import re as _re
 import socket as _socket
+import time as _time
 
 
 def _detect_device_info_for_profile() -> dict:
@@ -1067,7 +1117,7 @@ async def get_user_profile() -> Any:
                 content = user_md_path.read_text(encoding="utf-8")
             except (OSError, PermissionError, FileNotFoundError) as exc2:
                 logger.debug("setup.user_md_read_failed encoding=utf-8: {}", exc2, exc_info=True)
-            except Exception as exc2:
+            except Exception:
                 logger.exception("setup.user_md_read_failed unexpected_error")
                 content = ""
 
@@ -1154,7 +1204,7 @@ def _read_disclaimer_status(user_md_path: Path) -> dict:
             content = user_md_path.read_text(encoding="utf-8")
         except (OSError, PermissionError, FileNotFoundError) as exc2:
             logger.debug("setup.disclaimer_read_failed encoding=utf-8: {}", exc2, exc_info=True)
-        except Exception as exc2:
+        except Exception:
             logger.exception("setup.disclaimer_read_failed unexpected_error")
             return result
     except Exception:
@@ -1179,7 +1229,6 @@ def _write_disclaimer_agreement(user_md_path: Path, agreed: bool) -> str:
 
     若已存在该区块则替换；否则追加到文件末尾。
     """
-    from datetime import datetime
 
     agreed_at = _get_local_now().isoformat(timespec="seconds")
     new_section = (
@@ -1200,7 +1249,7 @@ def _write_disclaimer_agreement(user_md_path: Path, agreed: bool) -> str:
                 content = user_md_path.read_text(encoding="utf-8")
             except (OSError, PermissionError, FileNotFoundError) as exc2:
                 logger.debug("setup.disclaimer_write_read_failed encoding=utf-8: {}", exc2, exc_info=True)
-            except Exception as exc2:
+            except Exception:
                 logger.exception("setup.disclaimer_write_read_failed unexpected_error")
                 content = ""
         except Exception:

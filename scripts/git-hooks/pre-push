@@ -53,8 +53,20 @@ fi
 # ── 宽口径 except 棘轮（毫秒级）：存量 1136 冻结，增量拦截（技术债专项 #2）
 bash "$PWD/scripts/check_broad_except.sh"
 
+# ── ruff lint 棘轮（秒级）：存量冻结，增量拦截（2026-08-25 技术债第二轮；
+#    当日批量清理前曾积累至 1446 条——import 排序/未用导入等无人拦）
+bash "$PWD/scripts/check_ruff.sh"
+
 # ── 函数内延迟 import 棘轮（秒级）：存量冻结，增量拦截（技术债 P1-3 专项）
 "$PYTHON" "$PWD/scripts/check_lazy_imports.py"
+
+# ── 通用巨型文件门禁（秒级）：900 行阈值 + 赦免清单（2026-08-25 防复发体系；
+#    白名单制 ratchet 只盯存量热点，本门禁抓"新造巨型文件"）
+bash "$PWD/scripts/check_giant_files.sh"
+
+# ── TODO/FIXME/HACK 棘轮（毫秒级）：存量冻结，新增即拦——把"以后再说"
+#    变成显式登记的已知债务（2026-08-25 防复发体系；规则见 AGENTS.md）
+bash "$PWD/scripts/check_todo_ratchet.sh"
 
 # ── i18n 双字典 key 一致性（秒级；review 补漏——原只接了不运行的 GH workflow）
 if [ -d "$PWD/web/frontend/node_modules" ]; then
@@ -73,24 +85,68 @@ if [ "${PUSH_FULL_TESTS:-0}" = "1" ]; then
     bash "$PWD/scripts/check_dist_freshness.sh"
 fi
 
-echo "[pre-push] critical 子集门禁（19 文件，--no-verify 可跳过）..."
-exec "$PYTHON" -m pytest \
-    tests/test_smoke.py \
-    tests/test_agent_routing.py \
-    tests/test_context_compressor.py \
-    tests/test_risk_classifier.py \
-    tests/test_error_classifier.py \
-    tests/test_model_route_validation.py \
-    tests/test_prompt_integration.py \
-    tests/test_cognitive_memory.py \
-    tests/test_hopfield_layer.py \
-    tests/test_ssrf_guard.py \
-    tests/test_tool_guardrails.py \
-    tests/test_credential_pool.py \
-    tests/test_credential_vault.py \
-    tests/test_cancel_token.py \
-    tests/test_event_bus.py \
-    tests/test_shared_blackboard.py \
-    tests/test_circuit_breaker.py \
-    tests/test_manifest_consistency.py \
+# critical 子集单一事实源：scripts/critical_tests.txt（与两份 workflow 共用）
+CRITICAL_LIST="$PWD/scripts/critical_tests.txt"
+if [ ! -f "$CRITICAL_LIST" ]; then
+    echo "[pre-push] FATAL: $CRITICAL_LIST 不存在——门禁清单被误删，拒绝推送" >&2
+    exit 1
+fi
+# 清单内文件必须真实存在（防止删测试后清单腐烂）
+while IFS= read -r _t; do
+    case "$_t" in ''|'#'*) continue ;; esac
+    if [ ! -f "$PWD/$_t" ]; then
+        echo "[pre-push] FATAL: critical 清单引用了不存在的 $_t ——请更新 scripts/critical_tests.txt" >&2
+        exit 1
+    fi
+done < "$CRITICAL_LIST"
+
+# ── requirements.lock ↔ requirements.txt 一致性（技术债 P0-1 复发防线）──
+# lock 的每个 == 精确版本必须满足 txt 的范围约束；lock 缺 txt 声明的包也拦。
+"$PYTHON" - <<'PYEOF' || exit 1
+import re, sys
+
+def declared(path):
+    out = {}
+    for raw in open(path, encoding="utf-8"):
+        line = re.sub(r"#.*", "", raw).strip()
+        if not line:
+            continue
+        m = re.match(r"^([A-Za-z0-9][A-Za-z0-9._-]*)([^;#]*)", line)
+        if not m or not m.group(2).strip():
+            continue  # 无版本约束的声明不校验
+        # 平台专属依赖（如 pywinpty; sys_platform == "win32"）不适用本 Linux 锁文件
+        marker = raw.split(";", 1)[1] if ";" in raw else ""
+        if "win32" in marker or "Windows" in marker:
+            continue
+        out[m.group(1).lower().replace("_", "-")] = m.group(2).strip()
+    return out
+
+def vt(s):
+    return [int(x) for x in s.split(".") if x.isdigit()]
+
+txt = declared("requirements.txt")
+lock = declared("requirements.lock")
+bad = []
+for name, spec in txt.items():
+    pin = lock.get(name)
+    if pin is None:
+        bad.append(f"lock 缺少 txt 声明: {name} ({spec})")
+        continue
+    m_lo = re.match(r"^>=\s*([\d.]+)", spec)
+    m_pin = re.match(r"^==\s*([\d.]+)", pin)
+    hi = re.search(r"<\s*([\d.]+)", spec)
+    if m_lo and m_pin and vt(m_pin.group(1)) < vt(m_lo.group(1)):
+        bad.append(f"{name}: lock {pin} 低于 txt 下限 {spec}")
+    if hi and m_pin and vt(m_pin.group(1)) >= vt(hi.group(1)):
+        bad.append(f"{name}: lock {pin} 达到/超过 txt 上界 {spec}")
+if bad:
+    print("[pre-push] requirements.lock 与 requirements.txt 漂移：", file=sys.stderr)
+    for b in bad:
+        print(f"  - {b}", file=sys.stderr)
+    sys.exit(1)
+print("[pre-push] lock↔txt 一致性 OK")
+PYEOF
+
+echo "[pre-push] critical 子集门禁（来源 scripts/critical_tests.txt，--no-verify 可跳过）..."
+exec "$PYTHON" -m pytest $(grep -vE '^\s*(#|$)' "$CRITICAL_LIST") \
     -q --timeout=60

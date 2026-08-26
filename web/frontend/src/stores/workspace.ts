@@ -68,7 +68,7 @@ export const useWorkspaceStore = defineStore('workspace', () => {
   /** 撤销授权 */
   async function revoke() {
     const removed = currentPath.value
-    await del('/workspace')
+    await del('/workspace', true)
     authorized.value = false
     currentPath.value = ''
     authorizedAt.value = ''
@@ -89,7 +89,7 @@ export const useWorkspaceStore = defineStore('workspace', () => {
 
   /** 从白名单删除命令 */
   async function removeWhitelist(command: string) {
-    const data = await del<any>(`/workspace/whitelist/${encodeURIComponent(command)}`)
+    const data = await del<any>(`/workspace/whitelist/${encodeURIComponent(command)}`, true)
     whitelist.value = data.whitelist
   }
 

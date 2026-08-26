@@ -18,11 +18,12 @@ import json
 import os
 import time
 from dataclasses import dataclass, field
-from utils.similarity import ratio as text_ratio
 from enum import Enum
 from pathlib import Path
 
 from loguru import logger
+
+from utils.similarity import ratio as text_ratio
 
 # 延迟导入 DATA_DIR, 避免 config 模块在测试中导入失败时影响本模块
 try:

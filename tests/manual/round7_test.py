@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
 """第七轮深度测试 - Agent 完整启动 + 任务编排 + MCP + 数据库 + 剩余模块"""
 import asyncio
-import sys
 import os
+import sys
+
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."))
 
 
@@ -71,18 +72,8 @@ async def test_task_orchestration():
     print("=" * 60)
     bugs = []
 
-    # 测试 TaskOrchestrator
-    print("\n[1] TaskOrchestrator 基本功能...")
-    try:
-        from task_orchestrator import TaskOrchestrator
-        _orchestrator = TaskOrchestrator()
-        print("    OK: TaskOrchestrator 初始化成功")
-    except Exception as e:
-        bugs.append(f"TaskOrchestrator: {e}")
-        print(f"    BUG: {e}")
-
     # 测试 AgentDispatcher
-    print("\n[2] AgentDispatcher 测试...")
+    print("\n[1] AgentDispatcher 测试...")
     try:
         from agent_dispatcher import AgentDispatcher
         _dispatcher = AgentDispatcher()
@@ -92,7 +83,7 @@ async def test_task_orchestration():
         print(f"    BUG: {e}")
 
     # 测试 delegation
-    print("\n[3] Delegation 测试...")
+    print("\n[2] Delegation 测试...")
     try:
         print("    OK: delegation 导入成功")
     except Exception as e:
@@ -255,7 +246,7 @@ def test_module_imports():
         "utils.atomic_write", "utils.prompt_caching", "utils.lazy_deps",
         "memory.memory_manager", "belief_router",
         "emotion.tts_engine", "emotion.sticker_manager", "emotion.emotion_simple",
-        "task_orchestrator", "tool_engine.mcp_client",
+        "tool_engine.mcp_client",
         "qq_bot_adapter",
     ]
 

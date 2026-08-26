@@ -1,9 +1,10 @@
 """懒加载依赖 - 运行时按需安装和导入重依赖"""
 import importlib
+import re
 import subprocess
 import sys
-import re
 from typing import Any
+
 from loguru import logger
 
 # 懒加载白名单（仅允许这些包被按需安装）

@@ -534,6 +534,118 @@ async def test_shared_memory_scope_preserves_parent_agent_scope():
 
 
 @pytest.mark.asyncio
+async def test_submit_memory_owner_group_write_stays_in_group_scope(tmp_path):
+    from types import SimpleNamespace
+    from unittest.mock import MagicMock
+
+    from agent_core._shared import RequestContext, _current_request_ctx
+    from agent_core.sub_agent import SubAgent, SubAgentConfig
+    from db.database import DatabaseManager
+    from memory.scope import Scope, bind_scope, reset_scope
+
+    database = DatabaseManager(tmp_path / "subagent-memory.db")
+    await database.init()
+    agent = SubAgent.__new__(SubAgent)
+    agent.config = SubAgentConfig(
+        name="xiaoke", display_name="小可", provider="test", model="test"
+    )
+    agent._memory_submit_count = 0
+    invalidate = MagicMock()
+    agent._core = SimpleNamespace(memory=SimpleNamespace(
+        memory=database.memory, vec=None, invalidate_read_caches=invalidate,
+    ))
+    request = RequestContext(is_master=True)
+    request.principal = SimpleNamespace(is_owner=True)
+    request_token = _current_request_ctx.set(request)
+    scope = Scope.group("alice", "group-a")
+    scope_token = bind_scope(scope)
+    try:
+        result = await agent.submit_memory(["scope evidence group alpha"])
+    finally:
+        reset_scope(scope_token)
+        _current_request_ctx.reset(request_token)
+
+    group_rows = await database.memory.search_memories_fts_scoped(
+        "scope evidence", scope=scope, limit=10
+    )
+    private_rows = await database.memory.search_memories_fts_scoped(
+        "scope evidence", scope=Scope.personal("alice", "private-2"), limit=10
+    )
+    await database.close()
+
+    assert "已记录" in result
+    assert len(group_rows) == 1
+    assert group_rows[0]["session_id"] == "qq_group:group-a"
+    assert private_rows == []
+    invalidate.assert_called_once_with()
+
+
+@pytest.mark.asyncio
+async def test_submit_memory_guest_is_hidden_and_rejected():
+    from types import SimpleNamespace
+    from unittest.mock import AsyncMock
+
+    from agent_core._shared import RequestContext, _current_request_ctx
+    from agent_core.sub_agent import SubAgent, SubAgentConfig
+    from memory.scope import Scope, bind_scope, reset_scope
+
+    repository = SimpleNamespace(insert_episodic_memory=AsyncMock())
+    agent = SubAgent.__new__(SubAgent)
+    agent.config = SubAgentConfig(
+        name="xiaoke", display_name="小可", provider="test", model="test"
+    )
+    agent._memory_submit_count = 0
+    agent._tool_executor = object()
+    agent._core = SimpleNamespace(memory=SimpleNamespace(
+        memory=repository, vec=None, invalidate_read_caches=lambda: None,
+    ))
+    request = RequestContext(is_master=False)
+    request.principal = SimpleNamespace(is_owner=False)
+    request_token = _current_request_ctx.set(request)
+    scope_token = bind_scope(Scope.group("guest", "group-a"))
+    try:
+        assert "submit_memory" not in agent._filtered_tool_names()
+        result = await agent.submit_memory(["private write attempt"])
+    finally:
+        reset_scope(scope_token)
+        _current_request_ctx.reset(request_token)
+
+    assert "拒绝" in result
+    repository.insert_episodic_memory.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_submit_memory_without_bound_scope_fails_closed():
+    from types import SimpleNamespace
+    from unittest.mock import AsyncMock
+
+    from agent_core._shared import RequestContext, _current_request_ctx
+    from agent_core.sub_agent import SubAgent, SubAgentConfig
+
+    repository = SimpleNamespace(insert_episodic_memory=AsyncMock())
+    agent = SubAgent.__new__(SubAgent)
+    agent.config = SubAgentConfig(
+        name="xiaoke", display_name="小可", provider="test", model="test"
+    )
+    agent._memory_submit_count = 0
+    agent._tool_executor = object()
+    agent._core = SimpleNamespace(memory=SimpleNamespace(
+        memory=repository, vec=None, invalidate_read_caches=lambda: None,
+    ))
+    request = RequestContext(is_master=True)
+    request.principal = SimpleNamespace(is_owner=True)
+    request_token = _current_request_ctx.set(request)
+    try:
+        assert "submit_memory" not in agent._filtered_tool_names()
+        result = await agent.submit_memory(["unscoped write attempt"])
+    finally:
+        _current_request_ctx.reset(request_token)
+
+    assert "作用域" in result
+    repository.insert_episodic_memory.assert_not_awaited()
+
+
+@pytest.mark.asyncio
 async def test_structured_invocation_denies_file_tool_when_path_is_missing():
     from unittest.mock import AsyncMock
 

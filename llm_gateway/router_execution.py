@@ -52,6 +52,12 @@ from config import DEFAULT_PROVIDER as _CFG_DEFAULT_PROVIDER
 from core.app_exception import LLMError
 from core.error_codes import ErrorCodeEnum
 from llm_gateway.router_metrics import _reasoning_content_var
+from llm_gateway.stream_protocol import (
+    ModelStreamEvent,
+    ToolCallAccumulator,
+    ToolCallDelta,
+    normalize_finish_reason,
+)
 from llm_gateway.transports import CompletionRequest, TransportError
 from model_router_config import (
     _LOCAL_ORT_PROVIDER,
@@ -233,6 +239,240 @@ class ExecutionMixin:
         ):
             yield chunk
 
+    async def chat_stream_events(
+        self,
+        messages: list,
+        task_type: str = "chat",
+        temperature: float = 0.7,
+        max_tokens: int = 2000,
+        user_openid: str = "",
+        session_id: str = "",
+        extra_headers: dict | None = None,
+        tools: list[dict] | None = None,
+        tool_choice: str | None = None,
+        *,
+        turn: int = 0,
+    ) -> AsyncIterator[ModelStreamEvent]:
+        """Stream OpenAI-compatible text and tool-call deltas for one model turn."""
+        config = self._registry.get_task_ref(task_type) or self._registry.get_task_ref("chat") or {}
+        model = config["model"]
+        mt = max_tokens or config.get("max_tokens", DEFAULT_MAX_TOKENS)
+        provider = config.get("client", _CFG_DEFAULT_PROVIDER)
+        timeout = self.TASK_TIMEOUTS.get(task_type, 30)
+
+        if provider == _LOCAL_ORT_PROVIDER:
+            async for chunk in self._stream_local_chat(
+                messages, task_type, model, mt, temperature,
+            ):
+                yield ModelStreamEvent(
+                    kind="text_delta", turn=turn, text_delta=chunk,
+                    provider=provider, model=model,
+                )
+            yield ModelStreamEvent(
+                kind="turn_end", turn=turn, finish_reason="stop",
+                provider=provider, model=model,
+            )
+            return
+
+        messages = self._apply_prompt_caching(provider, messages)
+        extra_headers = self._apply_caching_headers(extra_headers)
+        tools = self._filter_tools_for_model(tools, model)
+        started_at = time.time()
+        stream = None
+        last_error: Exception | None = None
+        stall_timeout = float(os.getenv("LLM_STREAM_STALL_TIMEOUT", "15"))
+        output_yielded = False
+
+        for attempt in range(MAX_RETRIES + 1):
+            finish_reason = None
+            stream_usage: Any = None
+            chunk_count = 0
+            accumulator = ToolCallAccumulator()
+            reasoning_parts: list[str] = []
+            try:
+                client = await self._select_client_for_provider(provider)
+                kwargs = self._build_route_kwargs(
+                    model, messages, temperature, mt, True,
+                    tools, tool_choice, extra_headers, config, provider,
+                )
+                kwargs["stream_options"] = {"include_usage": True}
+                async with self._get_provider_call_semaphore(provider):
+                    stream = await asyncio.wait_for(
+                        client.chat.completions.create(**kwargs),
+                        timeout=timeout,
+                    )
+                    while True:
+                        try:
+                            chunk = await asyncio.wait_for(
+                                stream.__anext__(), timeout=stall_timeout,
+                            )
+                        except StopAsyncIteration:
+                            break
+                        chunk_count += 1
+                        if getattr(chunk, "usage", None) is not None:
+                            stream_usage = chunk.usage
+                        text, reasoning, tool_deltas, chunk_finish = \
+                            self._parse_structured_stream_chunk(chunk)
+                        if chunk_finish:
+                            finish_reason = chunk_finish
+                        if text:
+                            output_yielded = True
+                            yield ModelStreamEvent(
+                                kind="text_delta", turn=turn, text_delta=text,
+                                provider=provider, model=model,
+                            )
+                        if reasoning:
+                            reasoning_parts.append(reasoning)
+                            yield ModelStreamEvent(
+                                kind="reasoning_delta", turn=turn,
+                                reasoning_delta=reasoning,
+                                provider=provider, model=model,
+                            )
+                        for tool_delta in tool_deltas:
+                            output_yielded = True
+                            accumulator.add(tool_delta)
+                            yield ModelStreamEvent(
+                                kind="tool_call_delta", turn=turn,
+                                tool_call_delta=tool_delta,
+                                provider=provider, model=model,
+                            )
+                tool_calls = accumulator.finalize()
+                normalized_finish = normalize_finish_reason(finish_reason)
+                if tool_calls and normalized_finish is None:
+                    normalized_finish = "tool_calls"
+                _reasoning_content_var.set("".join(reasoning_parts))
+                await self._finalize_stream(
+                    task_type, model, provider, normalized_finish, stream_usage,
+                    chunk_count, user_openid, session_id, mt, started_at,
+                )
+                yield ModelStreamEvent(
+                    kind="turn_end", turn=turn, tool_calls=tool_calls,
+                    finish_reason=normalized_finish,
+                    provider=provider, model=model,
+                )
+                return
+            except (RuntimeError, OSError, KeyError, ValueError, _openai_mod.APIError,
+                    asyncio.TimeoutError, LLMError) as error:
+                stream, last_error, should_retry = await self._handle_stream_error(
+                    error, provider, task_type, model, attempt, stream,
+                    output_yielded, stall_timeout, chunk_count,
+                )
+                if not should_retry:
+                    break
+            except BaseException:
+                # 取消/生成器关闭不会进入 Exception 重试分支；显式关闭 provider 流，
+                # 避免连接和并发 semaphore 对应的上游资源滞留。
+                if stream is not None:
+                    with contextlib.suppress(AttributeError, OSError):
+                        await stream.close()
+                    stream = None
+                raise
+
+        # 重试耗尽也必须释放最后一次已创建的流（错误分支通常已关闭，保持幂等）。
+        if stream is not None:
+            with contextlib.suppress(AttributeError, OSError):
+                await stream.close()
+            stream = None
+
+        metrics.inc(f"model_route.{task_type}.failure")
+        metrics.observe(f"model_route.{task_type}.duration", time.time() - started_at)
+        metrics.maybe_report()
+        if last_error is None:
+            raise LLMError("流式调用失败：未知错误（last_error 未设置）")
+        async for event in self._stream_fallback_events(
+            last_error, task_type, messages, temperature, tools, tool_choice,
+            timeout, user_openid, session_id, extra_headers, mt, model, provider,
+            turn,
+        ):
+            yield event
+
+    async def _stream_fallback_events(
+        self,
+        last_error: Exception,
+        task_type: str,
+        messages: list,
+        temperature: float,
+        tools: list[dict] | None,
+        tool_choice: str | None,
+        timeout: float,
+        user_openid: str,
+        session_id: str,
+        extra_headers: dict | None,
+        mt: int,
+        model: str,
+        provider: str,
+        turn: int,
+    ) -> AsyncIterator[ModelStreamEvent]:
+        """Preserve structured events when the router falls back after no output."""
+        logger.warning(
+            "llm.stream_fallback_attempt", event="llm_stream_fallback",
+            model=model, task=task_type, provider=provider,
+            error=f"{type(last_error).__name__}: {last_error}"[:200],
+        )
+        try:
+            result = await self._try_fallback_chain(
+                last_error, task_type, messages, temperature, True,
+                tools, tool_choice, timeout, user_openid, session_id,
+                extra_headers, original_max_tokens=mt,
+            )
+        except (RuntimeError, OSError, LLMError) as fallback_error:
+            logger.error("llm.stream_fallback_failed error={}", str(fallback_error)[:200])
+            result = None
+        if isinstance(result, str) and result:
+            yield ModelStreamEvent(
+                kind="text_delta", turn=turn, text_delta=result,
+                provider=provider, model=model, fallback=True,
+            )
+            yield ModelStreamEvent(
+                kind="turn_end", turn=turn, finish_reason="stop",
+                provider=provider, model=model, fallback=True,
+            )
+            return
+        if result is not None and hasattr(result, "__aiter__"):
+            accumulator = ToolCallAccumulator()
+            finish_reason = None
+            fallback_model = model
+            async for chunk in result:
+                fallback_model = getattr(chunk, "model", None) or fallback_model
+                text, reasoning, tool_deltas, chunk_finish = \
+                    self._parse_structured_stream_chunk(chunk)
+                if chunk_finish:
+                    finish_reason = chunk_finish
+                if text:
+                    yield ModelStreamEvent(
+                        kind="text_delta", turn=turn, text_delta=text,
+                        provider=provider, model=fallback_model, fallback=True,
+                    )
+                if reasoning:
+                    yield ModelStreamEvent(
+                        kind="reasoning_delta", turn=turn,
+                        reasoning_delta=reasoning, provider=provider,
+                        model=fallback_model, fallback=True,
+                    )
+                for tool_delta in tool_deltas:
+                    accumulator.add(tool_delta)
+                    yield ModelStreamEvent(
+                        kind="tool_call_delta", turn=turn,
+                        tool_call_delta=tool_delta, provider=provider,
+                        model=fallback_model, fallback=True,
+                    )
+            tool_calls = accumulator.finalize()
+            normalized_finish = normalize_finish_reason(finish_reason)
+            if tool_calls and normalized_finish is None:
+                normalized_finish = "tool_calls"
+            yield ModelStreamEvent(
+                kind="turn_end", turn=turn, tool_calls=tool_calls,
+                finish_reason=normalized_finish, provider=provider,
+                model=fallback_model, fallback=True,
+            )
+            return
+        raise LLMError(
+            f"流式调用所有降级目标均不可用 (task={task_type}): "
+            f"{type(last_error).__name__}: {last_error}",
+            error_code=ErrorCodeEnum.E_LLM001,
+            cause=last_error,
+        ) from last_error
+
     async def _stream_fallback_yield(
         self, last_error: Exception, task_type: str, messages: list,
         temperature: float, tools: list[dict] | None, tool_choice: str | None,
@@ -282,13 +522,38 @@ class ExecutionMixin:
     @staticmethod
     def _parse_stream_chunk(chunk: Any) -> tuple[str | None, str | None]:
         """从流式 chunk 中提取 delta content 和 finish_reason。"""
+        text, _, _, finish_reason = ExecutionMixin._parse_structured_stream_chunk(chunk)
+        return text, finish_reason
+
+    @staticmethod
+    def _parse_structured_stream_chunk(
+        chunk: Any,
+    ) -> tuple[str | None, str | None, tuple[ToolCallDelta, ...], str | None]:
+        """Extract OpenAI-compatible content, reasoning and tool-call fragments."""
         try:
-            _choice = chunk.choices[0]
+            choice = chunk.choices[0]
+            delta = choice.delta
         except (AttributeError, IndexError):
-            return None, None
-        _fr = getattr(_choice, "finish_reason", None)
-        delta = getattr(_choice.delta, "content", None)
-        return delta, _fr
+            return None, None, (), None
+        tool_deltas: list[ToolCallDelta] = []
+        for tool_call in getattr(delta, "tool_calls", None) or ():
+            function = getattr(tool_call, "function", None)
+            tool_deltas.append(ToolCallDelta(
+                index=int(getattr(tool_call, "index", 0) or 0),
+                id_delta=getattr(tool_call, "id", None) or "",
+                name_delta=getattr(function, "name", None) or "",
+                arguments_delta=getattr(function, "arguments", None) or "",
+            ))
+        reasoning = (
+            getattr(delta, "reasoning_content", None)
+            or getattr(delta, "reasoning", None)
+        )
+        return (
+            getattr(delta, "content", None),
+            reasoning,
+            tuple(tool_deltas),
+            getattr(choice, "finish_reason", None),
+        )
 
     async def _finalize_stream(self, task_type: str, model: str, provider: str,
                                _stream_finish_reason: str | None, _stream_usage: Any,
@@ -530,8 +795,9 @@ class ExecutionMixin:
         await self._record_usage(task_type, model, response, user_openid, session_id, provider)
         self._check_cache_health()
 
-        # 报告凭证成功
-        await self._credential_pool.report_success(provider)
+        # 报告凭证成功（按当前客户端实际 Key 精确归因）
+        await self._credential_pool.report_success(
+            provider, api_key=self._active_api_key(provider))
 
         if tools and response.choices[0].message.tool_calls:
             _reasoning_content_var.set(getattr(response.choices[0].message, "reasoning_content", None) or "")
@@ -701,7 +967,8 @@ class ExecutionMixin:
         对于 ABORT 或不可重试错误，直接 raise 传播给调用方。
         """
         classified = self._error_classifier.classify(e)
-        await self._credential_pool.report_error(provider, classified)
+        await self._credential_pool.report_error(
+            provider, classified, api_key=self._active_api_key(provider))
 
         # 根据恢复策略执行不同操作
         if classified.action == RecoveryAction.ROTATE_CREDENTIAL:

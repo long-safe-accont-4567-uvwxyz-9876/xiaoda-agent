@@ -1,9 +1,10 @@
 import json
 import os
 import sys
-from loguru import logger
-from config import LOG_DIR
 
+from loguru import logger
+
+from config import LOG_DIR
 
 # ── 诊断日志 key 列表 ──────────────────────────────────
 # 这 4 个模块的诊断日志路由到 logs/diagnostics.log，方便单独排查：

@@ -1,12 +1,14 @@
 """RAG 管线延迟基准测试"""
 import asyncio
-import time
 import sys
+import time
+
 sys.path.insert(0, "/home/orangepi/ai-agent")
 
 from memory.query_cache import QueryCache
-from memory.retrieval_assessor import RetrievalAssessor
 from memory.query_transform import QueryTransformer
+from memory.retrieval_assessor import RetrievalAssessor
+
 
 async def main():
     qt = QueryTransformer()

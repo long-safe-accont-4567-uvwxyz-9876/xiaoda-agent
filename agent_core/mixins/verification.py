@@ -14,6 +14,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import time
 from contextvars import ContextVar as _ContextVar
 from typing import TYPE_CHECKING, Any
@@ -26,6 +27,8 @@ from agent_core._shared import (
     get_empty_reply_for_finish_reason,
 )
 from agent_core.mixins.greeting import _force_close_incomplete_reply
+from config import STRUCTURED_STREAM_EVENTS
+from llm_gateway.stream_protocol import StreamTurnResult
 from utils.llm_cleanup import merge_continuation
 from utils.text_utils import (
     ends_with_valid_ending,
@@ -84,7 +87,7 @@ class VerificationMixin:
 
         # 解析首轮 LLM 输出（提取 tool_calls、assistant_content、reasoning）
         current_tool_calls, current_assistant_content, current_reasoning = \
-            self._parse_verification_result(first_result, tools)
+            self._parse_verification_result(first_result, tools, stream_turn=0)
 
         # 如果首轮没有 tool_calls，检测回复完整性后返回
         if not current_tool_calls:
@@ -148,6 +151,7 @@ class VerificationMixin:
                 await self._call_and_parse_verification_llm(
                     messages, _effective_tools, task_type, temperature, max_tokens,
                     user_openid, session_id, trace, turn_idx, loop_start,
+                    status_callback=getattr(ctx, "status_callback", None),
                 )
             if early_reply is not None:
                 return early_reply, all_tool_results
@@ -178,15 +182,68 @@ class VerificationMixin:
             messages=messages,
         )
 
-    def _parse_verification_result(self, current_result: Any, tools: list[dict] | None) -> tuple:
+    def _parse_verification_result(
+        self,
+        current_result: Any,
+        tools: list[dict] | None,
+        *,
+        stream_turn: int = 0,
+    ) -> tuple:
         """从 LLM 输出中解析 tool_calls、assistant_content、reasoning。"""
         current_tool_calls = None
         current_assistant_content = ""
         current_reasoning = None
-        if isinstance(current_result, str):
+        if isinstance(current_result, StreamTurnResult):
+            if current_result.tool_calls:
+                current_tool_calls = [
+                    {
+                        "id": call.id,
+                        "type": "function",
+                        "function": {
+                            "name": call.name,
+                            "arguments": json.dumps(
+                                dict(call.arguments), ensure_ascii=False,
+                            ),
+                        },
+                        "_stream_turn": current_result.turn,
+                        "_stream_index": index,
+                    }
+                    for index, call in enumerate(current_result.tool_calls)
+                ]
+                current_assistant_content = current_result.text
+                current_reasoning = current_result.reasoning or None
+            elif has_dsml_tool_calls(current_result.text) and tools:
+                dsml_calls = parse_dsml_tool_calls(
+                    current_result.text, self.tool_repair._allowed_tools,
+                )
+                if dsml_calls:
+                    seen_ids: set[str] = set()
+                    for index, call in enumerate(dsml_calls):
+                        name = call.get("function", {}).get("name", "tool")
+                        call_id = str(call.get("id", ""))
+                        if not call_id or call_id in seen_ids or call_id.startswith(("dsml_", "xml_")):
+                            call_id = f"dsml:{current_result.turn}:{index}:{name}"
+                        call["id"] = call_id
+                        call["_stream_turn"] = current_result.turn
+                        call["_stream_index"] = index
+                        seen_ids.add(call_id)
+                    current_tool_calls = dsml_calls
+                    current_assistant_content = current_result.text
+                    current_reasoning = current_result.reasoning or None
+        elif isinstance(current_result, str):
             if has_dsml_tool_calls(current_result) and tools:
                 dsml_calls = parse_dsml_tool_calls(current_result, self.tool_repair._allowed_tools)
                 if dsml_calls:
+                    seen_ids: set[str] = set()
+                    for index, call in enumerate(dsml_calls):
+                        name = call.get("function", {}).get("name", "tool")
+                        call_id = str(call.get("id", ""))
+                        if not call_id or call_id in seen_ids or call_id.startswith(("dsml_", "xml_")):
+                            call_id = f"dsml:{stream_turn}:{index}:{name}"
+                        call["id"] = call_id
+                        call["_stream_turn"] = stream_turn
+                        call["_stream_index"] = index
+                        seen_ids.add(call_id)
                     current_tool_calls = dsml_calls
                     current_assistant_content = current_result
                     current_reasoning = self.router.pop_reasoning_content()
@@ -206,7 +263,8 @@ class VerificationMixin:
 
     async def _call_and_parse_verification_llm(self, messages: Any, tools: Any, task_type: Any, temperature: Any,
                                                 max_tokens: Any, user_openid: Any, session_id: Any, trace: Any,
-                                                turn_idx: Any, loop_start: Any) -> tuple:
+                                                turn_idx: Any, loop_start: Any,
+                                                status_callback: Any = None) -> tuple:
         """验收循环中再次调用 LLM 并解析结果。
 
         返回 (tool_calls, content, reasoning, early_reply)。
@@ -219,18 +277,30 @@ class VerificationMixin:
             return None, "", None, None
 
         try:
-            current_result = await asyncio.wait_for(
-                self.router.route(
-                    task_type, messages,
-                    temperature=temperature,
-                    max_tokens=max_tokens,
-                    tools=tools,
-                    tool_choice="auto" if tools else None,
-                    user_openid=user_openid,
-                    session_id=session_id,
-                ),
-                timeout=min(self.LLM_CALL_TIMEOUT, remaining),
-            )
+            if status_callback and STRUCTURED_STREAM_EVENTS:
+                current_result = await asyncio.wait_for(
+                    self._stream_llm_turn(
+                        messages, status_callback=status_callback,
+                        task_type=task_type, turn=turn_idx + 1,
+                        temperature=temperature, max_tokens=max_tokens,
+                        tools=tools, tool_choice="auto" if tools else None,
+                        user_openid=user_openid, session_id=session_id,
+                    ),
+                    timeout=min(self.LLM_CALL_TIMEOUT, remaining),
+                )
+            else:
+                current_result = await asyncio.wait_for(
+                    self.router.route(
+                        task_type, messages,
+                        temperature=temperature,
+                        max_tokens=max_tokens,
+                        tools=tools,
+                        tool_choice="auto" if tools else None,
+                        user_openid=user_openid,
+                        session_id=session_id,
+                    ),
+                    timeout=min(self.LLM_CALL_TIMEOUT, remaining),
+                )
         except TimeoutError:
             trace.warning("verification.llm_timeout", turn=turn_idx)
             return None, "", None, None
@@ -239,11 +309,13 @@ class VerificationMixin:
             return None, "", None, None
 
         current_tool_calls, current_assistant_content, current_reasoning = \
-            self._parse_verification_result(current_result, tools)
+            self._parse_verification_result(current_result, tools, stream_turn=turn_idx + 1)
 
         # 如果没有 tool_calls，验收通过
         if not current_tool_calls:
-            if isinstance(current_result, str):
+            if isinstance(current_result, StreamTurnResult):
+                early_reply = self._clean_reply(current_result.text)
+            elif isinstance(current_result, str):
                 early_reply = self._clean_reply(current_result)
             else:
                 early_reply = self._clean_reply(current_result.choices[0].message.content or "")
@@ -287,7 +359,9 @@ class VerificationMixin:
         _early_considered_complete = False
         # 获取工具后回复的 finish_reason（用于完整性判定）
         _early_finish_reason = None
-        if not isinstance(current_result, str):
+        if isinstance(current_result, StreamTurnResult):
+            _early_finish_reason = current_result.finish_reason
+        elif not isinstance(current_result, str):
             _early_finish_reason = getattr(current_result.choices[0], "finish_reason", None)
         else:
             _early_finish_reason = _stream_finish_reason_var.get()
@@ -466,7 +540,10 @@ class VerificationMixin:
         session_id: str,
     ) -> str:
         """首轮无 tool_calls 时的回复处理：空回复保护 + 完整性检测 + 截断重试 + 句号兜底。"""
-        if isinstance(first_result, str):
+        if isinstance(first_result, StreamTurnResult):
+            reply = self._clean_reply(first_result.text)
+            _finish_reason = first_result.finish_reason
+        elif isinstance(first_result, str):
             reply = self._clean_reply(first_result)
             # 流式路径：从 ContextVar 读取最后一次流式调用的 finish_reason
             # 用于检测 max_tokens 截断（finish_reason="length"）

@@ -2,7 +2,7 @@
 
 包含主处理路径相关方法：_run_main_process_path、_setup_main_emotion_and_memory、
 _run_emotion_llm_background、_build_main_messages、_finalize_main_reply、
-_dynamic_emotion_threshold、_retrieve_main_memories、_inject_image_description、
+_retrieve_main_memories、_inject_image_description、
 _prepare_sticker_and_tools、_resolve_task_and_circuit、_call_main_llm_with_verification。
 
 叶子模块依赖约定：本 mixin 只允许依赖 agent_core._shared、agent_core.mixins.verification、
@@ -12,6 +12,7 @@ agent_core.mixins.voice 及 config/core 叶子模块，不得 import agent_core.
 from __future__ import annotations
 
 import asyncio
+import inspect
 import os
 import re
 import tempfile
@@ -23,8 +24,13 @@ from loguru import logger
 from agent_core._shared import DEGRADED_REPLY, ProcessResult, is_degraded_reply
 from agent_core.mixins.verification import _system_context_var
 from agent_core.mixins.voice import _get_temperature
-from config import (AGENT_CONFIG, STREAM_TEXT_PUSH,
-                    build_safe_system_prompt, get_reply_dedup_enabled)
+from config import (
+    AGENT_CONFIG,
+    STREAM_TEXT_PUSH,
+    STRUCTURED_STREAM_EVENTS,
+    build_safe_system_prompt,
+    get_reply_dedup_enabled,
+)
 from core.background_tasks import _spawn
 from core.circuit_breaker import CircuitState
 from core.degradation_strategy import get_degradation_strategy
@@ -120,13 +126,27 @@ class MainPathMixin:
         except Exception:
             logger.debug("emotion.llm_spawn_failed", exc_info=True)
         emotion_hint = build_emotion_hint(emotion)
-        self.context.emotion_hint = emotion_hint
         ctx.last_user_emotion = emotion.get("primary", "")
         self._update_mental_state_emotion(emotion, user_id=getattr(ctx, "user_id", ""))
 
+        token = getattr(ctx, "user_context_token", None)
+        if token is None:
+            token = self.context.get_user_context_token()
+        if token is not None:
+            await self.context.commit_user_context(token, emotion_hint=emotion_hint)
+
         # 记忆检索与 notebook 上下文加载并行化
-        memories = await self._retrieve_main_memories(user_input, is_master, emotion)
-        self.context.memory_retrieval = memories if memories else None
+        memories = await self._retrieve_main_memories(
+            user_input,
+            is_master,
+            emotion,
+            user_token=token,
+        )
+        if token is not None:
+            await self.context.commit_user_context(
+                token,
+                memory_retrieval=memories if memories else None,
+            )
 
         emotion_label = emotion.get("primary", "")
         return emotion, emotion_label
@@ -249,14 +269,25 @@ class MainPathMixin:
                     _model_used = self.router.get_current_chat_model().get("model_id", "")
                     self._bg_task_manager.run_background_tasks(
                         user_input, _clean_for_memory, user_id, source, emotion, tool_results,
-                        session_id=session_id, model_used=_model_used)
-        # 偏好管线: 用户纠正 → L1(约束) + L3(教训) 联动 (异步, 不阻塞回复)
-        try:
-            from core.preference_pipeline import get_preference_pipeline
-            _spawn(get_preference_pipeline().process_correction(
-                user_input, reply, self._bg_task_manager.learning_manager))
-        except Exception as e:
-            logger.debug("msg.preference_pipeline_spawn_failed", error=str(e))
+                        session_id=session_id, model_used=_model_used,
+                        request_context=getattr(ctx, "group_context_metadata", None),
+                        user_context_token=getattr(ctx, "user_context_token", None),
+                    )
+        elif not is_degraded_reply(reply):
+            _model_used = self.router.get_current_chat_model().get("model_id", "")
+            self._bg_task_manager.log_conversation_only(
+                user_input, reply, user_id, source, emotion,
+                session_id=session_id, model_used=_model_used,
+                request_context=getattr(ctx, "group_context_metadata", None),
+            )
+        # 群聊非主人不进入个人偏好、画像或记忆管线。
+        if source != "qq_group" or is_master:
+            try:
+                from core.preference_pipeline import get_preference_pipeline
+                _spawn(get_preference_pipeline().process_correction(
+                    user_input, reply, self._bg_task_manager.learning_manager))
+            except Exception as e:
+                logger.debug("msg.preference_pipeline_spawn_failed", error=str(e))
         try:
             _spawn(self.router.flush_costs())
         except Exception as e:
@@ -295,6 +326,7 @@ class MainPathMixin:
                 "surprised": 0.7, "confused": 0.4, "thinking": 0.3,
                 "playful": 0.6, "moved": 0.7, "anxious": 0.6,
                 "fear": 0.8, "pout": 0.5, "neutral": 0.2,
+                "curious": 0.4, "greeting": 0.3,
             }
             get_emotion_state(getattr(ctx, "user_id", "")).update(
                 emotion_label, _intensity_map.get(emotion_label, 0.5)
@@ -306,52 +338,19 @@ class MainPathMixin:
                              audio_path=audio_path, tool_results=tool_results, image_paths=media_image_paths,
                              video_path=media_video_path, tts_pending=tts_pending, tts_text=tts_text)
 
-    def _dynamic_emotion_threshold(self, user_input: str, emotion: dict, base: float = 0.5) -> float:
-        """根据对话情景动态调整情绪触发阈值。
-
-        自适应策略:
-          1. 情绪强度高 → 降低阈值 (更容易触发安慰记忆)
-          2. 用户表达情感关键词多 → 降低阈值
-          3. 对话深入 (长输入) → 降低阈值
-          4. 短/无情感输入 → 保持或提高阈值 (避免误触发)
-
-        最终阈值 clamp 在 [0.2, 0.8] 范围内, 防止极端值。
-        """
-        threshold = base
-        intensity = float(emotion.get("intensity", 0.0))
-
-        # 因子 1: 情绪强度越高, 阈值越低
-        # intensity 0.8 → threshold -= 0.15; intensity 0.3 → threshold += 0.05
-        if intensity >= 0.7:
-            threshold -= 0.15
-        elif intensity >= 0.5:
-            threshold -= 0.05
-        elif intensity <= 0.2:
-            threshold += 0.05
-
-        # 因子 2: 情感关键词密度
-        emotional_words = (
-            "难过", "伤心", "哭", "痛", "累", "烦", "压力", "焦虑",
-            "害怕", "孤独", "想你", "分手", "吵架", "遗憾", "后悔",
-            "开心", "喜欢", "幸福", "感恩", "想", "心情", "感觉",
-        )
-        query_lower = user_input.lower() if isinstance(user_input, str) else ""
-        emo_count = sum(1 for w in emotional_words if w in query_lower)
-        if emo_count >= 3:
-            threshold -= 0.1   # 密集情感表达 → 大幅降低
-        elif emo_count >= 1:
-            threshold -= 0.05  # 有情感词 → 小幅降低
-
-        # 因子 3: 输入长度 (深入对话)
-        effective_len = sum(2 if '\u4e00' <= c <= '\u9fff' else 1 for c in query_lower)
-        if effective_len > 40:
-            threshold -= 0.05  # 长输入: 用户在认真倾诉
-
-        return max(0.2, min(0.8, threshold))
-
-    async def _retrieve_main_memories(self, user_input: Any, is_master: Any, emotion: Any) -> Any:
+    async def _retrieve_main_memories(
+        self,
+        user_input: Any,
+        is_master: Any,
+        emotion: Any,
+        user_token: Any | None = None,
+    ) -> Any:
         """主路径记忆检索（含情绪触发的安抚记忆）与 notebook 加载并行。"""
         _retrieve_start = time.time()
+        if user_token is not None:
+            await self.context.commit_user_context(
+                user_token, evidence_bundle=None
+            )
         # 记忆检索超时（秒）在此统一解析一次，内层检索与外层 gather 复用同一值，
         # 避免配置 MEMORY_RETRIEVE_TIMEOUT > 8 时被外层写死的 8s 硬顶（日志口径不一致）。
         import config as _cfg
@@ -366,7 +365,7 @@ class MainPathMixin:
                 _t0 = time.time()
                 logger.info("pipeline.memory.retrieve.start")
                 try:
-                    _k = self.memory._suggest_k(user_input, default_k=8)
+                    _k = self.memory.suggest_k(user_input, default_k=8)
                     logger.info("pipeline.memory.retrieve.call start k={}", _k)
                     # 治本（2026-08-05）：单次记忆检索超时 2→5s。
                     # 根因：2s 对 embed/reranker/检索链路过短，网络波动即误砍，
@@ -375,17 +374,101 @@ class MainPathMixin:
                     # (2026-08-06) 超时改为 config.MEMORY_RETRIEVE_TIMEOUT（默认 8s）：
                     #   USB 盘慢时 5s 仍频繁误砍（今日 66 次 retrieve_timeout_single），
                     #   8s 给慢速存储足够余量，同时控制最坏延迟（LLM 前串行 await）。
-                    from memory.scope import current_scope
+                    from memory.scope import Scope, current_scope
                     memory_scope = current_scope()
-                    results = await asyncio.wait_for(
-                        self.memory.retrieve_memories(
-                            user_input,
-                            k=_k,
-                            scope=memory_scope,
-                            conv_user_id=memory_scope.user_id,
-                        ),
-                        timeout=_mem_timeout,
+                    # 群回复始终使用 conversation boundary；P0 隐私边界不可由配置绕过。
+                    _session_id = str(getattr(memory_scope, "session_id", ""))
+                    _is_group_scope = _session_id.startswith("qq_group:")
+                    if _is_group_scope:
+                        memory_scope = Scope.group(
+                            user_id=memory_scope.user_id,
+                            group_id=str(memory_scope.session_id)[len("qq_group:"):],
+                            agent_id=memory_scope.agent_id,
+                            request_id=memory_scope.request_id,
+                        )
+                    traced_retrieve = getattr(
+                        self.memory, "retrieve_memories_with_trace", None
                     )
+                    if inspect.iscoroutinefunction(traced_retrieve):
+                        outcome = await asyncio.wait_for(
+                            traced_retrieve(
+                                user_input,
+                                k=_k,
+                                scope=memory_scope,
+                                conv_user_id=memory_scope.user_id,
+                            ),
+                            timeout=_mem_timeout,
+                        )
+                        results = list(outcome.results)
+                        outcome_degraded = outcome.degraded_components
+                        outcome_dropped = outcome.dropped
+                    else:
+                        results = await asyncio.wait_for(
+                            self.memory.retrieve_memories(
+                                user_input,
+                                k=_k,
+                                scope=memory_scope,
+                                conv_user_id=memory_scope.user_id,
+                            ),
+                            timeout=_mem_timeout,
+                        )
+                        outcome_degraded = ()
+                        outcome_dropped = ()
+                    if results and _is_group_scope:
+                        _raw_count = len(results)
+                        results = [m for m in results if memory_scope.matches_record(m)]
+                        if len(results) != _raw_count:
+                            logger.info("privacy.group_personal_memory_filtered",
+                                        dropped=_raw_count - len(results),
+                                        kept=len(results))
+                    if user_token is not None:
+                        try:
+                            from memory.evidence import EvidenceBundle, RetrievalPlan
+                            from memory.retrieval.trace import (
+                                read_retrieval_dropped,
+                                read_retrieval_trace,
+                            )
+                            channels = tuple(dict.fromkeys(
+                                str(channel)
+                                for item in (results or [])
+                                for channel in (
+                                    item.get("channels")
+                                    or [item.get("source_channel") or item.get("source")]
+                                )
+                                if channel
+                            ))
+                            plan = RetrievalPlan.from_query(
+                                str(user_input), scope=memory_scope, top_k=_k,
+                                enabled_channels=channels,
+                                budget_ms=int(_mem_timeout * 1000),
+                            )
+                            degraded_components = tuple(dict.fromkeys(
+                                (*outcome_degraded, *read_retrieval_trace())
+                            ))
+                            upstream_dropped = tuple(dict.fromkeys(
+                                (*outcome_dropped, *read_retrieval_dropped())
+                            ))
+                            evidence_bundle = EvidenceBundle.from_results(
+                                plan, results or [],
+                                degraded_components=degraded_components,
+                                upstream_dropped=upstream_dropped,
+                            ).apply_budget(
+                                int(getattr(_cfg, "MEMORY_EVIDENCE_TOKEN_BUDGET", 3000))
+                            )
+                            committed = await self.context.commit_user_context(
+                                user_token, evidence_bundle=evidence_bundle
+                            )
+                            logger.debug(
+                                "memory.evidence_shadow_built committed={} retrieved={} injected={} dropped={}",
+                                committed,
+                                len(evidence_bundle.evidence) + len(evidence_bundle.dropped),
+                                len(evidence_bundle.evidence),
+                                len(evidence_bundle.dropped),
+                            )
+                        except Exception as evidence_error:
+                            logger.warning(
+                                "memory.evidence_shadow_failed error={}", str(evidence_error)
+                            )
                     _retrieve_ms = int((time.time() - _t0) * 1000)
                     logger.info("pipeline.memory.retrieve.done elapsed_ms={} result_count={}",
                                 _retrieve_ms, len(results) if results else 0)
@@ -404,17 +487,8 @@ class MainPathMixin:
                     logger.warning("memory.retrieve_failed", error=str(e))
                     results = None
                 if results is not None:
-                    # 动态情绪阈值: 根据对话情景自适应调整
-                    _base_threshold = 0.5
-                    try:
-                        import config as _cfg
-                        _base_threshold = float(getattr(_cfg, "EMOTION_TRIGGER_THRESHOLD", 0.5))
-                    except (ImportError, ValueError, TypeError):
-                        logger.debug("main_path.emotion_threshold_config_fallback")
-                    _emo_threshold = self._dynamic_emotion_threshold(
-                        user_input, emotion, _base_threshold
-                    )
-                    # 注：comfort_memories 不再追加到 results
+                    # 注：comfort_memories 与动态情绪阈值已随安抚检索移除一并退役；
+                    # 情绪安抚由模型基于真实相关记忆自行组织语言。
                     # 根因：retrieve_comfort_memories 只按情绪标签+重要性+时间排序，
                     # 与当前 query 零语义相关，会污染记忆检索结果，导致"回忆不准"。
                     # 情绪安抚应由模型基于真实相关记忆自行组织语言，而非注入无关"开心记忆"。
@@ -426,7 +500,7 @@ class MainPathMixin:
             _t0 = time.time()
             logger.info("pipeline.memory.notebook.start")
             try:
-                await self._load_notebook_context()
+                await self._load_notebook_context(user_token=user_token)
                 _elapsed = int((time.time() - _t0) * 1000)
                 logger.info("pipeline.memory.notebook.done elapsed_ms={}", _elapsed)
                 if _elapsed > 500:
@@ -447,7 +521,8 @@ class MainPathMixin:
         #      整体移除该空转慢环节。
         _gather_start = time.time()
         memories_task = asyncio.create_task(_retrieve_memories())
-        _spawn(_load_notebook())  # 后台异步，不占用记忆检索关键路径
+        if is_master:
+            _spawn(_load_notebook())  # 全局单主人 notebook 仅 owner 可加载
         try:
             memories = await asyncio.wait_for(memories_task, timeout=_mem_timeout)
         except asyncio.TimeoutError:
@@ -643,14 +718,25 @@ class MainPathMixin:
         tool_results = []
         try:
             _llm_t0 = time.time()
-            if STREAM_TEXT_PUSH and status_callback and not tools:
+            if STREAM_TEXT_PUSH and status_callback and (not tools or STRUCTURED_STREAM_EVENTS):
                 logger.info("pipeline.llm_call.start mode=stream task_type={}", task_type)
-                result = await self._stream_llm_response(
-                    messages, status_callback=status_callback, task_type=task_type,
-                    temperature=_get_temperature(_model_cfg),
-                    max_tokens=_cb_max_tokens,
-                    user_openid=user_openid, session_id=session_id,
-                )
+                if tools and STRUCTURED_STREAM_EVENTS:
+                    result = await self._stream_llm_turn(
+                        messages, status_callback=status_callback, task_type=task_type,
+                        turn=0,
+                        temperature=_get_temperature(_model_cfg),
+                        max_tokens=_cb_max_tokens,
+                        tools=tools,
+                        tool_choice="auto",
+                        user_openid=user_openid, session_id=session_id,
+                    )
+                else:
+                    result = await self._stream_llm_response(
+                        messages, status_callback=status_callback, task_type=task_type,
+                        temperature=_get_temperature(_model_cfg),
+                        max_tokens=_cb_max_tokens,
+                        user_openid=user_openid, session_id=session_id,
+                    )
             else:
                 logger.info("pipeline.llm_call.start mode=route task_type={} timeout={}",
                             task_type, self.LLM_CALL_TIMEOUT)

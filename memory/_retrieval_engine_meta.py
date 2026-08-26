@@ -1,20 +1,17 @@
 """RetrievalEngine 的元数据/状态方法组 —— 拆分自 _retrieval_engine.py。
 
 Mixin 组合：RetrievalEngine 继承 MemoryMetadataMixin 获得记忆计数缓存、
-档位判断、检索审计与去重方法。仅依赖 self._mm 组件 + _memory_utils 纯函数。
+档位判断与检索审计。仅依赖 self._mm 组件。
 """
 from __future__ import annotations
 
 import time
-from typing import Any
 
 from loguru import logger
 
-from memory._memory_utils import _normalize_for_dedupe
-
 
 class MemoryMetadataMixin:
-    """记忆计数缓存/档位判断/检索审计/去重方法组。"""
+    """记忆计数缓存/档位判断/检索审计方法组。"""
 
     async def _get_memory_count(self) -> int:
         """获取用户私有记忆总数 (带 60s TTL 缓存, 避免频繁 COUNT)."""
@@ -71,36 +68,3 @@ class MemoryMetadataMixin:
         except Exception as e:
             logger.debug("memory.audit_retrieval_failed", error=str(e))
             return 0
-
-    async def _has_duplicate(self, summary: str, scope: Any | None = None) -> bool:
-        """检查是否存在归一化后内容相同的已有记忆（只对 is_raw=0 的提炼知识生效）。
-
-        mem0 SPEC 优化：原始记忆（is_raw=1）不去重，保证 append-only 可追溯。
-
-        Args:
-            scope: Scope 对象。传入时只在同 scope 内查重。
-        """
-        normalized = _normalize_for_dedupe(summary)
-        if len(normalized) < 10:
-            return False
-        try:
-            # 用 FTS 搜索相关记忆，然后精确匹配
-            if scope is not None:
-                # scope 过滤：只查 is_raw=0 的提炼知识
-                candidates = await self._mm.memory.search_memories_fts_scoped(
-                    summary, scope=scope, limit=5, is_raw=0
-                )
-            else:
-                candidates = await self._mm.memory.search_memories_fts(summary, limit=5)
-            for c in candidates:
-                # 只对 is_raw=0 的记忆判断重复
-                if c.get("is_raw", 0) == 0 and _normalize_for_dedupe(c.get("summary", "")) == normalized:
-                    return True
-            # FTS 无结果时也检查最近记忆
-            recent = await self._mm.memory.get_episodic_recent(limit=10)
-            for r in recent:
-                if r.get("is_raw", 0) == 0 and _normalize_for_dedupe(r.get("summary", "")) == normalized:
-                    return True
-        except (OSError, TypeError):
-            logger.debug("memory_manager.is_duplicate_check_failed", exc_info=True)
-        return False

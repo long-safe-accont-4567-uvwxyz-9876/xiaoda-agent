@@ -8,11 +8,11 @@ from typing import Any
 from fastapi import APIRouter, Depends, Request
 from loguru import logger
 
-from web.schemas import Envelope
-from web.routers.auth import get_current_user
-from web.model_capabilities import get_capabilities
 # 缓存抽到 web._discovery_cache, 避免与 web.routers.models 互相导入
-from web._discovery_cache import _cache, _CACHE_TTL, _cache_lock
+from web._discovery_cache import _CACHE_TTL, _cache, _cache_lock
+from web.model_capabilities import get_capabilities
+from web.routers.auth import get_current_user
+from web.schemas import Envelope
 
 router = APIRouter(tags=["model-discovery"], dependencies=[Depends(get_current_user)])
 
@@ -205,6 +205,7 @@ async def _get_siliconflow_pricing() -> dict[str, dict] | None:
 
     try:
         import re as _re
+
         import httpx
         async with httpx.AsyncClient(timeout=15) as client:
             resp = await client.get("https://siliconflow.cn/models",
@@ -382,6 +383,7 @@ async def _build_local_ort_group(request: Request) -> dict:
             installed = []
         except Exception:
             logger.exception("model_discovery._build_local_ort_group.unexpected_error")
+            installed = []
         for item in installed:
             purpose = getattr(item, "purpose", None)
             if purpose is None or str(purpose) != "chat":
@@ -412,8 +414,8 @@ def _get_all_providers() -> list[dict]:
 
     # 从 config_service 读取所有 provider
     try:
-        from web.config_service import get_config_service
         from web._provider_keys import load_provider_key
+        from web.config_service import get_config_service
         cfg = get_config_service()
         custom = cfg.get("models.providers", {}) or {}
         # 按 order 字段升序排列；未设置 order 的排在已设置之后，按字典插入顺序
@@ -460,16 +462,29 @@ async def discover_models(request: Request) -> Any:
     每次请求实时注入，安装/删除后立即生效。
     """
     now = time.time()
+    spawn_refresh = False
     async with _cache_lock:
-        fresh = _cache["data"] is not None and (now - _cache["ts"]) < _CACHE_TTL
-        stale = _cache["data"] is not None  # 过期但存在的旧数据
-    if fresh:
-        return _cache["data"]
-    if stale:
-        # stale-while-revalidate：旧数据立即返回（页面秒开），
-        # 后台静默刷新。模型页首次打开后不再被外部 API 拖慢 2.6s。
-        asyncio.get_running_loop().create_task(_refresh_cache_background(request))
-        return _cache["data"]
+        cached = _cache["data"]
+        fresh = cached is not None and (now - _cache["ts"]) < _CACHE_TTL
+        stale = cached is not None  # 过期但存在的旧数据
+        # 后台刷新去重：已有刷新在飞时不再 spawn，
+        # 防 stale 窗口内 N 个请求触发 N 次外部 provider 全量抓取
+        if stale and not fresh and not _cache["refreshing"]:
+            _cache["refreshing"] = True
+            spawn_refresh = True
+    if fresh or stale:
+        # 先 spawn 再做任何可失败 await：确保 refreshing 标志的复位
+        # 始终由后台任务的 finally 兜底，不会因后续异常被搁浅成永久卡死
+        if spawn_refresh:
+            asyncio.get_running_loop().create_task(_refresh_cache_background(request))
+        # 本地 ORT chat 组实时注入（不进缓存）：安装/删除后立即生效，
+        # 与冷路径 _fetch_and_cache_discovered 尾部行为保持一致。
+        # list() 拷贝防止把 local 组污染进 _cache["data"]。
+        result = list(cached)
+        local_group = await _build_local_ort_group(request)
+        if local_group["models"]:
+            result.append(local_group)
+        return Envelope(data=result)
 
     return await _fetch_and_cache_discovered(request)
 
@@ -602,3 +617,6 @@ async def _refresh_cache_background(request: Request) -> None:
     except Exception as e:  # noqa: BLE001
         from loguru import logger as _lg
         _lg.debug("models.discover_bg_refresh_failed error={}", str(e)[:150])
+    finally:
+        async with _cache_lock:
+            _cache["refreshing"] = False

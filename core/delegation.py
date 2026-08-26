@@ -13,13 +13,13 @@ class DelegationRequest:
     """子代理委派请求。
 
     Attributes:
-        type: 委派目标类型 — "klee" 或 "xiaoda"
+        type: 委派目标类型 — 当前仅支持 "xiaoli"
         question: 委派的问题/任务
         delegator: 发起委派的 Agent 名称
         depth: 委派深度（防止无限递归）
     """
 
-    type: str  # "klee" or "xiaoda"
+    type: str  # "xiaoli"
     question: str
     delegator: str
     depth: int = 0

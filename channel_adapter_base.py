@@ -27,24 +27,40 @@
    - ``_cap_stream_segments``：按被动回复配额（C2C/群聊各 4 片）截断，C2C 尾部合并后
      按字节上限重切
 
+5. TTLCache（B1：wechat 三份手搓 TTL 清理的统一替代）
+   - ``TTLCache.prune_pairs``：过期剔除 + 最旧淘汰的唯一算法内核（原
+     ``ChannelAdapterBase._session_cache_prune`` 的下沉，行为逐字节一致）
+   - ``TTLCache`` 实例形态：绑定外部 (值表, 时间戳表) 双 dict，提供 set/get/pop
+
+6. core 调用骨架（B2：qq/wechat 两适配器复制管道的沉淀层）
+   - ``CoreProcessRequest``：跨适配器 process 请求描述（dataclass，通道特有字段经子类扩展）
+   - ``ChannelAdapterBase._process_with_core()``：ACK → 会话 → 状态回调 →
+     EventBus 绑定 → wait_for(process, 120s) → 超时/异常兜底 的模板方法，
+     两通道语义差异全部经钩子方法消化（禁止在骨架内判别适配器类型）
+   - ``ChannelAdapterBase._send_segments_paced()``：流式分段发送共享内核——
+     段间打字节奏 random.uniform(0.8, 1.2)s、某段失败合并剩余段单条重发一次
+
 本模块只依赖标准库 + loguru，不 import config / agent_core / 任何通道 SDK，
 保证两个 adapter 均可安全 import 且无循环依赖。
 """
 from __future__ import annotations
 
-import contextlib
 import asyncio
+import contextlib
 import json
 import os
+import random
 import sqlite3
 import time
+from collections.abc import Awaitable, Callable
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
 from loguru import logger
 
 try:
-    from utils.atomic_write import atomic_write, _restrict_file_permissions_windows
+    from utils.atomic_write import _restrict_file_permissions_windows, atomic_write
 except (ImportError, AttributeError):
     atomic_write = None  # type: ignore[assignment]
     def _restrict_file_permissions_windows(path):  # type: ignore[no-redef]
@@ -238,6 +254,96 @@ def _cap_stream_segments(segments: list[str], is_group: bool,
     return segments
 
 
+class TTLCache:
+    """轻量 TTL + 容量上限缓存（B1：wechat 三份手搓清理的统一替代）。
+
+    背景：wechat_bot_adapter 曾有三份劣化复制的手搓清理循环
+    （``_remember_ctx`` / ``_user_lock`` / ``_prune_last_status_cache``），
+    与 QQ 会话缓存的 ``_session_cache_prune`` 各自漂移（P1-1/P1-7 系列
+    同一 bug 需人肉双修的先例）。本类是唯一算法内核：
+
+    - ``prune_pairs(values, stamps, ttl=…, max_size=…)``：静态形态，对
+      (值表, 时间戳表) 双 dict 执行「过期剔除 → 按时间戳最旧淘汰溢出项」，
+      与原 ``ChannelAdapterBase._session_cache_prune`` 行为逐字节一致；
+    - 实例形态：绑定外部两个 dict（dict 仍由调用方持有，测试/调试可继续
+      直接读写原属性名），提供 set/get/pop 便捷操作。
+
+    不变量：``set()`` 写入后立即执行清理，``len(values) <= max_size`` 恒成立
+    （``max_size=None`` 表示不限容量，仅做 TTL 清理）。
+    """
+
+    __slots__ = ("values", "stamps", "ttl", "max_size")
+
+    def __init__(self, values: dict, stamps: dict, *,
+                 ttl: float, max_size: int | None = None) -> None:
+        self.values = values
+        self.stamps = stamps
+        self.ttl = ttl
+        self.max_size = max_size
+
+    @staticmethod
+    def prune_pairs(values: dict, stamps: dict, *,
+                    ttl: float, max_size: int | None = None) -> None:
+        """过期剔除 + 最旧淘汰的唯一实现（原 _session_cache_prune 内核下沉）。
+
+        - 过期剔除：``now - ts > ttl`` 的条目连同时间戳一并删除；
+        - 容量淘汰（max_size 给定时）：按时间戳升序淘汰最旧条目至不超上限。
+        """
+        now = time.time()
+        expired = [k for k, t in stamps.items() if now - t > ttl]
+        for k in expired:
+            values.pop(k, None)
+            stamps.pop(k, None)
+        overflow = len(values) - (max_size if max_size is not None else len(values))
+        if overflow > 0:
+            sorted_keys = sorted(stamps.items(), key=lambda kv: kv[1])
+            for k, _ in sorted_keys[:overflow]:
+                values.pop(k, None)
+                stamps.pop(k, None)
+
+    def prune(self) -> None:
+        """对绑定的双 dict 执行一次清理。"""
+        self.prune_pairs(self.values, self.stamps, ttl=self.ttl, max_size=self.max_size)
+
+    def set(self, key: str, value: Any, *, prune: bool = True) -> None:
+        """写入并刷新时间戳；默认立即清理以维持容量上限。"""
+        self.values[key] = value
+        self.stamps[key] = time.time()
+        if prune:
+            self.prune()
+
+    def get(self, key: str, default: Any = None, *, prune: bool = True) -> Any:
+        if prune:
+            self.prune()
+        return self.values.get(key, default)
+
+    def pop(self, key: str, default: Any = None) -> Any:
+        self.stamps.pop(key, None)
+        return self.values.pop(key, default)
+
+    def __contains__(self, key: object) -> bool:
+        return key in self.values
+
+    def __len__(self) -> int:
+        return len(self.values)
+
+
+@dataclass
+class CoreProcessRequest:
+    """``ChannelAdapterBase._process_with_core`` 的跨适配器请求描述。
+
+    公共字段覆盖三个通道（qq_c2c / qq_group / wechat_c2c）调用
+    ``core.process`` 的共同入参；通道特有字段由子类扩展（如微信的
+    context_token），禁止在骨架里用适配器类型判别。
+    """
+
+    text: str                 # 用户输入（已含附件描述拼接）
+    user_id: str              # 规范化用户标识（qq_xxx / wechat_xxx）
+    source: str               # 渠道标识：qq_c2c / qq_group / wechat_c2c
+    user_openid: str          # 发送者 openid / from_user_id / member_openid
+    session_id: str | None = None   # 预解析会话；None 时由骨架钩子 _resolve_session 决定
+
+
 class ChannelAdapterBase:
     """IM 通道适配器共享基类（消息去重语义层 + 流式分片委托）。
 
@@ -278,18 +384,10 @@ class ChannelAdapterBase:
         """清理 session 缓存：1) 删除超过 TTL 的过期条目；2) 超过 max_size 按 FIFO 淘汰最旧。
 
         防多用户长期运行内存泄漏（原 P1-1，两侧各一份副本）。
+        B1：算法内核下沉至 :meth:`TTLCache.prune_pairs`（行为逐字节一致），本方法保留
+        为既有调用点/测试的稳定入口。
         """
-        now = time.time()
-        expired = [k for k, ts in cache_ts.items() if now - ts > ttl]
-        for k in expired:
-            cache.pop(k, None)
-            cache_ts.pop(k, None)
-        overflow = len(cache) - max_size
-        if overflow > 0:
-            sorted_keys = sorted(cache_ts.items(), key=lambda kv: kv[1])
-            for k, _ in sorted_keys[:overflow]:
-                cache.pop(k, None)
-                cache_ts.pop(k, None)
+        TTLCache.prune_pairs(cache, cache_ts, ttl=ttl, max_size=max_size)
 
     @classmethod
     def _session_cache_set(cls, cache: dict, cache_ts: dict, user_key: str, sid: str, *,
@@ -379,6 +477,162 @@ class ChannelAdapterBase:
         except (KeyError, OSError, RuntimeError) as e:
             logger.error(log_prefix + "." + event_stem + "_failed error={}", str(e)[:200])
             return f"{tmp_prefix}{user_key[:16]}"
+
+    # ------------------------------------------------------------------
+    # B2：core 调用共享骨架（原 qq C2C / qq 群聊 / wechat 三处复制管道的沉淀层）
+    # 时序即对外行为契约：ACK → 会话 → 绑定 → wait_for(process, 120s) → 兜底。
+    # 两通道语义不同处一律做成钩子方法，骨架内禁止判别适配器类型。
+    # ------------------------------------------------------------------
+
+    #: agent.process 兜底超时秒数（QQ/微信共同行为契约，禁止单侧调整）
+    CORE_PROCESS_TIMEOUT = 120
+
+    #: 需要「兜底文案」的异常集合；TimeoutError 由骨架先行捕获，不在此列。
+    #: 微信覆写为 (Exception,)（原实现捕获所有异常），QQ 沿用默认窄集。
+    CORE_ERROR_TYPES: tuple[type[BaseException], ...] = (RuntimeError, OSError, ValueError)
+
+    def _get_core(self) -> Any:
+        """返回承载 ``process()`` 的 AgentCore。子类覆写（QQ=self.agent，微信=self._core）。"""
+        raise NotImplementedError
+
+    async def _send_ack(self, req: CoreProcessRequest) -> None:
+        """处理前 ACK 钩子。失败策略由子类决定：上抛则走骨架错误兜底（QQ C2C），
+        容忍吞掉则继续处理（qq 群聊 / 微信）。默认无 ACK。"""
+
+    async def _resolve_session(self, req: CoreProcessRequest) -> str | None:
+        """取/建会话钩子。默认透传 req.session_id（QQ 在加锁处理器内预解析，
+        保持原「锁内先 session 后 ACK」时序）；微信覆写为查内存缓存/DB。"""
+        return req.session_id
+
+    def _make_status_callback(self, req: CoreProcessRequest) -> Any:
+        """构造传给 process 的状态回调。默认 None（QQ 侧返回 no-op 闭包）。"""
+        return None
+
+    def _build_process_kwargs(self, req: CoreProcessRequest,
+                              session_id: str | None) -> dict[str, Any]:
+        """构造 process 关键字参数。session_id 仅在真值时传递——
+        None/空串时省略该键（core.process 默认 session_id=""）。
+        QQ 群聊经 _resolve_session 透传合成边界 qq_group:{群 openid}，
+        由 core 侧拼装为按用户隔离的会话键；微信自行查缓存/DB 后传入。"""
+        kwargs: dict[str, Any] = {
+            "user_id": req.user_id,
+            "source": req.source,
+            "user_openid": req.user_openid,
+            "status_callback": self._make_status_callback(req),
+        }
+        if session_id:
+            kwargs["session_id"] = session_id
+        return kwargs
+
+    def _bind_bus_user(self, req: CoreProcessRequest) -> Any:
+        """process 执行期间向 EventBus 挂载通道用户；返回解绑令牌。
+        无事件总线语义的通道（微信）保持默认空操作并返回 None。"""
+        return None
+
+    def _unbind_bus_user(self, token: Any) -> None:
+        """解除 :meth:`_bind_bus_user` 的绑定（token 为 None 时空操作）。"""
+
+    async def _post_process_result(self, req: CoreProcessRequest, result: Any) -> Any:
+        """成功取得 result 后、仍在兜底保护区内的收尾钩子（QQ：HITL 审批 +
+        sticker 回复——其异常需落入错误兜底文案，故必须在骨架 try 内执行）。"""
+        return result
+
+    async def _on_core_timeout(self, req: CoreProcessRequest) -> None:
+        """超时兜底钩子：记录失败状态 + 发送超时文案（子类实现各自文案/日志）。"""
+
+    async def _on_core_error(self, req: CoreProcessRequest, exc: BaseException) -> None:
+        """异常兜底钩子：会话失效等副作用 + 发送错误文案（子类实现）。"""
+
+    async def _process_with_core(self, req: CoreProcessRequest) -> Any | None:
+        """跨适配器 core 调用骨架（模板方法）。
+
+        步骤（顺序即对外行为契约）：
+          1. ACK（_send_ack；是否容忍失败由子类实现决定）
+          2. 取/建会话（_resolve_session）
+          3. EventBus 绑定（_bind_bus_user）→ wait_for(core.process(**kwargs),
+             CORE_PROCESS_TIMEOUT=120) → finally 解绑
+          4. 成功：_post_process_result（仍在保护区内）后返回 ProcessResult
+          5. 超时/异常：_on_core_timeout / _on_core_error 兜底后返回 None
+             （调用方据此跳过回复投递）
+
+        T3（保护区缺口修复）：单一 try 覆盖 ACK/session/bind/process/post 全阶段。
+        原实现 ACK 在 try 内、_resolve_session 悬在两个 try 之间——session 阶段
+        异常（如 DB 抖动抛非窄集异常）会裸传播炸穿消息任务，用户收不到任何回复，
+        且各适配器行为漂移。CancelledError 单独重抛（停机/取消语义不被兜底吞掉），
+        TimeoutError 走超时兜底，其余异常统一走 _on_core_error 通道兜底。
+        """
+        core = self._get_core()
+        if core is None:
+            return None
+        token: Any = None
+        bound = False
+        try:
+            await self._send_ack(req)
+            session_id = await self._resolve_session(req)
+            token = self._bind_bus_user(req)
+            bound = True
+            result = await asyncio.wait_for(
+                core.process(req.text, **self._build_process_kwargs(req, session_id)),
+                timeout=self.CORE_PROCESS_TIMEOUT,
+            )
+            return await self._post_process_result(req, result)
+        except asyncio.CancelledError:
+            # 停机/取消语义：裸重抛，绝不落入兜底文案（finally 仍负责解绑）
+            raise
+        except TimeoutError:
+            await self._on_core_timeout(req)
+            return None
+        except self.CORE_ERROR_TYPES as e:
+            await self._on_core_error(req, e)
+            return None
+        finally:
+            if bound:
+                self._unbind_bus_user(token)
+
+    async def _send_segments_paced(
+        self,
+        segments: list[str],
+        send_one: Callable[[str], Awaitable[bool]],
+        *,
+        on_failure: Callable[[int, Any], Awaitable[Any]],
+        log_prefix: str,
+    ) -> bool:
+        """按固定节奏逐片发送，并把首次失败原样交给通道恢复钩子。
+
+        共享层只负责段间停顿和顺序发送。仅返回 ``True`` 表示成功；其他
+        返回值与发送时抛出的原异常对象均不改写地传给
+        ``on_failure(index, failure)``。恢复范围、重切上限和停止策略由各通道实现。
+        """
+        num_segments = len(segments)
+        for index, segment in enumerate(segments):
+            if index > 0:
+                await asyncio.sleep(random.uniform(0.8, 1.2))
+            try:
+                result = await send_one(segment)
+            except Exception as exc:
+                logger.warning(
+                    log_prefix + ".stream_segment_exception index={} total={} error={}",
+                    index,
+                    num_segments,
+                    str(exc)[:200],
+                )
+                await on_failure(index, exc)
+                return False
+            if result is not True:
+                logger.warning(
+                    log_prefix + ".stream_segment_failed index={} total={}",
+                    index,
+                    num_segments,
+                )
+                await on_failure(index, result)
+                return False
+            logger.debug(
+                log_prefix + ".stream_segment index={} total={} sent=True size={}",
+                index,
+                num_segments,
+                len(segment),
+            )
+        return True
 
     def _init_dedup_state(self) -> None:
         """初始化消息去重缓存（由子类 __init__ 调用）。

@@ -1,66 +1,65 @@
 :root {
-  /* 亮度调节：0.5 (暗) ~ 1.5 (亮)，由 JS 动态设置 */
+  color-scheme: dark;
+  /* Brand and semantic colors */
   --app-brightness: 1.05;
+  --dendro: #91e866;
+  --dendro-bright: #c2ff9c;
+  --dendro-deep: #62bd3c;
+  --dendro-dim: rgba(145, 232, 102, 0.62);
+  --jade: #55d9b2;
+  --cyan: #70c7dc;
+  --wisdom: #f0d89a;
+  --alert: #f07c72;
+  --warning: #efbd64;
 
-  /* Primary palette — 提亮默认绿色 */
-  --dendro: #8fe560;
-  --dendro-dim: rgba(143, 229, 96, 0.6);
+  /* Surfaces and text */
   --forest: #1d3b2a;
   --forest-deep: #0f1f17;
-  --wisdom: #e8d5a3;
-  --moon: #f2f7ee;
-  --moon-dim: rgba(242, 247, 238, 0.7);
-  --alert: #d96a5f;
+  --surface-0: rgba(16, 33, 24, 0.92);
+  --surface-1: rgba(22, 42, 31, 0.82);
+  --surface-2: rgba(28, 50, 38, 0.72);
+  --surface-3: rgba(36, 58, 46, 0.74);
+  --moon: #f4f8f3;
+  --moon-soft: rgba(244, 248, 243, 0.84);
+  --moon-dim: rgba(222, 233, 225, 0.66);
+  --moon-faint: rgba(222, 233, 225, 0.42);
+  --line-soft: rgba(218, 245, 226, 0.09);
+  --line: rgba(196, 238, 207, 0.15);
+  --line-strong: rgba(145, 232, 102, 0.3);
 
-  /* Glass panel */
-  --glass-bg: rgba(20, 40, 28, 0.45);
-  --glass-border: rgba(143, 229, 96, 0.18);
-  --glass-blur: 8px;
-  --glass-radius: 16px;
+  /* Glass and elevation */
+  --glass-bg: rgba(26, 48, 34, 0.45);
+  --glass-border: var(--line);
+  --glass-blur: 16px;
+  --glass-radius: 8px;
+  --control-radius: 6px;
+  --glass-highlight: inset 0 1px 0 rgba(255, 255, 255, 0.055);
+  --glass-inner-glow: inset 0 0 28px rgba(145, 232, 102, 0.025);
+  --shadow-sm: 0 2px 10px rgba(0, 0, 0, 0.24);
+  --shadow-md: 0 12px 34px rgba(0, 0, 0, 0.34);
+  --shadow-lg: 0 22px 68px rgba(0, 0, 0, 0.48);
+  --shadow-glow: 0 0 0 1px rgba(145, 232, 102, 0.08), 0 10px 32px rgba(0, 0, 0, 0.28);
+  --shadow-glow-md: 0 0 0 1px rgba(145, 232, 102, 0.12), 0 14px 36px rgba(0, 0, 0, 0.34);
+  --shadow-glow-jade: 0 10px 28px rgba(85, 217, 178, 0.07);
 
-  /* Backdrop tint overlay (shared by LoginView & AgentBackdrop) */
-  --backdrop-tint: linear-gradient(rgba(8, 24, 16, 0.35), rgba(8, 24, 16, 0.55));
+  /* Controlled accents */
+  --gradient-dendro: linear-gradient(135deg, var(--dendro-bright), var(--dendro) 52%, var(--jade));
+  --gradient-aurora: linear-gradient(120deg, rgba(145, 232, 102, 0.1), rgba(85, 217, 178, 0.06) 52%, rgba(112, 199, 220, 0.06));
+  --gradient-glass-sheen: linear-gradient(180deg, rgba(255, 255, 255, 0.04), transparent 34%);
+  --backdrop-tint: linear-gradient(180deg, rgba(8, 20, 13, 0.26), rgba(8, 20, 13, 0.55));
 
-  /* Shadows */
-  --shadow-sm: 0 2px 8px rgba(0, 0, 0, 0.3);
-  --shadow-md: 0 4px 16px rgba(0, 0, 0, 0.4);
-  --shadow-glow: 0 0 20px rgba(143, 229, 96, 0.15);
-
-  /* Transitions */
-  --ease-out: cubic-bezier(0.34, 1.56, 0.64, 1);
+  /* Motion and layout */
+  --ease-out: cubic-bezier(0.16, 1, 0.3, 1);
   --ease-smooth: cubic-bezier(0.4, 0, 0.2, 1);
-  --ease-spring: cubic-bezier(0.22, 1.4, 0.36, 1);
-
-  /* Spacing */
-  --sidebar-width: 64px;
-  --sidebar-expanded: 280px;
+  --ease-spring: cubic-bezier(0.2, 0.85, 0.25, 1.15);
+  --motion-fast: 120ms;
+  --motion-normal: 220ms;
+  --sidebar-width: 68px;
+  --sidebar-expanded: 276px;
   --sidebar-mobile-width: min(82vw, 320px);
-  --topbar-height: 56px;
+  --topbar-height: 60px;
+  --content-max-width: 1680px;
   --z-overlay: 70;
   --z-sidebar: 80;
   --z-palette: 90;
-  --motion-fast: 120ms;
-  --motion-normal: 220ms;
-}
-
-/* ===== 草元素美学 v2 · 层次色板与渐变 ===== */
-:root {
-  /* 多层次绿：嫩芽 → 草光 → 翡翠 → 薄荷 */
-  --dendro-bright: #b8ff85;
-  --dendro-deep: #5cb830;
-  --jade: #4fd6a5;
-  --mint: #a8f0c8;
-  --sprout: #d4ffb0;
-  --dew: #c8f7e8;
-
-  /* 渐变系统 */
-  --gradient-dendro: linear-gradient(135deg, var(--dendro-bright), var(--dendro) 45%, var(--jade));
-  --gradient-aurora: linear-gradient(120deg, rgba(143, 229, 96, 0.14), rgba(79, 214, 165, 0.10) 50%, rgba(232, 213, 163, 0.12));
-  --gradient-glass-sheen: linear-gradient(180deg, rgba(255, 255, 255, 0.055), rgba(255, 255, 255, 0) 32%);
-
-  /* 玻璃精修 */
-  --glass-highlight: inset 0 1px 0 rgba(255, 255, 255, 0.08);
-  --glass-inner-glow: inset 0 0 32px rgba(143, 229, 96, 0.04);
-  --shadow-glow-md: 0 0 28px rgba(143, 229, 96, 0.22);
-  --shadow-glow-jade: 0 0 22px rgba(79, 214, 165, 0.18);
 }

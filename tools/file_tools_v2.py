@@ -1,12 +1,18 @@
-from typing import Any
 import asyncio
 import os
 import re
-import shlex
 import tempfile
 import urllib.parse
+from typing import Any
+
 from loguru import logger
-from tool_engine.tool_registry import register_tool, ToolPermission, ToolResult
+
+from security.dangerous_targets import (
+    BLOCKED_PHRASE_RES,
+    BLOCKED_WORD_RES,
+    INJECTION_SHELL_RE,
+)
+from tool_engine.tool_registry import ToolPermission, ToolResult, register_tool
 
 try:
     from utils.atomic_write import atomic_write as _atomic_write
@@ -114,7 +120,7 @@ def _validate_path(path: str, mode: str = "read") -> tuple[bool, str, str]:
                             in_allowed = True
                             break
                     if not in_allowed:
-                        return False, re_resolved, f"符号链接目标不在允许的目录范围内"
+                        return False, re_resolved, "符号链接目标不在允许的目录范围内"
                     resolved = re_resolved
             # 写入模式额外限制：只允许项目目录和 tts_cache
             if mode == "write":
@@ -179,64 +185,8 @@ def _open_validated(resolved: str, mode: str = "r", encoding: str | None = "utf-
 
 
 # 安全加固：拦截危险操作（开发板模式，保留基本 shell 执行能力）
-BLOCKED_COMMANDS = {
-    # 递归强制删除
-    'rm -rf', 'rm -fr', 'rm -r -f', 'rm -f -r',
-    # 磁盘操作
-    'dd', 'mkfs', 'mkfs.ext4', 'mkfs.ext3', 'mkfs.vfat', 'mkfs.ntfs',
-    'fdisk', 'cfdisk', 'parted', 'format',
-    # 危险权限修改
-    'chmod 777', 'chmod -R 777', 'chmod 000',
-    'chown', 'chgrp',
-    # 系统关停
-    'shutdown', 'reboot', 'poweroff', 'halt', 'init 0', 'init 6',
-    # 反向 shell 工具
-    'nc -e', 'ncat -e', 'socat exec',
-    # 危险覆盖
-    'shred', 'wipe',
-}
-
-# 危险命令模式（正则，不区分大小写）
-_DANGEROUS_PATTERNS = [
-    # rm -rf 任意路径（不只是根目录）
-    r'rm\s+(-[a-zA-Z]*r[a-zA-Z]*f[a-zA-Z]*\s+|--recursive\s+--force\s+)\S+',
-    # fork bomb 变体
-    r':\(\)\{\s*:\|:&\s*\}',
-    r'\w+\(\)\{\s*\w+\|:\&\s*\}',
-    r'fork\s+bomb',
-    # 管道到 shell
-    r'\|\s*(ba)?sh\b',
-    r'\|\s*(ba)?sh\s+-c\b',
-    # 命令替换（仅拦截 bash 风格，PowerShell 的 $() 是表达式不是注入）
-    r'bash\s+-c\s+.*\$\([^)]*\)',
-    r'`[^`]+`',
-    # 反向 shell
-    r'(nc|ncat|socat)\s+.*(-e|--exec)\s+',
-    r'(nc|ncat)\s+.*(-e|--sh-exec)\s+',
-    # curl/wget 管道到 shell
-    r'(curl|wget)\s+.*\|\s*(ba)?sh',
-    # 解释器执行任意代码（-c / -m / -e）
-    r'python(?:3)?\s+(-c|-m)',
-    r'perl\s+-e',
-    r'ruby\s+-e',
-    r'node\s+-e',
-    # 解码器管道（解码后内容可能被注入执行）
-    r'base64\s+-d',
-    r'xxd\s+-r',
-    # awk system() 调用
-    r'awk\s+.*system\s*\(',
-    # 危险重定向覆盖
-    r'>\s*/dev/sd[a-z]',
-    r'>\s*/dev/nand',
-    r'>\s*/dev/mmcblk',
-    # 内核模块操作
-    r'rmmod\s+',
-    r'modprobe\s+-r\s+',
-    # 覆写关键系统文件
-    r'>\s*/etc/passwd',
-    r'>\s*/etc/shadow',
-    r'>\s*/etc/sudoers',
-]
+# 黑名单本体在 security/dangerous_targets.py（词级整词匹配 + 短语级弹性
+# 空白），原 BLOCKED_COMMANDS 子串匹配误伤 git add / --format=json，已废弃。
 
 # 输出中需要遮蔽的敏感信息模式
 _SENSITIVE_OUTPUT_PATTERNS = [
@@ -293,21 +243,28 @@ def _normalize_command(command: str) -> str:
 
 
 def _is_command_dangerous(command: str) -> str | None:
-    """检查命令是否危险，返回危险原因或 None。开发板模式：拦截危险操作"""
+    """检查命令是否危险，返回危险原因或 None。开发板模式：拦截危险操作
+
+    黑名单/模式本体来自 security/dangerous_targets.py（单一事实源）：
+    词级整词 + 短语级弹性空白 + 注入类正则，对规范化前后文本各查一遍。
+    """
     # 规范化：处理编码绕过
     normalized = _normalize_command(command)
 
-    # 检查基本黑名单（对规范化后的命令检查）
-    for blocked in BLOCKED_COMMANDS:
-        if blocked in normalized or blocked in command:
-            return f"命令包含不允许的操作: {blocked}"
+    # 检查词级黑名单（整词边界，不误伤 git add / --format=json）
+    for res in BLOCKED_WORD_RES:
+        if res.search(normalized) or res.search(command):
+            return f"命令包含不允许的操作: {res.pattern}"
 
-    # 检查危险模式
-    for pattern in _DANGEROUS_PATTERNS:
-        if re.search(pattern, normalized, re.IGNORECASE):
-            return f"命令包含危险模式: {pattern}"
-        if re.search(pattern, command, re.IGNORECASE):
-            return f"命令包含危险模式: {pattern}"
+    # 检查短语级黑名单（rm/chmod/init/nc 组合等）
+    for res in BLOCKED_PHRASE_RES:
+        if res.search(normalized) or res.search(command):
+            return f"命令包含不允许的操作: {res.pattern}"
+
+    # 检查注入/管道/解释器执行模式
+    for res in INJECTION_SHELL_RE:
+        if res.search(normalized) or res.search(command):
+            return f"命令包含危险模式: {res.pattern}"
 
     return None
 

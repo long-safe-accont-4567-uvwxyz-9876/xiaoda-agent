@@ -1,6 +1,7 @@
-import time
 import json
+import time
 import uuid
+
 import aiosqlite
 from loguru import logger
 
@@ -375,6 +376,18 @@ class KnowledgeDB:
                         visited.add(other)
                         next_frontier.append(other)
             frontier = next_frontier
+        # 深度耗尽时 frontier 里的邻居实体已被 relations 引用但未进 all_entities
+        # (它们只入 visited/next_frontier) —— 补查一轮,保证 entities ⊇ relations
+        # 涉及的端点,否则下游按关系找实体会拿到悬空引用。
+        dangling = [n for n in frontier if n not in all_entities]
+        if dangling:
+            placeholders = ",".join("?" * len(dangling))
+            cursor = await self._conn.execute(
+                f"SELECT * FROM knowledge_entities WHERE name IN ({placeholders})",
+                dangling,
+            )
+            for r in await cursor.fetchall():
+                all_entities[r["name"]] = dict(r)
         return {"entities": list(all_entities.values()), "relations": all_relations}
 
     async def cleanup_stale(self, days: int = 30, auto_commit: bool = True) -> int:

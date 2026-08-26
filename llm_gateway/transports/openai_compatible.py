@@ -105,7 +105,7 @@ class OpenAICompatibleTransport(ProviderTransport):
             response = await self._client.models.list()
             models = tuple(str(model.id) for model in response.data if getattr(model, "id", None))
             return CapabilityReport(True, self.capabilities, models=models or await super().discover_models())
-        except (ConnectionError, TimeoutError, OSError, ValueError) as error:
+        except (ConnectionError, TimeoutError, OSError, ValueError):
             return CapabilityReport(False, self.capabilities, error="health check failed")
         except Exception as error:
             if getattr(error, "status_code", None) == 404:

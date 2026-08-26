@@ -8,8 +8,21 @@
 """
 
 import re
+
 from loguru import logger
-from tool_engine.tool_registry import register_tool, ToolResult, ToolPermission
+
+from emotion.emotion_enum import EMOTION_VOCAB_SLASH
+from tool_engine.tool_registry import ToolPermission, ToolResult, register_tool
+
+_EMOTION_PARAM_DESC = (
+    f"情绪风格（可选）：{EMOTION_VOCAB_SLASH}。"
+    "运行时会自动归一到语音风格，传枚举值即可。"
+)
+
+
+def _emotion_param_description() -> str:
+    """供契约测试断言工具 schema 词表与枚举单一事实源对齐。"""
+    return _EMOTION_PARAM_DESC
 
 
 @register_tool(
@@ -31,8 +44,7 @@ from tool_engine.tool_registry import register_tool, ToolResult, ToolPermission
             },
             "emotion": {
                 "type": "string",
-                "description": "情绪风格（可选）：happy/excited/sad/angry/anxious/shy/surprised/"
-                               "neutral/greeting/caring/playful/lonely/curious/thinking/coquettish",
+                "description": _EMOTION_PARAM_DESC,
             },
         },
         "required": ["text"],

@@ -179,7 +179,6 @@ def main() -> int:
         print(f"[info] {table}: 待向量化={len(found)} 孤儿(跳过)={orphans}", flush=True)
     adb.close()
 
-    total_items = sum(len(v) for v in items.values())
     if args.dry_run:
         print("[info] dry-run 完成，未写入。", flush=True)
         return 0

@@ -1,35 +1,36 @@
 .app-bg {
-  background-image:
-    linear-gradient(rgba(8, 24, 16, 0.35), rgba(8, 24, 16, 0.55)),
-    url("/assets/webui_background.jpg");
-  background-size: cover;
+  background-image: var(--backdrop-tint), url("/assets/webui_background.jpg");
   background-position: center;
+  background-size: cover;
   background-attachment: fixed;
 }
 
 .glass-panel {
-  background:
-    var(--gradient-glass-sheen, linear-gradient(180deg, rgba(255,255,255,0.055), rgba(255,255,255,0) 32%)),
-    var(--glass-bg, rgba(20, 40, 28, 0.45));
-  backdrop-filter: blur(var(--glass-blur, 14px));
-  -webkit-backdrop-filter: blur(var(--glass-blur, 14px));
-  border: 1px solid var(--glass-border, rgba(143, 229, 96, 0.18));
-  border-radius: var(--glass-radius, 16px);
-  box-shadow:
-    var(--glass-highlight, inset 0 1px 0 rgba(255,255,255,0.08)),
-    var(--glass-inner-glow, inset 0 0 32px rgba(143,229,96,0.04)),
-    var(--shadow-sm, 0 2px 8px rgba(0, 0, 0, 0.3));
+  position: relative;
+  background: var(--gradient-glass-sheen), var(--glass-bg);
+  backdrop-filter: blur(var(--glass-blur)) saturate(1.08);
+  -webkit-backdrop-filter: blur(var(--glass-blur)) saturate(1.08);
+  border: 1px solid var(--glass-border);
+  border-radius: var(--glass-radius);
+  box-shadow: var(--glass-highlight), var(--glass-inner-glow), var(--shadow-sm);
 }
 
-/* 弱 GPU 设备（含核显）降级：blur 从 10-16px 降档到 4px，保留玻璃质感但
-   大幅降低 backdrop-filter 实时模糊开销（模糊半径小 → 采样 kernel 与重算成本骤降）；
-   背景不透明度同步提升补偿清晰度。 */
+.glass-panel::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  border-top: 1px solid rgba(255, 255, 255, 0.035);
+  pointer-events: none;
+}
+
 body.low-gpu .glass-panel {
+  /* 低配降档只降模糊半径，保住半透明翠绿玻璃效果（不透明深墨底 = 玻璃感尽失） */
+  background: rgba(26, 48, 34, 0.6) !important;
   backdrop-filter: blur(4px) !important;
   -webkit-backdrop-filter: blur(4px) !important;
-  background: rgba(20, 40, 28, 0.62) !important;
 }
-/* 常驻/高频组件统一降档（TopBar/SideBar 常驻，ModelSelector/终端 FAB 弹层） */
+
 body.low-gpu .topbar,
 body.low-gpu .sidebar,
 body.low-gpu .model-panel,
@@ -38,178 +39,229 @@ body.low-gpu .term-fab {
   -webkit-backdrop-filter: blur(4px) !important;
 }
 
-.glass-panel-hover:hover {
-  border-color: rgba(127, 214, 80, 0.35);
-  box-shadow: var(--shadow-glow, 0 0 20px rgba(143, 229, 96, 0.15));
-  transition: border-color 0.3s, box-shadow 0.3s;
+body.low-gpu .mobile-overlay,
+body.low-gpu .n-modal-mask {
+  backdrop-filter: none !important;
+  -webkit-backdrop-filter: none !important;
+}
+
+body.low-gpu .n-modal,
+body.low-gpu .n-dialog,
+body.low-gpu .n-message {
+  background: rgba(22, 42, 31, 0.98) !important;
+  backdrop-filter: blur(4px) !important;
+  -webkit-backdrop-filter: blur(4px) !important;
+}
+
+.glass-panel-hover,
+.glass-panel-lift {
+  transition: border-color var(--motion-normal) var(--ease-smooth), box-shadow var(--motion-normal) var(--ease-smooth), transform var(--motion-normal) var(--ease-out);
+}
+
+.glass-panel-hover:hover,
+.glass-panel-lift:hover {
+  border-color: var(--line-strong);
+  box-shadow: var(--glass-highlight), var(--shadow-glow-md), var(--shadow-glow-jade);
+}
+
+.glass-panel-lift:hover {
+  transform: translateY(-2px);
 }
 
 .dendro-btn {
-  background: var(--gradient-dendro, linear-gradient(135deg, #b8ff85, #8fe560 45%, #4fd6a5));
-  color: var(--forest-deep, #0f1f17);
-  border: none;
-  border-radius: 999px;
-  padding: 9px 24px;
-  font-weight: 600;
+  position: relative;
+  isolation: isolate;
+  min-height: 38px;
+  overflow: hidden;
+  padding: 9px 19px;
+  border: 1px solid rgba(238, 224, 164, 0.72);
+  border-radius: 10px 5px 10px 5px;
+  background:
+    linear-gradient(116deg, transparent 0 45%, rgba(232, 255, 205, 0.2) 45.5%, transparent 46.5%),
+    linear-gradient(155deg, rgba(229, 255, 204, 0.32), transparent 42%),
+    linear-gradient(135deg, #8fe560, #78d84f 56%, #55c98f);
+  box-shadow:
+    inset 0 1px 0 rgba(242, 255, 226, 0.46),
+    inset -10px -7px 18px rgba(18, 88, 43, 0.1),
+    0 5px 13px rgba(6, 35, 17, 0.22);
+  color: #0a2414;
   cursor: pointer;
-  text-shadow: 0 1px 0 rgba(255, 255, 255, 0.25);
-  transition: transform 0.15s var(--ease-out, cubic-bezier(0.34, 1.56, 0.64, 1)), box-shadow 0.15s, filter 0.15s;
+  font: inherit;
+  font-weight: 700;
+  letter-spacing: 0;
+  text-shadow: 0 1px 0 rgba(255, 255, 255, 0.48);
+  transition: transform var(--motion-fast) var(--ease-out), box-shadow var(--motion-normal), filter var(--motion-fast), opacity var(--motion-fast);
 }
+
+.dendro-btn::after {
+  content: '';
+  position: absolute;
+  z-index: -1;
+  inset: 1px;
+  border-radius: inherit;
+  background:
+    radial-gradient(ellipse at 18% 18%, rgba(255, 255, 255, 0.28), transparent 28%),
+    linear-gradient(116deg, transparent 0 45%, rgba(42, 104, 60, 0.08) 45.5%, transparent 46.5%);
+  pointer-events: none;
+}
+
 .dendro-btn:hover:not(:disabled) {
   transform: translateY(-1px);
-  filter: brightness(1.06);
-  box-shadow: 0 4px 16px rgba(143, 229, 96, 0.45), 0 0 24px rgba(79, 214, 165, 0.25);
+  filter: brightness(1.045) saturate(1.04);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.38), 0 10px 24px rgba(52, 134, 78, 0.27);
 }
+
 .dendro-btn:active:not(:disabled) {
-  transform: translateY(0) scale(0.97);
+  transform: translateY(1px);
+  box-shadow: inset 0 2px 4px rgba(9, 28, 17, 0.18);
+}
+
+.dendro-btn:focus-visible,
+.dendro-input:focus-visible {
+  outline: 2px solid var(--dendro-bright);
+  outline-offset: 2px;
+}
+
+.dendro-btn:disabled {
+  cursor: not-allowed;
+  filter: saturate(0.45);
+  opacity: 0.5;
 }
 
 .dendro-input {
-  background: rgba(15, 31, 23, 0.6);
-  border: 1px solid var(--glass-border, rgba(143, 229, 96, 0.18));
-  border-radius: 10px;
-  padding: 10px 14px;
-  color: var(--moon, #f2f7ee);
-  font-size: 14px;
+  min-height: 38px;
+  padding: 9px 12px;
+  border: 1px solid var(--line);
+  border-radius: var(--control-radius);
   outline: none;
-  transition: border-color 0.2s;
-}
-.dendro-input:focus {
-  border-color: var(--dendro, #8fe560);
-  box-shadow: 0 0 0 2px rgba(127, 214, 80, 0.2);
-}
-.dendro-input::placeholder {
-  color: var(--moon-dim, rgba(242, 247, 238, 0.7));
+  background: rgba(7, 18, 13, 0.72);
+  box-shadow: inset 0 1px 3px rgba(0, 0, 0, 0.18);
+  color: var(--moon);
+  font: inherit;
+  font-size: 14px;
+  transition: background-color var(--motion-fast), border-color var(--motion-fast), box-shadow var(--motion-fast);
 }
 
-/* Status dots */
+.dendro-input:hover {
+  border-color: rgba(145, 232, 102, 0.34);
+  background: rgba(10, 24, 18, 0.82);
+}
+
+.dendro-input:focus {
+  border-color: var(--dendro);
+  box-shadow: 0 0 0 3px rgba(145, 232, 102, 0.12), inset 0 1px 3px rgba(0, 0, 0, 0.16);
+}
+
+.dendro-input::placeholder {
+  color: var(--moon-faint);
+}
+
 .status-dot {
+  display: inline-block;
   width: 8px;
   height: 8px;
+  border: 2px solid rgba(255, 255, 255, 0.14);
   border-radius: 50%;
-  display: inline-block;
 }
-.status-dot.green { background: #4ade80; box-shadow: 0 0 6px #4ade80; }
-.status-dot.yellow { background: #facc15; box-shadow: 0 0 6px #facc15; }
-.status-dot.red { background: #f87171; box-shadow: 0 0 6px #f87171; }
 
-/* Animations */
+.status-dot.green { background: var(--dendro); box-shadow: 0 0 0 3px rgba(145, 232, 102, 0.1), 0 0 8px rgba(145, 232, 102, 0.5); }
+.status-dot.yellow { background: var(--warning); box-shadow: 0 0 0 3px rgba(239, 189, 100, 0.1), 0 0 8px rgba(239, 189, 100, 0.5); }
+.status-dot.red { background: var(--alert); box-shadow: 0 0 0 3px rgba(240, 124, 114, 0.1), 0 0 8px rgba(240, 124, 114, 0.48); }
+
 @keyframes breathe {
-  0%, 100% { opacity: 0.6; }
+  0%, 100% { opacity: 0.62; }
   50% { opacity: 1; }
 }
+
 @keyframes slideUp {
-  from { opacity: 0; transform: translateY(12px); }
+  from { opacity: 0; transform: translateY(10px); }
   to { opacity: 1; transform: translateY(0); }
 }
+
 @keyframes fadeIn {
   from { opacity: 0; }
   to { opacity: 1; }
 }
 
-.animate-slide-up {
-  animation: slideUp 0.3s var(--ease-smooth, cubic-bezier(0.4, 0, 0.2, 1));
-}
-.animate-fade-in {
-  animation: fadeIn 0.3s var(--ease-smooth, cubic-bezier(0.4, 0, 0.2, 1));
-}
+.animate-slide-up { animation: slideUp 0.28s var(--ease-out); }
+.animate-fade-in { animation: fadeIn 0.24s var(--ease-smooth); }
 
-/* ===== 草元素美学 v2 · 工具类与新动画 ===== */
-
-/* 渐变标题文字：嫩芽→草光→翡翠 */
 .dendro-title {
-  background: var(--gradient-dendro, linear-gradient(135deg, #b8ff85, #8fe560 45%, #4fd6a5));
-  -webkit-background-clip: text;
+  background: var(--gradient-dendro);
   background-clip: text;
-  -webkit-text-fill-color: transparent;
   color: transparent;
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
 }
 
-/* 面板悬停：双层辉光（草光 + 翡翠） */
-.glass-panel-lift {
-  transition: transform 0.25s var(--ease-out, cubic-bezier(0.34, 1.56, 0.64, 1)), border-color 0.3s, box-shadow 0.3s;
-}
-.glass-panel-lift:hover {
-  transform: translateY(-2px);
-  border-color: rgba(143, 229, 96, 0.4);
-  box-shadow:
-    var(--glass-highlight, inset 0 1px 0 rgba(255,255,255,0.08)),
-    var(--shadow-glow-md, 0 0 28px rgba(143,229,96,0.22)),
-    var(--shadow-glow-jade, 0 0 22px rgba(79,214,165,0.18)),
-    var(--shadow-md, 0 4px 16px rgba(0,0,0,0.4));
-}
-
-/* 极光氛围层：给大面积容器铺一层缓慢流动的草元素极光 */
 .aurora-veil {
   position: relative;
   overflow: hidden;
 }
+
 .aurora-veil::before {
   content: '';
   position: absolute;
   inset: -40%;
-  background: var(--gradient-aurora, linear-gradient(120deg, rgba(143,229,96,0.14), rgba(79,214,165,0.10) 50%, rgba(232,213,163,0.12)));
-  filter: blur(20px);
-  animation: auroraDrift 26s ease-in-out infinite alternate;
+  background: var(--gradient-aurora);
+  filter: blur(28px);
+  animation: auroraDrift 28s ease-in-out infinite alternate;
   pointer-events: none;
 }
+
 @keyframes auroraDrift {
-  0%   { transform: translate(-6%, -3%) rotate(-2deg); }
-  50%  { transform: translate(4%, 3%) rotate(1.5deg); }
-  100% { transform: translate(-2%, 5%) rotate(-1deg); }
+  from { transform: translate(-5%, -2%) rotate(-1deg); }
+  to { transform: translate(4%, 4%) rotate(1deg); }
 }
 
-/* 呼吸辉光（状态点、强调图标用） */
 @keyframes pulseGlow {
-  0%, 100% { filter: drop-shadow(0 0 3px rgba(143, 229, 96, 0.5)); }
-  50%      { filter: drop-shadow(0 0 10px rgba(143, 229, 96, 0.9)); }
-}
-.animate-pulse-glow {
-  animation: pulseGlow 2.6s ease-in-out infinite;
+  0%, 100% { filter: drop-shadow(0 0 3px rgba(145, 232, 102, 0.35)); }
+  50% { filter: drop-shadow(0 0 8px rgba(145, 232, 102, 0.72)); }
 }
 
-/* 轻柔浮动（装饰叶片、徽章） */
+.animate-pulse-glow { animation: pulseGlow 2.8s ease-in-out infinite; }
+
 @keyframes floatY {
   0%, 100% { transform: translateY(0); }
-  50%      { transform: translateY(-6px); }
-}
-.animate-float {
-  animation: floatY 4s ease-in-out infinite;
+  50% { transform: translateY(-4px); }
 }
 
-/* 流光扫过（徽章、卡片高光） */
+.animate-float { animation: floatY 4.8s ease-in-out infinite; }
+
 @keyframes shimmerSweep {
-  0%   { transform: translateX(-120%) skewX(-18deg); opacity: 0; }
-  18%  { opacity: 1; }
-  100% { transform: translateX(240%) skewX(-18deg); opacity: 0; }
+  0% { transform: translateX(-140%) skewX(-18deg); opacity: 0; }
+  18% { opacity: 0.7; }
+  100% { transform: translateX(260%) skewX(-18deg); opacity: 0; }
 }
+
 .shimmer-band {
   position: relative;
   overflow: hidden;
 }
+
 .shimmer-band::after {
   content: '';
   position: absolute;
-  top: 0;
-  bottom: 0;
-  width: 34%;
-  background: linear-gradient(90deg, transparent, rgba(212, 255, 176, 0.14), transparent);
-  animation: shimmerSweep 5.2s var(--ease-smooth, cubic-bezier(0.4, 0, 0.2, 1)) infinite;
+  inset-block: 0;
+  width: 24%;
+  background: linear-gradient(90deg, transparent, rgba(218, 255, 197, 0.1), transparent);
+  animation: shimmerSweep 6.8s var(--ease-smooth) infinite;
   pointer-events: none;
 }
 
-/* 叶脉分隔线 */
 .leaf-divider {
   height: 1px;
-  border: none;
-  background: linear-gradient(90deg, transparent, rgba(143, 229, 96, 0.35) 30%, rgba(79, 214, 165, 0.35) 70%, transparent);
+  border: 0;
+  background: linear-gradient(90deg, transparent, var(--line-strong) 24%, rgba(85, 217, 178, 0.28) 76%, transparent);
 }
 
 @media (prefers-reduced-motion: reduce) {
   .aurora-veil::before,
   .shimmer-band::after,
   .animate-pulse-glow,
-  .animate-float {
+  .animate-float,
+  .animate-slide-up,
+  .animate-fade-in {
     animation: none;
   }
 }

@@ -1,12 +1,15 @@
-from typing import Any
-import json
-import os
-import sys
 import asyncio
 import hashlib
+import json
+import math
+import os
+import struct
+import sys
 import threading
 from collections import OrderedDict
 from pathlib import Path
+from typing import Any
+
 from loguru import logger
 
 try:
@@ -18,7 +21,6 @@ except Exception:  # pragma: no cover
     atomic_write = None  # type: ignore[assignment]
 
 
-from utils.common import safe_int as _safe_int
 from local_ai.integration.embedding import LocalEmbeddingService, LocalEmbeddingUnavailableError
 from local_ai.integration.reranker import LocalModelUnavailableError
 from local_ai.runtimes.base import RuntimeValidationError
@@ -34,7 +36,7 @@ except (ImportError, AttributeError):
     HAS_SQLITE_VEC = False
 
 try:
-    from openai import AsyncOpenAI, APITimeoutError, APIConnectionError, APIStatusError
+    from openai import APIConnectionError, APIStatusError, APITimeoutError, AsyncOpenAI
     HAS_OPENAI = True
 except ImportError:
     HAS_OPENAI = False
@@ -63,8 +65,11 @@ except ImportError:  # pragma: no cover
 #   占用连接池资源 → 后续请求也慢 → 向量检索 1.2-8s 波动（日志铁证）。
 # read=5s 治本：embed 正常 0.5-2s，5s 覆盖+3s 余量；偶发慢 5s 快速失败，
 #   不依赖外层 cancel，从源头消除连接池污染。
-from utils.http_pool import get_shared_client as _get_embed_shared_client
 import httpx as _httpx_embed
+
+from config_constants import env_flag
+from utils.http_pool import get_shared_client as _get_embed_shared_client
+
 _EMBED_HTTP_TIMEOUT = _httpx_embed.Timeout(connect=15.0, read=5.0, write=10.0, pool=10.0)
 
 
@@ -266,16 +271,12 @@ class VectorStore:
         # 13761×512 仅 23MB 常驻内存，4.5ms/次（SQLite 暴力 33.5ms）。
         # SQLite 仍是唯一数据源，本索引是加速副本，失败自动回退 SQLite。
         self._brute: Any = None
-        self._brute_enabled = os.getenv("VECTOR_BRUTE_ENABLED", "0") == "1"
+        self._brute_enabled = env_flag("VECTOR_BRUTE_ENABLED", False)
         self._brute_base_dir = ""
         # 单飞（single-flight）：同一文本并发调用 embed 时只发一次 API 请求，
         # 其余协程共享结果，避免 7 路检索通道并发时重复 embed 放大延迟/限流
         self._inflight: dict[tuple[Any, str], asyncio.Future] = {}
         self._embedding_selection_key: tuple[str, int] | int | None = None
-
-        # 并发嵌入限制（避免 API 限流），可通过环境变量配置
-        _embed_concurrency = _safe_int(os.getenv("VECTOR_EMBED_CONCURRENCY", "8"), 8)
-        self._embed_semaphore = asyncio.Semaphore(_embed_concurrency)
 
         if self._embed_mode == "local":
             # 本地推理：不依赖远程 API Key / 网络，模型加载为懒加载。
@@ -715,6 +716,7 @@ class VectorStore:
 
                 # 检测文件系统类型，vfat/exfat 不支持 WAL
                 from pathlib import Path
+
                 from db.database import _detect_fs_type
                 fs_type = _detect_fs_type(Path(self._db_path))
                 is_fat = fs_type in ("vfat", "fat", "msdos", "exfat", "fat32")
@@ -1107,35 +1109,6 @@ class VectorStore:
 
         return await asyncio.to_thread(_do_upsert)
 
-    async def upsert_child(self, child_id: int, text: str) -> None:
-        """子chunk向量写入（使用独立表 memories_child_vec）。"""
-        if not self._initialized or not self._vec_conn:
-            return
-        vectors = await self.embed([text])
-        vec = vectors[0] if vectors else []
-        if not vec:
-            return
-        vec_json = json.dumps(vec)
-
-        def _do_upsert() -> None:
-            """在后台线程中执行子chunk向量的写入（upsert）操作。"""
-            with self._lock:
-                if self._closed:
-                    return
-                try:
-                    self._vec_conn.execute(
-                        "INSERT OR REPLACE INTO memories_child_vec (rowid, embedding) VALUES (?, vec_f32(?))",
-                        (child_id, vec_json),
-                    )
-                    self._vec_conn.commit()
-                    # 双写 HNSW 加速索引
-                    if self._brute is not None:
-                        self._brute.upsert("memories_child_vec", child_id, vec)
-                except Exception as e:
-                    logger.warning("vector_store.upsert_child_failed", row_id=child_id, error=str(e))
-
-        await asyncio.to_thread(_do_upsert)
-
     async def batch_upsert_children(self, items: list[tuple[int, str]]) -> bool:
         """批量子chunk向量写入。items = [(child_id, text), ...]"""
         if not self._initialized or not self._vec_conn or not items:
@@ -1215,107 +1188,39 @@ class VectorStore:
             logger.warning("vector_store.delete_failed", row_id=row_id, error=str(e))
             return False
 
-    async def delete_child(self, child_id: int) -> None:
-        """删除子chunk向量。"""
-        if not self._initialized or not self._vec_conn:
-            return
-
-        def _do_delete() -> None:
-            """在后台线程中删除指定 child_id 的子chunk向量记录。"""
-            with self._lock:
-                if self._closed:
-                    return
-                try:
-                    self._vec_conn.execute(
-                        "DELETE FROM memories_child_vec WHERE rowid=?", (child_id,)
-                    )
-                    self._vec_conn.commit()
-                    # 双写 HNSW 加速索引
-                    if self._brute is not None:
-                        self._brute.delete("memories_child_vec", child_id)
-                except Exception as e:
-                    logger.warning("vector_store.delete_child_failed", row_id=child_id, error=str(e))
-
-        try:
-            await asyncio.to_thread(_do_delete)
-        except Exception as e:
-            logger.warning("vector_store.delete_child_failed", row_id=child_id, error=str(e))
-
-    async def batch_upsert(self, items: list[tuple[int, str]]) -> int:
-        """批量写入向量（并发嵌入 + 单事务写入）"""
-        if not self._initialized or not self._vec_conn:
-            return 0
-
-        if not items:
-            return 0
-
-        # 并发嵌入（受 Semaphore 限制，避免 API 限流）
-        async def _embed_one(row_id: int, text: str) -> tuple[int, str, list[float]]:
-            """对单条文本执行嵌入，受并发信号量限制。"""
-            async with self._embed_semaphore:
-                vectors = await self.embed([text])
-                vec = vectors[0] if vectors else []
-                return (row_id, text, vec)
-
-        embed_results = await asyncio.gather(
-            *[_embed_one(row_id, text) for row_id, text in items],
-            return_exceptions=True,
-        )
-
-        # 过滤成功的嵌入结果（日志不记录文本内容，可能含 PII）
-        valid_items: list[tuple[int, str, list[float]]] = []
-        for result in embed_results:
-            if isinstance(result, Exception):
-                logger.warning("vector.batch_embed_failed", error=str(result)[:200])
-                continue
-            row_id, text, vec = result
-            if vec:
-                valid_items.append((row_id, text, vec))
-
-        if not valid_items:
-            return 0
-
-        # 单事务批量写入（保持原有逻辑）
-        def _do_batch() -> int:
-            """在后台线程中以单事务批量写入向量记录。"""
-            with self._lock:
-                if self._closed:
-                    return 0
-                conn = self._vec_conn
-                success = 0
-                try:
-                    conn.execute("BEGIN TRANSACTION")
-                    for row_id, _text, vec in valid_items:
-                        vec_json = json.dumps(vec)
-                        try:
-                            conn.execute("DELETE FROM memories_vec WHERE rowid=?", [row_id])
-                        except Exception as e:
-                            logger.debug("vector_store batch_upsert 删除旧记录失败(rowid={}): {}", row_id, e)
-                        try:
-                            conn.execute(
-                                "INSERT INTO memories_vec(rowid, embedding) VALUES (?, vec_f32(?))",
-                                [row_id, vec_json],
-                            )
-                            success += 1
-                            # 双写 HNSW 加速索引
-                            if self._brute is not None:
-                                self._brute.upsert("memories_vec", row_id, vec)
-                        except Exception as e:
-                            logger.warning("vector_store.batch_upsert_item_failed", row_id=row_id, error=str(e))
-                    if success > 0:
-                        conn.commit()
-                    else:
-                        conn.rollback()
-                    return success
-                except Exception as e:
-                    try:
-                        conn.rollback()
-                    except Exception as re:
-                        logger.debug("vector_store.batch_upsert_rollback_error", error=str(re))
-                    logger.error("vector.batch_upsert_failed", error=str(e)[:200])
-                    return 0
-
-        return await asyncio.to_thread(_do_batch)
+    def _search_candidates_exact(
+        self,
+        table: str,
+        query_vec: list[float],
+        candidate_ids: list[int],
+        top_k: int,
+    ) -> list[tuple[int, float]]:
+        """Exact bounded search over candidate rowids when vec0 cannot filter KNN."""
+        if not candidate_ids or top_k <= 0:
+            return []
+        candidate_list = sorted({int(value) for value in candidate_ids})
+        ranked: list[tuple[int, float]] = []
+        for offset in range(0, len(candidate_list), 900):
+            batch = candidate_list[offset:offset + 900]
+            placeholders = ",".join("?" for _ in batch)
+            rows = self._vec_conn.execute(
+                f"SELECT rowid, embedding FROM {table} "
+                f"WHERE rowid IN ({placeholders})",
+                batch,
+            ).fetchall()
+            for row_id, raw in rows:
+                if not isinstance(raw, (bytes, bytearray, memoryview)):
+                    continue
+                values = struct.unpack(f"<{len(raw) // 4}f", bytes(raw))
+                if len(values) != len(query_vec):
+                    continue
+                distance = math.sqrt(sum(
+                    (float(value) - float(query_value)) ** 2
+                    for value, query_value in zip(values, query_vec, strict=True)
+                ))
+                ranked.append((int(row_id), distance))
+        ranked.sort(key=lambda item: (item[1], item[0]))
+        return ranked[:top_k]
 
     async def search(self, query_text: str, top_k: int = 5,
                      candidate_ids: list[int] | None = None,
@@ -1369,15 +1274,9 @@ class VectorStore:
                 # sqlite-vec 的 vec0 KNN 只允许 ORDER BY distance (不允许 , rowid)
                 # 所以 tie-breaking 在 Python 层做: 按 (distance, rowid) 稳定排序
                 if candidate_ids is not None:
-                    cand_set = set(candidate_ids)
-                    oversample = min(top_k * 6, len(candidate_ids) + top_k * 2)
-                    rows = self._vec_conn.execute(
-                        "SELECT rowid, distance FROM memories_vec "
-                        "WHERE embedding MATCH vec_f32(?) AND k=? "
-                        "ORDER BY distance",
-                        [vec_json, oversample],
-                    ).fetchall()
-                    results = [(row[0], row[1]) for row in rows if row[0] in cand_set]
+                    return self._search_candidates_exact(
+                        "memories_vec", vec, candidate_ids, top_k
+                    )
                 else:
                     rows = self._vec_conn.execute(
                         "SELECT rowid, distance FROM memories_vec "
@@ -1397,7 +1296,12 @@ class VectorStore:
             logger.warning("vector_store.search_failed", error=str(e))
             return []
 
-    async def search_child(self, query_vec: list[float], top_k: int = 20) -> list[dict]:
+    async def search_child(
+        self,
+        query_vec: list[float],
+        top_k: int = 20,
+        candidate_ids: list[int] | None = None,
+    ) -> list[dict]:
         """子chunk向量相似度检索。返回 [{id, distance}, ...]"""
         if not self._initialized or not self._vec_conn:
             return []
@@ -1413,9 +1317,18 @@ class VectorStore:
                 # 内存暴力加速路径：None=不可用/失败 → 回退 SQLite
                 if self._brute is not None:
                     brute_res = self._brute.search(
-                        "memories_child_vec", query_vec, top_k, ef=top_k * 2)
+                        "memories_child_vec", query_vec, top_k,
+                        candidate_ids=candidate_ids,
+                        ef=max(top_k * 2, len(candidate_ids or [])),
+                    )
                     if brute_res is not None:
                         return [{"id": r[0], "distance": r[1]} for r in brute_res]
+                if candidate_ids is not None:
+                    exact = self._search_candidates_exact(
+                        "memories_child_vec", query_vec, candidate_ids, top_k
+                    )
+                    return [{"id": row_id, "distance": distance}
+                            for row_id, distance in exact]
                 rows = self._vec_conn.execute(
                     "SELECT rowid, distance FROM memories_child_vec "
                     "WHERE embedding MATCH vec_f32(?) AND k=? "
@@ -1494,15 +1407,9 @@ class VectorStore:
                             return [{"rowid": r[0], "distance": r[1]}
                                     for r in brute_res[:k]]
                     if cand_int is not None:
-                        cand_set = set(cand_int)
-                        oversample = min(k * 6, len(cand_set) + k * 2)
-                        rows = self._vec_conn.execute(
-                            "SELECT rowid, distance FROM memories_vec "
-                            "WHERE embedding MATCH vec_f32(?) AND k=? "
-                            "ORDER BY distance",
-                            [vec_json, oversample],
-                        ).fetchall()
-                        results = [(row[0], row[1]) for row in rows if row[0] in cand_set]
+                        results = self._search_candidates_exact(
+                            "memories_vec", mixed, cand_int, k
+                        )
                     else:
                         rows = self._vec_conn.execute(
                             "SELECT rowid, distance FROM memories_vec "
@@ -1603,7 +1510,12 @@ class VectorStore:
 
         return await asyncio.to_thread(_do_upsert)
 
-    async def search_kg_entities(self, query_text: str, top_k: int = 5) -> list[tuple[int, float]]:
+    async def search_kg_entities(
+        self,
+        query_text: str,
+        top_k: int = 5,
+        candidate_ids: list[int] | None = None,
+    ) -> list[tuple[int, float]]:
         """搜索 KG 实体向量，返回 [(rowid, distance), ...]。"""
         if not self._initialized or not self._vec_conn:
             return []
@@ -1621,9 +1533,16 @@ class VectorStore:
                 # 内存暴力加速路径：None=不可用/失败 → 回退 SQLite
                 if self._brute is not None:
                     brute_res = self._brute.search(
-                        "kg_entities_vec", vec, top_k, ef=top_k * 2)
+                        "kg_entities_vec", vec, top_k,
+                        candidate_ids=candidate_ids,
+                        ef=max(top_k * 2, len(candidate_ids or [])),
+                    )
                     if brute_res is not None:
                         return brute_res
+                if candidate_ids is not None:
+                    return self._search_candidates_exact(
+                        "kg_entities_vec", vec, candidate_ids, top_k
+                    )
                 rows = self._vec_conn.execute(
                     "SELECT rowid, distance FROM kg_entities_vec "
                     "WHERE embedding MATCH vec_f32(?) AND k=? "
@@ -1640,8 +1559,13 @@ class VectorStore:
             logger.warning("vector_store.search_kg_entities_failed", error=str(e))
             return []
 
-    async def search_kg_relations(self, query_text: str, top_k: int = 5) -> list[tuple[int, float]]:
-        """搜索 KG 关系向量，返回 [(rowid, distance), ...]。"""
+    async def search_kg_relations(
+        self,
+        query_text: str,
+        top_k: int = 5,
+        candidate_ids: list[int] | None = None,
+    ) -> list[tuple[int, float]]:
+        """搜索 KG 关系向量，可限定允许的 relation rowid。"""
         if not self._initialized or not self._vec_conn:
             return []
         vectors = await self.embed([query_text])
@@ -1658,16 +1582,33 @@ class VectorStore:
                 # 内存暴力加速路径：None=不可用/失败 → 回退 SQLite
                 if self._brute is not None:
                     brute_res = self._brute.search(
-                        "kg_relations_vec", vec, top_k, ef=top_k * 2)
+                        "kg_relations_vec", vec, top_k,
+                        candidate_ids=candidate_ids,
+                        ef=max(top_k * 2, len(candidate_ids or [])),
+                    )
                     if brute_res is not None:
                         return brute_res
+                if candidate_ids is not None:
+                    if not candidate_ids:
+                        return []
+                    candidate_set = set(candidate_ids)
+                    count_row = self._vec_conn.execute(
+                        "SELECT COUNT(*) FROM kg_relations_vec"
+                    ).fetchone()
+                    fetch_count = max(int(count_row[0] if count_row else 0), top_k)
+                else:
+                    candidate_set = None
+                    fetch_count = fetch_k
                 rows = self._vec_conn.execute(
                     "SELECT rowid, distance FROM kg_relations_vec "
                     "WHERE embedding MATCH vec_f32(?) AND k=? "
                     "ORDER BY distance",
-                    [vec_json, fetch_k],
+                    [vec_json, fetch_count],
                 ).fetchall()
-                results = [(row[0], row[1]) for row in rows]
+                results = [
+                    (row[0], row[1]) for row in rows
+                    if candidate_set is None or row[0] in candidate_set
+                ]
                 results.sort(key=lambda r: (r[1], r[0]))
                 return results[:top_k]
 

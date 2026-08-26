@@ -1,14 +1,15 @@
 """Thompson Sampling belief-based agent routing."""
-from typing import ClassVar
-
 import asyncio
 import math
 import random
-import time
 import sqlite3
 import threading
+import time
 from dataclasses import dataclass
+from typing import ClassVar
+
 from loguru import logger
+
 from utils.atomic_write import atomic_json_write
 
 # J-Space Hook: 增强型路由 (非阻塞, 失败不影响主流程)
@@ -192,9 +193,15 @@ class BeliefRouter:
 
     async def _save_to_db(self) -> None:
         """Save beliefs to database (non-blocking via thread pool)."""
+        # 快照独立于保存 try 块：赋值失败时提前返回，
+        # 避免函数尾部 _save_to_json 引用未绑定变量
         try:
             with self._lock:
                 beliefs_snapshot = {name: b.to_dict() for name, b in self._beliefs.items()}
+        except Exception as e:
+            logger.warning("belief_router.snapshot_failed", error=str(e))
+            return
+        try:
             db_path = self._db_path
 
             def _do_save() -> None:

@@ -1,17 +1,19 @@
 """媒体工坊路由（R11）：TTS 同步合成（内容寻址缓存）、图/视频异步任务、画廊。"""
 from __future__ import annotations
-from typing import Any
 
+import asyncio
 import hashlib
 import shutil
 import time
 from pathlib import Path
+from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from loguru import logger
 
-from web.schemas import Envelope
 from web.routers.auth import get_current_user
+from web.schemas import Envelope
+from web.upload_utils import read_upload_limited
 
 router = APIRouter(tags=["media"], dependencies=[Depends(get_current_user)])
 
@@ -36,20 +38,14 @@ def _queue(request: Request) -> Any:
 
 
 def _signed_media_url(request: Request, url: str) -> str:
-    """给 /media URL 附加当前请求的 token，供 <audio>/<img> 直连静态资源。
+    """原样返回 /media URL（保留函数避免改动调用点）。
 
-    /media 静态目录已启用 token 鉴权（web/media_auth.AuthStaticFiles），
-    浏览器加载 <audio>/<img> 不会带 Authorization 头，因此由后端在返回
-    audio_url/url 字段时拼上 ?token=…。取不到 token 时保持原样（访问时 401，
-    fail-closed）。
+    历史：曾在此把 token 作为 URL 查询参数拼进地址供 <audio>/<img> 直连静态
+    资源，但凭据出现在 URL 中会经访问日志/Referer/浏览器历史泄露。现在
+    /media 凭据只走 HttpOnly cookie（x_media_token，登录时下发）或
+    Authorization 头，见 web/media_auth.py。
     """
-    auth = request.headers.get("Authorization", "")
-    if not auth.startswith("Bearer "):
-        return url
-    token = auth[7:].strip()
-    if not token:
-        return url
-    return f"{url}?token={token}"
+    return url
 
 
 # ── TTS ──────────────────────────────────────────────────────────
@@ -94,7 +90,7 @@ async def synthesize_tts(body: dict, request: Request) -> Any:
 
 @router.get("/media/tts/voices", response_model=Envelope[dict])
 async def tts_voices() -> Any:
-    from emotion.tts_engine import list_all_voices, EMOTION_STYLE_MAP
+    from emotion.tts_engine import EMOTION_STYLE_MAP, list_all_voices
     all_voices = list_all_voices()
     # 转为按 agent 分组: {agent: [{name, voice_ref}]}
     groups = {}
@@ -109,8 +105,9 @@ async def tts_voices() -> Any:
 @router.post("/media/tts/voices/{agent}", response_model=Envelope[dict])
 async def upload_voice_ref(agent: str, request: Request) -> Any:
     """上传指定 agent 的参考音频。FormData: name=音色名, file=音频文件(.mp3/.wav, <10MB)。"""
-    from emotion.tts_engine import get_agent_voice_dir
     import re
+
+    from emotion.tts_engine import get_agent_voice_dir
     if ".." in agent or "/" in agent or "\\" in agent:
         raise HTTPException(400, "非法 agent 名称")
     form = await request.form()
@@ -120,9 +117,7 @@ async def upload_voice_ref(agent: str, request: Request) -> Any:
         raise HTTPException(400, "name 和 file 不能为空")
     if not re.match(r'^[a-zA-Z0-9_-]+$', name):
         raise HTTPException(400, "音色名只允许字母、数字、下划线、中横线")
-    content = await file.read()
-    if len(content) > 10 * 1024 * 1024:
-        raise HTTPException(400, "音频文件不能超过 10MB")
+    content = await read_upload_limited(file, 10 * 1024 * 1024, "音频文件")
     ext = Path(file.filename or "").suffix.lower()
     if ext not in (".mp3", ".wav"):
         raise HTTPException(400, "仅支持 .mp3 和 .wav 格式")
@@ -137,10 +132,13 @@ async def upload_voice_ref(agent: str, request: Request) -> Any:
 
 
 @router.delete("/media/tts/voices/{agent}/{name}", response_model=Envelope[dict])
-async def delete_voice_ref(agent: str, name: str) -> Any:
+async def delete_voice_ref(agent: str, name: str, request: Request) -> Any:
     """删除指定 agent 的参考音频。"""
-    from emotion.tts_engine import get_agent_voice_dir
+    if request.headers.get("X-Confirm") != "yes":
+        raise HTTPException(400, "缺少 X-Confirm: yes 确认头")
     import re
+
+    from emotion.tts_engine import get_agent_voice_dir
     if ".." in agent or "/" in agent or "\\" in agent:
         raise HTTPException(400, "非法 agent 名称")
     if not re.match(r'^[a-zA-Z0-9_-]+$', name):
@@ -223,6 +221,9 @@ async def get_task(task_id: str, request: Request) -> Any:
 
 @router.delete("/media/tasks/{task_id}", response_model=Envelope[dict])
 async def cancel_task(task_id: str, request: Request) -> Any:
+    # 删除类接口统一要求确认头（CLAUDE.md 契约）
+    if request.headers.get("X-Confirm") != "yes":
+        raise HTTPException(400, "缺少 X-Confirm: yes 确认头")
     ok = await _queue(request).cancel(task_id)
     if not ok:
         raise HTTPException(400, "仅 queued 状态的任务可取消")
@@ -247,15 +248,23 @@ async def gallery(request: Request,
     d = MEDIA_ROOT / _GALLERY_DIRS[type]
     if not d.exists():
         return Envelope(data=[])
-    files = [f for f in d.iterdir()
-             if f.is_file() and f.suffix.lower() in _GALLERY_EXTS[type]]
-    files.sort(key=lambda f: f.stat().st_mtime, reverse=True)
+    # iterdir+stat 循环是同步文件 IO，USB 盘冷读可拖慢事件循环，下放线程池
+    def _scan() -> list[tuple[str, int, float]]:
+        out = []
+        for f in d.iterdir():
+            if f.is_file() and f.suffix.lower() in _GALLERY_EXTS[type]:
+                st = f.stat()
+                out.append((f.name, st.st_size, st.st_mtime))
+        return out
+
+    files = await asyncio.to_thread(_scan)
+    files.sort(key=lambda x: x[2], reverse=True)
     window = files[page * limit:(page + 1) * limit]
     return Envelope(data=[
-        {"name": f.name, "url": _signed_media_url(
-            request, f"/media/{_GALLERY_DIRS[type]}/{f.name}"),
-         "size": f.stat().st_size, "mtime": f.stat().st_mtime}
-        for f in window])
+        {"name": name, "url": _signed_media_url(
+            request, f"/media/{_GALLERY_DIRS[type]}/{name}"),
+         "size": size, "mtime": mtime}
+        for name, size, mtime in window])
 
 
 @router.delete("/media/gallery/{type}/{name}", response_model=Envelope[dict])

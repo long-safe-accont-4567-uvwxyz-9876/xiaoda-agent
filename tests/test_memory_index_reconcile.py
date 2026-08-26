@@ -198,4 +198,4 @@ class TestIndexingTaskFailureLogLevel:
             "memory.encode_concept_timeout",
             "memory.encode_children_section_timeout",
         ):
-            assert f'logger.error(' in src
+            assert 'logger.error(' in src

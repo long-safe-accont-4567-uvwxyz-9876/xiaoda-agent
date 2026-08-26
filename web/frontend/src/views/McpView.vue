@@ -1,9 +1,10 @@
 <script setup lang="ts">
 import { ref, onMounted, computed } from 'vue'
 import SumeruIcon from '../components/fx/SumeruIcon.vue'
+import ViewTitleIcon from '../components/fx/ViewTitleIcon.vue'
 import {
   NButton, NModal, NForm, NFormItem, NInput, NTag, NPopconfirm,
-  NDynamicInput, NSwitch, NSpace, useMessage, NTabs, NTabPane, NEmpty, NTooltip,
+  NDynamicInput, NSwitch, NSpace, NSpin, useMessage, NTabs, NTabPane, NEmpty, NTooltip,
 } from 'naive-ui'
 import { get, post, put, del } from '../api'
 import { t, tf } from '../i18n'
@@ -114,7 +115,7 @@ async function save() {
   }
   try {
     if (isCreate.value) {
-      const data = await post('/mcp/servers', body)
+      const data = await post<{ status: string; tool_names: string[]; last_error?: string }>('/mcp/servers', body)
       message.success(data.status === 'running'
         ? tf('mcpView.startedWithTools', data.tool_names.length)
         : tf('mcpView.savedButFailed', data.last_error))
@@ -300,17 +301,17 @@ function onMcpTabChange(tab: string) {
 
 <template>
   <div class="mcp-view">
+    <div class="page-header">
+      <h2 class="view-title-icon"><ViewTitleIcon name="mcp" /> {{ t('mcpView.title') }}</h2>
+      <div class="page-actions">
+        <n-button @click="openTemplates">📦 {{ t('mcpView.template') }}</n-button>
+        <n-button type="primary" @click="showImport = true">📋 {{ t('mcpView.importJson') }}</n-button>
+        <n-button @click="openForm(null)"><SumeruIcon name="plus" :size="14" variant="duo" tone="add" interactive /> {{ t('mcpView.addManual') }}</n-button>
+      </div>
+    </div>
+
     <n-tabs v-model:value="mcpTab" type="line" animated @update:value="onMcpTabChange">
       <n-tab-pane name="installed" :tab="t('installed')">
-        <div class="view-header">
-          <h2 class="view-title-icon"><SumeruIcon name="mcp" :size="20" variant="duo" interactive /> {{ t('mcpView.title') }}</h2>
-          <div style="display:flex; gap:8px">
-            <n-button @click="openTemplates">📦 {{ t('mcpView.template') }}</n-button>
-            <n-button type="primary" @click="showImport = true">📋 {{ t('mcpView.importJson') }}</n-button>
-            <n-button @click="openForm(null)"><SumeruIcon name="plus" :size="14" variant="duo" tone="add" interactive /> {{ t('mcpView.addManual') }}</n-button>
-          </div>
-        </div>
-
         <p class="mcp-hint">
           {{ t('mcpView.addServerHint') }}
         </p>
@@ -334,7 +335,7 @@ function onMcpTabChange(tab: string) {
               <div v-for="t in (s.tool_names || []).slice(0, 8)" :key="t" class="tool-toggle">
                 <n-switch size="small" :value="!(s.disabled_tools || []).includes(t)"
                           @update:value="(v: boolean) => toggleTool(s.name, t, v)" />
-                <n-tag size="tiny" :bordered="false" :type="(s.disabled_tools || []).includes(t) ? 'default' : 'success'">{{ t }}</n-tag>
+                <span class="tool-name" :class="{ disabled: (s.disabled_tools || []).includes(t) }">{{ t }}</span>
               </div>
               <span v-if="(s.tool_names || []).length > 8" class="more">
                 +{{ s.tool_names.length - 8 }}
@@ -364,7 +365,7 @@ function onMcpTabChange(tab: string) {
         <n-modal v-model:show="showForm" preset="card"
                  :title="isCreate ? t('mcpView.newServer') : `${t('mcpView.editServer')} · ${form.name}`"
                  style="width: min(580px, 94vw)">
-          <n-form label-placement="left" label-width="90">
+          <n-form class="mcp-form" label-placement="left" label-width="90">
             <n-form-item label="name" v-if="isCreate">
               <n-input v-model:value="form.name" :placeholder="t('mcpView.serverNamePh')" />
             </n-form-item>
@@ -380,7 +381,7 @@ function onMcpTabChange(tab: string) {
             </n-form-item>
           </n-form>
           <template #footer>
-            <div style="display:flex; justify-content:flex-end; gap:10px">
+            <div class="modal-actions">
               <n-button @click="showForm = false">{{ t('cancel') }}</n-button>
               <n-button type="primary" @click="save">{{ t('mcpView.saveStart') }}</n-button>
             </div>
@@ -392,7 +393,7 @@ function onMcpTabChange(tab: string) {
           <n-input v-model:value="importJson" type="textarea" :rows="14"
                    class="mono" :placeholder="IMPORT_PLACEHOLDER" />
           <template #footer>
-            <div style="display:flex; justify-content:flex-end; gap:10px">
+            <div class="modal-actions">
               <n-button @click="showImport = false">{{ t('cancel') }}</n-button>
               <n-button type="primary" :loading="importing" :disabled="!importJson.trim()"
                         @click="runImport">{{ t('mcpView.importStart') }}</n-button>
@@ -402,11 +403,11 @@ function onMcpTabChange(tab: string) {
 
         <n-modal v-model:show="showTemplates" preset="card" :title="t('mcpView.templateTitle')"
                  style="width: min(580px, 94vw)">
-          <p style="font-size:13px; color:var(--moon-dim); margin-bottom:12px">
+          <p class="template-intro">
             {{ t('mcpView.templateDesc') }}
           </p>
           <div class="template-list">
-            <div v-for="tpl in TEMPLATES" :key="tpl.name" class="template-item glass-panel">
+            <div v-for="tpl in TEMPLATES" :key="tpl.name" class="template-item">
               <div class="tpl-info">
                 <span class="tpl-name">{{ tpl.name }}</span>
                 <span class="tpl-desc">{{ tpl.desc }}</span>
@@ -419,8 +420,8 @@ function onMcpTabChange(tab: string) {
       </n-tab-pane>
 
       <n-tab-pane name="market-mcp" :tab="t('mcpView.market')">
-        <div class="market-toolbar" style="margin-bottom: 16px;">
-          <n-input v-model:value="mcpSearch" :placeholder="t('mcpView.marketSearchPlaceholder')" clearable style="max-width: 400px" />
+        <div class="market-toolbar">
+          <n-input v-model:value="mcpSearch" :placeholder="t('mcpView.marketSearchPlaceholder')" clearable class="market-search" />
         </div>
         <n-spin :show="mcpLoading">
           <div class="mcp-grid">
@@ -437,7 +438,7 @@ function onMcpTabChange(tab: string) {
               <p class="card-desc">{{ item.description || t('mcpView.noDesc') }}</p>
               <div class="card-footer">
                 <span class="card-downloads">{{ item.use_count ?? 0 }} {{ t('mcpView.uses') }}</span>
-                <div style="display: flex; gap: 6px;">
+                <div class="card-actions">
                   <n-button size="small" type="error" secondary
                     :loading="uninstallingMcp[item.name]"
                     @click="uninstallFromMcp(item)">
@@ -462,34 +463,58 @@ function onMcpTabChange(tab: string) {
 </template>
 
 <style scoped>
-.view-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 8px; }
-.view-header h2 { font-family: 'Noto Serif SC', serif; }
+.page-header h2 { margin: 0; font-family: 'Noto Serif SC', serif; }
 .mcp-hint { font-size: 12.5px; color: var(--moon-dim); margin-bottom: 14px; }
 
 .server-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
+  grid-template-columns: repeat(auto-fill, minmax(min(100%, 300px), 1fr));
   gap: 14px;
 }
 
-.server-card { padding: 14px 16px; }
-.server-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 8px; }
-.server-name { font-weight: 600; font-size: 15px; }
+.server-card { min-width: 0; padding: 14px 16px; }
+.server-head { display: flex; min-width: 0; align-items: flex-start; justify-content: space-between; gap: 10px; margin-bottom: 8px; }
+.server-head :deep(.n-space) { min-width: 0; }
+.server-head :deep(.n-tag) { flex-shrink: 0; }
+.server-name { min-width: 0; font-weight: 600; font-size: 15px; overflow-wrap: anywhere; word-break: break-word; }
 
 .server-cmd {
-  font-size: 12px; color: var(--moon-dim);
-  word-break: break-all; margin-bottom: 8px;
+  min-width: 0;
+  margin-bottom: 8px;
+  color: var(--moon-dim);
+  font-size: 12px;
+  overflow-wrap: anywhere;
+  word-break: break-word;
 }
 .mono { font-family: 'JetBrains Mono', monospace; }
 
 .server-error {
-  font-size: 12px; color: var(--alert);
+  min-width: 0;
+  margin-bottom: 8px;
+  padding: 4px 8px;
+  border-radius: 6px;
   background: rgba(217, 106, 95, 0.08);
-  border-radius: 6px; padding: 4px 8px; margin-bottom: 8px;
+  color: var(--alert);
+  font-size: 12px;
+  overflow-wrap: anywhere;
+  word-break: break-word;
 }
 
-.server-tools { display: flex; flex-wrap: wrap; gap: 4px; margin-bottom: 10px; min-height: 22px; align-items: center; }
-.tool-toggle { display: flex; align-items: center; gap: 3px; }
+.server-tools { display: flex; min-width: 0; min-height: 24px; align-items: center; flex-wrap: wrap; gap: 6px; margin-bottom: 10px; }
+.tool-toggle {
+  display: inline-flex;
+  min-width: 0;
+  max-width: 100%;
+  align-items: center;
+  gap: 5px;
+  padding: 3px 7px;
+  border: 1px solid var(--glass-border);
+  border-radius: 6px;
+  background: rgba(255, 255, 255, 0.025);
+}
+.tool-toggle :deep(.n-switch) { flex-shrink: 0; }
+.tool-name { min-width: 0; color: var(--moon); font-size: 11px; line-height: 1.35; overflow-wrap: anywhere; word-break: break-word; }
+.tool-name.disabled { color: var(--moon-dim); }
 .more { font-size: 11px; color: var(--moon-dim); }
 
 .health-dot {
@@ -497,34 +522,88 @@ function onMcpTabChange(tab: string) {
   cursor: pointer; transition: background 0.2s;
 }
 
-.template-list { display: flex; flex-direction: column; gap: 10px; }
+.template-intro { margin: 0 0 8px; color: var(--moon-dim); font-size: 13px; }
+.template-list { display: flex; flex-direction: column; }
 .template-item {
-  display: flex; align-items: center; justify-content: space-between;
-  padding: 10px 14px; gap: 12px;
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 12px 2px;
+  border-bottom: 1px solid var(--glass-border);
 }
+.template-item:last-child { border-bottom: 0; }
+.template-item > :deep(.n-button) { flex-shrink: 0; }
 .tpl-info { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
-.tpl-name { font-weight: 600; font-size: 14px; }
-.tpl-desc { font-size: 12px; color: var(--moon-dim); }
-.tpl-cmd { font-size: 11px; color: var(--moon-dim); word-break: break-all; }
+.tpl-name { font-weight: 600; font-size: 14px; overflow-wrap: anywhere; }
+.tpl-desc { font-size: 12px; color: var(--moon-dim); overflow-wrap: anywhere; }
+.tpl-cmd { font-size: 11px; color: var(--moon-dim); overflow-wrap: anywhere; word-break: break-word; }
 
-.server-ops { display: flex; gap: 6px; flex-wrap: wrap; }
+.server-ops { display: flex; flex-wrap: wrap; gap: 6px; padding-top: 10px; border-top: 1px solid var(--glass-border); }
+.modal-actions { display: flex; justify-content: flex-end; flex-wrap: wrap; gap: 10px; }
 
 .empty-state { padding: 40px; text-align: center; color: var(--moon-dim); grid-column: 1 / -1; }
 
 .mcp-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
+  grid-template-columns: repeat(auto-fill, minmax(min(100%, 300px), 1fr));
   gap: 14px;
   margin-bottom: 16px;
 }
-.market-card { padding: 14px; }
-.card-header { display: flex; align-items: center; gap: 10px; margin-bottom: 8px; }
+.market-card { min-width: 0; padding: 14px; }
+.card-header { display: flex; min-width: 0; align-items: center; gap: 10px; margin-bottom: 8px; }
 .card-icon { width: 36px; height: 36px; border-radius: 6px; object-fit: cover; }
-.card-icon-placeholder { width: 36px; height: 36px; border-radius: 6px; background: rgba(232,213,163,0.1); display: flex; align-items: center; justify-content: center; font-size: 20px; }
+.card-icon-placeholder { display: flex; width: 36px; height: 36px; flex-shrink: 0; align-items: center; justify-content: center; border-radius: 6px; background: rgba(232,213,163,0.1); font-size: 20px; }
 .card-title-area { min-width: 0; flex: 1; }
-.card-title { font-size: 15px; font-weight: 600; margin: 0 0 2px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.card-author { font-size: 12px; color: var(--moon-dim); }
-.card-desc { font-size: 13px; color: var(--moon-secondary, #aaa); margin: 0 0 10px; line-height: 1.5; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
-.card-footer { display: flex; align-items: center; justify-content: space-between; }
-.card-downloads { font-size: 12px; color: var(--moon-dim); }
+.card-title { margin: 0 0 2px; overflow: hidden; font-size: 15px; font-weight: 600; text-overflow: ellipsis; white-space: nowrap; }
+.card-author { font-size: 12px; color: var(--moon-dim); overflow-wrap: anywhere; }
+.card-desc { display: -webkit-box; margin: 0 0 10px; overflow: hidden; color: var(--moon-dim); font-size: 13px; line-height: 1.5; -webkit-box-orient: vertical; -webkit-line-clamp: 2; }
+.card-footer { display: flex; min-width: 0; align-items: center; justify-content: space-between; gap: 10px; }
+.card-downloads { min-width: 0; font-size: 12px; color: var(--moon-dim); overflow-wrap: anywhere; }
+.card-actions { display: flex; flex-shrink: 0; gap: 6px; }
+.market-toolbar { margin-bottom: 16px; }
+.market-search { max-width: 400px; }
+
+@media (max-width: 600px) {
+  .page-actions {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 6px;
+  }
+
+  .page-actions > :deep(.n-button) {
+    min-width: 0;
+    width: 100%;
+    padding-inline: 6px;
+  }
+
+  .page-actions > :deep(.n-button):last-child {
+    grid-column: 1 / -1;
+  }
+
+  .mcp-form :deep(.n-form-item.n-form-item--left-labelled) {
+    grid-template-areas: "label" "blank" "feedback";
+    grid-template-columns: minmax(0, 100%);
+    grid-template-rows: auto 1fr;
+  }
+
+  .mcp-form :deep(.n-form-item.n-form-item--left-labelled .n-form-item-label) {
+    display: flex;
+    width: auto !important;
+    min-height: 0;
+    justify-content: flex-start;
+    padding: 0 0 6px !important;
+    text-align: left;
+  }
+
+  .market-search { max-width: none; }
+}
+
+@media (max-width: 420px) {
+  .template-item { align-items: flex-start; flex-direction: column; }
+  .template-item > :deep(.n-button) { align-self: flex-end; }
+  .card-footer { align-items: flex-start; flex-direction: column; }
+  .card-actions { align-self: flex-end; }
+}
 </style>

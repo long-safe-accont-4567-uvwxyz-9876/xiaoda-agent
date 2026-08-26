@@ -9,16 +9,17 @@
 （模拟懒加载/MCP 后注册）→ 验证 to_openai_tools() 正确应用禁用配置。
 """
 import pytest
+
 from tool_engine.tool_registry import (
-    _tools,
-    _schema_cache,
-    register_tool_direct,
-    to_openai_tools,
-    set_tool_overrides,
-    invalidate_tool_cache,
     MAX_ENABLED_TOOLS,
+    ToolPermission,
+    _schema_cache,
+    _tools,
+    invalidate_tool_cache,
+    register_tool_direct,
+    set_tool_overrides,
+    to_openai_tools,
 )
-from tool_engine.tool_registry import ToolPermission
 
 
 @pytest.fixture(autouse=True)

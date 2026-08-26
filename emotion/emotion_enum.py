@@ -8,6 +8,7 @@
 import os
 import re
 from enum import Enum
+
 from loguru import logger
 
 
@@ -124,6 +125,9 @@ TTS_STYLE_MAP: dict[Emotion, str] = {
     Emotion.GREETING: "happy",   # 问候用 happy 风格（温暖友好）
 }
 
+# TTS 风格值集合（TTS_STYLE_MAP 的去重值域，供标签剥离等下游使用）
+TTS_STYLE_VALUES: frozenset[str] = frozenset(TTS_STYLE_MAP.values())
+
 # sticker 降级映射：核心枚举 → sticker 类别（部分枚举无对应表情包）
 STICKER_FALLBACK: dict[Emotion, str] = {
     Emotion.HAPPY: "happy",
@@ -148,11 +152,38 @@ STICKER_FALLBACK: dict[Emotion, str] = {
 # 合法标签值集合（用于 _ensure_emotion_tag 校验）
 VALID_EMOTION_TAGS: set[str] = {e.value for e in Emotion}
 
+# 工具 schema / 工作区提示词对外宣传用词表（斜杠串联）。
+# 单一事实源派生：新增枚举值自动跟进，杜绝 2026-08 review 发现的
+# "枚举 17 种 vs 工具宣传 15 种旧词表" 文档漂移。
+EMOTION_VOCAB_SLASH: str = "/".join(e.value for e in Emotion)
+
+# 标签中文说明（提示词用）：动态生成情绪规则块的唯一事实源，
+# 与 EMOTION_ALIASES 同步维护；新增枚举值时必须在此补一行
+EMOTION_TAG_GUIDE: dict[str, str] = {
+    "happy": "开心、高兴、温和的喜悦",
+    "excited": "兴奋、激动、惊喜、欢呼",
+    "love": "喜欢、爱、心动",
+    "shy": "害羞、不好意思、脸红",
+    "sad": "难过、伤心、失落、遗憾、孤独、思念",
+    "angry": "生气、不满、赌气",
+    "surprised": "惊讶、吃惊、震惊",
+    "confused": "困惑、疑惑、不解、迷茫",
+    "thinking": "思考、犹豫、琢磨",
+    "playful": "俏皮、调皮、恶作剧、得意",
+    "moved": "感动、欣慰、暖心",
+    "neutral": "平静、淡然、无奈",
+    "pout": "撒娇、娇嗔、嘟嘴",
+    "fear": "害怕、恐惧",
+    "anxious": "焦虑、紧张、不安、担忧",
+    "curious": "好奇、感兴趣",
+    "greeting": "问候、打招呼、道别",
+}
+
 # 中文标签 → 英文枚举值的映射（用于 agent_core 中的 emotion_label 转换）
 CN_TO_EN: dict[str, str] = {
     "喜悦": "happy",
     "兴奋": "excited",
-    "喜欢": "love",
+    "喜爱": "love",
     "害羞": "shy",
     "悲伤": "sad",
     "愤怒": "angry",

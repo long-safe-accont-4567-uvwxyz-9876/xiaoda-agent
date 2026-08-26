@@ -1,31 +1,33 @@
-from typing import Any
 import asyncio
 import fnmatch
 import json
 import re
 import time
 from pathlib import Path
+from typing import Any
 
 from loguru import logger
-from .tool_executor import ToolExecutor, ToolResult
-from .tool_repair import ToolCallRepair
-from utils.text_utils import smart_truncate
-from emotion.emoji_config import get_status_msg
+
+from agent_core._shared import (
+    ALLOWED_NON_MASTER_TOOLS as _ALLOWED_NON_MASTER_TOOLS,
+)
+from agent_core._shared import (
+    _current_request_ctx,
+    is_degraded_reply,
+)
 from config import ERROR_RULE_STRICT_MODE
 from core.background_tasks import _spawn
 from core.error_codes import ErrorCodeEnum
-from core.event_bus import event_bus, AgentEvent, AgentEventType
+from core.event_bus import AgentEvent, AgentEventType, event_bus
+from emotion.emoji_config import get_status_msg
 from security.instruction_hierarchy import (
     InstructionLevel,
     format_instruction,
     sanitize_external_content,
 )
-from agent_core._shared import (
-    is_degraded_reply,
-    ALLOWED_NON_MASTER_TOOLS as _ALLOWED_NON_MASTER_TOOLS,
-    _current_request_ctx,
-)
 
+from .tool_executor import ToolExecutor, ToolResult
+from .tool_repair import ToolCallRepair
 
 # 写操作工具集合：这些工具会修改文件系统/配置，需进行路径白名单校验
 _WRITE_TOOLS: set[str] = {
@@ -153,7 +155,16 @@ class ToolCallHandler:
             except (RuntimeError, OSError, ConnectionError) as e:
                 logger.warning("工具调用状态回调通知失败: {}", e)
 
-    async def _notify_tool_status(self, tool_name: str, stage: str, detail: str = "") -> None:
+    async def _notify_tool_status(
+        self,
+        tool_name: str,
+        stage: str,
+        detail: str = "",
+        *,
+        tool_call_id: str = "",
+        turn: int = 0,
+        index: int = 0,
+    ) -> None:
         """推送工具调用的中间状态 — 通过 EventBus 发射 TOOL_* 事件。
 
         Args:
@@ -177,7 +188,13 @@ class ToolCallHandler:
                 type=event_type,
                 agent=getattr(self, "_agent_name", ""),
                 task_id=getattr(self, "_task_id", ""),
-                data={"tool_name": tool_name, "detail": detail[:100] if detail else ""},
+                data={
+                    "tool_name": tool_name,
+                    "detail": detail[:100] if detail else "",
+                    "tool_call_id": tool_call_id,
+                    "turn": turn,
+                    "index": index,
+                },
             ))
 
         # 保留 status_callback 兜底（向后兼容）
@@ -193,6 +210,9 @@ class ToolCallHandler:
                 "stage": stage,
                 "label": f"{label} {display}...",
                 "detail": detail[:100] if detail else "",
+                "tool_call_id": tool_call_id,
+                "turn": turn,
+                "index": index,
             })
         except (RuntimeError, OSError, ConnectionError) as e:
             logger.debug("tool_status_push_failed: {}", e)
@@ -245,25 +265,29 @@ class ToolCallHandler:
         if not tool_calls:
             return self._clean_reply(assistant_content), []
 
-        if reasoning_content:
-            pass  # scavenge 已移除：DSML 从 content 中已完整解析出工具调用列表
-
         tool_results = []
         tool_messages = []
-        assistant_msg = {"role": "assistant", "content": assistant_content, "tool_calls": tool_calls}
+        assistant_calls = [
+            {key: value for key, value in call.items() if not key.startswith("_stream_")}
+            for call in tool_calls
+        ]
+        assistant_msg = {
+            "role": "assistant",
+            "content": assistant_content,
+            "tool_calls": assistant_calls,
+        }
         if reasoning_content:
             assistant_msg["reasoning_content"] = reasoning_content
 
         messages.append(assistant_msg)
 
-        if tool_calls:
-            display_names = [TOOL_DISPLAY_NAMES.get(tc["function"]["name"], tc["function"]["name"]) for tc in tool_calls]
-            logger.info("tool.calls_selected tools={} user_input={}", [tc['function']['name'] for tc in tool_calls], current_user_input[:80])
-            # 只对耗时/重要工具显示进度，简单查询跳过
-            important_tools = {"shell_command", "python_executor", "web_search", "multi_search", "web_browse", "document_reader"}
-            has_important = any(tc["function"]["name"] in important_tools for tc in tool_calls)
-            if has_important:
-                await self._notify_status(f"{get_status_msg(self._agent_name, 'using', '、'.join(display_names[:3]), self._personality_file)}{'等' if len(display_names) > 3 else ''}")
+        display_names = [TOOL_DISPLAY_NAMES.get(tc["function"]["name"], tc["function"]["name"]) for tc in tool_calls]
+        logger.info("tool.calls_selected tools={} user_input={}", [tc['function']['name'] for tc in tool_calls], current_user_input[:80])
+        # 只对耗时/重要工具显示进度，简单查询跳过
+        important_tools = {"shell_command", "python_executor", "web_search", "multi_search", "web_browse", "document_reader"}
+        has_important = any(tc["function"]["name"] in important_tools for tc in tool_calls)
+        if has_important:
+            await self._notify_status(f"{get_status_msg(self._agent_name, 'using', '、'.join(display_names[:3]), self._personality_file)}{'等' if len(display_names) > 3 else ''}")
 
         _concurrent_count = len(tool_calls)
         _exec_start = time.time()
@@ -394,7 +418,12 @@ class ToolCallHandler:
                         return (tc["id"], ToolResult.fail(err_msg), f"错误: {err_msg}", display_name)
 
             # 优先使用带钩子的工具执行回调，否则直接执行
-            await self._notify_tool_status(t_name, "started")
+            status_meta = {
+                "tool_call_id": str(tc.get("id", "")),
+                "turn": int(tc.get("_stream_turn", 0) or 0),
+                "index": int(tc.get("_stream_index", 0) or 0),
+            }
+            await self._notify_tool_status(t_name, "started", **status_meta)
             _tool_start = time.time()
             try:
                 if self._tool_execute_callback:
@@ -404,7 +433,9 @@ class ToolCallHandler:
             except (RuntimeError, OSError, ValueError, TimeoutError, KeyError) as e:
                 _tool_elapsed = round(time.time() - _tool_start, 2)
                 logger.warning("tool.exec_failed", tool=t_name, elapsed=_tool_elapsed, error=str(e)[:100])
-                await self._notify_tool_status(t_name, "failed", detail=str(e)[:100])
+                await self._notify_tool_status(
+                    t_name, "failed", detail=str(e)[:100], **status_meta,
+                )
                 raise
 
             _tool_elapsed = round(time.time() - _tool_start, 2)
@@ -416,10 +447,12 @@ class ToolCallHandler:
             result_text = ""
             if result.success:
                 result_text = json.dumps(result.data, ensure_ascii=False) if not isinstance(result.data, str) else result.data
-                await self._notify_tool_status(t_name, "completed")
+                await self._notify_tool_status(t_name, "completed", **status_meta)
             else:
                 result_text = f"错误: {result.error}"
-                await self._notify_tool_status(t_name, "failed", detail=str(result.error)[:100])
+                await self._notify_tool_status(
+                    t_name, "failed", detail=str(result.error)[:100], **status_meta,
+                )
                 # P5: 工具失败后异步触发规则提取（不阻塞主流程）
                 if self._error_pipeline is not None and result.error:
                     try:
@@ -456,7 +489,7 @@ class ToolCallHandler:
         return None
 
     async def _handle_delegation(self, result: Any) -> Any:
-        """处理工具结果中的委托请求（Klee 委托等）。"""
+        """处理工具结果中的委托请求（delegate_task → xiaoli）。"""
         from core.delegation import DelegationRequest
         if not (result.success and result.data):
             return result
@@ -464,10 +497,6 @@ class ToolCallHandler:
         delegation_req = None
         if isinstance(result.data, DelegationRequest):
             delegation_req = result.data
-        elif isinstance(result.data, str) and result.data.startswith("[KLEE_PENDING]"):
-            delegation_req = DelegationRequest(
-                type="xiaoli", question=result.data[len("[KLEE_PENDING]"):], delegator="xiaoda"
-            )
 
         if delegation_req and delegation_req.type == "xiaoli" and self._xiaoli_delegate:
             xiaoli_reply = await self._xiaoli_delegate(delegation_req.question)

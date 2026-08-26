@@ -23,7 +23,10 @@ export const routes: RouteRecordRaw[] = [
     component: () => import('./components/layout/AppLayout.vue'),
     meta: { requiresAuth: true },
     children: [
-      { path: '', name: 'chat', component: () => import('./views/ChatView.vue') },
+      { path: '', name: 'chat', alias: 'chat', component: () => import('./views/ChatView.vue') },
+      // /chat 是文档与用户习惯写法（CLAUDE.md 亦如此记载），重定向到根聊天页，
+      // 避免静默白屏（2026-08-25 全路由扫屏发现）
+      { path: 'chat', redirect: { name: 'chat' } },
       { path: 'insight', name: 'insight', component: () => import('./views/InsightView.vue') },
       { path: 'schedule', name: 'schedule', component: () => import('./views/ScheduleView.vue') },
       { path: 'media', name: 'media', component: () => import('./views/MediaView.vue') },
@@ -43,5 +46,10 @@ export const routes: RouteRecordRaw[] = [
       { path: 'disclaimer', name: 'disclaimer', component: () => import('./views/DisclaimerView.vue') },
       { path: 'sponsor', name: 'sponsor', component: () => import('./views/SponsorView.vue') },
     ],
+  },
+  {
+    // 404 兜底：未知路径一律回聊天主页（此前未知 hash 直接白屏且零反馈）
+    path: '/:pathMatch(.*)*',
+    redirect: '/',
   },
 ]

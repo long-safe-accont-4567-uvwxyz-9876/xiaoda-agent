@@ -1,19 +1,20 @@
-from typing import Any
-import signal
 import ast
 import os
 import re
-import sys
-import math
+import signal
 import subprocess
-from datetime import datetime, timezone, timedelta
+import sys
+from datetime import datetime
+from typing import Any
 from zoneinfo import ZoneInfo
-from tool_engine.tool_registry import register_tool, ToolPermission, ToolResult
+
 from loguru import logger
+
 from config import get_agent_display_name
+from tool_engine.tool_registry import ToolPermission, ToolResult, register_tool
 
 _NAHIDA_DN = get_agent_display_name('xiaoda')
-_KELI_DN = get_agent_display_name('xiaoli')
+_XIAOLI_DN = get_agent_display_name('xiaoli')
 
 # python_executor 执行超时（秒）
 _EXEC_TIMEOUT = 30
@@ -608,7 +609,7 @@ def calculator(expression: str) -> ToolResult:
 
 @register_tool(
     name="call_xiaoda",
-    description=f"向{_NAHIDA_DN}姐姐求助。当{_KELI_DN}遇到不懂的问题、需要深度分析、或需要{_NAHIDA_DN}姐姐亲自回答时使用此工具。{_NAHIDA_DN}姐姐是须弥的草神，温柔聪慧，擅长深度思考和分析。",
+    description=f"向{_NAHIDA_DN}姐姐求助。当{_XIAOLI_DN}遇到不懂的问题、需要深度分析、或需要{_NAHIDA_DN}姐姐亲自回答时使用此工具。{_NAHIDA_DN}姐姐是须弥的草神，温柔聪慧，擅长深度思考和分析。",
     schema={
         "type": "object",
         "properties": {

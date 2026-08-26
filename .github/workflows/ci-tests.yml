@@ -21,13 +21,12 @@ jobs:
 
     steps:
       - name: Checkout code
-        uses: actions/checkout@v4
-
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
       - name: Install system dependencies
         run: sudo apt-get update && sudo apt-get install -y portaudio19-dev
 
       - name: Set up Python 3.11
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
         with:
           python-version: '3.11'
 
@@ -35,6 +34,8 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           pip install -r requirements.lock -q
+          # lock 完整性最低要求：安装后依赖图无冲突（版本声明 vs 实际解析）
+          pip check
 
       - name: Create test environment
         run: |
@@ -51,36 +52,25 @@ jobs:
       - name: Version sync check
         run: python scripts/check_version_sync.py --ci
 
+      # 2026-08-24 门禁复审：
+      # 1) 不再用 `| tail -50` —— 管道会吞掉 pytest 的退出码（exit 4 曾被吞为 0 假绿）。
+      #    输出截断交给 GitHub Actions 折叠日志，失败必须让 step 红。
+      # 2) 不再 --deselect tests/test_a4_rag_root_fix.py：该用例在 CI 失败是因
+      #    CI 环境预置了 INTENT_LLM_CLASSIFY=true；用例已改为显式清空该环境变量
+      #    （fail on 真实默认值漂移，而非 fail on 环境差异），全集直接跑。
       - name: Run tests
         run: |
           python -m pytest tests/ -v --tb=short \
             --cov=. --cov-report=term-missing --cov-report=json:coverage.json \
-            --deselect tests/test_a4_rag_root_fix.py::TestIntentClassifyDefault::test_intent_llm_classify_default_false \
             -m "not slow and not e2e_real" \
             --timeout=60 \
-            -q 2>&1 | tail -50
+            -q
 
       - name: Run critical tests (strict)
         run: |
+          # 单一事实源：scripts/critical_tests.txt（与 pre-push / build-release 共用）
           python -m pytest \
-            tests/test_smoke.py \
-            tests/test_agent_routing.py \
-            tests/test_context_compressor.py \
-            tests/test_risk_classifier.py \
-            tests/test_error_classifier.py \
-            tests/test_model_route_validation.py \
-            tests/test_prompt_integration.py \
-            tests/test_cognitive_memory.py \
-            tests/test_hopfield_layer.py \
-            tests/test_ssrf_guard.py \
-            tests/test_tool_guardrails.py \
-            tests/test_credential_pool.py \
-            tests/test_credential_vault.py \
-            tests/test_cancel_token.py \
-            tests/test_event_bus.py \
-            tests/test_shared_blackboard.py \
-            tests/test_circuit_breaker.py \
-            tests/test_manifest_consistency.py \
+            $(grep -vE '^\s*(#|$)' scripts/critical_tests.txt) \
             -v --tb=short
 
       - name: Coverage summary
@@ -96,7 +86,7 @@ jobs:
       - name: Coverage comment
         id: coverage_comment
         if: always() && github.event_name == 'pull_request' && hashFiles('.coverage') != ''
-        uses: py-cov-action/python-coverage-comment-action@v3
+        uses: py-cov-action/python-coverage-comment-action@50d15ff8768f6d897b04e5a0805bd1a98f7096c4 # v3
         with:
           GITHUB_TOKEN: ${{ github.token }}
           # 低于 50% 为红色徽章，50-100% 为橙色（PR 评论会显示覆盖率 evolution）
@@ -119,7 +109,7 @@ jobs:
 
       - name: Store Pull Request comment artifact
         if: always() && steps.coverage_comment.outputs.comment_file_written == 'true'
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: python-coverage-comment-action
           path: python-coverage-comment-action.txt
@@ -136,10 +126,9 @@ jobs:
 
     steps:
       - name: Checkout code
-        uses: actions/checkout@v4
-
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
       - name: Set up Node 20
-        uses: actions/setup-node@v5
+        uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5
         with:
           node-version: '20'
 
@@ -160,10 +149,9 @@ jobs:
 
     steps:
       - name: Checkout code
-        uses: actions/checkout@v4
-
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
       - name: Set up Python 3.11
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
         with:
           python-version: '3.11'
 
@@ -185,25 +173,41 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout code
-        uses: actions/checkout@v4
-
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
       - name: Set up Python 3.11
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
         with:
           python-version: '3.11'
 
       - name: Install security tools
         run: pip install bandit pip-audit -q
 
+      # 2026-08-24 门禁化：移除 || true（此前扫描失败被吞，security job 永远绿）。
+      # 规则：HIGH 计数 > scripts/security_baseline.json 的 high_count 即红；
+      # 基线内已登记的豁免条目（带 reason）不计入。新增 HIGH 必须修掉或
+      # 在 baseline 中登记豁免理由。
       - name: Run Bandit security scan
         run: |
-          bandit -r . -x ./tests,./chaos,./.venv,./node_modules -f json -o bandit-report.json || true
-          bandit -r . -x ./tests,./chaos,./.venv,./node_modules -f screen || true
+          bandit -r . -x ./tests,./chaos,./.venv,./node_modules -f json -o bandit-report.json || echo "bandit exited $? (findings present), gating below"
+          python scripts/security_gate.py bandit-report.json
 
-      - name: Run pip-audit dependency scan
+      - name: Run pip-audit dependency scan (gate on HIGH/CRITICAL)
         run: |
           pip install -r requirements.lock -q
-          pip-audit --desc || true
+          # pip-audit 发现漏洞时退出码非 0；报告落盘后由门禁脚本按 CRITICAL/HIGH 计数判定，
+          # 避免直接把非零退出当失败导致无法输出差异明细
+          pip-audit -r requirements.lock --desc -f json -o pip-audit-report.json || echo "pip-audit exited $? (vulnerabilities present), gating below"
+          python scripts/security_gate.py pip-audit-report.json
+
+      - name: Upload security reports
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: security-reports
+          path: |
+            bandit-report.json
+            pip-audit-report.json
+          if-no-files-found: ignore
 
       - name: Security summary
         if: always()

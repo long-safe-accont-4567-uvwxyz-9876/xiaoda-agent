@@ -5,16 +5,16 @@
 供 prompt_builder.load_skills() 注入 system prompt。
 """
 from __future__ import annotations
-from typing import Any
 
 import json
 import re
+from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 from loguru import logger
 
-from web.schemas import Envelope
 from web.routers.auth import get_current_user
+from web.schemas import Envelope
 
 router = APIRouter(tags=["workflows"], dependencies=[Depends(get_current_user)])
 
@@ -255,6 +255,9 @@ async def update_workflow(wf_id: str, body: dict, request: Request) -> Any:
 @router.delete("/workflows/{wf_id}", response_model=Envelope[dict])
 async def delete_workflow(wf_id: str, request: Request) -> Any:
     """删除工作流。"""
+    # 删除类接口统一要求确认头（CLAUDE.md 契约）
+    if request.headers.get("X-Confirm") != "yes":
+        raise HTTPException(400, "缺少 X-Confirm: yes 确认头")
     wf_id = _safe_wf_id(wf_id)
     fp = _wf_path(wf_id)
     if not fp.exists():

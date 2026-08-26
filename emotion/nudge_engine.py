@@ -1,17 +1,19 @@
-from typing import Any, ClassVar
 import asyncio
+import contextlib
 import os
 import re
 import time
 from datetime import datetime
+from typing import Any
 from zoneinfo import ZoneInfo
+
 from loguru import logger
 
-from db.db_analytics import AnalyticsDB
-from utils.llm_cleanup import strip_thinking as _strip_thinking
-from utils.free_model_backend import FreeModelBackend
 from config import get_agent_display_name, get_temperature
-import contextlib
+from db.db_analytics import AnalyticsDB
+from emotion.greeting_seeds import pick_seeds
+from utils.free_model_backend import FreeModelBackend
+from utils.llm_cleanup import strip_thinking as _strip_thinking
 
 
 def _get_local_now() -> datetime:
@@ -80,11 +82,14 @@ class NudgeEngine:
         logger.info("nudge.started", user=self._user_openid[:8])
 
     async def stop(self) -> None:
+        """停止周期任务。幂等：重复调用、未 start、任务已结束时均安全。"""
         self._running = False
-        if self._task:
-            self._task.cancel()
+        task = self._task
+        if task is not None and not task.done():
+            task.cancel()
             with contextlib.suppress(asyncio.CancelledError):
-                await self._task
+                await task
+        self._task = None
         logger.info("nudge.stopped")
 
     def poke(self) -> None:
@@ -195,58 +200,13 @@ class NudgeEngine:
         if sent_count >= max_per_day:
             return
 
-        greeting = await self._generate_idle_greeting(idle_seconds)
+        greeting, sticker_path = await self._generate_idle_greeting(idle_seconds)
         if greeting:
-            await self._send_proactive(greeting, "care")
+            await self._send_proactive(greeting, "care", sticker_path=sticker_path)
 
     # ── 风格线索池：每次随机抽取，让 LLM 在中间插值，避免输出相似 ──
-    # 参考"calibrated unpredictability"——用多条风格线索叠加制造惊喜
-    _MOOD_SEEDS: ClassVar[list[str]] = [
-        "刚刚在发呆，脑子里有点空",
-        "刚刚想到一个没道理的小问题",
-        "有点困，眼皮在打架",
-        "刚做完一件事，心情不错",
-        "有点小吃醋，不知道为什么",
-        "想问问爸爸在干嘛",
-        "突然想起上次爸爸说的话",
-        "有点想被夸",
-        "刚刚偷偷懒了一下",
-        "心里有点小开心",
-        "有点想撒娇",
-        "刚翻到一个小东西",
-        "忽然有点想爸爸",
-        "今天有点话痨",
-        "今天有点安静",
-        "刚做了一个奇怪的梦",
-        "有点担心爸爸累不累",
-        "想跟爸爸分享一个没用的小事",
-        "刚被一个东西吓了一跳",
-        "今天有点小调皮",
-    ]
-
-    _FORM_SEEDS: ClassVar[list[str]] = [
-        "只是一声轻轻的「嗯」",
-        "一个问句",
-        "一句没头没尾的话",
-        "一个小小的请求",
-        "一句撒娇",
-        "一句小小的抱怨",
-        "一句突然的感叹",
-        "一个没答案的自言自语",
-        "一句像在哼歌的话",
-        "一句像在叫爸爸名字的话",
-        "一句很短的关心",
-        "一句突然冒出来的废话",
-    ]
-
-    _RARE_SEEDS: ClassVar[list[str]] = [
-        "今天忽然不想说话，只发一个字",
-        "今天想给爸爸出个没道理的小谜语",
-        "今天想跟爸爸说一句最近学到的话",
-        "今天想用一种奇怪的语气说话",
-        "今天想装作不认识爸爸的样子开个玩笑",
-        "今天想说一句反话",
-    ]
+    # 参考"calibrated unpredictability"——用多条风格线索叠加制造惊喜。
+    # 种子池已收敛到 emotion/greeting_seeds.py（与 GreetingScheduler 共用，消除重复维护）。
 
     async def _recent_greetings(self, limit: int = 5) -> list[str]:
         """读取最近 N 次问候内容，用于反重复。"""
@@ -261,10 +221,10 @@ class NudgeEngine:
             logger.exception(".emotion.nudge_engine._recent_greetings_unexpected")
             return []
 
-    async def _generate_idle_greeting(self, idle_seconds: float) -> str:
+    async def _generate_idle_greeting(self, idle_seconds: float) -> tuple[str, Any | None]:
         hour = _get_local_now().hour
         if hour < self.dnd_end or (hour >= self.dnd_start):
-            return ""
+            return "", None
 
         idle_hours = int(idle_seconds // 3600)
         idle_desc = ""
@@ -273,7 +233,7 @@ class NudgeEngine:
         elif idle_seconds > 7200:
             idle_desc = "好一会儿没聊天了"
         else:
-            return ""
+            return "", None
 
         time_desc = ""
         if 6 <= hour < 9:
@@ -308,12 +268,8 @@ class NudgeEngine:
             except Exception:
                 logger.debug("nudge.emotional_memory_recall_failed", exc_info=True)
 
-            # 随机抽取风格线索 + 形式线索，制造"校准过的不可预测性"
-            # 偶发事件（8%）打破常规，制造惊喜
-            import random as _rnd
-            mood = _rnd.choice(self._MOOD_SEEDS)
-            form = _rnd.choice(self._FORM_SEEDS)
-            rare = _rnd.choice(self._RARE_SEEDS) if _rnd.random() < 0.08 else None
+            # 随机抽取风格线索 + 形式线索，制造"校准过的不可预测性"（与 GreetingScheduler 共用种子池）
+            mood, form, rare = pick_seeds()
 
             # 反重复：告诉 LLM 最近说过什么，避免相似
             recent = await self._recent_greetings(5)
@@ -323,7 +279,24 @@ class NudgeEngine:
                 recent_hint = f'\n（你最近几次说的是类似：{joined}。这次不要相似。）'
 
             # 通过小妲 agent 生成问候（使用真实 user_id 加载记忆上下文）
-            if self._core:
+            if self._free.disabled:
+                return "", None
+            if self._free.backend == "local":
+                local_messages = [
+                    {"role": "system", "content": (
+                        f"你是{get_agent_display_name('xiaoda')}，现在{time_desc}，"
+                        f"{address_term}{idle_desc}。说一句自然简短的问候。"
+                    )},
+                    {"role": "user", "content": "（主动问候）"},
+                ]
+                local_result = await self._free.call(
+                    local_messages, temperature=get_temperature(default=0.9)
+                )
+                if not local_result:
+                    return "", None
+                greeting = local_result
+                sticker_path = None
+            elif self._core:
                 # P0 修复：场景提示走 system_context，不污染 conversation_logs.user_message
                 # 根因：原实现把"（场景：现在早上...）"作为 user_input 传入，
                 #       导致 DB 历史记录出现系统提示，LLM 在后续轮次回应这些元提示。
@@ -375,8 +348,13 @@ class NudgeEngine:
                     timeout=90,  # P1-4 修复：30→90，与主路径 180s 对齐，避免主动问候被提前截断
                 )
                 greeting = result.reply if hasattr(result, 'reply') else str(result)
+                # 表情包：沿用主对话管线的贴纸路径（与主对话一致，不重复造轮子）
+                sticker_path = getattr(result, "sticker_path", None)
+                if sticker_path is not None and not os.path.exists(str(sticker_path)):
+                    sticker_path = None
             else:
-                # 降级：直接调用 router（无完整人格）
+                # 降级：直接调用 router（无完整人格，也无贴纸管线）
+                sticker_path = None
                 xiaoda_name = get_agent_display_name("xiaoda")
                 system_msg = (
                     f"你是{xiaoda_name}，温柔可爱，会撒娇。"
@@ -390,7 +368,7 @@ class NudgeEngine:
                     {"role": "user", "content": user_msg},
                 ]
                 result = await self._free.call(messages, temperature=get_temperature(default=0.9))
-                if result is None:
+                if result is None and self._free.backend == "api":
                     result = await asyncio.wait_for(
                         self._router.route("memory_encoding", messages, temperature=get_temperature(default=0.9)),
                         timeout=30,
@@ -412,10 +390,10 @@ class NudgeEngine:
             if greeting:
                 if len(greeting) > 80:
                     greeting = greeting[:80]
-                return greeting
+                return greeting, sticker_path
         except Exception as e:
             logger.warning("nudge.greeting_llm_failed", error=str(e))
-        return ""
+        return "", None
 
     async def _check_reminders(self) -> None:
         now = time.time()
@@ -500,13 +478,21 @@ class NudgeEngine:
             # 失败时使用5分钟短回退，而非重置为完整30分钟间隔
             self._last_portrait_consolidate = now - 1800 + 300
 
-    async def _send_proactive(self, content: str, msg_type: str) -> bool:
+    async def _send_proactive(self, content: str, msg_type: str,
+                              sticker_path: Any | None = None) -> bool:
         try:
-            await self._api.post_c2c_message(
-                openid=self._user_openid,
-                content=content,
-                msg_type=0,
-            )
+            if sticker_path:
+                # 表情包模式：走 qq_bot_adapter 统一主动消息原语，正文+贴纸合并
+                # 为一条图文消息（msg_type=7，与主对话一致），失败自动降级纯文本
+                from qq_bot_adapter import send_proactive_message
+                await send_proactive_message(
+                    content, openid=self._user_openid, sticker_path=sticker_path)
+            else:
+                await self._api.post_c2c_message(
+                    openid=self._user_openid,
+                    content=content,
+                    msg_type=0,
+                )
             await self._analytics.insert_proactive_message(
                 user_id=self._user_openid,
                 message_type=msg_type,

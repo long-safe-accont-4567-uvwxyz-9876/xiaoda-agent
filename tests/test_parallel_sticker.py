@@ -3,11 +3,12 @@
 验证 _finalize_parallel_reply 不再始终使用 xiaoda 的 sticker_manager，
 而是优先使用子代理的专属表情包管理器。
 """
-import pytest
-from unittest.mock import MagicMock, AsyncMock, patch
 from pathlib import Path
+from unittest.mock import MagicMock, patch
 
-from agent_core._shared import ProcessResult, RequestContext
+import pytest
+
+from agent_core._shared import RequestContext
 from agent_core.sub_agent_manager import SubAgentManagerMixin
 
 

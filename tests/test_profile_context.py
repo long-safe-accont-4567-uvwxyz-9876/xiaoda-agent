@@ -1,7 +1,7 @@
 import pytest
 
-from core.profile_context import ProfileContextProvider
 from agent_context import AgentContext
+from core.profile_context import ProfileContextProvider
 from db.database import DatabaseManager
 from memory.scope import Scope, bind_scope, reset_scope
 

@@ -1,16 +1,21 @@
 """内在世界路由（R9）：情绪/画像/今日事件/记忆/知识图谱/笔记/学习/本能。"""
 from __future__ import annotations
-from typing import Any
 
 import asyncio
-import json
 import os
 import time
 import uuid
 from datetime import datetime
+from typing import Any
 from zoneinfo import ZoneInfo
 
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
+from loguru import logger
+
 from utils.common import safe_float as _safe_float
+from web.routers.auth import get_current_user
+from web.schemas import Envelope
+from web.ws_hub import manager
 
 
 def _get_local_now() -> datetime:
@@ -22,13 +27,6 @@ def _get_local_now() -> datetime:
         tz = ZoneInfo("Asia/Shanghai")
     return datetime.now(tz)
 
-
-from fastapi import APIRouter, Depends, HTTPException, Query, Request
-from loguru import logger
-
-from web.schemas import Envelope
-from web.routers.auth import get_current_user
-from web.ws_hub import manager
 
 router = APIRouter(tags=["insight"], dependencies=[Depends(get_current_user)])
 
@@ -186,13 +184,17 @@ async def list_memories(request: Request,
     core = request.app.state.core
     if q.strip() and core.memory:
         try:
-            results = await core.memory.retrieve_memories(q.strip(), k=limit)
+            # 分页语义与 DB 分支对齐：向量检索按相关性排序，取 k = 跳过量 +
+            # 本页条数后切本页窗口（同名接口不再有两种分页语义）
+            results = await core.memory.retrieve_memories(
+                q.strip(), k=page * limit + limit)
+            window = results[page * limit:(page + 1) * limit]
             return Envelope(data=[
                 {"id": r.get("id"), "summary": r.get("summary", ""),
                  "importance": r.get("importance", 0.5),
                  "emotion_label": r.get("emotion_label", ""),
                  "timestamp": r.get("timestamp", 0), "via": "vector"}
-                for r in results
+                for r in window
                 if (r.get("importance") or 0) >= importance_min])
         except (OSError, RuntimeError, ConnectionError, TimeoutError) as e:
             from local_ai.integration.reranker import is_structured_local_unavailable
@@ -239,110 +241,108 @@ async def knowledge_graph(request: Request,
     """知识图谱数据（内在世界页 + 全屏 3D 共用）。
 
     性能契约：逐层批量 BFS（每层 2 条 IN 查询），depth 严格生效——
-    depth=1 只返回第一跳。每层独立 GRAPH_MAX_EDGES_PER_HOP=400 上限
+    depth=1 只返回第一跳。每层独立 GRAPH_MAX_EDGES_PER_HOP 上限
     （confidence 降序截断，被挤掉的边所指向的实体不再外扩），
     防止热门实体（1200+ 关系）撑爆渲染且不再掩盖深度差异。
+
+    空实体（全图模式）：自动选关系数最高的实体作为根再做同款 BFS ——
+    此前该分支固定返回最近 80 条关系、完全忽略 depth，
+    导致前端调深度无任何变化（2026-08-25 冒烟发现）。
     """
     core = request.app.state.core
     kdb = core.db.knowledge
     # 分层可视化参数：每层最多 30 个新实体（按关系 confidence 挑最重要的），
-    # 边上限随之收敛。depth=1 = 中心实体 + 30 个一跳邻居，逐层外扩一圈一圈清晰。
+    # 边上限随之收敛。depth=1 = 根实体 + 一跳邻居，逐层外扩一圈一圈清晰。
     GRAPH_MAX_NODES_PER_HOP = 30
     GRAPH_MAX_EDGES_PER_HOP = 90
 
     if entity.strip():
-        # 逐层 BFS：每层独立批量查询 + 独立上限。此前全局截断导致热门实体
-        # 一跳就吃满 400 名额，depth=1 与 depth=6 返回完全一致（约束失效）。
-        seen_rel: set[tuple[str, str, str]] = set()
-        visited: set[str] = {entity.strip()}
-        prev_kept: set[str] = {entity.strip()}  # 上一层最终保留节点（逐层更新为扩散中心）
-        frontier = [entity.strip()]
-        edges: list[dict] = []
-        ent_map: dict[str, dict] = {}
-        for _ in range(depth):
-            if not frontier:
-                break
-            placeholders = ",".join("?" * len(frontier))
-            cur = await kdb._conn.execute(
-                f"SELECT * FROM knowledge_relations "
-                f"WHERE from_entity IN ({placeholders}) OR to_entity IN ({placeholders})",
-                frontier + frontier,
-            )
-            rows = await cur.fetchall()
-            next_frontier: list[str] = []
-            hop_rels: list[dict] = []
-            for r in rows:
-                rel = dict(r)
-                key = (rel["from_entity"], rel.get("relation_type", ""), rel["to_entity"])
-                if key in seen_rel:
-                    continue
-                seen_rel.add(key)
-                hop_rels.append(rel)
-                for other in (rel["from_entity"], rel["to_entity"]):
-                    if other not in visited:
-                        visited.add(other)
-                        next_frontier.append(other)
-            # 本层新实体超限：按"入边最高 confidence"选最重要的邻居节点，
-            # 只保留与所选节点相关的边（中心实体的视角：邻居比边数重要）。
-            if len(next_frontier) > GRAPH_MAX_NODES_PER_HOP:
-                # 每个候选邻居的最高置信边
-                best = {}
-                for r in hop_rels:
-                    for e in (r["from_entity"], r["to_entity"]):
-                        if e not in visited - set(next_frontier):
-                            c = r.get("confidence") or 0
-                            if e not in best or c > best[e]:
-                                best[e] = c
-                ranked = sorted(next_frontier, key=lambda n: -best.get(n, 0))
-                chosen = set(ranked[:GRAPH_MAX_NODES_PER_HOP])
-                # 分层保留：边必须连接「上一层已保留节点」与「本层入选邻居」。
-                # prev_kept 首层=搜索实体；一跳时未入选邻居的边因另一端不在
-                # prev_kept+chosen 而剔除；二跳只从一层入选邻居继续生长（一圈一圈清晰）
-                anchors = prev_kept | chosen
-                hop_rels = [r for r in hop_rels
-                            if (r["from_entity"] in prev_kept and r["to_entity"] in chosen)
-                            or (r["to_entity"] in prev_kept and r["from_entity"] in chosen)]
-                next_frontier = [n for n in next_frontier if n in chosen]
-            elif len(hop_rels) > GRAPH_MAX_EDGES_PER_HOP:
-                hop_rels = sorted(hop_rels, key=lambda x: x.get("confidence") or 0,
-                                  reverse=True)[:GRAPH_MAX_EDGES_PER_HOP]
-            # 批量补本层新实体的 kind
-            new_names = [n for n in set(next_frontier) | {r["from_entity"] for r in hop_rels}
-                         | {r["to_entity"] for r in hop_rels} if n not in ent_map]
-            if new_names:
-                ph = ",".join("?" * len(new_names))
-                cur2 = await kdb._conn.execute(
-                    f"SELECT name, kind FROM knowledge_entities WHERE name IN ({ph})", new_names)
-                for row in await cur2.fetchall():
-                    ent_map[row["name"]] = dict(row)
-            for rel in hop_rels:
-                edges.append({"from": rel["from_entity"], "to": rel["to_entity"],
-                              "relation": rel.get("relation_type", "")})
-            prev_kept |= {r["from_entity"] for r in hop_rels} | {r["to_entity"] for r in hop_rels}
-            frontier = list(set(next_frontier))
-        # 节点只来自保留边的端点——未入选的邻居不返回（否则图上挂 98 个孤立点）
-        nodes = [{"name": n, "kind": (ent_map.get(n) or {}).get("kind", "")}
-                 for n in ({e["from"] for e in edges} | {e["to"] for e in edges})]
-        return Envelope(data={"nodes": nodes, "edges": edges})
+        seed = entity.strip()
+    else:
+        # 全图模式：以"度数最高"的实体为根 —— 记忆树的树干顶
+        cur0 = await kdb._conn.execute(
+            "SELECT name FROM ("
+            "  SELECT from_entity AS name FROM knowledge_relations"
+            "  UNION ALL SELECT to_entity FROM knowledge_relations"
+            ") GROUP BY name ORDER BY COUNT(*) DESC LIMIT 1")
+        r0 = await cur0.fetchone()
+        if not r0:
+            return Envelope(data={"nodes": [], "edges": []})
+        seed = r0["name"]
 
-    # 全图概览：最近 80 条关系（原逻辑保留，量级固定无风险）
-    nodes: dict[str, dict] = {}
+    # 逐层 BFS：每层独立批量查询 + 独立上限。此前全局截断导致热门实体
+    # 一跳就吃满名额，depth=1 与 depth=6 返回完全一致（约束失效）。
+    seen_rel: set[tuple[str, str, str]] = set()
+    visited: set[str] = {seed}
+    prev_kept: set[str] = {seed}  # 上一层最终保留节点（逐层更新为扩散中心）
+    frontier = [seed]
     edges: list[dict] = []
+    ent_map: dict[str, dict] = {}
+    for _ in range(depth):
+        if not frontier:
+            break
+        placeholders = ",".join("?" * len(frontier))
+        cur = await kdb._conn.execute(
+            f"SELECT * FROM knowledge_relations "
+            f"WHERE from_entity IN ({placeholders}) OR to_entity IN ({placeholders})",
+            frontier + frontier,
+        )
+        rows = await cur.fetchall()
+        next_frontier: list[str] = []
+        hop_rels: list[dict] = []
+        for r in rows:
+            rel = dict(r)
+            key = (rel["from_entity"], rel.get("relation_type", ""), rel["to_entity"])
+            if key in seen_rel:
+                continue
+            seen_rel.add(key)
+            hop_rels.append(rel)
+            for other in (rel["from_entity"], rel["to_entity"]):
+                if other not in visited:
+                    visited.add(other)
+                    next_frontier.append(other)
+        # 本层新实体超限：按"入边最高 confidence"选最重要的邻居节点，
+        # 只保留与所选节点相关的边（根实体的视角：邻居比边数重要）。
+        if len(next_frontier) > GRAPH_MAX_NODES_PER_HOP:
+            # 每个候选邻居的最高置信边
+            best = {}
+            for r in hop_rels:
+                for e in (r["from_entity"], r["to_entity"]):
+                    if e not in visited - set(next_frontier):
+                        c = r.get("confidence") or 0
+                        if e not in best or c > best[e]:
+                            best[e] = c
+            ranked = sorted(next_frontier, key=lambda n: -best.get(n, 0))
+            chosen = set(ranked[:GRAPH_MAX_NODES_PER_HOP])
+            # 分层保留：边必须连接「上一层已保留节点」与「本层入选邻居」。
+            # prev_kept 首层=根实体；一跳时未入选邻居的边因另一端不在
+            # prev_kept+chosen 而剔除；二跳只从当前层入选邻居继续生长（一圈一圈清晰）
+            hop_rels = [r for r in hop_rels
+                        if (r["from_entity"] in prev_kept and r["to_entity"] in chosen)
+                        or (r["to_entity"] in prev_kept and r["from_entity"] in chosen)]
+            next_frontier = [n for n in next_frontier if n in chosen]
+        elif len(hop_rels) > GRAPH_MAX_EDGES_PER_HOP:
+            hop_rels = sorted(hop_rels, key=lambda x: x.get("confidence") or 0,
+                              reverse=True)[:GRAPH_MAX_EDGES_PER_HOP]
+        # 批量补本层新实体的 kind
+        new_names = [n for n in set(next_frontier) | {r["from_entity"] for r in hop_rels}
+                     | {r["to_entity"] for r in hop_rels} if n not in ent_map]
+        if new_names:
+            ph = ",".join("?" * len(new_names))
+            cur2 = await kdb._conn.execute(
+                f"SELECT name, kind FROM knowledge_entities WHERE name IN ({ph})", new_names)
+            for row in await cur2.fetchall():
+                ent_map[row["name"]] = dict(row)
+        for rel in hop_rels:
+            edges.append({"from": rel["from_entity"], "to": rel["to_entity"],
+                          "relation": rel.get("relation_type", "")})
+        prev_kept |= {r["from_entity"] for r in hop_rels} | {r["to_entity"] for r in hop_rels}
+        frontier = list(set(next_frontier))
 
-    async def _node(name: str) -> None:
-        if name in nodes:
-            return
-        ent = await kdb.get_knowledge_entity(name)
-        nodes[name] = {"name": name, "kind": (ent or {}).get("kind", "")}
-
-    rows = await core.db.fetch_all(
-        "SELECT * FROM knowledge_relations ORDER BY rowid DESC LIMIT 80")
-    for r in rows:
-        await _node(r["from_entity"])
-        await _node(r["to_entity"])
-        edges.append({"from": r["from_entity"], "to": r["to_entity"],
-                      "relation": r.get("relation_type", "")})
-    return Envelope(data={"nodes": list(nodes.values()), "edges": edges})
+    # 节点只来自保留边的端点——未入选的邻居不返回（否则图上挂一堆孤立点）
+    nodes = [{"name": n, "kind": (ent_map.get(n) or {}).get("kind", "")}
+             for n in ({e["from"] for e in edges} | {e["to"] for e in edges})]
+    return Envelope(data={"nodes": nodes, "edges": edges})
 
 
 @router.get("/insight/knowledge/entities", response_model=Envelope[list[dict]])
@@ -450,6 +450,8 @@ async def update_note(note_id: int, body: dict, request: Request) -> Any:
 
 @router.delete("/insight/notebook/{note_id}", response_model=Envelope[dict])
 async def delete_note(note_id: int, request: Request) -> Any:
+    if request.headers.get("X-Confirm") != "yes":
+        raise HTTPException(400, "缺少 X-Confirm: yes 确认头")
     core = request.app.state.core
     n = await core.db.execute("DELETE FROM notebook_entries WHERE id=?", (note_id,))
     if not n:
@@ -494,10 +496,13 @@ async def create_memory(body: dict, request: Request) -> Any:
         raise HTTPException(400, "summary 不能为空")
     importance = _safe_float(body.get("importance", 0.5), 0.5)
     emotion_label = body.get("emotion_label", "")
-    timestamp = _safe_float(body.get("timestamp", time.time()), default=time.time())
-    mid = await core.db.insert_episodic_memory(
+    ts = _safe_float(body.get("timestamp", time.time()), default=time.time())
+    mid = await core.db.memory.insert_episodic_memory(
         summary=summary, importance=importance,
-        emotion_label=emotion_label, timestamp=timestamp)
+        emotion_label=emotion_label)
+    # 补录语义：允许指定记忆发生时间（repo 层固定写 now，这里显式回填）
+    await core.db.execute(
+        "UPDATE episodic_memories SET timestamp=? WHERE id=?", (ts, mid))
     # 写入向量索引（失败时记录警告，不静默吞掉）
     try:
         if core.memory:
@@ -609,6 +614,8 @@ async def update_learning(learning_id: int, body: dict, request: Request) -> Any
 
 @router.delete("/insight/learnings/{learning_id}", response_model=Envelope[dict])
 async def delete_learning(learning_id: int, request: Request) -> Any:
+    if request.headers.get("X-Confirm") != "yes":
+        raise HTTPException(400, "缺少 X-Confirm: yes 确认头")
     core = request.app.state.core
     try:
         n = await core.db.execute("DELETE FROM learnings WHERE id=?", (learning_id,))
@@ -697,6 +704,8 @@ async def update_instinct(instinct_id: int, body: dict, request: Request) -> Any
 
 @router.delete("/insight/instincts/{instinct_id}", response_model=Envelope[dict])
 async def delete_instinct(instinct_id: int, request: Request) -> Any:
+    if request.headers.get("X-Confirm") != "yes":
+        raise HTTPException(400, "缺少 X-Confirm: yes 确认头")
     core = request.app.state.core
     try:
         n = await core.db.execute("DELETE FROM instincts WHERE id=?", (instinct_id,))
@@ -769,6 +778,8 @@ async def update_entity(name: str, body: dict, request: Request) -> Any:
 
 @router.delete("/insight/knowledge/entities/{name}", response_model=Envelope[dict])
 async def delete_entity(name: str, request: Request) -> Any:
+    if request.headers.get("X-Confirm") != "yes":
+        raise HTTPException(400, "缺少 X-Confirm: yes 确认头")
     core = request.app.state.core
     kdb = core.db.knowledge
     deleted = await kdb.delete_knowledge_entity(name)
@@ -802,6 +813,8 @@ async def create_relation(body: dict, request: Request) -> Any:
 
 @router.delete("/insight/knowledge/relations/{relation_id}", response_model=Envelope[dict])
 async def delete_relation(relation_id: str, request: Request) -> Any:
+    if request.headers.get("X-Confirm") != "yes":
+        raise HTTPException(400, "缺少 X-Confirm: yes 确认头")
     core = request.app.state.core
     kdb = core.db.knowledge
     deleted = await kdb.delete_knowledge_relation(relation_id)
@@ -838,7 +851,7 @@ def _build_guidance(config: dict) -> str:
 
 @router.get("/insight/xp", response_model=Envelope[dict])
 async def get_xp(request: Request, user_id: str = Depends(get_current_user)) -> Any:
-    from core.xp_system import get_xp_system, XPLevel, XP_THRESHOLDS, _LEVEL_LABELS
+    from core.xp_system import _LEVEL_LABELS, XP_THRESHOLDS, XPLevel, get_xp_system
 
     try:
         xp_sys = get_xp_system()
@@ -887,7 +900,7 @@ async def get_xp(request: Request, user_id: str = Depends(get_current_user)) -> 
 
 @router.get("/insight/xp/levels", response_model=Envelope[dict])
 async def get_xp_levels(request: Request) -> Any:
-    from core.xp_system import XPLevel, XP_THRESHOLDS, _LEVEL_LABELS
+    from core.xp_system import _LEVEL_LABELS, XP_THRESHOLDS, XPLevel
 
     try:
         from core.xp_system import get_xp_system

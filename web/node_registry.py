@@ -7,17 +7,35 @@ local_deploy_nodes 的运行时热更新逻辑（apply_to_runtime 等）。
 """
 from __future__ import annotations
 
-import os
 from typing import Any
 
 from loguru import logger
-
 
 # 节点后端只有三种（与前端按钮对齐，无 auto）：
 #   local = 本地模型；api = 硅基流动免费模型；off = 关闭。
 # 存量配置里的 "auto"（历史值：有本地用本地否则 API）读取时映射为 "api"。
 _BACKENDS = ("local", "api", "off")
 _BACKEND_ALIASES = {"auto": "api"}
+
+_NODE_CONTRACTS: dict[str, tuple[str, str, str, str]] = {
+    # capability, runtime_adapter, model_purpose, fallback_policy
+    "embedding": ("text_embedding", "vector_store", "embedding", "explicit_failure"),
+    "reranker": ("cross_encoder_rerank", "managed_reranker", "reranker", "rrf"),
+    "query_transform": ("query_planning", "query_transformer", "chat", "original_input"),
+    "instinct": ("instinct_extraction", "instinct_manager", "chat", "skip"),
+    "error_rule": ("error_rule_extraction", "error_pipeline", "chat", "skip"),
+    "kg_extract": ("knowledge_extraction", "knowledge_graph", "chat", "skip"),
+    "asr": ("speech_to_text", "asr_service", "asr", "explicit_failure"),
+    "emotion_llm": ("emotion_analysis", "emotion_llm", "chat", "deterministic"),
+    "portrait": ("portrait_synthesis", "portrait_manager", "chat", "skip"),
+    "nudge": ("nudge_generation", "nudge_engine", "chat", "skip"),
+    "reunion": ("reunion_generation", "reunion_reflection", "chat", "deterministic"),
+    "growth": ("growth_narrative", "growth_narrative", "chat", "skip"),
+    "memory_distill": ("memory_distillation", "memory_distiller", "chat", "skip"),
+    "spontaneous_recall": ("recall_narrative", "spontaneous_recall", "chat", "skip"),
+    "dream": ("preference_discovery", "dream_engine", "chat", "skip"),
+    "intent_decomposition": ("intent_decomposition", "intent_decomposer", "chat", "deterministic"),
+}
 
 # 节点注册表：kind=encoder 编码型（本地有专有模型）/ generative 生成型（本地=对话小模型）
 NODES: list[dict[str, Any]] = [
@@ -182,6 +200,15 @@ NODES: list[dict[str, Any]] = [
     },
 ]
 
+for _node in NODES:
+    _capability, _adapter, _purpose, _fallback = _NODE_CONTRACTS[_node["id"]]
+    _node.update({
+        "capability": _capability,
+        "runtime_adapter": _adapter,
+        "model_purpose": _purpose,
+        "fallback_policy": _fallback,
+    })
+
 _NODE_MAP = {node["id"]: node for node in NODES}
 
 
@@ -219,11 +246,10 @@ def set_backend(cfg: Any, node_id: str, backend: str, local_model: str | None = 
     backend = _BACKEND_ALIASES.get(backend, backend)
     if not valid_backend(backend):
         raise ValueError(f"invalid backend: {backend!r}, must be one of {list(_BACKENDS)}")
-    cfg.set(f"local_deploy.nodes.{node_id}", backend)
-    # 注意：local_model 必须存独立路径（local_deploy.node_models.<id>），
-    # 不能挂在 nodes.<id> 下——那会把 backend 字符串替换成 dict 导致读取失败
+    updates = {f"local_deploy.nodes.{node_id}": backend}
     if local_model and local_model.strip():
-        cfg.set(f"local_deploy.node_models.{node_id}", local_model.strip())
+        updates[f"local_deploy.node_models.{node_id}"] = local_model.strip()
+    cfg.set_many(updates)
     logger.info("local_deploy.node_set node={} backend={} local_model={}", node_id, backend, local_model or "-")
     return backend
 

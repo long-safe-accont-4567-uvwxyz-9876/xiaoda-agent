@@ -1,6 +1,5 @@
 """WebSocket 主通道（§9 协议）：流式状态、工具事件、最终回复、问候/任务/配置广播。"""
 from __future__ import annotations
-from typing import Any
 
 import asyncio
 import contextvars
@@ -8,14 +7,11 @@ import json
 import os
 import platform
 import shutil
-import signal
-import struct
-import subprocess
-import threading
 import time
 import uuid
+from collections import OrderedDict
 from pathlib import Path
-
+from typing import Any
 
 from utils.common import safe_int as _safe_int
 
@@ -23,20 +19,25 @@ _IS_WINDOWS = platform.system() == "Windows"
 
 if _IS_WINDOWS:
     # Windows: 使用 subprocess + 管道模拟终端
-    import subprocess as _subprocess
     _HAS_PTY = False
 else:
-    import fcntl
-    import pty
-    import termios
     _HAS_PTY = True
 
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect  # noqa: E402
 from loguru import logger  # noqa: E402
 
-from config import STREAM_STATUS_PUSH, STREAM_TEXT_PUSH, STREAM_TOOL_STATUS  # noqa: E402
-from core.event_bus import event_bus  # noqa: E402
 from agent_core.user_web import WebUser  # noqa: E402
+from config import (  # noqa: E402
+    STREAM_STATUS_PUSH,
+    STREAM_TEXT_PUSH,
+    STREAM_TOOL_STATUS,
+    STRUCTURED_STREAM_EVENTS,
+)
+from core.event_bus import event_bus  # noqa: E402
+from llm_gateway.stream_protocol import (  # noqa: E402
+    StreamEventSequencer,
+    StructuredStreamProtocolError,
+)
 
 router = APIRouter()
 
@@ -91,7 +92,15 @@ class ConnectionManager:
         self._send_queues: dict[str, asyncio.Queue] = {}
         self._writer_tasks: dict[str, asyncio.Task] = {}
         self._term_start_tasks: set[asyncio.Task] = set()
+        # 每连接在途 chat 任务数上限：客户端换 msg_id 即可并发拉起无限 LLM
+        # 任务（track_message_task 只按 msg_id 幂等），此处按连接方硬顶
+        self.MAX_CHAT_TASKS_PER_CONN = 3
+        self._stream_sessions: OrderedDict[tuple[str, str], dict[str, Any]] = OrderedDict()
+        self._MAX_STREAM_SESSIONS = 256
         self._SEND_QUEUE_MAX = 64  # 有界队列上限；溢出的连接视为过慢并关闭
+        # msg_id 幂等：已完成请求的短 TTL 记录（重试帧直接重放而非二次执行）
+        self._completed_results: dict[tuple[str, str], float] = {}
+        self._MSG_RESULT_TTL_SECONDS = 60.0
 
     def register(self, ws: WebSocket) -> str:
         """注册一个新连接, 返回生成的连接 ID."""
@@ -116,6 +125,13 @@ class ConnectionManager:
 
         P1-4: 改为 async 方法，先 await ws.close() 释放底层 TCP 资源，
         再清理内部状态。close 失败不应阻塞清理（defensive）。幂等：重复调用安全。
+
+        心跳超时路径自取消防护：unregister 可能被 heartbeat 任务自身调用，
+        cancel 集合必须排除 asyncio.current_task()——否则取消会在后续 await
+        处注入 CancelledError，中断 chat 任务清理导致 LLM/工具泄漏。
+
+        任务回收带超时上限：病态任务（吞掉 CancelledError 后挂起）不得拖死
+        unregister——否则心跳路径清理被卡住，连接状态半残。
         """
         ws = self._connections.get(conn_id)
         if ws is not None:
@@ -127,30 +143,92 @@ class ConnectionManager:
         self._connections.pop(conn_id, None)
         self._agent_map.pop(conn_id, None)
         self._session_map.pop(conn_id, None)
-        # G5: 取消心跳任务 + 清理 pong event
+        current = asyncio.current_task()
+        # G5: 取消心跳任务 + 清理 pong event（永不取消调用者自身）
         task = self._heartbeat_tasks.pop(conn_id, None)
-        if task and not task.done():
+        if task and task is not current and not task.done():
             task.cancel()
         self._pong_events.pop(conn_id, None)
         # 治本：取消写入任务 + 清理发送队列
         wtask = self._writer_tasks.pop(conn_id, None)
-        if wtask and not wtask.done():
+        if wtask and wtask is not current and not wtask.done():
             wtask.cancel()
         self._send_queues.pop(conn_id, None)
-        await self.cancel_connection_tasks(conn_id)
+        for key in [key for key in self._stream_sessions if key[0] == conn_id]:
+            self._stream_sessions.pop(key, None)
+        try:
+            await asyncio.wait_for(
+                self.cancel_connection_tasks(conn_id), timeout=5.0)
+        except asyncio.TimeoutError:
+            logger.warning("ws.unregister.reap_timeout conn_id={}", conn_id)
 
-    def track_message_task(self, conn_id: str, msg_id: str, task: asyncio.Task) -> None:
+    def track_message_task(self, conn_id: str, msg_id: str, task: asyncio.Task) -> bool:
+        """登记在途消息任务（put-if-absent 幂等）。
+
+        返回 False 表示同 (conn_id, msg_id) 已有在途任务——调用方不得重复执行
+        （客户端重试重发会造成双份 LLM/工具副作用，且 abort 只能取消后一份）。
+        """
         key = (conn_id, msg_id)
+        existing = self._tasks.get(key)
+        if existing is not None and not existing.done():
+            task.cancel()
+            return False
         self._tasks[key] = task
 
         def _discard(done_task: asyncio.Task) -> None:
             if self._tasks.get(key) is done_task:
                 self._tasks.pop(key, None)
+                # 完成结果短 TTL 缓存：客户端重试同 msg_id 时直接重放 final，
+                # 不再二次执行。
+                try:
+                    exc = done_task.exception()
+                except asyncio.CancelledError:
+                    return
+                if exc is None:
+                    self._completed_results[key] = (
+                        time.monotonic() + self._MSG_RESULT_TTL_SECONDS)
 
         task.add_done_callback(_discard)
+        return True
+
+    def get_completed_result_time(self, conn_id: str, msg_id: str) -> float | None:
+        """同 msg_id 已完成且仍在 TTL 内时返回完成时间戳（单调钟），否则 None。"""
+        deadline = self._completed_results.get((conn_id, msg_id))
+        if deadline is None:
+            return None
+        if time.monotonic() > deadline:
+            self._completed_results.pop((conn_id, msg_id), None)
+            return None
+        return deadline
 
     def get_message_task(self, conn_id: str, msg_id: str) -> asyncio.Task | None:
         return self._tasks.get((conn_id, msg_id))
+
+    def inflight_chat_count(self, conn_id: str) -> int:
+        """该连接当前在途的 chat 任务数（用于每连接并发节流）。"""
+        return sum(1 for (owner, _), task in self._tasks.items()
+                   if owner == conn_id and not task.done())
+
+    def get_session(self, conn_id: str) -> str:
+        """读取连接绑定的会话 ID（封装 _session_map，避免跨模块私有访问）。"""
+        return self._session_map.get(conn_id, "")
+
+    def set_session(self, conn_id: str, session_id: str) -> None:
+        if session_id:
+            self._session_map[conn_id] = session_id
+
+    def get_agent(self, conn_id: str) -> str:
+        """读取连接当前受话 agent（封装 _agent_map）。"""
+        return self._agent_map.get(conn_id, "xiaoda")
+
+    def set_agent(self, conn_id: str, agent: str) -> None:
+        self._agent_map[conn_id] = agent
+
+    def notify_pong(self, conn_id: str) -> None:
+        """客户端心跳 pong 应答（封装 _pong_events）。"""
+        evt = self._pong_events.get(conn_id)
+        if evt:
+            evt.set()
 
     async def cancel_message_task(self, conn_id: str, msg_id: str) -> None:
         task = self.get_message_task(conn_id, msg_id)
@@ -214,31 +292,123 @@ class ConnectionManager:
                 await self.unregister(conn_id)
                 return
 
+    def _stream_frames(self, conn_id: str, event: dict) -> list[dict]:
+        """按双帧兼容策略计算应入队的帧列表。
+
+        STRUCTURED_STREAM_EVENTS 开启时，聊天生命周期事件（stream_text/
+        tool_status/final/error）同时产出两路帧：
+          [0] legacy 帧 —— 供旧客户端（已部署 bundle 只认 stream_text/final 等同名帧）
+          [1] stream_event v1 信封 —— 供新前端（seq 单调去重 + 迟到事件防护）
+        文本帧两路都只携带绝对 accumulated（由本端按 delta 重建/采信生产者），
+        不携带增量 delta：旧客户端（accumulated 绝对覆盖）、新前端
+        （delta 为空时回退 accumulated 绝对覆盖）以及同时消费两路的客户端，
+        无论到达顺序如何都不会重复拼接文本。返回 [] 表示该事件被结构化协议
+        抑制（tool_event 全局广播、终态之后的迟到事件）。
+        """
+        if not STRUCTURED_STREAM_EVENTS:
+            return [event]
+        msg_id = str(event.get("msg_id") or "")
+        if not msg_id:
+            return [event]
+        event_type = str(event.get("type") or "")
+        # tool_event 是无稳定请求身份的全局广播；结构化模式改用请求绑定的 tool_status。
+        if event_type == "tool_event":
+            return []
+        if event_type not in {
+            "stream_text", "tool_status", "final", "error",
+        }:
+            return [event]
+        key = (conn_id, msg_id)
+        session = self._stream_sessions.get(key)
+        if session is None:
+            session = {
+                "sequencer": StreamEventSequencer(msg_id),
+                "turn": None,
+                "accumulated": "",
+            }
+            self._stream_sessions[key] = session
+            while len(self._stream_sessions) > self._MAX_STREAM_SESSIONS:
+                self._stream_sessions.popitem(last=False)
+        else:
+            self._stream_sessions.move_to_end(key)
+        terminal = event_type in {"final", "error"}
+        payload = {k: v for k, v in event.items() if k not in {"type", "msg_id"}}
+        turn = int(payload.pop("turn", 0) or 0)
+        mapped_event = {
+            "stream_text": "text_delta",
+            "tool_status": "tool_status",
+            "final": "final",
+            "error": "abort" if payload.get("code") == "ABORTED" else "error",
+        }[event_type]
+        try:
+            envelope = session["sequencer"].emit(
+                mapped_event, turn=turn, terminal=terminal, **payload,
+            )
+        except StructuredStreamProtocolError:
+            # 终态之后的迟到事件：两路一并抑制，避免旧客户端回放过期内容。
+            return []
+        if event_type == "stream_text":
+            accumulated = self._track_stream_text(session, turn, payload)
+            legacy = {
+                "type": "stream_text",
+                "msg_id": msg_id,
+                "accumulated": accumulated,
+                "turn": turn,
+            }
+            envelope.pop("delta", None)
+            envelope["accumulated"] = accumulated
+        else:
+            legacy = event
+        return [legacy, envelope]
+
+    @staticmethod
+    def _track_stream_text(session: dict[str, Any], turn: int, payload: dict) -> str:
+        """维护每条流的绝对文本快照：生产者给的 accumulated 优先，否则按 delta 累积。
+
+        turn 变化视为新一轮文本流，快照从头重建（与逐 turn 流式语义一致）。
+        """
+        provided = str(payload.get("accumulated") or "")
+        delta = str(payload.get("delta") or "")
+        if session["turn"] != turn:
+            session["turn"] = turn
+            session["accumulated"] = provided or delta
+        elif provided:
+            session["accumulated"] = provided
+        else:
+            session["accumulated"] += delta
+        return session["accumulated"]
+
     def _enqueue(self, conn_id: str, event: dict) -> bool:
         """非阻塞入队一个事件；连接不存在返回 False。
 
         队列满（连接过慢）时：丢弃最旧的事件为新事件腾位，而非注销连接。
         这样最新/关键消息（如最终回复）仍能送达，不牺牲功能性；被丢弃的只是
-        过期可视化推送。
+        过期可视化推送。结构化模式下一条逻辑事件可能展开为 legacy+信封双帧
+        （见 _stream_frames），每帧独立套用同样的溢出策略；因文本帧均为绝对
+        快照，任一帧被挤出队列都不会造成内容错乱。
         """
+        frames = self._stream_frames(conn_id, event)
+        if not frames:
+            return True
         if conn_id not in self._connections:
             return False
         q = self._send_queues.get(conn_id)
         if q is None:
             return False
-        try:
-            q.put_nowait(event)
-        except asyncio.QueueFull:
+        for frame in frames:
             try:
-                q.get_nowait()  # 丢最旧，保最新
-            except asyncio.QueueEmpty:
-                # 队列已被消费完，无可丢弃事件（正常路径）
-                logger.debug("ws.send_queue_drain_empty conn_id={}", conn_id)
-            try:
-                q.put_nowait(event)
+                q.put_nowait(frame)
             except asyncio.QueueFull:
-                logger.warning("ws.send_queue_overflow conn_id={}", conn_id)
-                return False
+                try:
+                    q.get_nowait()  # 丢最旧，保最新
+                except asyncio.QueueEmpty:
+                    # 队列已被消费完，无可丢弃事件（正常路径）
+                    logger.debug("ws.send_queue_drain_empty conn_id={}", conn_id)
+                try:
+                    q.put_nowait(frame)
+                except asyncio.QueueFull:
+                    logger.warning("ws.send_queue_overflow conn_id={}", conn_id)
+                    return False
         return True
 
     async def send_to(self, conn_id: str, event: dict) -> None:
@@ -315,31 +485,6 @@ def local_ai_event(resource: str, record: Any) -> dict[str, Any]:
         resource: payload,
     }
 
-# PTY 终端会话: term_sid -> {pid, fd, conn_id, shell, alive}
-_pty_sessions: dict[str, dict] = {}
-_pty_sessions_lock = threading.Lock()
-
-# 终端输出合帧缓冲: term_sid -> {"buf": str, "timer": asyncio.TimerHandle|None}
-# PTY 大输出会被内核拆成大量小块(实测 288KB/2188 次 read)，逐条发 JSON 帧
-# 会把前端 xterm 渲染冲垮——按 ~16ms/帧合并后发送。
-_term_out_buf: dict[str, dict] = {}
-_TERM_FLUSH_INTERVAL_S = 0.016
-_TERM_FLUSH_MAX_CHARS = 65536
-
-
-def _try_import_winpty():
-    """ConPTY 可用性探测（仅 win32 有轮子）：返回 PtyProcess 类或 None。
-
-    Windows 会话优先 ConPTY（真终端语义：resize/TUI 全支持），
-    未安装 pywinpty 时回退 subprocess 管道（无 TTY，兼容旧行为）。"""
-    if os.name != "nt":
-        return None
-    try:
-        from winpty import PtyProcess  # noqa: PLC0415 —— 平台可选依赖懒加载
-        return PtyProcess
-    except (ImportError, OSError):
-        logger.debug("ws.winpty_unavailable: 回退管道模式")
-        return None
 
 
 # ── 媒体路径 → URL ───────────────────────────────────────────────
@@ -406,13 +551,17 @@ def _cleanup_old_media() -> int:
 
 
 async def _media_cleanup_loop() -> None:
-    """后台循环：定期清理过期动态媒体文件。"""
+    """后台循环：定期清理过期动态媒体文件（IO 下放线程池，不占事件循环）。"""
     while True:
         await asyncio.sleep(_MEDIA_CLEANUP_INTERVAL_SECONDS)
         try:
-            _cleanup_old_media()
+            removed = await asyncio.to_thread(_cleanup_old_media)
         except (OSError, RuntimeError) as e:
             logger.warning("ws.media_cleanup_error", error=str(e))
+            continue
+        if removed:
+            logger.info("ws.media_cleanup", removed=removed,
+                        max_age_hours=_MEDIA_MAX_AGE_SECONDS // 3600)
 
 
 def start_media_cleanup() -> None:
@@ -449,19 +598,21 @@ def serialize_result(result: Any) -> dict:
     }
 
 
+async def _synthesize_speech(core: Any, agent: str, tts_text: str, emotion: str) -> str | None:
+    """按 agent 分派 TTS 合成（xiaoda 主体直连，子 agent 未注册时回退主体）。"""
+    if agent == "xiaoda":
+        return await core.tts.synthesize_xiaoda(tts_text, emotion=emotion)
+    sub_agent = core.dispatcher.get_agent(agent)
+    if sub_agent:
+        return await sub_agent.synthesize(tts_text, emotion=emotion)
+    return await core.tts.synthesize_xiaoda(tts_text, emotion=emotion)
+
+
 async def _async_tts_task(core: Any, agent: str, tts_text: str, emotion: str,
                            conn_id: str, msg_id: str) -> None:
-    """Task 6: 后台 TTS 合成任务 —— 合成完成后推送 audio_ready 事件。"""
+    """Task 6: 后台 TTS 合成任务 -- 合成完成后推送 audio_ready 事件。"""
     try:
-        if agent == "xiaoda":
-            audio_path = await core.tts.synthesize_xiaoda(tts_text, emotion=emotion)
-        else:
-            sub_agent = core.dispatcher.get_agent(agent)
-            if sub_agent:
-                audio_path = await sub_agent.synthesize(tts_text, emotion=emotion)
-            else:
-                audio_path = await core.tts.synthesize_xiaoda(tts_text, emotion=emotion)
-
+        audio_path = await _synthesize_speech(core, agent, tts_text, emotion)
         audio_url = _publish_file(audio_path, "tts") if audio_path else None
         if audio_url:
             await manager.send_to(conn_id, {
@@ -469,21 +620,16 @@ async def _async_tts_task(core: Any, agent: str, tts_text: str, emotion: str,
             })
         else:
             logger.warning("ws.async_tts_no_audio", conn_id=conn_id, msg_id=msg_id)
-    except (OSError, RuntimeError, asyncio.CancelledError) as e:
+    except asyncio.CancelledError:
+        raise
+    except (OSError, RuntimeError) as e:
         logger.error("ws.async_tts_failed", conn_id=conn_id, msg_id=msg_id, error=str(e))
 
 
 async def _synthesize_tts_sync(core: Any, agent: str, tts_text: str, emotion: str) -> str | None:
     """同步 TTS 合成（HTTP 端点等无 WebSocket 连接场景的回退）。"""
     try:
-        if agent == "xiaoda":
-            audio_path = await core.tts.synthesize_xiaoda(tts_text, emotion=emotion)
-        else:
-            sub_agent = core.dispatcher.get_agent(agent)
-            if sub_agent:
-                audio_path = await sub_agent.synthesize(tts_text, emotion=emotion)
-            else:
-                audio_path = await core.tts.synthesize_xiaoda(tts_text, emotion=emotion)
+        audio_path = await _synthesize_speech(core, agent, tts_text, emotion)
         return _publish_file(audio_path, "tts") if audio_path else None
     except (OSError, RuntimeError) as e:
         logger.error("ws.sync_tts_failed", error=str(e))
@@ -516,7 +662,7 @@ async def process_and_serialize(core: Any, text: str, session_id: str,
                                 conn_id: str = "", msg_id: str = "",
                                 image_data: list[dict] | None = None,
                                 system_context: str = "") -> dict:
-    """统一处理入口：主体走 AgentCore.process；子代理直达 dispatcher（R5）。
+    """统一处理入口：主体走 process；Web 子代理走 AgentCore 锁内入口。
 
     斜杠命令（/ 开头）始终走主体 process（内部路由到 SlashCommandHandler）。
     Task 6: 当 TTS_ASYNC_MODE 开启且结果标记 tts_pending 时，启动后台合成任务。
@@ -542,21 +688,14 @@ async def process_and_serialize(core: Any, text: str, session_id: str,
                 except (RuntimeError, OSError, ConnectionError):
                     logger.warning("ws.agent_fallback_status_callback_failed", exc_info=True)
         else:
-            # 走与 QQ 通道相同的完整子代理流程：表情包/情绪/TTS/落库都不缺
-            from loguru import logger as _logger
-            from agent_core import RequestContext
-            from utils.trace_context import new_trace_id
-            # 身份解析：与 core.process() 主路径一致，确保 is_master/user_openid 语义正确
-            _identity = core._resolve_identity("webui", user_openid="", source="web")
-            ctx = RequestContext(session_id=session_id, user_id=os.getenv("MASTER_QQ_OPENID", "webui"),
-                                 user_input=text, status_callback=status_callback,
-                                 is_master=_identity.is_owner)
-            ctx.identity = _identity
-            _tid = new_trace_id()
-            trace = _logger.bind(trace_id=_tid)
-            result = await core._dispatch_single_sub_agent(
-                agent, text, user_id=os.getenv("MASTER_QQ_OPENID", "webui"), source="web",
-                session_id=session_id, trace=trace, ctx=ctx)
+            # Web 直达子代理必须经过 AgentCore 的锁内入口；Web 层不管理用户上下文。
+            result = await core.dispatch_web_sub_agent(
+                agent,
+                text,
+                session_id=session_id,
+                status_callback=status_callback,
+                user_id=os.getenv("MASTER_QQ_OPENID", "webui"),
+            )  # Web 直达子代理路径当前不涉及后台委托插话，保持默认 None
             data = serialize_result(result)
             # XP 自动加成：子 agent 路径也需触发 XP（与主路径一致）
             # 根因修复：add_chat_xp 内部 json.dump 同步写文件，原直接调用阻塞事件循环。
@@ -630,7 +769,7 @@ async def websocket_endpoint(ws: WebSocket) -> None:
     logger.info("ws.connected conn_id={}", conn_id)
     await manager.send_to(conn_id, {
         "type": "connected", "conn_id": conn_id,
-        "session_id": manager._session_map[conn_id],
+        "session_id": manager.get_session(conn_id),
     })
 
     try:
@@ -665,26 +804,47 @@ async def _dispatch_message(conn_id: str, msg: dict, mtype: str, ws: WebSocket) 
         await manager.send_to(conn_id, {"type": "pong"})
 
     elif mtype == "pong":
-        # G5: 客户端响应心跳 pong —— 唤醒心跳协程的 wait_for
-        evt = manager._pong_events.get(conn_id)
-        if evt:
-            evt.set()
+        # G5: 客户端响应心跳 pong -- 唤醒心跳协程的 wait_for
+        manager.notify_pong(conn_id)
 
     elif mtype == "set_agent":
         agent = str(msg.get("agent") or "xiaoda")
-        manager._agent_map[conn_id] = agent
+        manager.set_agent(conn_id, agent)
         await manager.send_to(conn_id, {"type": "agent_changed", "agent": agent})
 
     elif mtype == "set_session":
         sid = str(msg.get("session_id") or "")
         if sid:
-            manager._session_map[conn_id] = sid
+            manager.set_session(conn_id, sid)
             await manager.send_to(conn_id, {"type": "session_changed", "session_id": sid})
 
     elif mtype == "chat":
         msg_id = str(msg.get("msg_id") or uuid.uuid4().hex[:8])
+        # 幂等防线 1：已完成且在 TTL 内的同 msg_id 直接重放，不二次执行
+        if msg_id and manager.get_completed_result_time(conn_id, msg_id) is not None:
+            await manager.send_to(conn_id, {
+                "type": "error", "msg_id": msg_id,
+                "code": "DUPLICATE_COMPLETED",
+                "message": "该消息已处理完成，请勿重复发送",
+            })
+            return
+        # 每连接并发节流：track_message_task 只按 msg_id 幂等，客户端换
+        # msg_id 即可无限并发拉起 LLM 任务，此处按连接硬顶在途数
+        if manager.inflight_chat_count(conn_id) >= manager.MAX_CHAT_TASKS_PER_CONN:
+            await manager.send_to(conn_id, {
+                "type": "error", "msg_id": msg_id,
+                "code": "TOO_MANY_INFLIGHT",
+                "message": "当前连接并发请求过多，请等待在途消息完成",
+            })
+            return
         task = asyncio.create_task(_handle_chat(conn_id, msg, msg_id, ws))
-        manager.track_message_task(conn_id, msg_id, task)
+        # 幂等防线 2：同 key 在途时拒绝新帧（put-if-absent），防止双跑副作用
+        if not manager.track_message_task(conn_id, msg_id, task):
+            await manager.send_to(conn_id, {
+                "type": "error", "msg_id": msg_id,
+                "code": "DUPLICATE_IN_FLIGHT",
+                "message": "相同消息正在处理中，已忽略重复请求",
+            })
 
     elif mtype == "terminal_start":
         term_sid = str(msg.get("term_sid") or uuid.uuid4().hex[:8])
@@ -808,10 +968,10 @@ async def _handle_chat(conn_id: str, msg: dict, msg_id: str, ws: WebSocket) -> N
         return
     if not text:
         text = "📷 图片" if image_url_field else f"📄 {Path(doc_path_field).name}"
-    agent = str(msg.get("agent") or manager._agent_map.get(conn_id, "xiaoda"))
+    agent = str(msg.get("agent") or manager.get_agent(conn_id))
     session_id = str(msg.get("session_id") or
-                     manager._session_map.get(conn_id) or f"web_{uuid.uuid4().hex[:12]}")
-    manager._session_map[conn_id] = session_id
+                     manager.get_session(conn_id) or f"web_{uuid.uuid4().hex[:12]}")
+    manager.set_session(conn_id, session_id)
     app = ws.scope.get("app")
     core = app.state.core
 
@@ -865,14 +1025,19 @@ async def _handle_chat(conn_id: str, msg: dict, msg_id: str, ws: WebSocket) -> N
         data.update({"type": "final", "msg_id": msg_id})
         await manager.send_to(conn_id, data)
     except asyncio.CancelledError:
+        # 取消须向上传播（吞掉会破坏 asyncio 取消语义，任务无法真正终止）。
+        # ABORTED 通知经 finally 前的队列发送：send_to 是非阻塞入队，
+        # 不会因连接失效而挂起；随后 raise 恢复取消链。
         await manager.send_to(conn_id, {
             "type": "error", "msg_id": msg_id,
             "code": "ABORTED", "message": "已中断生成"})
-    except (RuntimeError, OSError, asyncio.CancelledError, ValueError) as e:
-        logger.error("ws.chat.failed conn_id={} error={}", conn_id, str(e))
+        raise
+    except (RuntimeError, OSError, ValueError):
+        # 异常原文不回传客户端（可能带内部路径/模型细节），完整信息进日志
+        logger.exception("ws.chat.failed conn_id={} msg_id={}", conn_id, msg_id)
         await manager.send_to(conn_id, {
             "type": "error", "msg_id": msg_id,
-            "code": "CHAT_ERROR", "message": str(e)[:300]})
+            "code": "CHAT_ERROR", "message": "生成回复失败，请稍后重试或查看服务端日志"})
     finally:
         reset_current_request_context(request_context_token)
         current_msg_id.reset(token)
@@ -897,6 +1062,7 @@ def _build_image_data(image_url_field: str, text: str) -> tuple[list | None, str
 
     if image_urls:
         from pathlib import Path as _Path
+
         from utils.text_utils import encode_image_to_base64
         image_data = []
         for url in image_urls:
@@ -957,6 +1123,9 @@ def _make_status_callback(conn_id: str, msg_id: str):
                 "stage": message.get("stage", ""),
                 "label": message.get("label", ""),
                 "detail": message.get("detail", ""),
+                "tool_call_id": message.get("tool_call_id", ""),
+                "turn": message.get("turn", 0),
+                "index": message.get("index", 0),
             })
             return
         if STREAM_STATUS_PUSH:
@@ -966,431 +1135,26 @@ def _make_status_callback(conn_id: str, msg_id: str):
             })
     return on_status
 
-async def _handle_terminal_start(conn_id: str, msg: dict, term_sid: str) -> None:
-    """启动一个终端会话：Linux 用 PTY，Windows 用 subprocess 管道。
-
-    msg 字段：
-      shell    — Shell 类型 (bash/zsh/python/node/cmd/powershell/wsl)，默认 bash
-      cols     — 终端列数
-      rows     — 终端行数
-    """
-    shell_type = (msg.get("shell") or "bash").strip().lower()
-    cols = int(msg.get("cols") or 80)
-    rows = int(msg.get("rows") or 24)
-
-    env = os.environ.copy()
-    env["TERM"] = "xterm-256color"
-
-    if _HAS_PTY:
-        # ── Linux / macOS: PTY 方式 ──
-        shell_map = {
-            "bash": "bash", "zsh": "zsh",
-            "python": "python3", "node": "node",
-        }
-        shell_cmd = shell_map.get(shell_type, "bash")
-        env["SHELL"] = shell_cmd
-        loop = asyncio.get_running_loop()
-
-        try:
-            child_pid, master_fd = pty.fork()
-            if child_pid == 0:
-                # ── 子进程 ──
-                os.chdir(str(Path.home()))
-                winsize = struct.pack("HHHH", rows, cols, 0, 0)
-                fcntl.ioctl(0, termios.TIOCSWINSZ, winsize)
-                os.execvpe(shell_cmd, [shell_cmd], env)
-            else:
-                with _pty_sessions_lock:
-                    _pty_sessions[term_sid] = {
-                        "pid": child_pid, "fd": master_fd, "conn_id": conn_id,
-                        "shell": shell_type, "alive": True, "loop": loop,
-                        "is_windows": False,
-                    }
-                logger.info("ws.terminal.start term_sid={} shell={} pid={}", term_sid, shell_type, child_pid)
-                await manager.send_to(conn_id, {
-                    "type": "terminal_started", "term_sid": term_sid, "shell": shell_type})
-                _setup_pty_reader(term_sid)
-
-        except (OSError, RuntimeError, ValueError) as e:
-            logger.error("ws.terminal.start.failed term_sid={} error={}", term_sid, str(e))
-            await manager.send_to(conn_id, {
-                "type": "terminal_error", "term_sid": term_sid,
-                "error": str(e)[:200]})
-    else:
-        # ── Windows: ConPTY 优先（真终端语义），缺 pywinpty 回退管道 ──
-        shell_map_win = {
-            "cmd": "cmd.exe",
-            "powershell": "powershell.exe",
-            "pwsh": "pwsh.exe",
-            "python": "python.exe",
-            "node": "node.exe",
-            "wsl": "wsl.exe",
-            "bash": "bash.exe",
-        }
-        exe = shell_map_win.get(shell_type, "cmd.exe")
-        loop = asyncio.get_running_loop()
-        PtyProcess = _try_import_winpty()
-
-        if PtyProcess is not None:
-            # ConPTY：真 PTY——resize/TUI(opencode 等)全支持
-            try:
-                pty_proc = PtyProcess.spawn(
-                    exe, cwd=str(Path.home()), dimensions=(rows, cols),
-                    env=list(f"{k}={v}" for k, v in env.items()))
-                with _pty_sessions_lock:
-                    _pty_sessions[term_sid] = {
-                        "pid": pty_proc.pid, "winpty": pty_proc,
-                        "conn_id": conn_id, "shell": shell_type,
-                        "alive": True, "loop": loop,
-                        "is_windows": True, "conpty": True,
-                    }
-                logger.info("ws.terminal.start term_sid={} shell={} pid={} mode=conpty",
-                            term_sid, shell_type, pty_proc.pid)
-                await manager.send_to(conn_id, {
-                    "type": "terminal_started", "term_sid": term_sid,
-                    "shell": shell_type, "mode": "conpty"})
-                _setup_win_pty_reader(term_sid)
-                return
-            except (OSError, RuntimeError, ValueError) as e:
-                logger.warning("ws.conpty_spawn_failed term_sid={} error={} → 回退管道",
-                               term_sid, str(e)[:150])
-
-        # 管道回退：无 TTY 语义（resize no-op、全屏 TUI 不可用）
-        try:
-            proc = _subprocess.Popen(
-                [exe] if not exe.endswith("powershell.exe") and not exe.endswith("pwsh.exe")
-                else [exe, "-NoLogo"],
-                stdin=_subprocess.PIPE,
-                stdout=_subprocess.PIPE,
-                stderr=_subprocess.STDOUT,
-                bufsize=0,
-                env=env,
-                cwd=str(Path.home()),
-                creationflags=_subprocess.CREATE_NEW_PROCESS_GROUP
-                    if hasattr(_subprocess, "CREATE_NEW_PROCESS_GROUP") else 0,
-            )
-            with _pty_sessions_lock:
-                _pty_sessions[term_sid] = {
-                    "pid": proc.pid, "proc": proc, "conn_id": conn_id,
-                    "shell": shell_type, "alive": True, "loop": loop,
-                    "is_windows": True, "conpty": False,
-                }
-            logger.info("ws.terminal.start term_sid={} shell={} pid={} mode=pipe",
-                        term_sid, shell_type, proc.pid)
-            await manager.send_to(conn_id, {
-                "type": "terminal_started", "term_sid": term_sid, "shell": shell_type})
-            _setup_win_pipe_reader(term_sid)
-
-        except (OSError, RuntimeError, ValueError) as e:
-            logger.error("ws.terminal.start.failed term_sid={} error={}", term_sid, str(e))
-            await manager.send_to(conn_id, {
-                "type": "terminal_error", "term_sid": term_sid,
-                "error": str(e)[:200]})
-
-
-def _setup_pty_reader(term_sid: str) -> None:
-    """用 loop.add_reader() 注册 PTY fd 的可读回调。"""
-    with _pty_sessions_lock:
-        session = _pty_sessions.get(term_sid)
-    if not session:
-        return
-    fd = session["fd"]
-    conn_id = session["conn_id"]
-    loop: asyncio.AbstractEventLoop = session["loop"]
-
-    def _on_pty_readable() -> None:
-        """当 PTY master fd 有数据可读时被调用。"""
-        try:
-            data = os.read(fd, 8192)
-        except OSError:
-            _cleanup_pty(term_sid)
-            return
-
-        if not data:
-            _cleanup_pty(term_sid)
-            return
-
-        text = data.decode("utf-8", errors="replace")
-
-        # 输出推送到前端：合帧节流（~16ms 一帧合并多次 read，防前端渲染冲垮）
-        _queue_term_output(term_sid, conn_id, text)
-
-        # 送入标记符检测器（内部按行缓冲）
-        try:
-            from web.pty_executor import feed_output
-            feed_output(text)
-        except (ImportError, OSError, RuntimeError):
-            logger.debug("ws.feed_output_error", exc_info=True)
-
-    loop.add_reader(fd, _on_pty_readable)
-
-
-def _queue_term_output(term_sid: str, conn_id: str, text: str) -> None:
-    """终端输出合帧：缓冲当前块并调度 ~16ms 后的冲刷（在事件循环线程执行）。
-
-    超过单帧上限立即冲刷，避免单条巨帧占内存。"""
-    loop: asyncio.AbstractEventLoop | None = None
-    with _pty_sessions_lock:
-        session = _pty_sessions.get(term_sid)
-        if session is not None:
-            loop = session.get("loop")
-    if loop is None:
-        return
-
-    def _flush(term_sid: str = term_sid) -> None:
-        entry = _term_out_buf.pop(term_sid, None)
-        if not entry or not entry["buf"]:
-            return
-        sid_ = entry["conn_id"]
-        asyncio.ensure_future(manager.send_to(sid_, {
-            "type": "terminal_output", "term_sid": term_sid,
-            "data": entry["buf"]}))
-
-    with _pty_sessions_lock:
-        entry = _term_out_buf.get(term_sid)
-        if entry is None:
-            entry = {"buf": "", "conn_id": conn_id, "timer": None}
-            _term_out_buf[term_sid] = entry
-    entry["buf"] += text
-    if len(entry["buf"]) >= _TERM_FLUSH_MAX_CHARS:
-        # 已满：取消定时器立即发（保持顺序——仍在循环线程串行执行）
-        if entry["timer"] is not None:
-            entry["timer"].cancel()
-        _flush()
-        return
-    if entry["timer"] is None and loop is not None:
-        entry["timer"] = loop.call_later(_TERM_FLUSH_INTERVAL_S, _flush)
-
-
-def _cleanup_term_out_buf(term_sid: str) -> None:
-    """会话清理时丢弃残留缓冲与未触发的定时器。"""
-    entry = _term_out_buf.pop(term_sid, None)
-    if entry and entry.get("timer") is not None:
-        entry["timer"].cancel()
-
-
-def _setup_win_pty_reader(term_sid: str) -> None:
-    """Windows ConPTY：后台线程读 PtyProcess 输出，推回事件循环（合帧）。"""
-    with _pty_sessions_lock:
-        session = _pty_sessions.get(term_sid)
-    if not session:
-        return
-    pty_proc = session["winpty"]
-    conn_id = session["conn_id"]
-    loop: asyncio.AbstractEventLoop = session["loop"]
-
-    def _reader_thread() -> None:
-        try:
-            while pty_proc.isalive():
-                # pywinpty read 在无数据时短暂阻塞，返回空串继续轮询
-                data = pty_proc.read(8192)
-                if not data:
-                    if not pty_proc.isalive():
-                        break
-                    time.sleep(0.01)
-                    continue
-                loop.call_soon_threadsafe(
-                    _queue_term_output, term_sid, conn_id, data)
-        except (OSError, RuntimeError, EOFError):
-            logger.debug("ws.conpty_reader_error term_sid={}", term_sid,
-                         exc_info=True)
-        finally:
-            loop.call_soon_threadsafe(_cleanup_pty, term_sid)
-
-    import threading
-    t = threading.Thread(target=_reader_thread, daemon=True)
-    t.start()
-
-
-def _setup_win_pipe_reader(term_sid: str) -> None:
-    """Windows: 在后台线程中读取 subprocess stdout 管道。"""
-    with _pty_sessions_lock:
-        session = _pty_sessions.get(term_sid)
-    if not session:
-        return
-    proc = session["proc"]
-    conn_id = session["conn_id"]
-    loop: asyncio.AbstractEventLoop = session["loop"]
-
-    def _reader_thread() -> None:
-        """后台线程：阻塞读取 stdout，推送到 event loop。"""
-        try:
-            while True:
-                data = proc.stdout.read(4096)
-                if not data:
-                    break
-                text = data.decode("utf-8", errors="replace")
-                loop.call_soon_threadsafe(_queue_term_output, term_sid, conn_id, text)
-
-                # 送入标记符检测器（内部按行缓冲）
-                try:
-                    from web.pty_executor import feed_output
-                    feed_output(text)
-                except (ImportError, OSError, RuntimeError):
-                    logger.debug("ws.feed_output_error_win", exc_info=True)
-        except (OSError, RuntimeError):
-            logger.debug("ws.win_pipe_reader_error term_sid={}", term_sid, exc_info=True)
-        finally:
-            loop.call_soon_threadsafe(_cleanup_pty, term_sid)
-
-    import threading
-    t = threading.Thread(target=_reader_thread, daemon=True)
-    t.start()
-
-
-def _cleanup_pty(term_sid: str) -> None:
-    """清理终端会话（在 reader 回调中调用，不能 await）。"""
-    # 先冲刷残留输出再清缓冲，保证退出前的最后几行不丢
-    entry = _term_out_buf.pop(term_sid, None)
-    if entry and entry["buf"]:
-        if entry.get("timer") is not None:
-            entry["timer"].cancel()
-        asyncio.ensure_future(manager.send_to(entry["conn_id"], {
-            "type": "terminal_output", "term_sid": term_sid,
-            "data": entry["buf"]}))
-    with _pty_sessions_lock:
-        session = _pty_sessions.pop(term_sid, None)
-    if not session:
-        return
-    session["alive"] = False
-    conn_id = session["conn_id"]
-    loop: asyncio.AbstractEventLoop = session["loop"]
-    is_win = session.get("is_windows", False)
-
-    if is_win:
-        # ── Windows: ConPTY 优先，其次 subprocess 管道 ──
-        wp = session.get("winpty") if session.get("conpty") else None
-        if wp is not None:
-            rc = -1
-            try:
-                wp.terminate(force=True)
-            except (OSError, RuntimeError):
-                logger.debug("ws.conpty_terminate_error", exc_info=True)
-            # ConPTY 无 wait 返回码语义，统一 -1（前端只显示退出提示）
-        else:
-            proc = session.get("proc")
-            rc = -1
-            if proc:
-                try:
-                    proc.terminate()
-                    rc = proc.wait(timeout=3)
-                except (OSError, subprocess.TimeoutExpired):
-                    logger.debug("ws.process_terminate_error", exc_info=True)
-                    try:
-                        proc.kill()
-                    except (OSError, PermissionError):
-                        logger.debug("ws.process_kill_error", exc_info=True)
-                    rc = -1
-    else:
-        # ── Unix: 关闭 PTY fd + 收割子进程（防僵尸） ──
-        fd = session["fd"]
-        try:
-            loop.remove_reader(fd)
-        except (OSError, ValueError):
-            logger.debug("ws.remove_reader_error", exc_info=True)
-        # reader 看到 EOF/EIO 时子进程可能尚未真正退出；旧实现
-        # waitpid(WNOHANG) 拿到 (0,0) 会被误判为 rc=0 且不再收割 → defunct 堆积。
-        # 先 SIGKILL 补刀（已退出则为无害 no-op），再有界轮询等收割。
-        pid = session["pid"]
-        try:
-            os.kill(pid, signal.SIGKILL)
-        except (ProcessLookupError, PermissionError):
-            pass
-        rc = -1
-        for _ in range(30):  # ≤300ms：SIGKILL 后通常首轮即收走
-            try:
-                wpid, status = os.waitpid(pid, os.WNOHANG)
-            except ChildProcessError:
-                break  # 已无此子进程（被别处收割）
-            if wpid == pid:
-                rc = os.WEXITSTATUS(status) if os.WIFEXITED(status) else -1
-                break
-            time.sleep(0.01)
-        try:
-            os.close(fd)
-        except OSError:
-            logger.debug("ws.close_fd_error", exc_info=True)
-
-    try:
-        loop.call_soon_threadsafe(
-            lambda: asyncio.ensure_future(
-                manager.send_to(conn_id, {
-                    "type": "terminal_exit", "term_sid": term_sid, "returncode": rc
-                }), loop=loop))
-    except RuntimeError:
-        logger.debug("ws.terminal_exit_send_failed term_sid={}", term_sid)
-    logger.info("ws.terminal.exit term_sid={} rc={}", term_sid, rc)
-
-
-def _handle_terminal_input(conn_id: str, msg: dict) -> None:
-    """将用户输入写入终端 stdin。"""
-    term_sid = str(msg.get("term_sid") or "")
-    data = msg.get("data", "")
-    with _pty_sessions_lock:
-        session = _pty_sessions.get(term_sid)
-        if not session or not session["alive"]:
-            return
-        if session.get("conn_id") != conn_id:
-            logger.warning("ws.terminal_input.denied conn_id={} owner={}", conn_id, session.get("conn_id"))
-            return
-        # 锁内获取引用，锁外做实际写入（避免阻塞其他会话）
-        is_windows = session.get("is_windows")
-        proc = session.get("proc")
-        fd = session.get("fd")
-    try:
-        if is_windows:
-            if session.get("conpty"):
-                wp = session.get("winpty")
-                if wp is not None:
-                    wp.write(data)
-            elif proc and proc.stdin:
-                proc.stdin.write(data.encode("utf-8", errors="replace"))
-                proc.stdin.flush()
-        else:
-            os.write(fd, data.encode("utf-8", errors="replace"))
-    except (OSError, BrokenPipeError):
-        logger.debug("ws.terminal_input_write_failed conn_id={}", conn_id, exc_info=True)
-
-
-def _handle_terminal_resize(conn_id: str, msg: dict) -> None:
-    """调整终端窗口大小。"""
-    term_sid = str(msg.get("term_sid") or "")
-    cols = int(msg.get("cols") or 80)
-    rows = int(msg.get("rows") or 24)
-    with _pty_sessions_lock:
-        session = _pty_sessions.get(term_sid)
-        if not session or not session["alive"]:
-            return
-        if session.get("conn_id") != conn_id:
-            logger.warning("ws.terminal_resize.denied conn_id={} owner={}", conn_id, session.get("conn_id"))
-            return
-        if session.get("is_windows"):
-            # ConPTY 会话支持 resize；管道回退无 TTY 概念，no-op
-            wp = session.get("winpty")
-            if session.get("conpty") and wp is not None:
-                try:
-                    wp.resize(rows, cols)
-                except (OSError, RuntimeError, ValueError):
-                    logger.debug("ws.conpty_resize_failed term_sid={}", term_sid,
-                                 exc_info=True)
-            return
-        fd = session.get("fd")
-    try:
-        winsize = struct.pack("HHHH", rows, cols, 0, 0)
-        fcntl.ioctl(fd, termios.TIOCSWINSZ, winsize)
-    except OSError:
-        logger.debug("ws.terminal_resize_failed conn_id={}", conn_id, exc_info=True)
-
-
-def _handle_terminal_kill(conn_id: str, msg: dict) -> None:
-    """终止终端会话 (复用 _cleanup_pty 确保前端收到 terminal_exit)."""
-    term_sid = str(msg.get("term_sid") or "")
-    with _pty_sessions_lock:
-        session = _pty_sessions.get(term_sid)
-        if not session:
-            return
-        if session.get("conn_id") != conn_id:
-            logger.warning("ws.terminal_kill.denied conn_id={} owner={}", conn_id, session.get("conn_id"))
-            return
-    _cleanup_pty(term_sid)
-    logger.info("ws.terminal.kill term_sid={}", term_sid)
+# ── 虚空终端子模块（web/ws_terminal.py，2026-08-25 拆分）──────────
+# 状态与会话管理函数全部内聚于子模块;此处 re-export 保持
+# `from web.ws_hub import X` 与 hub._X 引用面不破
+# （tests/test_terminal_output_coalescing.py 等 64 处引用）。
+from web.ws_terminal import (  # noqa: F401, E402 —— 文件尾 re-export(拆分兼容层)
+    _TERM_FLUSH_INTERVAL_S,
+    _TERM_FLUSH_MAX_CHARS,
+    _cleanup_pty,
+    _handle_terminal_input,
+    _handle_terminal_kill,
+    _handle_terminal_resize,
+    _handle_terminal_start,
+    _notify_terminal_exit,
+    _pty_sessions,
+    _pty_sessions_lock,
+    _queue_term_output,
+    _reap_unix_child,
+    _setup_pty_reader,
+    _setup_win_pipe_reader,
+    _setup_win_pty_reader,
+    _term_out_buf,
+    _try_import_winpty,
+)

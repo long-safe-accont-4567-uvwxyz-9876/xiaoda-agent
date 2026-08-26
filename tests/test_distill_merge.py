@@ -1,15 +1,16 @@
 """蒸馏流程测试：merge_knowledge + _distill_to_knowledge + _update_knowledge"""
-import asyncio
-import time
-import pytest
 import sys
 from pathlib import Path
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock
+
+import pytest
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from memory.scope import Scope
+from memory.context_governance import ContextGovernance, compute_content_hash
+from memory.fsrs_model import S_PERMANENT
 from memory.memory_distiller import MemoryDistiller
+from memory.scope import Scope
 
 
 @pytest.fixture
@@ -240,6 +241,207 @@ class TestUpdateKnowledge:
         updated = await db.memory.get_memory_by_id(existing_id)
         assert updated["summary"] == "用户喜欢Python和React"
         mgr.distiller.merge_knowledge.assert_awaited_once()
+
+    async def test_update_promotes_canonical_state_from_fact_raw(self, distill_db):
+        db, mgr = distill_db
+        scope = Scope()
+        canonical_id = await db.memory.insert_episodic_memory(
+            "已有事件知识", importance=0.5, scope=scope, is_raw=0,
+            memory_type="event", phase="buffer", stability=3.0,
+            reinforcement_count=0,
+        )
+        raw_id = await db.memory.insert_episodic_memory(
+            "我的生日是3月15日", importance=0.9, scope=scope, is_raw=1,
+            memory_type="fact", phase="permanent", stability=S_PERMANENT,
+            reinforcement_count=1,
+        )
+        mgr.distiller.merge_knowledge = AsyncMock(return_value="合并后的生日知识")
+
+        await mgr._update_knowledge(canonical_id, "生日事实", raw_id, scope)
+
+        canonical = await db.memory.get_memory_by_id(canonical_id)
+        raw = await db.memory.get_memory_by_id(raw_id)
+        assert canonical["memory_type"] == "fact"
+        assert canonical["importance"] >= 0.9
+        assert canonical["phase"] == "permanent"
+        assert canonical["stability"] >= S_PERMANENT
+        assert canonical["reinforcement_count"] >= 1
+        assert raw["summary"] == "我的生日是3月15日"
+
+    @pytest.mark.parametrize("memory_type", ["affect", "relation"])
+    async def test_update_promotes_event_canonical_to_reinforced_type(
+        self, distill_db, memory_type
+    ):
+        db, mgr = distill_db
+        scope = Scope()
+        canonical_id = await db.memory.insert_episodic_memory(
+            "已有事件知识", importance=0.5, scope=scope, is_raw=0,
+            memory_type="event", phase="buffer", stability=3.0,
+            reinforcement_count=0,
+        )
+        raw_id = await db.memory.insert_episodic_memory(
+            "新的关系或情绪", importance=0.7, scope=scope, is_raw=1,
+            memory_type=memory_type, phase="reinforced", stability=4.0,
+            reinforcement_count=1,
+        )
+        mgr.distiller.merge_knowledge = AsyncMock(return_value="合并知识")
+
+        await mgr._update_knowledge(canonical_id, "新内容", raw_id, scope)
+
+        canonical = await db.memory.get_memory_by_id(canonical_id)
+        assert canonical["memory_type"] == memory_type
+        assert canonical["importance"] >= 0.7
+        assert canonical["phase"] == "reinforced"
+        assert canonical["stability"] >= 4.0
+        assert canonical["reinforcement_count"] >= 1
+
+    async def test_update_does_not_lower_existing_fact_with_relation_raw(
+        self, distill_db
+    ):
+        db, mgr = distill_db
+        scope = Scope()
+        canonical_id = await db.memory.insert_episodic_memory(
+            "已有永久知识", importance=0.95, scope=scope, is_raw=0,
+            memory_type="fact", phase="permanent", stability=S_PERMANENT,
+            reinforcement_count=2,
+        )
+        raw_id = await db.memory.insert_episodic_memory(
+            "新的关系", importance=0.7, scope=scope, is_raw=1,
+            memory_type="relation", phase="reinforced", stability=4.0,
+            reinforcement_count=1,
+        )
+        mgr.distiller.merge_knowledge = AsyncMock(return_value="合并知识")
+
+        await mgr._update_knowledge(canonical_id, "新内容", raw_id, scope)
+
+        canonical = await db.memory.get_memory_by_id(canonical_id)
+        assert canonical["memory_type"] == "fact"
+        assert canonical["importance"] >= 0.95
+        assert canonical["phase"] == "permanent"
+        assert canonical["stability"] >= S_PERMANENT
+        assert canonical["reinforcement_count"] >= 2
+
+    async def test_update_instruction_promotes_default_event_canonical(self, distill_db):
+        db, mgr = distill_db
+        scope = Scope()
+        canonical_id = await db.memory.insert_episodic_memory(
+            "默认事件", scope=scope, is_raw=0, memory_type="event"
+        )
+        raw_id = await db.memory.insert_episodic_memory(
+            "以后请记住规则", scope=scope, is_raw=1,
+            memory_type="instruction", importance=0.7,
+        )
+        mgr.distiller.merge_knowledge = AsyncMock(return_value="规则知识")
+
+        await mgr._update_knowledge(canonical_id, "规则", raw_id, scope)
+
+        canonical = await db.memory.get_memory_by_id(canonical_id)
+        assert canonical["memory_type"] == "instruction"
+        assert canonical["importance"] >= 0.7
+
+    async def test_update_event_raw_does_not_lower_instruction_canonical(self, distill_db):
+        db, mgr = distill_db
+        scope = Scope()
+        canonical_id = await db.memory.insert_episodic_memory(
+            "已有规则", importance=0.8, scope=scope, is_raw=0,
+            memory_type="instruction", phase="buffer",
+        )
+        raw_id = await db.memory.insert_episodic_memory(
+            "普通事件", importance=0.5, scope=scope, is_raw=1,
+            memory_type="event", phase="buffer",
+        )
+        mgr.distiller.merge_knowledge = AsyncMock(return_value="规则附带事件")
+
+        await mgr._update_knowledge(canonical_id, "事件", raw_id, scope)
+
+        canonical = await db.memory.get_memory_by_id(canonical_id)
+        assert canonical["memory_type"] == "instruction"
+        assert canonical["importance"] >= 0.8
+
+    async def test_update_merge_commits_main_fts_and_governance_atomically(self, distill_db):
+        db, mgr = distill_db
+        scope = Scope()
+        mgr._governance = ContextGovernance(db._conn)
+        canonical_id = await db.memory.insert_episodic_memory(
+            "旧canonical摘要", importance=0.5, scope=scope, is_raw=0,
+            memory_type="event",
+        )
+        await mgr._governance.record_initial_version(canonical_id, "旧canonical摘要")
+        raw_id = await db.memory.insert_episodic_memory(
+            "我的生日是3月15日", importance=0.9, scope=scope, is_raw=1,
+            memory_type="fact", phase="permanent", stability=S_PERMANENT,
+            reinforcement_count=1,
+        )
+        mgr.distiller.merge_knowledge = AsyncMock(return_value="新canonical生日摘要")
+        mgr.vec = MagicMock()
+        mgr.vec.upsert = AsyncMock()
+
+        await mgr._update_knowledge(canonical_id, "生日事实", raw_id, scope)
+
+        canonical = await db.memory.get_memory_by_id(canonical_id)
+        assert canonical["summary"] == "新canonical生日摘要"
+        assert canonical["importance"] >= 0.9
+        assert canonical["memory_type"] == "fact"
+        assert canonical["phase"] == "permanent"
+        assert canonical["stability"] >= S_PERMANENT
+        assert canonical["reinforcement_count"] >= 1
+        assert canonical["content_hash"] == compute_content_hash("新canonical生日摘要")
+        assert canonical["version"] == 2
+        versions = await db.fetch_all(
+            "SELECT version, content_hash, summary_snapshot FROM memory_versions "
+            "WHERE memory_id=? ORDER BY version",
+            (canonical_id,),
+        )
+        assert [row["version"] for row in versions] == [1, 2]
+        assert versions[-1]["summary_snapshot"] == "新canonical生日摘要"
+        fts_rows = await db.fetch_all(
+            "SELECT id FROM episodic_memory_fts WHERE id=? AND summary_index MATCH ?",
+            (canonical_id, "生日"),
+        )
+        assert fts_rows == [{"id": canonical_id}]
+        mgr.vec.upsert.assert_awaited_once_with(canonical_id, "新canonical生日摘要")
+
+    @pytest.mark.parametrize("failure", ["fts", "db_false"])
+    async def test_update_merge_failure_rolls_back_and_skips_vector(
+        self, distill_db, failure
+    ):
+        db, mgr = distill_db
+        scope = Scope()
+        mgr._governance = ContextGovernance(db._conn)
+        canonical_id = await db.memory.insert_episodic_memory(
+            "事务前摘要", importance=0.5, scope=scope, is_raw=0,
+            memory_type="event",
+        )
+        await mgr._governance.record_initial_version(canonical_id, "事务前摘要")
+        before = await db.memory.get_memory_by_id(canonical_id)
+        raw_id = await db.memory.insert_episodic_memory(
+            "生日事实", importance=0.9, scope=scope, is_raw=1,
+            memory_type="fact", phase="permanent", stability=S_PERMANENT,
+            reinforcement_count=1,
+        )
+        mgr.distiller.merge_knowledge = AsyncMock(return_value="事务后摘要")
+        mgr.vec = MagicMock()
+        mgr.vec.upsert = AsyncMock()
+        if failure == "fts":
+            db.memory._sync_fts = AsyncMock(side_effect=RuntimeError("fts failed"))
+        else:
+            db.memory.merge_memory_knowledge_state = AsyncMock(return_value=False)
+
+        await mgr._update_knowledge(canonical_id, "事实", raw_id, scope)
+
+        after = await db.memory.get_memory_by_id(canonical_id)
+        assert after["summary"] == before["summary"]
+        assert after["importance"] == before["importance"]
+        assert after["memory_type"] == before["memory_type"]
+        assert after["phase"] == before["phase"]
+        assert after["content_hash"] == before["content_hash"]
+        assert after["version"] == before["version"]
+        versions = await db.fetch_all(
+            "SELECT version FROM memory_versions WHERE memory_id=? ORDER BY version",
+            (canonical_id,),
+        )
+        assert versions == [{"version": 1}]
+        mgr.vec.upsert.assert_not_awaited()
 
     async def test_update_nonexistent_knowledge_noop(self, distill_db):
         """_update_knowledge 对不存在的 ID 安全跳过"""

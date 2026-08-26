@@ -14,67 +14,152 @@ class LifecycleMixin:
     async def get_all_memories(self, limit: int = 100) -> Any:
         """获取所有活跃记忆（排除已归档）"""
         cursor = await self._read_conn().execute(
-            "SELECT * FROM episodic_memories WHERE session_id != 'archived' ORDER BY timestamp DESC LIMIT ?",
+            "SELECT * FROM episodic_memories "
+            "WHERE session_id != 'archived' AND status != 'archived' "
+            "ORDER BY timestamp DESC LIMIT ?",
             (limit,),
         )
         rows = await cursor.fetchall()
         return [dict(r) for r in rows]
 
-    async def delete_memory(self, memory_id: int, auto_commit: bool = True) -> None:
-        await self._conn.execute("DELETE FROM episodic_memories WHERE id=?", (memory_id,))
-        # 同步删除 FTS 记录
+    async def _purge_memory_references(self, memory_id: int) -> None:
+        """删除记忆的全部库内引用（数据库小任务B-2）。
+
+        必须先于 episodic_memories 主行删除、在同一主库事务内执行：
+        memory_versions 的 FK 无 ON DELETE 策略，主行先行删除会 IntegrityError，
+        且此时外部向量若已删则不可恢复。FTS 为虚拟表，沿用防御性容错。
+        """
+        await self._conn.execute(
+            "DELETE FROM memory_versions WHERE memory_id=?", (memory_id,))
+        await self._conn.execute(
+            "DELETE FROM context_audit_log WHERE memory_id=?", (memory_id,))
+        await self._conn.execute(
+            "DELETE FROM entity_memory_links WHERE memory_id=?", (memory_id,))
+        await self._conn.execute(
+            "DELETE FROM memory_child_chunks WHERE parent_id=?", (memory_id,))
         try:
-            await self._conn.execute("DELETE FROM episodic_memory_fts WHERE id=?", (memory_id,))
+            await self._conn.execute(
+                "DELETE FROM episodic_memory_fts WHERE id=?", (memory_id,))
         except Exception as e:
             logger.debug("db_memory.fts_delete_failed", error=str(e))
+
+    async def delete_memory(self, memory_id: int, auto_commit: bool = True) -> None:
+        """Delete mutable knowledge; ordinary deletion only archives raw records."""
+        # B-2：先清引用再删主行（同一事务），避免 FK IntegrityError 半途状态
+        await self._purge_memory_references(memory_id)
+        await self._conn.execute(
+            "DELETE FROM episodic_memories WHERE id=? AND is_raw=0", (memory_id,)
+        )
+        await self._conn.execute(
+            "UPDATE episodic_memories SET status='archived' "
+            "WHERE id=? AND is_raw=1",
+            (memory_id,),
+        )
         if auto_commit:
             await self._conn.commit()
 
     async def delete_memories_batch(self, memory_ids: list[int],
                                      vector_store: Any = None,
                                      auto_commit: bool = True) -> None:
-        """批量删除记忆，同步批量删除 FTS 索引与向量（消除 N+1 查询）。
+        """Delete knowledge in bulk and archive raw records without hard deletion.
 
-        保留 delete_memory 的 FTS 副作用：批量删除主表后批量删除 FTS 记录。
-        若传入 vector_store，则先逐条删除向量（memories_vec），避免孤儿向量。
+        B-2 顺序契约：主库先行（归档 raw → 清引用 → 删 knowledge 主行 →
+        commit），之后才删外部向量；向量删除失败不抛出，留待对账重试补删
+        ——绝不出现「向量已删而主记录仍在」的不可恢复状态。
         """
         if not memory_ids:
             return
-        # 先清理向量（与 delete_memory_with_vector 保持一致：先向量后主表）
-        if vector_store is not None:
-            for mid in memory_ids:
-                try:
-                    await vector_store.delete(mid)
-                except Exception as e:
-                    logger.error("db_memory.vec_delete_batch_failed",
-                                 memory_id=mid, error=str(e))
-                    # 单条向量删除失败不阻塞主表清理，但向上抛出由调用方决策
-                    raise
         placeholders = _sql_placeholders(memory_ids)
-        await self._conn.execute(
-            f"DELETE FROM episodic_memories WHERE id IN ({placeholders})",
+        cursor = await self._read_conn().execute(
+            f"SELECT id, is_raw FROM episodic_memories WHERE id IN ({placeholders})",
             memory_ids,
         )
-        # 同步批量删除 FTS 记录（保留 delete_memory 的副作用）
-        try:
+        rows = await cursor.fetchall()
+        knowledge_ids = [int(row["id"]) for row in rows if not row["is_raw"]]
+        await self._conn.execute(
+            f"UPDATE episodic_memories SET status='archived' "
+            f"WHERE is_raw=1 AND id IN ({placeholders})",
+            memory_ids,
+        )
+        if knowledge_ids:
+            knowledge_placeholders = _sql_placeholders(knowledge_ids)
+            for memory_id in knowledge_ids:
+                await self._purge_memory_references(memory_id)
             await self._conn.execute(
-                f"DELETE FROM episodic_memory_fts WHERE id IN ({placeholders})",
-                memory_ids,
+                f"DELETE FROM episodic_memories "
+                f"WHERE is_raw=0 AND id IN ({knowledge_placeholders})",
+                knowledge_ids,
             )
-        except Exception as e:
-            logger.debug("db_memory.fts_delete_batch_failed", error=str(e))
         if auto_commit:
             await self._conn.commit()
+        # 向量删除后置（commit 之后）：失败可重试，不阻断主库结果
+        if vector_store is not None:
+            for memory_id in knowledge_ids:
+                try:
+                    await vector_store.delete(memory_id)
+                except Exception as e:
+                    logger.error(
+                        "db_memory.vec_delete_batch_failed_retryable",
+                        memory_id=memory_id,
+                        error=str(e),
+                    )
 
-    async def delete_memory_with_vector(self, memory_id: int, vector_store: Any=None, auto_commit: bool = True) -> None:
-        """统一删除：先删向量，再删记忆"""
-        if vector_store:
+    async def delete_memory_with_vector(self, memory_id: int, vector_store: Any=None,
+                                        auto_commit: bool = True) -> None:
+        """Delete mutable knowledge with its vector; raw records are only archived.
+
+        B-2 顺序契约：主库事务内（清引用→删主行→commit）全部完成后才删外部
+        向量——绝不出现「向量已删而主记录仍在」的不可恢复状态。向量删除失败
+        不抛出（主库结果不受影响），可由对账重试幂等补删：主行已不存在时
+        仍会尝试补删向量。
+        """
+        row = await self.get_memory_by_id(memory_id)
+        if row and row.get("is_raw"):
+            # 原始记录仅归档，不涉取向量删除（保持既有语义）
+            await self.delete_memory(memory_id, auto_commit=auto_commit)
+            return
+        await self.delete_memory(memory_id, auto_commit=auto_commit)
+        if vector_store is not None:
             try:
                 await vector_store.delete(memory_id)
             except Exception as e:
-                logger.error("db_memory.vec_delete_failed", memory_id=memory_id, error=str(e))
-                raise
-        await self.delete_memory(memory_id, auto_commit=auto_commit)
+                # 主库删除已完成；失败留待 reconciliation 对账重试补删
+                logger.error(
+                    "db_memory.vec_delete_failed_retryable",
+                    memory_id=memory_id,
+                    error=str(e),
+                )
+
+    async def hard_delete_raw_for_user_request(
+        self,
+        memory_id: int,
+        vector_store: Any = None,
+        auto_commit: bool = True,
+    ) -> bool:
+        """Hard-delete one raw record only for an explicit user forget request.
+
+        B-2 顺序契约：先清引用再删主行（同一主库事务），commit 成功后才删
+        外部向量；向量删除失败不抛出，可由对账重试补删。
+        """
+        row = await self.get_memory_by_id(memory_id)
+        if not row or not row.get("is_raw"):
+            return False
+        await self._purge_memory_references(memory_id)
+        cursor = await self._conn.execute(
+            "DELETE FROM episodic_memories WHERE id=? AND is_raw=1", (memory_id,)
+        )
+        if auto_commit:
+            await self._conn.commit()
+        if vector_store is not None:
+            try:
+                await vector_store.delete(memory_id)
+            except Exception as e:
+                logger.error(
+                    "db_memory.vec_delete_raw_forget_failed_retryable",
+                    memory_id=memory_id,
+                    error=str(e),
+                )
+        return cursor.rowcount > 0
 
     async def get_episodic_recent(self, limit: int = 50) -> Any:
         cursor = await self._read_conn().execute(
@@ -93,8 +178,17 @@ class LifecycleMixin:
     async def get_raw_memory_ids(self) -> list[int]:
         """获取主表所有 is_raw=1 且未归档的记忆 id（用于向量索引对账）。"""
         try:
+            available = getattr(self, "_episodic_columns_cache", None)
+            if available is None:
+                schema_cursor = await self._read_conn().execute(
+                    "PRAGMA table_info(episodic_memories)"
+                )
+                available = {row[1] for row in await schema_cursor.fetchall()}
+                self._episodic_columns_cache = available
+            status_filter = " AND status != 'archived'" if "status" in available else ""
             cursor = await self._read_conn().execute(
-                "SELECT id FROM episodic_memories WHERE is_raw=1 AND session_id != 'archived'"
+                "SELECT id FROM episodic_memories "
+                "WHERE is_raw=1 AND session_id != 'archived'" + status_filter
             )
             rows = await cursor.fetchall()
             return [int(r["id"]) for r in rows]

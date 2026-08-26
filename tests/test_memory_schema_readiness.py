@@ -15,6 +15,12 @@ def _make_db(path, version: int, *, complete: bool = False) -> None:
             "metadata_json TEXT DEFAULT '{}'",
             "content_hash TEXT DEFAULT ''",
             "version INTEGER DEFAULT 1",
+            "memory_type TEXT DEFAULT 'event'",
+            "classification_status TEXT DEFAULT 'pending'",
+            "classification_version INTEGER DEFAULT 0",
+            "classified_at REAL DEFAULT 0",
+            "status TEXT DEFAULT 'active'",
+            "superseded_by INTEGER",
         ):
             conn.execute(f"ALTER TABLE episodic_memories ADD COLUMN {column_sql}")
         conn.execute(
@@ -24,7 +30,13 @@ def _make_db(path, version: int, *, complete: bool = False) -> None:
         conn.execute("CREATE TABLE memory_versions (id INTEGER PRIMARY KEY, memory_id INTEGER)")
         conn.execute("CREATE TABLE context_audit_log (id INTEGER PRIMARY KEY, memory_id INTEGER)")
         # v14 新增表
-        for table in ("kg_entities_v2", "kg_relations_v2", "kg_episodes", "memory_facts", "memory_preferences"):
+        for table in (
+            "kg_entities_v2", "kg_relations_v2", "kg_episodes",
+            "memory_facts", "memory_preferences", "memory_knowledge_sources",
+            "memory_reconciliation_jobs", "memory_reconciliation_actions",
+            "memory_reconciliation_targets", "memory_reconciliation_snapshots",
+            "memory_index_outbox", "memory_retrieval_epochs",
+        ):
             conn.execute(f"CREATE TABLE {table} (id INTEGER PRIMARY KEY)")
     conn.commit()
     conn.close()
@@ -55,3 +67,16 @@ def test_reports_ready_only_when_version_and_required_schema_are_present(tmp_pat
     assert report.current_version == 12
     assert report.missing_capabilities == ()
     assert report.dirty is False
+
+
+def test_reports_memory_type_capability_missing_even_when_version_is_current(tmp_path):
+    db_path = tmp_path / "false-current.db"
+    _make_db(db_path, 31, complete=True)
+    with sqlite3.connect(db_path) as conn:
+        conn.execute("ALTER TABLE episodic_memories DROP COLUMN memory_type")
+        conn.commit()
+
+    report = inspect_memory_schema(db_path, expected_version=31)
+
+    assert report.ready is False
+    assert "episodic_memories.memory_type" in report.missing_capabilities

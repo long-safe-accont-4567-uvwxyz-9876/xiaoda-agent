@@ -8,8 +8,6 @@
 """
 from unittest.mock import MagicMock, patch
 
-import pytest
-
 from emotion.nudge_engine import NudgeEngine
 from memory.emotional_memory import EmotionalMemory
 
@@ -92,7 +90,11 @@ async def test_memory_injection_no_crash():
     ):
         result = await engine._generate_idle_greeting(idle_seconds=14400)
 
-    assert isinstance(result, str)
+    # R：返回 (text, sticker_path) 二元组；无 core 的降级路径贴纸恒为 None
+    assert isinstance(result, tuple)
+    greeting, sticker_path = result
+    assert isinstance(greeting, str)
+    assert sticker_path is None
 
 
 async def test_memory_injection_with_memories_no_crash():
@@ -116,7 +118,11 @@ async def test_memory_injection_with_memories_no_crash():
     ):
         result = await engine._generate_idle_greeting(idle_seconds=14400)
 
-    assert isinstance(result, str)
+    # R：返回 (text, sticker_path) 二元组；无 core 的降级路径贴纸恒为 None
+    assert isinstance(result, tuple)
+    greeting, sticker_path = result
+    assert isinstance(greeting, str)
+    assert sticker_path is None
 
 
 # ── 情感记忆注入确实调用了 recall（TDD: 实现前应失败）──

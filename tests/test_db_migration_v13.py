@@ -1,7 +1,6 @@
 """DB Migration v13 测试：验证 mem0 SPEC 优化新增的列、表、索引存在"""
+
 import pytest
-import aiosqlite
-from pathlib import Path
 
 
 @pytest.fixture

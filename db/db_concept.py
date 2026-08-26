@@ -1,6 +1,7 @@
 """概念图数据库 CRUD — concept_nodes / concept_edges / concept_meta 表操作"""
 import asyncio
 import json
+import time
 from datetime import datetime
 from zoneinfo import ZoneInfo
 
@@ -17,8 +18,21 @@ def _now_iso() -> str:
 class ConceptDB:
     """概念图数据库访问层（异步 aiosqlite）"""
 
+    # alive_nodes 全表读的 TTL 快照（2026-08-25 性能专项：USB 盘冷读实测 1.7s）
+    _ALIVE_NODES_TTL_S = 60.0
+    # 结构性变更才失效缓存；纯统计字段（weight/access_count 等）不失效，
+    # 否则每次检索后的 touch 批量更新会把命中率打没（与图快照 TTL 同一取舍）
+    _STRUCTURAL_NODE_FIELDS = frozenset(
+        {"text", "keys", "valid_to", "superseded_by", "layer"})
+
     def __init__(self, conn):
         self._conn = conn
+        self._alive_cache: dict[str, dict] | None = None
+        self._alive_cache_ts: float = 0.0
+
+    def _invalidate_alive_nodes_cache(self) -> None:
+        self._alive_cache = None
+        self._alive_cache_ts = 0.0
 
     async def insert_node(self, id: str, text: str, keys: str,
                           weight: float = 1.0, peak_weight: float = 1.0,
@@ -40,6 +54,7 @@ class ConceptDB:
                           reinforcement_count: int = 0,
                           auto_commit: bool = True) -> None:
         """插入概念节点。keys 为 JSON 字符串。使用 UPSERT 避免覆盖已有 FSRS 状态。"""
+        self._invalidate_alive_nodes_cache()
         now = created or _now_iso()
         await self._conn.execute(
             """INSERT INTO concept_nodes
@@ -113,6 +128,8 @@ class ConceptDB:
     async def update_node(self, node_id: str, auto_commit: bool = True, **fields) -> None:
         if not fields:
             return
+        if not self._STRUCTURAL_NODE_FIELDS.isdisjoint(fields):
+            self._invalidate_alive_nodes_cache()
         cols = ", ".join(f"{k} = ?" for k in fields)
         vals = list(fields.values()) + [node_id]
         await self._conn.execute(
@@ -122,19 +139,39 @@ class ConceptDB:
             await self._conn.commit()
 
     async def get_alive_nodes(self, limit: int = 0, offset: int = 0) -> dict[str, dict]:
-        """返回有效节点（valid_to IS NULL），支持分页。limit=0 表示不分页。"""
-        if limit > 0:
+        """返回有效节点（valid_to IS NULL），支持分页。limit=0 表示不分页。
+
+        全量读取（limit=0 且 offset=0）走 TTL 快照：扩散召回每轮全表拉取，
+        USB 盘冷读实测 1.7s。返回浅拷贝防止调用方修改污染缓存。
+        结构性写入（insert/valid_to/supersede/text/keys 变更）即时失效；
+        纯统计字段更新容忍 ≤TTL 的陈旧（与图边快照同一取舍）。
+        """
+        if limit > 0 or offset > 0:
             async with self._conn.execute(
                 "SELECT * FROM concept_nodes WHERE valid_to IS NULL LIMIT ? OFFSET ?",
                 (limit, offset)
             ) as cur:
                 rows = await cur.fetchall()
-        else:
-            async with self._conn.execute(
-                "SELECT * FROM concept_nodes WHERE valid_to IS NULL"
-            ) as cur:
-                rows = await cur.fetchall()
-        return {row["id"]: dict(row) for row in rows}
+            return {row["id"]: dict(row) for row in rows}
+
+        now = time.monotonic()
+        if (self._alive_cache is not None
+                and now - self._alive_cache_ts < self._ALIVE_NODES_TTL_S):
+            logger.debug("concept.alive_cache_hit rows={}",
+                         len(self._alive_cache))
+            return {nid: dict(node) for nid, node in self._alive_cache.items()}
+
+        _t0 = time.monotonic()
+        async with self._conn.execute(
+            "SELECT * FROM concept_nodes WHERE valid_to IS NULL"
+        ) as cur:
+            rows = await cur.fetchall()
+        result = {row["id"]: dict(row) for row in rows}
+        self._alive_cache = result
+        self._alive_cache_ts = now
+        logger.debug("concept.alive_cache_miss rows={} took_ms={}",
+                     len(result), int((time.monotonic() - _t0) * 1000))
+        return {nid: dict(node) for nid, node in result.items()}
 
     async def get_node_count(self) -> int:
         async with self._conn.execute(

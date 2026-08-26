@@ -1,10 +1,19 @@
-from typing import ClassVar
-import re
 import json
 import random
+import re
 from pathlib import Path
+from typing import ClassVar
+
 from loguru import logger
-from .emotion_enum import Emotion, resolve_emotion, STICKER_FALLBACK, is_unified
+
+from .emotion_enum import (
+    STICKER_FALLBACK,
+    TTS_STYLE_VALUES,
+    VALID_EMOTION_TAGS,
+    Emotion,
+    is_unified,
+    resolve_emotion,
+)
 
 
 class StickerManager:
@@ -120,6 +129,15 @@ class StickerManager:
 
     EMOTION_PATTERN = re.compile(r'\[emotion:([a-z_]+)\]')
 
+    # 纯情绪词标签 [happy] [pout] 等：从枚举 + TTS 风格值动态生成，
+    # 覆盖全部合法标签（含 moved/confused/anxious/curious/pout/love），
+    # 避免 LLM 幻觉标签泄露给用户（2026-08 review #5）；
+    # _LEGACY_PURE_TAGS：旧版提示词教过、现已废弃的标签，保留剥离防存量泄露
+    _LEGACY_PURE_TAGS: ClassVar[frozenset[str]] = frozenset({"lonely"})
+    _PURE_TAG_RE = re.compile(
+        r"\[(?:%s)\]" % "|".join(sorted(VALID_EMOTION_TAGS | TTS_STYLE_VALUES | _LEGACY_PURE_TAGS))
+    )
+
     # should_send 概率：有明确情绪 100%、无情绪/neutral 90%，表情包是核心特色优先触达
     SEND_PROB_EMOTION = 1.0
     SEND_PROB_NEUTRAL = 0.9
@@ -234,8 +252,8 @@ class StickerManager:
         text = re.sub(r'\[emotion:[^\]]*\]', '', text)
         # LLM 幻觉格式 [playful/stickers:xxx /emotions/xxx.png]
         text = re.sub(r'\[\w+/stickers:[^\]]*\]', '', text)
-        # 纯情绪词标签 [happy] [sad] [playful] 等（仅匹配已知情绪词）
-        text = re.sub(r'\[(?:happy|excited|sad|angry|shy|surprised|fear|neutral|greeting|caring|playful|lonely|thinking)\]', '', text)
+        # 纯情绪词标签 [happy] [sad] [moved] 等（枚举 ∪ TTS 风格，动态生成）
+        text = self._PURE_TAG_RE.sub('', text)
         # 未闭合的截断标签 [playful/sti 或 [emotion:ha 等
         text = re.sub(r'\[(?:emotion:|playful/|excited/|happy/|sad/)\S*$', '', text)
         return text.rstrip()
@@ -303,6 +321,11 @@ class StickerManager:
     def available(self) -> bool:
         """返回是否已加载任何表情包."""
         return bool(self._cache)
+
+    @property
+    def available_categories(self) -> set[str]:
+        """当前已加载的情绪分类名（物理目录名集合）."""
+        return set(self._cache)
 
     def pick_by_text(self, text: str, detected_emotion: str = "") -> Path | None:
         """根据文本内容挑选表情包 (优先用已检测情绪).

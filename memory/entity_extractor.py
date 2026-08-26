@@ -11,10 +11,11 @@
 - IDENTIFIER: 技术标识符（英文/代码符号）
 """
 import asyncio
-import re
 import json
+import re
 from dataclasses import dataclass
 from typing import Any
+
 from loguru import logger
 
 
@@ -103,8 +104,8 @@ class EntityExtractor:
         seen_names: set[str] = set()
 
         try:
-            import jieba.posseg as pseg
             import jieba.analyse
+            import jieba.posseg as pseg
 
             # 1. jieba 词性标注 → PROPER（专有名词）
             for word, flag in pseg.cut(text):

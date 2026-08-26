@@ -15,6 +15,7 @@
   "providers": {
     "agnes": {
       "protocol": "openai_compatible",
+      "label": "Agnes AI",
       "environment_aliases": ["AGNES_API_KEY"],
       "base_url_default": "https://apihub.agnes-ai.cn/v1",
       "max_tokens_cap": 65535,
@@ -27,6 +28,7 @@
     },
     "mimo": {
       "protocol": "openai_compatible",
+      "label": "小米 MiMo",
       "environment_aliases": ["MIMO_API_KEY"],
       "base_url_default": "https://api.xiaomimimo.com/v1",
       "max_tokens_cap": 131072,
@@ -40,6 +42,7 @@
     },
     "deepseek": {
       "protocol": "openai_compatible",
+      "label": "DeepSeek",
       "environment_aliases": ["DEEPSEEK_API_KEY"],
       "base_url_default": "https://api.deepseek.com/v1",
       "max_tokens_cap": 8192,
@@ -51,6 +54,7 @@
     },
     "siliconflow": {
       "protocol": "openai_compatible",
+      "label": "SiliconFlow 硅基流动",
       "environment_aliases": ["SILICONFLOW_API_KEY"],
       "base_url_default": "https://api.siliconflow.cn/v1",
       "max_tokens_cap": null,
@@ -62,6 +66,7 @@
     },
     "openrouter": {
       "protocol": "openai_compatible",
+      "label": "OpenRouter",
       "environment_aliases": ["OPENROUTER_API_KEY"],
       "base_url_default": "https://openrouter.ai/api/v1",
       "max_tokens_cap": null,
@@ -73,6 +78,7 @@
     },
     "modelscope": {
       "protocol": "openai_compatible",
+      "label": "ModelScope 魔搭",
       "environment_aliases": ["MODELSCOPE_ACCESS_TOKEN", "MODELSCOPE_API_KEY"],
       "base_url_default": "https://api-inference.modelscope.cn/v1/",
       "max_tokens_cap": null,
@@ -84,6 +90,7 @@
     },
     "ollama": {
       "protocol": "ollama",
+      "label": "Ollama 本地大模型",
       "environment_aliases": ["OLLAMA_API_KEY"],
       "base_url_default": "",
       "max_tokens_cap": null,
@@ -100,6 +107,7 @@
     },
     "llama.cpp": {
       "protocol": "openai_compatible",
+      "label": "llama.cpp 本地接口",
       "environment_aliases": ["LLAMA_CPP_API_KEY"],
       "base_url_default": "",
       "max_tokens_cap": null,

@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
 """第五轮深度测试 - Agent 对话流程 + 边界条件 + 未覆盖模块"""
 import asyncio
-import sys
 import os
+import sys
 import tempfile
+
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."))
 
 
@@ -226,7 +227,7 @@ def test_boundary_conditions():
     # 测试 6: AtomicWrite 边界
     print("\n[6] AtomicWrite 边界测试...")
     try:
-        from utils.atomic_write import atomic_write, atomic_json_write
+        from utils.atomic_write import atomic_json_write, atomic_write
 
         with tempfile.TemporaryDirectory() as tmpdir:
             # 正常写入
@@ -278,16 +279,6 @@ def test_uncovered_modules():
         print("    OK: BeliefRouter 初始化成功")
     except Exception as e:
         bugs.append(f"BeliefRouter: {e}")
-        print(f"    BUG: {e}")
-
-    # 测试 3: TaskOrchestrator
-    print("\n[3] TaskOrchestrator 测试...")
-    try:
-        from task_orchestrator import TaskOrchestrator
-        _to = TaskOrchestrator()
-        print("    OK: TaskOrchestrator 初始化成功")
-    except Exception as e:
-        bugs.append(f"TaskOrchestrator: {e}")
         print(f"    BUG: {e}")
 
     # 测试 4: Hooks
@@ -398,7 +389,7 @@ def test_module_imports():
     print("\n[1] 基础模块导入...")
     basic_modules = [
         "agent_core", "model_router", "agent_context", "agent_dispatcher",
-        "hooks", "instinct_manager", "belief_router", "task_orchestrator",
+        "hooks", "instinct_manager", "belief_router",
         "qq_bot_adapter",
     ]
     for mod_name in basic_modules:

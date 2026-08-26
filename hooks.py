@@ -9,13 +9,14 @@ import asyncio
 import os
 import re
 import threading
-from enum import Enum
 from dataclasses import dataclass
+from enum import Enum
 from typing import Any
+
 from loguru import logger
 
-from core.risk_classifier import RiskClassifier, EvidenceGate, PostValidator, RiskLevel
-
+from core.risk_classifier import EvidenceGate, PostValidator, RiskClassifier, RiskLevel
+from security.dangerous_targets import READ_TARGET_TOOLS, SENSITIVE_TOOL_MATCHER
 
 # ── 钩子类型 ──────────────────────────────────────────────
 
@@ -372,7 +373,8 @@ class SecurityPreCheck(BaseHook):
     name = "security_pre_check"
     hook_type = HookType.PRE_TOOL_USE
     tool_filter = None
-    matcher = r"shell_command|execute_code|python_executor|write_file|edit_file|create_file|agnes_image|agnes_video"
+    # 单一事实源：security/dangerous_targets.py 按注册表核实过的敏感工具集合
+    matcher = SENSITIVE_TOOL_MATCHER
 
     def __init__(self) -> None:
         self._filter = None
@@ -509,7 +511,8 @@ class GateGuardHook(BaseHook):
                 return HookResult(allowed=False, reason=reason)
 
         # 如果是读取操作，标记已读取（用于后续证据门禁）
-        if tool_name in ("read_file", "cat", "list_dir") and file_path:
+        # 单一事实源：security/dangerous_targets.py（原 "cat"/"list_dir" 从未注册，已剔除）
+        if tool_name in READ_TARGET_TOOLS and file_path:
             self._evidence_gate.mark_read(file_path)
 
         return HookResult(allowed=True)

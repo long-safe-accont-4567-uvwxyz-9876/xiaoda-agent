@@ -25,7 +25,6 @@ from __future__ import annotations
 import math
 import sys
 
-
 # 覆盖率下降容忍阈值 (百分点). 超过此值才输出 ::warning::.
 _DROP_WARNING_THRESHOLD = -2.0
 

@@ -12,6 +12,45 @@ if str(PROJECT_ROOT) not in __import__("sys").path:
     __import__("sys").path.insert(0, str(PROJECT_ROOT))
 
 
+async def _create_production_memory_tables(conn) -> None:
+    """用生产建表管线（DDL → 迁移链 → 索引）初始化记忆域 schema。
+
+    此前夹具手写 episodic_memories 建表语句，schema 演进（v15 FSRS 列、v31 记忆
+    分类、v32 对账状态）后与 insert_episodic_memory 脱节，出现 "no such column"。
+    注意：episodic_memories 的完整列集 = ddl_schema 基础 DDL + legacy_migrations
+    各迁移 ADD COLUMN，单复用任一片段都会漂移，因此直接跑 DDLMixin._create_tables()
+    全流程（与 DatabaseManager 启动一致）。后续新迁移加列时夹具自动跟随。
+    """
+    from db.ddl_schema import DDLMixin
+    from db.legacy_migrations import LegacyMigrationMixin
+
+    class _ProductionSchema(LegacyMigrationMixin, DDLMixin):
+        """最小宿主：补齐 DatabaseManager 提供给两个 Mixin 的依赖。"""
+
+        def __init__(self, conn):
+            self._conn = conn
+            # v4 迁移经 self.memory.migrate_add_source_column() 加列
+            from db.db_memory import MemoryDB
+
+            self.memory = MemoryDB(conn)
+
+        async def fetch_all(self, sql, params=()):
+            rows = await self._conn.execute_fetchall(sql, params)
+            return [dict(r) for r in rows]
+
+        async def _ensure_columns(self, table, columns):
+            # 与 DatabaseManager._ensure_columns 同款幂等实现（db/database.py）
+            rows = await self._conn.execute_fetchall(f"PRAGMA table_info({table})")
+            existing = {row[1] for row in rows}
+            for name, spec in columns.items():
+                if name not in existing:
+                    await self._conn.execute(
+                        f"ALTER TABLE {table} ADD COLUMN {name} {spec}"
+                    )
+
+    await _ProductionSchema(conn)._create_tables()
+
+
 # ── 单元测试：_split_into_children ──────────────────────────
 
 class TestSplitIntoChildren:
@@ -129,52 +168,15 @@ class TestChildChunkDB:
     async def memory_db(self, tmp_path):
         """创建临时内存数据库"""
         import aiosqlite
+
         from db.db_memory import MemoryDB
 
         db_path = str(tmp_path / "test_child.db")
         conn = await aiosqlite.connect(db_path)
         conn.row_factory = aiosqlite.Row
 
-        # 创建表结构
-        await conn.executescript("""
-            CREATE TABLE IF NOT EXISTS episodic_memories (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                timestamp REAL NOT NULL,
-                summary TEXT NOT NULL,
-                importance REAL DEFAULT 0.5,
-                emotion_label TEXT DEFAULT '',
-                session_id TEXT DEFAULT 'user',
-                embedding_id INTEGER DEFAULT -1,
-                rag_status TEXT DEFAULT 'pending',
-                rag_synced_at REAL DEFAULT 0,
-                doc_id TEXT DEFAULT '',
-                source TEXT DEFAULT 'user',
-                access_count INTEGER DEFAULT 0,
-                distilled INTEGER DEFAULT 0,
-                user_id TEXT DEFAULT 'default',
-                agent_id TEXT DEFAULT 'xiaoda',
-                is_raw INTEGER DEFAULT 0
-            );
-            CREATE VIRTUAL TABLE IF NOT EXISTS episodic_memory_fts USING fts5(
-                id UNINDEXED, summary_index
-            );
-            CREATE TABLE IF NOT EXISTS memory_child_chunks (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                parent_id INTEGER NOT NULL,
-                content TEXT NOT NULL,
-                embed_content TEXT DEFAULT '',
-                chunk_type TEXT NOT NULL DEFAULT 'segment',
-                importance REAL DEFAULT 0.5,
-                overlap_hash TEXT DEFAULT '',
-                created_at REAL NOT NULL,
-                FOREIGN KEY (parent_id) REFERENCES episodic_memories(id) ON DELETE CASCADE
-            );
-            CREATE INDEX IF NOT EXISTS idx_child_parent ON memory_child_chunks(parent_id);
-            CREATE INDEX IF NOT EXISTS idx_child_type ON memory_child_chunks(chunk_type);
-            CREATE VIRTUAL TABLE IF NOT EXISTS memory_child_chunks_fts
-                USING fts5(content, tokenize='unicode61');
-        """)
-        await conn.commit()
+        # 生产 DDL 建表（episodic_memories / memory_child_chunks / FTS / 索引）
+        await _create_production_memory_tables(conn)
 
         mdb = MemoryDB(conn)
         return mdb, conn
@@ -286,17 +288,6 @@ class TestVectorStoreChild:
         result = asyncio.run(vs.search_child([0.1, 0.2], top_k=5))
         assert result == []
 
-    def test_upsert_child_skips_when_not_initialized(self):
-        """测试未初始化时upsert_child跳过"""
-        from memory.vector_store import VectorStore
-        vs = VectorStore.__new__(VectorStore)
-        vs._initialized = False
-        vs._closed = False
-        vs._vec_conn = None
-
-        # 不应抛出异常
-        asyncio.run(vs.upsert_child(1, "测试文本"))
-
     def test_batch_upsert_children_skips_empty(self):
         """测试空列表时batch_upsert_children跳过"""
         from memory.vector_store import VectorStore
@@ -361,7 +352,7 @@ class TestVectorStoreChild:
         await first.init()
         first.embed = AsyncMock(side_effect=[[[1.0, 0.0]], [[1.0, 0.0]]])
         assert await first.upsert(1, "parent-one")
-        await first.upsert_child(1, "child-one")
+        assert await first.batch_upsert_children([(1, "child-one")])
         await first.close()
 
         conn = sqlite3.connect(db_path)
@@ -632,54 +623,20 @@ class TestBackwardCompatibility:
     async def test_old_memory_without_children(self, tmp_path):
         """测试旧记忆（无子chunk）的检索兼容性"""
         import aiosqlite
+
         from db.db_memory import MemoryDB
 
         db_path = str(tmp_path / "test_compat.db")
         conn = await aiosqlite.connect(db_path)
         conn.row_factory = aiosqlite.Row
 
-        await conn.executescript("""
-            CREATE TABLE IF NOT EXISTS episodic_memories (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                timestamp REAL NOT NULL,
-                summary TEXT NOT NULL,
-                importance REAL DEFAULT 0.5,
-                emotion_label TEXT DEFAULT '',
-                session_id TEXT DEFAULT 'user',
-                embedding_id INTEGER DEFAULT -1,
-                rag_status TEXT DEFAULT 'pending',
-                rag_synced_at REAL DEFAULT 0,
-                doc_id TEXT DEFAULT '',
-                source TEXT DEFAULT 'user',
-                access_count INTEGER DEFAULT 0,
-                distilled INTEGER DEFAULT 0,
-                user_id TEXT DEFAULT 'default',
-                agent_id TEXT DEFAULT 'xiaoda',
-                is_raw INTEGER DEFAULT 0
-            );
-            CREATE VIRTUAL TABLE IF NOT EXISTS episodic_memory_fts USING fts5(
-                id UNINDEXED, summary_index
-            );
-            CREATE TABLE IF NOT EXISTS memory_child_chunks (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                parent_id INTEGER NOT NULL,
-                content TEXT NOT NULL,
-                embed_content TEXT DEFAULT '',
-                chunk_type TEXT NOT NULL DEFAULT 'segment',
-                importance REAL DEFAULT 0.5,
-                overlap_hash TEXT DEFAULT '',
-                created_at REAL NOT NULL,
-                FOREIGN KEY (parent_id) REFERENCES episodic_memories(id) ON DELETE CASCADE
-            );
-            CREATE VIRTUAL TABLE IF NOT EXISTS memory_child_chunks_fts
-                USING fts5(content, tokenize='unicode61');
-        """)
-        await conn.commit()
+        # 生产 DDL 建表（与 TestChildChunkDB 同一事实源）
+        await _create_production_memory_tables(conn)
 
         mdb = MemoryDB(conn)
 
         # 插入旧记忆（无子chunk）
-        pid = await mdb.insert_episodic_memory(
+        await mdb.insert_episodic_memory(
             summary="旧记忆：用户讨论了Python编程", importance=0.7)
 
         # 子chunk FTS检索应返回空（不崩溃）

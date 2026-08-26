@@ -1,6 +1,7 @@
-from typing import Any
 import json
 import re
+from typing import Any
+
 from loguru import logger
 
 from db.db_memory import MemoryDB
@@ -89,6 +90,20 @@ def _build_consolidate_prompt(old_section: Any, recent_memories: Any, recent_not
                                address_term: str = "爸爸") -> Any:
     from config import get_agent_display_name
     agent_name = get_agent_display_name("xiaoda")
+    try:
+        from web.prompt_profile_repository import try_resolve
+
+        override = try_resolve("portrait.consolidate", {
+            "agent_name": agent_name,
+            "address_term": address_term,
+            "OLD_SECTION": str(old_section),
+            "RECENT_MEMORIES": str(recent_memories),
+            "RECENT_NOTES": str(recent_notes),
+        })
+    except Exception:
+        override = None
+    if override is not None:
+        return override[1]
     return (
         CONSOLIDATE_PROMPT_TEMPLATE
         .replace("{agent_name}", agent_name)
@@ -138,7 +153,7 @@ class PortraitManager:
 
         messages = [{"role": "user", "content": prompt}]
         raw = await self._free.call(messages, temperature=0.3, max_tokens=1536)
-        if raw is None:
+        if raw is None and self._free.backend == "api":
             try:
                 raw = await self._router.route(
                     "memory_encoding",
@@ -149,6 +164,8 @@ class PortraitManager:
             except Exception as e:
                 logger.error("portrait.llm_failed", error=str(e))
                 return None
+        if raw is None:
+            return None
 
         try:
             data = _repair_and_extract_json(raw)

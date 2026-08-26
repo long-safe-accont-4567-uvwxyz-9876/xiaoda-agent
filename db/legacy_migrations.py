@@ -1,4 +1,4 @@
-"""LegacyMigrationMixin — v1-v28 历史 schema 迁移函数。
+"""LegacyMigrationMixin — v1-v30 历史 schema 迁移函数。
 
 自 db/database.py 拆分（上帝文件 Phase 1）：函数体逐字节搬移，仅缩进调整。
 结构契约见 tests/test_db_migration_refactor.py；实例白盒调用
@@ -16,15 +16,14 @@ from . import db_workflow
 
 
 # ── 迁移体系导航 ─────────────────────────────────────────────
-# 本项目 DB schema 变更只有一个生产入口：LegacyMigrationMixin（本文件，v1-v28，
+# 本项目 DB schema 变更只有一个生产入口：LegacyMigrationMixin（本文件，v1-v30，
 # 挂载于 DatabaseManager.init）。幂等机制 = schema_version 跟踪 + 逐条
 # IF NOT EXISTS 守卫 + migration_state dirty 恢复；新迁移一律追加到本文件。
 #
 # 同目录另有：
-#   idempotent_migrator.py — 早期 H3 幂等迁移器，机制已被本文件完整覆盖，
-#       生产零引用，仅 tests/test_phase6_modules.py 保留行为测试，禁止新增调用。
 #   repair_migration.py   — 运维 CLI（--status/--mark-clean/--rollback），仅操作
 #       schema_version 迁移记录，不承担 schema 变更；dirty 恢复失败时手动介入。
+#   （早期 H3 幂等迁移器 idempotent_migrator.py 已删除，机制被本文件完整覆盖。）
 class LegacyMigrationMixin:
     async def _setup_migration_state(self) -> None:
         # 逐条执行 DDL，避免 executescript() 在 vfat 上的隐式 commit 问题
@@ -92,22 +91,74 @@ class LegacyMigrationMixin:
         # 防御性校验：检查关键列是否真正存在（防止 schema_version 被标记但列未实际添加）
         if current >= 10:
             epi_cols = {r["name"] for r in await self.fetch_all("PRAGMA table_info(episodic_memories)")}
-            # v15 关键列缺失 → 回退 schema_version 到 v9，触发重新迁移
             critical_v15_cols = {"phase", "difficulty", "stability"}
-            if current >= 15 and not critical_v15_cols.issubset(epi_cols):
-                logger.warning("database.migration_integrity_check_failed",
-                               msg=f"schema_version={current} 但缺失关键列 {critical_v15_cols - epi_cols}，回退到 v9 重新迁移")
-                # 删除 v10+ 的 schema_version 记录
-                await self._conn.execute("DELETE FROM schema_version WHERE version >= 10")
+            critical_v31_cols = {
+                "memory_type", "classification_status",
+                "classification_version", "classified_at",
+            }
+            missing_v15 = (
+                critical_v15_cols - epi_cols if current >= 15 else set()
+            )
+            missing_v18 = (
+                {"distill_status"} - epi_cols if current >= 18 else set()
+            )
+            missing_v31 = (
+                critical_v31_cols - epi_cols if current >= 31 else set()
+            )
+            missing_v32 = set()
+            if current >= 32:
+                critical_v32_cols = {"status", "superseded_by"}
+                critical_v32_tables = {
+                    "memory_knowledge_sources",
+                    "memory_reconciliation_jobs",
+                    "memory_reconciliation_actions",
+                    "memory_reconciliation_targets",
+                    "memory_reconciliation_snapshots",
+                    "memory_index_outbox",
+                    "memory_retrieval_epochs",
+                }
+                missing_v32 |= critical_v32_cols - epi_cols
+                table_rows = await self.fetch_all(
+                    "SELECT name FROM sqlite_master WHERE type='table'"
+                )
+                tables = {row["name"] for row in table_rows}
+                missing_v32 |= critical_v32_tables - tables
+            rollback_versions = []
+            if missing_v15:
+                rollback_versions.append(9)
+            if missing_v18:
+                rollback_versions.append(17)
+            if missing_v31:
+                rollback_versions.append(30)
+                reset_sets = []
+                if "classification_status" in epi_cols:
+                    reset_sets.append("classification_status='pending'")
+                if "classification_version" in epi_cols:
+                    reset_sets.append("classification_version=0")
+                if "classified_at" in epi_cols:
+                    reset_sets.append("classified_at=0")
+                if reset_sets:
+                    await self._conn.execute(
+                        "UPDATE episodic_memories SET " + ", ".join(reset_sets)
+                    )
+            if missing_v32:
+                rollback_versions.append(31)
+            if rollback_versions:
+                rollback_current = min(rollback_versions)
+                missing = missing_v15 | missing_v18 | missing_v31 | missing_v32
+                logger.warning(
+                    "database.migration_integrity_check_failed",
+                    msg=(
+                        f"schema_version={current} 但缺失关键列 {missing}，"
+                        f"回退到 v{rollback_current} 重新迁移"
+                    ),
+                )
+                await self._conn.execute(
+                    "DELETE FROM schema_version WHERE version >= ?",
+                    (rollback_current + 1,),
+                )
                 await self._conn.commit()
-                current = 9
-            # v18 关键列缺失
-            elif current >= 18 and "distill_status" not in epi_cols:
-                logger.warning("database.migration_integrity_check_failed",
-                               msg="schema_version>=18 但缺失 distill_status 列，回退到 v17 重新迁移")
-                await self._conn.execute("DELETE FROM schema_version WHERE version >= 18")
-                await self._conn.commit()
-                current = 17
+                current = rollback_current
         return current
 
     def _migration_entries(self) -> list:
@@ -142,6 +193,9 @@ class LegacyMigrationMixin:
             (27, "workflow_v2_tables", self._migrate_v27),
             (28, "workflow_v2_config_table", self._migrate_v28),
             (29, "workflow_v2_review_table", self._migrate_v29),
+            (30, "drop_dead_v06_cognitive_tables", self._migrate_v30),
+            (31, "episodic_memory_type_enrichment", self._migrate_v31),
+            (32, "memory_reconciliation_shadow", self._migrate_v32),
         ]
 
     async def _run_migrations(self) -> None:
@@ -156,12 +210,12 @@ class LegacyMigrationMixin:
         await self._conn.commit()
 
     async def _apply_migration(self, version: int, description: str, migrate_fn: Any) -> None:
-        """执行单个迁移：标记 dirty → migrate_fn → INSERT schema_version → commit → 清除 dirty。
+        """执行单个迁移：标记 dirty → SAVEPOINT 包住 migrate_fn+版本记录 → commit → 清除 dirty。
 
-        失败时不杀进程，下次启动自动重试（dirty自动修复机制）。
-        含 SQLITE_BUSY 重试（Windows杀软锁文件常见）。
-        注意：不使用显式 BEGIN TRANSACTION，因为迁移函数内部的 executescript()
-        会隐式提交当前事务，在 vfat 上会导致死锁/挂起。
+        失败时先 ROLLBACK TO SAVEPOINT（部分 DDL/DML 不落盘），再独立事务记 dirty；
+        下次启动自动重试（dirty自动修复机制）。含 SQLITE_BUSY 重试（Windows杀软锁文件常见）。
+        注意：迁移函数内部禁止 executescript()（会隐式提交、释放 savepoint），
+        新迁移一律逐条 execute。
         """
         # 确保 migration_state 表存在（防御 vfat 上 executescript 静默失败）
         try:
@@ -206,26 +260,50 @@ class LegacyMigrationMixin:
 
         _max_retries = 3
         for attempt in range(1, _max_retries + 1):
+            # 原子性（2026-08-24 审查修复）：每个迁移体包在 SAVEPOINT 内，
+            # 失败先回滚到 savepoint 再独立事务记 dirty——否则失败路径的
+            # dirty commit 会把迁移已执行的部分 DDL/DML 一并提交，重试面对
+            # 半迁移状态（v31 故障注入已复现错误分类）。
+            # 前提：迁移函数内部不得使用 executescript()（隐式提交会释放
+            # savepoint）；现有迁移已全部改为逐条 execute。
+            sp_name = f"migration_v{version}_a{attempt}"
+            await self._conn.execute(f"SAVEPOINT {sp_name}")
             try:
-                # 不使用 BEGIN TRANSACTION：executescript() 会隐式提交，
-                # 在 vfat (DELETE journal_mode) 上显式事务 + 隐式提交会导致挂起
                 await migrate_fn()
                 await self._conn.execute(
                     "INSERT INTO schema_version (version, applied_at) VALUES (?, ?)",
                     (version, time.time()),
                 )
-                await self._conn.commit()
+                await self._conn.commit()  # RELEASE 前提交，兼容迁移内部 commit
+                logger.info("database.migration_v{}", version, desc=description)
                 # 迁移成功：清除 dirty
                 await self._conn.execute(
                     "UPDATE migration_state SET dirty = 0, last_version = ?, last_error = '' WHERE id = 1",
                     (version,),
                 )
                 await self._conn.commit()
-                logger.info("database.migration_v{}", version, desc=description)
                 return  # 成功，退出重试循环
             except Exception as e:
                 err_msg = str(e)
                 is_busy = "locked" in err_msg.lower() or "busy" in err_msg.lower()
+                # 迁移内部 commit 会释放 savepoint（no such savepoint），
+                # 此时部分写入已被提交、无法回滚——记录告警供运维排查；
+                # 未被释放时正常回滚到 savepoint。
+                try:
+                    await self._conn.execute(
+                        f"ROLLBACK TO SAVEPOINT {sp_name}")
+                    await self._conn.execute(
+                        f"RELEASE SAVEPOINT {sp_name}")
+                except (OSError, RuntimeError, ValueError) as rb_err:
+                    if "no such savepoint" in str(rb_err).lower():
+                        logger.warning(
+                            "database.migration_partial_commit_not_recoverable "
+                            "v={} hint=迁移函数内部 commit 释放了 savepoint",
+                            version)
+                    else:
+                        logger.warning(
+                            "database.migration_rollback_error v={}", version,
+                            exc_info=True)
                 if is_busy and attempt < _max_retries:
                     # SQLITE_BUSY: Windows杀软/Defender锁文件，等一会重试
                     import asyncio
@@ -236,9 +314,7 @@ class LegacyMigrationMixin:
                     )
                     await asyncio.sleep(wait)
                     continue
-                # 非BUSY或重试耗尽
-                # 不需要 ROLLBACK：未使用显式事务，executescript 自行管理原子性
-                # 记录错误到 dirty state（独立事务）
+                # 非BUSY或重试耗尽：回滚已完成，独立事务记录 dirty
                 try:
                     await self._conn.execute(
                         "UPDATE migration_state SET dirty = 1, last_version = ?, last_error = ? WHERE id = 1",
@@ -758,7 +834,8 @@ class LegacyMigrationMixin:
             WHERE last_review = 0 AND timestamp > 0
         """)
 
-        await self._conn.commit()
+        # commit 由 _apply_migration 的 savepoint 流程统一管理（内部 commit
+        # 会释放 savepoint，失败时部分写入将不可回滚）
         logger.info("database.migration_v16_created_at_done")
 
     async def _migrate_v17(self) -> None:
@@ -777,12 +854,41 @@ class LegacyMigrationMixin:
         except Exception as e:
             logger.warning("database.migration_v17_check_failed", error=str(e))
 
-        # 重建表以更新 CHECK 约束 (含 user_id 列以匹配 v20 schema, 避免列数不匹配)
+        # 重建表以更新 CHECK 约束。
+        # 显式列清单复制（2026-08-24 审查修复）：目标表含 v20 才有的 user_id，
+        # `INSERT SELECT *` 对 v16 及更早的 13 列旧表必报列数不匹配并永久 dirty；
+        # 显式列出源列并为 user_id 补 'default'，兼容任意旧形状。
         await self._conn.execute("""CREATE TABLE IF NOT EXISTS greeting_schedules_v17 ( id INTEGER PRIMARY KEY AUTOINCREMENT, type TEXT NOT NULL CHECK(type IN ('fixed','random','reminder')), time TEXT DEFAULT '', window_start TEXT DEFAULT '', window_end TEXT DEFAULT '', count_per_day INTEGER DEFAULT 1, days TEXT NOT NULL DEFAULT '[1,2,3,4,5,6,7]', prompt_hint TEXT DEFAULT '', channels TEXT NOT NULL DEFAULT '["web"]', enabled INTEGER NOT NULL DEFAULT 1, next_fire_times TEXT DEFAULT '[]', drawn_date TEXT DEFAULT '', created_at REAL NOT NULL, user_id TEXT NOT NULL DEFAULT 'default' )""")
-        await self._conn.execute("""INSERT OR IGNORE INTO greeting_schedules_v17 SELECT * FROM greeting_schedules""")
+        src_cols = {r["name"] for r in await self.fetch_all(
+            "PRAGMA table_info(greeting_schedules)")}
+        base_cols = [
+            "id", "type", "time", "window_start", "window_end",
+            "count_per_day", "days", "prompt_hint", "channels",
+            "enabled", "next_fire_times", "drawn_date", "created_at",
+        ]
+        select_parts = [c for c in base_cols if c in src_cols]
+        missing_defaults = {
+            "days": "'[1,2,3,4,5,6,7]'",
+            "channels": "'[\"web\"]'",
+            "enabled": "1",
+            "next_fire_times": "'[]'",
+            "drawn_date": "''",
+            "created_at": "strftime('%s','now')",
+        }
+        for col, default_sql in missing_defaults.items():
+            if col not in select_parts:
+                select_parts.append(default_sql)
+        select_parts.append("'default' AS user_id")
+        cols_sql = ", ".join(
+            ["id", "type", "time", "window_start", "window_end",
+             "count_per_day", "days", "prompt_hint", "channels",
+             "enabled", "next_fire_times", "drawn_date", "created_at", "user_id"])
+        await self._conn.execute(
+            f"INSERT OR IGNORE INTO greeting_schedules_v17 ({cols_sql}) "
+            f"SELECT {', '.join(select_parts)} FROM greeting_schedules")
         await self._conn.execute("""DROP TABLE IF EXISTS greeting_schedules""")
         await self._conn.execute("""ALTER TABLE greeting_schedules_v17 RENAME TO greeting_schedules""")
-        await self._conn.commit()
+        # commit 由 _apply_migration 的 savepoint 流程统一管理
         logger.info("database.migration_v17_reminder_type_done")
 
     async def _migrate_v18(self) -> None:
@@ -1080,3 +1186,104 @@ class LegacyMigrationMixin:
     async def _migrate_v29(self) -> None:
         # wf_review 审批单表（M4 REVIEW 高级节点：待批/已批/已拒 + 决策记录）
         await db_workflow.create_schema(self._conn)
+
+    async def _migrate_v30(self) -> None:
+        """v30: 清除 v0.6 认知架构遗留的四张死表。
+
+        semantic_memories / memory_connections / bridge_memories / preference_patterns
+        由 v14 创建，全仓零读写（认知架构 v0.6 未落地的部分，活逻辑走
+        memory_edges/memory_preferences 等 v13 表）。DROP TABLE IF EXISTS 幂等；
+        表上索引随表自动清除。memory_revisions 不在清理范围（保留）。
+        """
+        await self._conn.execute("DROP TABLE IF EXISTS semantic_memories")
+        await self._conn.execute("DROP TABLE IF EXISTS memory_connections")
+        await self._conn.execute("DROP TABLE IF EXISTS bridge_memories")
+        await self._conn.execute("DROP TABLE IF EXISTS preference_patterns")
+        logger.info("database.migration_v30_drop_cognitive_tables_done")
+
+    async def _migrate_v31(self) -> None:
+        """v31: add memory taxonomy columns and deterministic local backfill."""
+        from memory.enrichment import (
+            CLASSIFICATION_VERSION,
+            classify_memory_deterministically,
+        )
+
+        await self._ensure_columns("episodic_memories", {
+            "memory_type": "memory_type TEXT DEFAULT 'event'",
+            "classification_status": (
+                "classification_status TEXT DEFAULT 'pending'"
+            ),
+            "classification_version": (
+                "classification_version INTEGER DEFAULT 0"
+            ),
+            "classified_at": "classified_at REAL DEFAULT 0",
+        })
+
+        import json as _json
+
+        cursor = await self._conn.execute(
+            "SELECT id, summary, emotion_label, is_raw, metadata_json "
+            "FROM episodic_memories WHERE classification_status IS NULL "
+            "OR classification_status = 'pending' ORDER BY id"
+        )
+        rows = await cursor.fetchall()
+        raw_types: dict[int, str] = {}
+        for row in rows:
+            if row[3] == 1:
+                raw_types[row[0]] = classify_memory_deterministically(
+                    row[1] or "", row[2] or ""
+                )
+
+        classified_at = time.time()
+        for row in rows:
+            if row[3] == 1:
+                memory_type = raw_types[row[0]]
+            else:
+                memory_type = "event"
+                try:
+                    metadata = _json.loads(row[4] or "{}")
+                    source_ids = metadata.get("source_raw_ids", [])
+                    inherited = {
+                        raw_types[source_id]
+                        for source_id in source_ids
+                        if isinstance(source_id, int) and source_id in raw_types
+                    }
+                    if len(inherited) == 1:
+                        memory_type = inherited.pop()
+                except (AttributeError, TypeError, ValueError, _json.JSONDecodeError):
+                    pass
+            await self._conn.execute(
+                "UPDATE episodic_memories SET memory_type=?, "
+                "classification_status='backfilled', classification_version=?, "
+                "classified_at=? WHERE id=?",
+                (memory_type, CLASSIFICATION_VERSION, classified_at, row[0]),
+            )
+
+        await self._conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_episodic_memory_type "
+            "ON episodic_memories(memory_type)"
+        )
+        await self._conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_episodic_classification_pending "
+            "ON episodic_memories(user_id, agent_id, classification_status, id)"
+        )
+        logger.info("database.migration_v31_memory_type_done", rows=len(rows))
+
+    async def _migrate_v32(self) -> None:
+        """v32: additive reconciliation, provenance, outbox, and visibility state."""
+        from .db_memory_reconciliation import create_schema
+
+        await self._ensure_columns("episodic_memories", {
+            "status": "status TEXT NOT NULL DEFAULT 'active'",
+            "superseded_by": "superseded_by INTEGER",
+        })
+        await self._conn.execute(
+            "UPDATE episodic_memories SET status='active' "
+            "WHERE status IS NULL OR status=''"
+        )
+        await create_schema(self._conn)
+        await self._conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_episodic_active_scope "
+            "ON episodic_memories(user_id, agent_id, status, is_raw, id)"
+        )
+        logger.info("database.migration_v32_reconciliation_done")

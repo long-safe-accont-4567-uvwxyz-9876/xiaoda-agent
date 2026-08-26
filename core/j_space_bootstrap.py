@@ -8,12 +8,13 @@ J-Space 架构优化启动初始化。
 3. InterventionLoop 注册默认规则
 """
 from loguru import logger
-from config import ENABLE_J_SPACE_HOOKS, DIRECTION_REGISTRY_PATH, SIGNAL_STREAM_MAX_HISTORY
-from core.behavioral_signal import BehavioralSignalStream
-from core.behavioral_direction import DirectionVector, DirectionRegistry
-from core.intervention_loop import InterventionRule, InterventionLoop
+
 from agent_core.structured_blackboard import StructuredBlackboard
+from config import DIRECTION_REGISTRY_PATH, ENABLE_J_SPACE_HOOKS, SIGNAL_STREAM_MAX_HISTORY
+from core.behavioral_direction import DirectionRegistry, DirectionVector
+from core.behavioral_signal import BehavioralSignalStream
 from core.enhanced_router import EnhancedBeliefRouter
+from core.intervention_loop import InterventionLoop, InterventionRule
 
 
 def _create_default_directions() -> list[DirectionVector]:
@@ -41,6 +42,32 @@ _direction_registry: DirectionRegistry | None = None
 _intervention_loop: InterventionLoop | None = None
 _structured_blackboard: StructuredBlackboard | None = None
 _enhanced_router: EnhancedBeliefRouter | None = None
+_intent_decomposer = None
+
+
+def get_intent_decomposer(router=None):
+    """J-Space 意图分解单一运行时；可在 core 初始化后补注入 router。"""
+    global _intent_decomposer
+    if _intent_decomposer is None:
+        from core.intent_decomposition import IntentDecomposer
+
+        _intent_decomposer = IntentDecomposer(use_llm_decomposition=True)
+    if router is not None:
+        from utils.free_model_backend import FreeModelBackend
+
+        backend = getattr(_intent_decomposer, "_free_backend", None)
+        if backend is None:
+            backend = FreeModelBackend()
+            _intent_decomposer.set_free_backend(backend)
+        backend.set_router(router)
+    return _intent_decomposer
+
+
+def set_intent_backend(backend: str, local_model: str | None = None) -> None:
+    decomposer = get_intent_decomposer()
+    # set_backend 内部维护公开的 node_backend/use_llm 运行态，
+    # 此处不再跨模块写私有属性
+    decomposer.set_backend(backend, local_model)
 
 
 def _wire_hooks() -> None:
@@ -117,8 +144,10 @@ def init_j_space() -> None:
         _structured_blackboard = StructuredBlackboard()
         # EnhancedBeliefRouter wraps the base BeliefRouter
         try:
+            from config import BELIEF_DB_PATH
             from belief_router import BeliefRouter
-            _base_router = BeliefRouter()
+            # 传真实路径接通持久化：无参构造会让 Thompson Sampling 每次重启归零
+            _base_router = BeliefRouter(db_path=BELIEF_DB_PATH)
             _enhanced_router = EnhancedBeliefRouter(
                 base_router=_base_router,
                 direction_registry=_direction_registry,

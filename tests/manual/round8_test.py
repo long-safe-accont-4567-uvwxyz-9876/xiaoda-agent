@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
 """第八轮深度测试 - 真实对话 + 数据库CRUD + Transport + Thompson Sampling"""
 import asyncio
-import sys
 import os
+import sys
 import tempfile
+
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."))
 
 
@@ -191,70 +192,6 @@ async def test_database_crud():
     return bugs
 
 
-async def test_transport_layer():
-    """Part 3: Transport 层功能测试"""
-    print("\n" + "=" * 60)
-    print("Part 3: Transport 层功能测试")
-    print("=" * 60)
-    bugs = []
-
-    from transports.base import TransportResponse
-    from transports.mimo_transport import MiMoTransport
-    from transports.agnes_transport import AgnesTransport
-
-    # 检查 MiMoTransport
-    print("\n[1] MiMoTransport...")
-    try:
-        import inspect
-        sig = inspect.signature(MiMoTransport.__init__)
-        print(f"    INFO: 构造函数签名: {sig}")
-
-        # 尝试创建实例
-        try:
-            mimo = MiMoTransport()
-            print(f"    OK: MiMoTransport 创建成功 (provider={mimo.provider_name})")
-        except TypeError:
-            # 可能需要参数
-            mimo = MiMoTransport(client=None)
-            print(f"    OK: MiMoTransport 创建成功 (provider={mimo.provider_name})")
-
-        # 检查方法
-        methods = [m for m in dir(mimo) if not m.startswith('_')]
-        print(f"    INFO: 方法: {methods}")
-
-        # 检查 is_available
-        print(f"    INFO: is_available = {mimo.is_available()}")
-    except Exception as e:
-        print(f"    FAIL: {e}")
-        bugs.append(f"MiMoTransport error: {e}")
-
-    # 检查 AgnesTransport
-    print("\n[2] AgnesTransport...")
-    try:
-        agnes = AgnesTransport()
-        print(f"    OK: AgnesTransport 创建成功 (provider={agnes.provider_name})")
-        print(f"    INFO: is_available = {agnes.is_available()}")
-
-        # 检查 thinking 支持
-        if hasattr(agnes, '_supports_thinking'):
-            print(f"    INFO: thinking 支持 = {agnes._supports_thinking}")
-    except Exception as e:
-        print(f"    FAIL: {e}")
-        bugs.append(f"AgnesTransport error: {e}")
-
-    # 检查 TransportResponse
-    print("\n[3] TransportResponse...")
-    try:
-        resp = TransportResponse(content="test", model="test-model", usage={"tokens": 10})
-        print("    OK: TransportResponse 创建成功")
-        print(f"    INFO: content={resp.content[:20]}, model={resp.model}")
-    except Exception as e:
-        print(f"    FAIL: {e}")
-        bugs.append(f"TransportResponse error: {e}")
-
-    return bugs
-
-
 async def test_belief_router_sampling():
     """Part 4: Belief Router Thompson Sampling"""
     print("\n" + "=" * 60)
@@ -416,7 +353,7 @@ async def test_hook_engine_deep():
     print("=" * 60)
     bugs = []
 
-    from hooks import HookEngine, HookType, BaseHook, HookResult
+    from hooks import BaseHook, HookEngine, HookResult, HookType
 
     engine = HookEngine()
 
@@ -504,7 +441,6 @@ async def main():
     all_bugs = []
     all_bugs.extend(await test_real_conversation())
     all_bugs.extend(await test_database_crud())
-    all_bugs.extend(await test_transport_layer())
     all_bugs.extend(await test_belief_router_sampling())
     all_bugs.extend(await test_context_compressor_deep())
     all_bugs.extend(await test_hook_engine_deep())

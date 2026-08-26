@@ -1,14 +1,41 @@
 """概念图数据库 CRUD 单元测试"""
-import asyncio
 import json
-import os
-import tempfile
-import time
 
 import aiosqlite
 import pytest
 
 from db.db_concept import ConceptDB
+
+
+@pytest.fixture
+async def engine():
+    """内存库 + ConceptDB（与 test_spreading_activation 同构）。"""
+    conn = await aiosqlite.connect(":memory:")
+    conn.row_factory = aiosqlite.Row
+    await conn.executescript("""
+        CREATE TABLE IF NOT EXISTS concept_nodes (
+            id TEXT PRIMARY KEY, text TEXT NOT NULL,
+            weight REAL DEFAULT 1.0, peak_weight REAL DEFAULT 1.0,
+            confidence REAL DEFAULT 1.0, access_count INTEGER DEFAULT 0,
+            keys TEXT DEFAULT '[]', layer TEXT DEFAULT 'hippocampus',
+            created TEXT NOT NULL, last_accessed TEXT NOT NULL,
+            valid_from TEXT NOT NULL, valid_to TEXT, superseded_by TEXT,
+            history TEXT DEFAULT '[]', origin TEXT DEFAULT '{}',
+            source_mem_id INTEGER, embedding BLOB,
+            difficulty REAL DEFAULT 5.0, stability REAL DEFAULT 3.0,
+            phase TEXT DEFAULT 'buffer', last_review REAL DEFAULT 0.0,
+            reinforcement_count INTEGER DEFAULT 0
+        );
+        CREATE TABLE IF NOT EXISTS concept_edges (
+            source_id TEXT NOT NULL, target_id TEXT NOT NULL,
+            relation TEXT DEFAULT 'related', weight REAL DEFAULT 1.0,
+            created TEXT NOT NULL, PRIMARY KEY (source_id, target_id)
+        );
+    """)
+    await conn.commit()
+    yield ConceptDB(conn)
+    await conn.close()
+
 
 
 @pytest.fixture
@@ -350,3 +377,58 @@ async def test_batch_link_recent_executemany_writes_correctly(concept_db):
     # 验证字段正确
     assert edges_1["node2"]["relation"] == "co-occurrence"
     assert edges_1["node2"]["weight"] == 1.0
+
+
+# ── alive_nodes TTL 快照（2026-08-25 性能专项：USB 盘冷读 1.7s）────────
+
+
+@pytest.mark.asyncio
+async def test_alive_nodes_ttl_snapshot(concept_db, monkeypatch):
+    """全量读取走 TTL 缓存：命中不回库、浅拷贝防污染、过期后重新回库。"""
+    clock = {"t": 1000.0}
+    monkeypatch.setattr("db.db_concept.time.monotonic", lambda: clock["t"])
+
+    now = "2026-07-10T12:00:00+08:00"
+    await concept_db.insert_node(
+        id="c1", text="缓存测试节点", keys=json.dumps(["k"]),
+        created=now, last_accessed=now, valid_from=now)
+
+    first = await concept_db.get_alive_nodes()
+    assert "c1" in first
+
+    # TTL 内第二次调用：命中快照，且返回浅拷贝（改返回值不得污染缓存）
+    second = await concept_db.get_alive_nodes()
+    assert second is not first and second["c1"] is not first["c1"]
+    second["c1"]["text"] = "污染尝试"
+    third = await concept_db.get_alive_nodes()
+    assert third["c1"]["text"] == "缓存测试节点"
+
+    # TTL 过期后重新回库
+    clock["t"] += 61
+    fourth = await concept_db.get_alive_nodes()
+    assert "c1" in fourth
+
+
+@pytest.mark.asyncio
+async def test_structural_write_invalidates_alive_cache(concept_db, monkeypatch):
+    """结构性字段更新立即失效快照；纯统计字段更新容忍 ≤TTL 陈旧。"""
+    clock = {"t": 2000.0}
+    monkeypatch.setattr("db.db_concept.time.monotonic", lambda: clock["t"])
+
+    now = "2026-07-10T12:00:00+08:00"
+    await concept_db.insert_node(
+        id="s1", text="旧文本", keys=json.dumps(["k"]),
+        created=now, last_accessed=now, valid_from=now)
+    cached = await concept_db.get_alive_nodes()
+    assert cached["s1"]["text"] == "旧文本"
+
+    # 纯统计字段更新：不失效（touch 批量更新的高频路径）
+    await concept_db.update_node("s1", access_count=5)
+    still = await concept_db.get_alive_nodes()
+    assert still["s1"]["text"] == "旧文本"  # 快照容忍统计字段陈旧
+
+    # 结构性字段更新（text）：立即失效并反映新值
+    await concept_db.update_node("s1", text="新文本", auto_commit=False)
+    await concept_db._conn.commit()
+    fresh = await concept_db.get_alive_nodes()
+    assert fresh["s1"]["text"] == "新文本"

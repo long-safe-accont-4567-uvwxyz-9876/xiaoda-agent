@@ -1,15 +1,16 @@
-from typing import Any, ClassVar
+import asyncio
+import base64
 import hashlib
 import json
 import os
 import re
-import base64
 import time
-import asyncio
 from collections import OrderedDict
 from pathlib import Path
-from openai import AsyncOpenAI
+from typing import Any, ClassVar
+
 from loguru import logger
+from openai import AsyncOpenAI
 
 try:
     from utils.atomic_write import atomic_write
@@ -18,8 +19,9 @@ except (ImportError, AttributeError):
 except Exception:
     logger.exception(".emotion.tts_engine.unexpected")
     atomic_write = None  # type: ignore[assignment]
-from .emotion_enum import resolve_emotion, TTS_STYLE_MAP, is_unified
 from config import get_agent_display_name, get_base_url_for_provider
+
+from .emotion_enum import TTS_STYLE_MAP, is_unified, resolve_emotion
 
 MIMO_API_KEY = os.getenv("MIMO_API_KEY", "")
 MIMO_BASE_URL = get_base_url_for_provider("mimo")

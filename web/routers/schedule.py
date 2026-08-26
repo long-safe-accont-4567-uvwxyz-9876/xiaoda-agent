@@ -1,16 +1,16 @@
 """定时与问候路由（R10）：问候计划 CRUD、DND、立即试发、历史。"""
 from __future__ import annotations
-from typing import Any
 
 import json
 import re
 import time
+from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from loguru import logger
 
-from web.schemas import Envelope
 from web.routers.auth import get_current_user
+from web.schemas import Envelope
 
 router = APIRouter(tags=["schedule"], dependencies=[Depends(get_current_user)])
 
@@ -205,6 +205,9 @@ async def update_greeting(sid: int, body: dict, request: Request) -> Any:
 
 @router.delete("/schedule/greetings/{sid}", response_model=Envelope[dict])
 async def delete_greeting(sid: int, request: Request) -> Any:
+    # 删除类接口统一要求确认头（CLAUDE.md 契约）
+    if request.headers.get("X-Confirm") != "yes":
+        raise HTTPException(400, "缺少 X-Confirm: yes 确认头")
     core = request.app.state.core
     n = await core.db.execute(
         "DELETE FROM greeting_schedules WHERE id=?", (sid,))

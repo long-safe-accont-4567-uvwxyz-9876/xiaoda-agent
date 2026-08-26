@@ -70,7 +70,7 @@ dependencies = [
 
 [project.optional-dependencies]
 streamlit = ["streamlit>=1.28.0"]
-dev = ["pytest>=7.0", "pytest-asyncio>=0.21", "ruff>=0.1.0", "libcst>=1.0"]
+dev = ["pytest>=7.0", "pytest-asyncio>=0.21", "pytest-timeout>=2.3", "pytest-cov>=6.0", "ruff>=0.1.0", "libcst>=1.0"]
 search = []
 windows = ["pywin32>=306", "pywinpty>=2.0.10"]  # ConPTY 真终端（虚空终端 resize/TUI）
 local-ai = ["onnxruntime-genai==0.15.2; python_version >= '3.11' and ((platform_system == 'Windows' and platform_machine == 'AMD64') or (platform_system == 'Linux' and platform_machine == 'x86_64') or (platform_system == 'Linux' and platform_machine == 'aarch64'))"]
@@ -78,7 +78,49 @@ local-ai = ["onnxruntime-genai==0.15.2; python_version >= '3.11' and ((platform_
 [project.scripts]
 xiaoda-agent = "agent:main"
 
+# ── 根目录单文件模块 ─────────────────────────────────────────
+# console script 指向 agent:main，但 packages.find 只收「包」，不含仓库根目录的
+# 单文件模块——此前 pip install 后入口 ModuleNotFoundError（已实证）。
+# 显式声明全部被 import 的顶层模块（宁可全列不可漏；由
+# tests/test_windows_package_reliability.py::test_py_modules_cover_every_imported_root_module
+# 守护：AST 扫描源码树，漏列即红）。与 PyInstaller spec 无冲突：spec 直接引用
+# 源文件路径，不经 setuptools 打包。
+[tool.setuptools]
+py-modules = [
+    "agent",
+    "agent_context",
+    "agent_dispatcher",
+    "belief_router",
+    "botpy_compat",
+    "channel_adapter_base",
+    "cli",
+    "cli_client",
+    "cli_menu",
+    "cli_palette",
+    "config",
+    "config_agents",
+    "config_constants",
+    "config_paths",
+    "config_providers",
+    "hooks",
+    "ilink_client",
+    "instinct_manager",
+    "model_router",
+    "model_router_config",
+    "model_router_registry",
+    "prompt_builder",
+    "qq_bot_adapter",
+    "setup_wizard",
+    "slash_commands",
+    "wechat_bot_adapter",
+    "xiaoli_agent",
+]
+
 [tool.setuptools.packages.find]
+# 注意：config/ 目录是「数据目录」不是 Python 包（无 __init__.py），
+# 但 config* 通配会把它的 json5/yaml/md 当作包数据装进 site-packages/config/
+# （namespace 包语义），遮蔽源码树根的 config.py。显式排除，只保留真包。
+exclude = ["config", "config.*"]
 include = [
     "agent*",
     "agent_core*",

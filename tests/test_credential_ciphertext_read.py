@@ -19,8 +19,8 @@ if str(_PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(_PROJECT_ROOT))
 
 import security.credential_vault as cv
-from security.credential_vault import encrypt
 from model_router import _resolve_provider_key
+from security.credential_vault import encrypt
 
 PLAIN = "sk-test-mimo-key-1234567890"
 

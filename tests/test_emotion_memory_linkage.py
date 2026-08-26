@@ -15,8 +15,11 @@ import memory.emotional_memory as em
 @pytest.fixture
 def isolated_managers(tmp_path, monkeypatch):
     """创建隔离的管理器实例（重置全局单例 + 临时持久化路径）。"""
-    # 重置单例
-    es._instance = None
+    # 重置单例：_instances 是 per-user 注册表——其他测试文件（如
+    # test_emotional_memory）先跑时会留下 "u1" 的残留情绪状态，
+    # 只清旧版 _instance 字段清不掉它（2026-08-25 测试隔离修复）
+    es._instances.clear()
+    es._instance = None  # 兼容旧字段
     em._emotional_memory_manager = None
     # 设置临时路径
     monkeypatch.setenv("EMOTION_STATE_PATH", str(tmp_path / "emotion_state.json"))
@@ -25,6 +28,7 @@ def isolated_managers(tmp_path, monkeypatch):
     manager = EmotionalMemoryManager(data_dir=tmp_path)
     yield manager
     # 清理单例，避免影响后续测试
+    es._instances.clear()
     es._instance = None
     em._emotional_memory_manager = None
 
@@ -169,7 +173,7 @@ class TestCnToEnMap:
         "愤怒": "angry",
         "焦虑": "anxious",
         "害羞": "shy",
-        "好奇": "confused",
+        "好奇": "curious",
         "思考": "thinking",
         "恐惧": "fear",
         "平静": "neutral",

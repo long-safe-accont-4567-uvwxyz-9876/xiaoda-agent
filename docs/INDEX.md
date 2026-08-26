@@ -1,6 +1,6 @@
 # xiaoda-agent 文档索引
 
-> 本文档统一索引项目所有文档，按角色分类。最后更新: 2026-07-19
+> 本文档统一索引项目所有文档，按角色分类。最后更新: 2026-08-23
 >
 > 链接路径均相对于本文件（`docs/INDEX.md`）。标注"（内部使用）"的文档主要面向项目维护者与 AI 协作工具，普通使用者无需阅读。
 
@@ -17,6 +17,8 @@
 - [API 文档](API.md) - Web API 接口规范
 - [CLAUDE 开发指南](../CLAUDE.md)（内部使用） - 开发命令、架构说明、配置体系
 - [改进计划](IMPROVEMENT_PLAN.md) - 项目改进路线图
+- [情感陪伴升级方案](research/external-specs/astrbot-tdbm-companion-upgrade.md) - 基于 AstrBot / TencentDB-Agent-Memory 的对照研究与 P0-P2 优化路线（2026-08-23）
+- [情感陪伴升级核验记录](research/external-specs/astrbot-tdbm-companion-upgrade-validation.md) - 外部固定点、已证伪假设、实施与灰度门禁（2026-08-23）
 - [WebUI 设计](WEBUI_DESIGN.md) - Web 前端设计文档
 - [场景感知重设计](SCENE_AWARE_REDESIGN.md) - 场景感知系统重设计
 
@@ -29,10 +31,9 @@
 - [Dockerfile](../Dockerfile) - 容器镜像构建文件
 - [健康检查脚本 (Linux)](../scripts/doctor.sh) - 自检脚本
 - [健康检查脚本 (Windows)](../scripts/doctor.bat) - 自检脚本
-- [K8s 部署配置](../deploy/k8s.yaml) - Kubernetes 部署
-- [systemd 服务单元](../deploy/qq-agent.service) - QQ Bot systemd 服务
+- [K8s 部署配置](../deploy/k8s.yaml) - Kubernetes 部署（参考模板，未随版本验证）
 
-## 📊 审计与质量
+## 📊 审计与质量（历史归档）
 
 - [代码质量审计报告](../audit/code_quality_audit_report.md) - 代码质量评估
 - [代码质量审计证据](../audit/code_quality_audit_evidence.md) - 审计原始证据
@@ -65,7 +66,7 @@
 - [报告问题批量修复 Spec](../.trae/specs/report-issues-batch-fix/spec.md) - 当前批次修复规格
 - [docs/SPECS 子规格](SPECS/) - 文档子规格目录
 - [项目规格目录](../specs/) - 项目规格文档
-- [RAG 优化规格](../RAG-OPTIMIZATION-SPEC.md) - RAG 检索优化规格
+- [检索、RAG 与功能节点提示词优化调研](research/retrieval-rag-functional-node-prompt-optimization-2026-08-23.md) - 当前代码基线、16 节点提示词治理、评测闭环与 P0-P4 路线（2026-08-23）
 - [改进计划](IMPROVEMENT_PLAN.md) - 项目改进路线图
 - [Bugfix 计划 2026-07-19](../BUGFIX_PLAN_2026-07-19.md) - 最新 Bugfix 计划
 - [优化任务清单](../optimization-tasks.md) - 优化任务清单

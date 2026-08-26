@@ -176,20 +176,74 @@ onBeforeUnmount(() => {
 
 const themeOverrides: GlobalThemeOverrides = {
   common: {
-    primaryColor: '#8fe560',
-    primaryColorHover: '#a2f070',
-    primaryColorPressed: '#6bc840',
-    primaryColorSuppl: '#8fe560',
+    primaryColor: '#91e866',
+    primaryColorHover: '#a9f183',
+    primaryColorPressed: '#68c844',
+    primaryColorSuppl: '#55d9b2',
     bodyColor: 'transparent',
-    cardColor: 'rgba(20, 40, 28, 0.45)',
-    modalColor: 'rgba(20, 40, 28, 0.92)',
-    popoverColor: 'rgba(18, 36, 26, 0.96)',
+    cardColor: 'rgba(13, 28, 21, 0.94)',
+    modalColor: 'rgba(13, 28, 21, 0.96)',
+    popoverColor: 'rgba(10, 23, 17, 0.98)',
     tableColor: 'transparent',
-    inputColor: 'rgba(15, 31, 23, 0.5)',
-    borderColor: 'rgba(143, 229, 96, 0.18)',
-    successColor: '#8fe560',
-    errorColor: '#d96a5f',
-    warningColor: '#e8d5a3',
+    inputColor: 'rgba(7, 18, 13, 0.72)',
+    inputColorDisabled: 'rgba(13, 25, 19, 0.58)',
+    borderColor: 'rgba(196, 238, 207, 0.15)',
+    dividerColor: 'rgba(218, 245, 226, 0.09)',
+    textColorBase: '#f4f8f3',
+    textColor1: '#f4f8f3',
+    textColor2: 'rgba(244, 248, 243, 0.84)',
+    textColor3: 'rgba(222, 233, 225, 0.66)',
+    placeholderColor: 'rgba(222, 233, 225, 0.42)',
+    successColor: '#91e866',
+    infoColor: '#70c7dc',
+    errorColor: '#f07c72',
+    warningColor: '#efbd64',
+    borderRadius: '6px',
+    borderRadiusSmall: '5px',
+    fontWeightStrong: '700',
+  },
+  Button: {
+    heightMedium: '38px',
+    paddingMedium: '0 17px',
+    borderRadiusTiny: '6px 3px 6px 3px',
+    borderRadiusSmall: '8px 4px 8px 4px',
+    borderRadiusMedium: '10px 5px 10px 5px',
+    borderRadiusLarge: '12px 5px 12px 5px',
+    color: 'rgba(9, 24, 16, 0.78)',
+    colorHover: 'rgba(17, 39, 27, 0.92)',
+    colorPressed: 'rgba(7, 19, 13, 0.96)',
+    colorFocus: 'rgba(17, 39, 27, 0.92)',
+    border: '1px solid rgba(210, 235, 207, 0.18)',
+    borderHover: '1px solid rgba(187, 226, 165, 0.42)',
+    borderPressed: '1px solid rgba(91, 181, 137, 0.4)',
+    borderFocus: '1px solid rgba(224, 238, 181, 0.54)',
+    colorSecondary: 'rgba(197, 229, 184, 0.07)',
+    colorSecondaryHover: 'rgba(197, 229, 184, 0.13)',
+    colorSecondaryPressed: 'rgba(82, 169, 128, 0.1)',
+    colorTertiary: 'rgba(7, 22, 14, 0.42)',
+    colorTertiaryHover: 'rgba(197, 229, 184, 0.09)',
+    colorTertiaryPressed: 'rgba(82, 169, 128, 0.08)',
+    colorQuaternary: 'transparent',
+    colorQuaternaryHover: 'rgba(197, 229, 184, 0.08)',
+    colorQuaternaryPressed: 'rgba(82, 169, 128, 0.07)',
+    colorPrimary: '#78d84f',
+    colorHoverPrimary: '#91e866',
+    colorPressedPrimary: '#58b83b',
+    colorFocusPrimary: '#91e866',
+    borderPrimary: '1px solid rgba(236, 224, 164, 0.72)',
+    borderHoverPrimary: '1px solid rgba(249, 239, 191, 0.92)',
+    borderPressedPrimary: '1px solid rgba(189, 181, 123, 0.72)',
+    borderFocusPrimary: '1px solid rgba(249, 239, 191, 0.92)',
+    textColorPrimary: '#0a2414',
+    textColorHoverPrimary: '#071b0f',
+    textColorPressedPrimary: '#071b0f',
+    textColorFocusPrimary: '#071b0f',
+  },
+  Card: {
+    borderRadius: '8px',
+  },
+  Dialog: {
+    borderRadius: '8px',
   },
 }
 </script>
@@ -234,9 +288,31 @@ html, body, #app {
 }
 
 body {
-  font-family: 'Noto Sans SC', system-ui, -apple-system, sans-serif;
+  font-family: 'Noto Sans SC', 'Microsoft YaHei UI', 'PingFang SC', system-ui, sans-serif;
   color: var(--moon);
   background: var(--forest-deep);
+  font-size: 14px;
+  line-height: 1.55;
+  text-rendering: optimizeLegibility;
+  -webkit-font-smoothing: antialiased;
+}
+
+button,
+input,
+textarea,
+select {
+  font: inherit;
+}
+
+button,
+a,
+[role='button'] {
+  -webkit-tap-highlight-color: transparent;
+}
+
+::selection {
+  background: rgba(145, 232, 102, 0.24);
+  color: var(--moon);
 }
 
 /* 叶片翻页转场 · v2 弹簧+柔焦 */
@@ -278,10 +354,15 @@ body.low-gpu .leaf-page-leave-to {
   filter: none;
 }
 
-::-webkit-scrollbar { width: 6px; height: 6px; }
+::-webkit-scrollbar { width: 8px; height: 8px; }
 ::-webkit-scrollbar-track { background: transparent; }
-::-webkit-scrollbar-thumb { background: rgba(143, 229, 96, 0.3); border-radius: 3px; }
-::-webkit-scrollbar-thumb:hover { background: rgba(143, 229, 96, 0.5); }
+::-webkit-scrollbar-thumb {
+  border: 2px solid transparent;
+  border-radius: 8px;
+  background: rgba(196, 238, 207, 0.22);
+  background-clip: padding-box;
+}
+::-webkit-scrollbar-thumb:hover { background-color: rgba(145, 232, 102, 0.42); }
 
 /* 全局署名水印（非 scoped）——移除 writing-mode 避免每帧重排 */
 .brand-watermark {

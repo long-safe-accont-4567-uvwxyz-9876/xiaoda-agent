@@ -1,9 +1,10 @@
-from dataclasses import dataclass
-from typing import Any
-from enum import Enum
 import threading
+from dataclasses import dataclass
+from enum import Enum
+from typing import Any
 
 from loguru import logger
+
 from utils.metrics import metrics
 
 
@@ -161,6 +162,11 @@ def register_tool(name: str, description: str, schema: dict,
     def decorator(func: Any) -> Any:
         """实际注册函数的装饰器内层."""
         global _schema_cache, _schema_version
+        if name in _tools:
+            # 显式告警：同名覆写依赖 import 顺序（如 web_browse 旧/增强版），
+            # 静默切实现属于隐式契约，任何新双注册都应在此可见
+            logger.warning("tool_registry.duplicate_overwrite name={} old_source={}",
+                           name, _tools[name].get("source", "?"))
         _tools[name] = {
             "name": name,
             "description": description,
@@ -356,6 +362,69 @@ def invalidate_tool_cache() -> None:
         _schema_cache = None
 
 
+_tiering_wired = False
+
+
+def _ensure_tiering_wiring() -> None:
+    """工具分层接线：注册 search_tools 元工具执行器 + 把延迟集喂给检索引擎。
+
+    仅在 TOOL_TIERING_ENABLED 且首次进入时执行一次。
+    """
+    global _tiering_wired
+    if _tiering_wired:
+        return
+    from config_constants import TOOL_DEFERRED_NAMES
+    from tool_engine.tool_registry import register_tool_direct  # 自引用兼容显式化
+    from tool_engine.tool_search import ToolDef, get_tool_search_engine
+
+    engine = get_tool_search_engine()
+    fed = 0
+    for name in sorted(TOOL_DEFERRED_NAMES):
+        t = _tools.get(name)
+        if not t:
+            continue
+        engine.register(ToolDef(
+            name=t["name"], description=t["description"],
+            parameters=t["schema"],
+            keywords=[t.get("category", "")] if t.get("category") else [],
+        ))
+        fed += 1
+
+    async def _search_tools_impl(query: str, top_k: int = 5) -> "ToolResult":
+        """按关键词检索延迟加载的工具，返回完整定义供模型直接调用。"""
+        import json as _json
+        hits = engine.search(query, top_k=max(1, min(int(top_k), 10)))
+        defs = [{"name": d.name, "description": d.description,
+                 "parameters": d.parameters} for d in hits]
+        if not defs:
+            return ToolResult.fail(f"没有找到与「{query}」相关的工具")
+        body = "\n".join(_json.dumps(d, ensure_ascii=False) for d in defs)
+        return ToolResult.ok(
+            f"找到 {len(defs)} 个工具，可直接按以下定义发起调用：\n{body}")
+
+    register_tool_direct(
+        name="search_tools",
+        description=(
+            "按关键词检索当前未加载的工具定义（邮件/视觉摄像/文档解析等低频工具"
+            "已转入按需模式）。需要用到不在工具列表里的能力时调用本工具获取定义，"
+            "然后直接按定义发起调用即可。"),
+        func=_search_tools_impl,
+        parameters={
+            "type": "object",
+            "properties": {
+                "query": {"type": "string",
+                          "description": "描述你需要的工具能力的关键词"},
+                "top_k": {"type": "integer", "default": 5},
+            },
+            "required": ["query"],
+        },
+        permission=ToolPermission.READ_ONLY,
+        category="system",
+    )
+    logger.info("tool_tiering.wired deferred={} search_tools=registered", fed)
+    _tiering_wired = True
+
+
 def to_openai_tools() -> list[dict]:
     """生成 OpenAI function-calling 格式的工具列表 (带缓存，受上限限制)."""
     global _schema_cache
@@ -365,8 +434,17 @@ def to_openai_tools() -> list[dict]:
             return _schema_cache
     metrics.inc("tool_registry.schema_cache.miss")
 
+    from config_constants import TOOL_DEFERRED_NAMES, TOOL_TIERING_ENABLED
+    tiering = bool(TOOL_TIERING_ENABLED)
+    if tiering:
+        _ensure_tiering_wiring()
+
     enabled = []
     for t in _tools.values():
+        if tiering and t["name"] in TOOL_DEFERRED_NAMES:
+            continue
+        if not tiering and t["name"] == "search_tools":
+            continue  # 回退全量模式时元工具一并隐藏
         if t.get("max_frequency", 0) == 0:
             continue
         if t.get("enabled") is False:

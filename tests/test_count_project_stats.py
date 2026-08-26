@@ -11,7 +11,6 @@ from __future__ import annotations
 
 import importlib.util
 import json
-import sys
 from pathlib import Path
 
 import pytest
@@ -634,10 +633,18 @@ class TestMain:
         (tmp_path / "a.py").write_text("x = 1\n")
         (tmp_path / "b.py").write_text("y = 2\nz = 3\n\n# comment\n")
         (tmp_path / "db").mkdir()
-        (tmp_path / "db" / "schema.sql").write_text(
-            "CREATE TABLE t (id INTEGER);\n"
-            "CREATE VIRTUAL TABLE t_fts USING fts5(content);\n"
-            "CREATE INDEX idx_t ON t(id);\n"
+        # schema.sql 已删（fc353d75），main 现读 db/ddl_schema.py 内嵌 DDL；
+        # 该文件计入 python_modules，故总数 15→16
+        (tmp_path / "db" / "ddl_schema.py").write_text(
+            'async def _ddl(self):\n'
+            '    await self._conn.execute("""\n'
+            '            CREATE TABLE IF NOT EXISTS t (id INTEGER)\n'
+            '            """)\n'
+            '    await self._conn.execute("""\n'
+            '            CREATE VIRTUAL TABLE IF NOT EXISTS t_fts USING fts5(content)\n'
+            '            """)\n'
+            '    await self._conn.execute(\n'
+            '        "CREATE INDEX IF NOT EXISTS idx_t ON t(id)")\n'
         )
         (tmp_path / "web").mkdir()
         (tmp_path / "web" / "routers").mkdir()
@@ -676,7 +683,7 @@ class TestMain:
         assert rc == 0
         captured = capsys.readouterr()
         parsed = json.loads(captured.out)
-        assert parsed["python_modules"] == 15  # all .py files in mini_project tree
+        assert parsed["python_modules"] == 16  # 15 + db/ddl_schema.py（替代已删的 schema.sql）
         assert parsed["db_tables"] == 1
         assert parsed["db_virtual_tables"] == 1
         assert parsed["db_indexes"] == 1
@@ -720,7 +727,7 @@ class TestMain:
 
     def test_main_check_readme_returns_zero_when_in_sync(self, cps, mini_project, monkeypatch, capsys):
         (mini_project / "README.md").write_text(
-            "| Python 模块 | 15 |\n"
+            "| Python 模块 | 16 |\n"
             "| 数据库表 | 1 张 + 1 索引 |\n"
             "| Web API 路由 | 1 模块 + 2 端点 |\n"
             "2 类情绪\n"

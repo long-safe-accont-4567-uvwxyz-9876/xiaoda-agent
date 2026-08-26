@@ -7,20 +7,20 @@
 - 优雅降级: 依赖模块缺失时不崩溃
 """
 import json
+
+# 确保项目根在 path (conftest 已注入, 这里冗余以保证独立运行)
+import sys
 import time
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
 
-# 确保项目根在 path (conftest 已注入, 这里冗余以保证独立运行)
-import sys
-from pathlib import Path
 ROOT = Path(__file__).parent.parent
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from core.agent_introspection import AgentState, AgentIntrospector
-
+from core.agent_introspection import AgentIntrospector, AgentState
 
 # ============================================================
 # 辅助 fixtures

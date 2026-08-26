@@ -151,6 +151,7 @@ async def test_cleanup_reaps_child_no_zombie(clean_buffers):
 
     回归：waitpid(WNOHANG) 在子进程尚未退出时返回 (0,0)，旧实现误判为
     rc=0 且不再收割，服务进程下 [zsh] <defunct> 持续堆积。
+    收割已下放线程池（事件循环零阻塞），故此处轮询等待异步完成。
     判定：收割成功的 pid 对 kill(pid,0) 报 ProcessLookupError；
     未收割的僵尸对 kill() 仍然"成功"。"""
     child_pid, master_fd = pty.fork()
@@ -163,11 +164,61 @@ async def test_cleanup_reaps_child_no_zombie(clean_buffers):
             "shell": "bash", "alive": True, "loop": loop,
             "is_windows": False,
         }
-    await asyncio.to_thread(hub._cleanup_pty, "reap")
-    with pytest.raises(ProcessLookupError):
-        os.kill(child_pid, 0)  # 僵尸残留时这里不会抛
-    # 退出码也应真实反映（0），而不是 WNOHANG 竞态下的伪 rc
-    assert hub._pty_sessions.get("reap") is None
+    hub._cleanup_pty("reap")  # 在 loop 线程调用——必须立即返回不阻塞
+    deadline = loop.time() + 5.0
+    while loop.time() < deadline:
+        try:
+            os.kill(child_pid, 0)  # 僵尸残留时这里不会抛
+        except ProcessLookupError:
+            break
+        await asyncio.sleep(0.05)
+    else:
+        pytest.fail("5s 内未完成子进程收割（僵尸残留）")
+    with hub._pty_sessions_lock:
+        assert hub._pty_sessions.get("reap") is None
+
+
+@pytest.mark.asyncio
+async def test_cleanup_pty_does_not_block_event_loop(clean_buffers):
+    """收割在 loop 线程触发时不得阻塞事件循环——并发探测任务须持续运转。
+
+    P0 审查项：SIGKILL+waitpid 轮询最坏 ~300ms，若在 loop 线程内联执行，
+    同期调度的其他回调会被卡住。以"并行 sleep(0.02) 探测全部按时完成"
+    作为非阻塞观测；调用方式与生产完全一致（loop 线程直呼）。"""
+    child_pid, master_fd = pty.fork()
+    if child_pid == 0:
+        os._exit(0)
+    loop = asyncio.get_running_loop()
+    with hub._pty_sessions_lock:
+        hub._pty_sessions["nb"] = {
+            "pid": child_pid, "fd": master_fd, "conn_id": "c-nb",
+            "shell": "bash", "alive": True, "loop": loop,
+            "is_windows": False,
+        }
+
+    async def _probe():
+        stamps = [loop.time()]
+        for _ in range(10):
+            await asyncio.sleep(0.02)
+            stamps.append(loop.time())
+        return stamps
+
+    probe_task = asyncio.create_task(_probe())
+    await asyncio.sleep(0.01)  # 让探测先跑起来
+    hub._cleanup_pty("nb")     # 生产路径：loop 线程直接调用
+    stamps = await probe_task
+    gaps = [b - a for a, b in zip(stamps, stamps[1:])]
+    assert max(gaps) < 0.15, f"loop 被阻塞: 最大间隔 {max(gaps):.3f}s"
+    # 等异步收割收尾（不留僵尸）
+    deadline = loop.time() + 5.0
+    while loop.time() < deadline:
+        try:
+            os.kill(child_pid, 0)
+        except ProcessLookupError:
+            break
+        await asyncio.sleep(0.05)
+    else:
+        pytest.fail("5s 内未完成子进程收割（僵尸残留）")
 
 
 @pytest.mark.asyncio

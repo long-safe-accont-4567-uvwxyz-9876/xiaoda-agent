@@ -9,26 +9,63 @@ import json
 import re
 import time
 from pathlib import Path
-from typing import Any, TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from loguru import logger
 
+from agent_core._shared import RequestContext, _current_request_ctx
 from config import FILE_DIR, get_agent_display_name
-from utils.text_utils import strip_dsml, strip_reasoning, humanize
+from core.degradation_strategy import get_degradation_strategy
 from utils.llm_cleanup import (
     deduplicate_multi_reply,
-    strip_system_leak,
-    strip_log_timestamps,
-    strip_image_gen_leak,
-    strip_qq_face_tags,
     strip_english_reasoning_leak,
+    strip_image_gen_leak,
+    strip_log_timestamps,
+    strip_qq_face_tags,
+    strip_system_leak,
 )
-from core.degradation_strategy import get_degradation_strategy
-
-from agent_core._shared import _current_request_ctx, RequestContext
+from utils.text_utils import humanize, strip_dsml, strip_reasoning
 
 if TYPE_CHECKING:
     from tool_engine.tool_registry import ToolResult
+
+
+# ── 模块级常量（原先在函数体内每请求重建） ──────────────────
+
+# markdown 图：![alt](url)，url 允许一层嵌套括号（如 pollinations 的 (duck)）
+_MD_IMG_RE = re.compile(
+    r'!\[[^\]]*\]\((https?://(?:[^()\s]|\([^()\s]*\))*)\)'
+)
+# 裸 pollinations URL（贪婪到首个空白，URL 不含空格）
+_POLLINATIONS_RE = re.compile(r'https?://image\.pollinations\.ai/\S+')
+
+# LLM 模仿工具返回的 XML 标签（<file_content>、<artifact> 等）
+_XML_TAG_RE = re.compile(
+    r'</?(?:file_content|file|code|artifact|antArtifact|system-reminder|reminder|tool_result|tool_call)[^>]*>',
+    re.IGNORECASE,
+)
+
+# 回复开头 agent 前缀表（"小可："、"[小可] "、"【小可】"、"小可 " 等格式）
+# 显示名在进程内视为稳定，首次使用时构建并缓存
+_AGENT_PREFIXES: list[str] | None = None
+
+
+def _get_agent_prefixes() -> list[str]:
+    global _AGENT_PREFIXES
+    if _AGENT_PREFIXES is None:
+        names = [n for n in (get_agent_display_name(a) for a in (
+            'xiaoda', 'xiaoli', 'xiaolang', 'xiaolian', 'xiaoke')) if n]
+        prefixes: list[str] = []
+        for name in names:
+            prefixes.extend([
+                f"{name}：", f"{name}:", f"{name} ", f"{name}\n",
+                f"[{name}]", f"[{name}] ", f"[{name}]：", f"[{name}]:",
+                f"【{name}】", f"【{name}】 ", f"【{name}】：",
+                f"（{name}）", f"({name})",
+            ])
+        prefixes.extend(["助手：", "助手:", "AI：", "AI:"])
+        _AGENT_PREFIXES = prefixes
+    return _AGENT_PREFIXES
 
 
 class ToolExecutorMixin:
@@ -38,8 +75,9 @@ class ToolExecutorMixin:
                                         user_id: str = "", safe_mode: bool = False,
                                         user_input: str = "") -> ToolResult:
         """带钩子的工具执行"""
-        from tool_engine.tool_registry import ToolResult
         import time as _time
+
+        from tool_engine.tool_registry import ToolResult
         _t0 = _time.time()
 
         # PreToolUse 钩子
@@ -141,17 +179,32 @@ class ToolExecutorMixin:
         self._tool_call_handler.set_status_callback(_ctx.status_callback if _ctx else None)
         return await self._tool_call_handler.handle(tool_calls, messages, trace, assistant_content=assistant_content, reasoning_content=reasoning_content, user_openid=user_openid, session_id=session_id, safe_mode=safe_mode, current_user_input=_ctx.user_input if _ctx else "", user_id=_ctx.user_id if _ctx else "", skip_summarize=skip_summarize)
 
-    async def _load_notebook_context(self) -> None:
+    async def _load_notebook_context(self, user_token: Any | None = None) -> bool:
+        token = user_token or self.context.get_user_context_token()
+        if token is None:
+            return False
         try:
             focus = await self.notebook_manager.get_current_focus()
             if focus:
-                self.context.notebook_focus = focus
+                committed = await self.context.commit_user_context(
+                    token,
+                    notebook_focus=focus,
+                )
+                if not committed:
+                    return False
 
             tasks = await self.notebook_manager.get_pending_tasks_summary()
             if tasks:
-                self.context.pending_tasks = tasks
+                committed = await self.context.commit_user_context(
+                    token,
+                    pending_tasks=tasks,
+                )
+                if not committed:
+                    return False
+            return self.context.get_user_context_token() == token
         except Exception as e:
             logger.warning("notebook.context_load_failed", error=str(e))
+            return False
 
     async def _extract_media_from_tool_results(self, tool_results: list, reply: str) -> tuple[list[Path], Path | None, str]:
         """从工具结果中提取图片/视频路径，并清理回复文本中的冗余路径描述。"""
@@ -259,12 +312,9 @@ class ToolExecutorMixin:
         if not reply:
             return image_paths, reply
 
-        # markdown 图：![alt](url)，url 允许一层嵌套括号（如 pollinations 的 (duck)）
-        md_img_re = re.compile(
-            r'!\[[^\]]*\]\((https?://(?:[^()\s]|\([^()\s]*\))*)\)'
-        )
-        # 裸 pollinations URL（贪婪到首个空白，URL 不含空格）
-        pollinations_re = re.compile(r'https?://image\.pollinations\.ai/\S+')
+        # markdown 图 / pollinations 正则已在模块级预编译
+        md_img_re = _MD_IMG_RE
+        pollinations_re = _POLLINATIONS_RE
 
         # 仅通过 pollinations_re 收集 URL（贪婪 \S+ 捕获完整 URL token）。
         # 不从 md_img_re 收集：LLM 伪造的 markdown 常含异常嵌套括号（如 "url)?width=...true)"），
@@ -306,9 +356,11 @@ class ToolExecutorMixin:
         cleaned = re.sub(r'\n{3,}', '\n\n', cleaned)
         return image_paths, cleaned.strip()
 
-    def _clean_reply(self, text: str) -> str:
-        text = text.strip()
-        # JSON 格式回复提取：LLM（如 agnes-2.0-flash）有时返回 JSON 而非纯文本
+    def _extract_json_reply(self, text: str, *, log_prefix: str) -> str:
+        """JSON 格式回复提取：LLM（如 agnes-2.0-flash）有时返回 JSON 而非纯文本。
+
+        _clean_reply 与 _finalize_reply 共用，防止两份拷贝漂移。
+        """
         if text.startswith(('{', '[')):
             try:
                 obj = json.loads(text)
@@ -316,31 +368,47 @@ class ToolExecutorMixin:
                     for key in ('reply', 'text', 'content', 'message', 'body', 'response'):
                         if key in obj and isinstance(obj[key], str):
                             text = obj[key].strip()
-                            logger.debug("agent.json_reply_extracted key={} len={}", key, len(text))
+                            logger.debug("{}.json_reply_extracted key={} len={}", log_prefix, key, len(text))
                             break
                     else:
-                        logger.warning("agent.json_reply_no_text_field keys={}", list(obj.keys())[:5])
+                        logger.warning("{}.json_reply_no_text_field keys={}", log_prefix, list(obj.keys())[:5])
                         text = "（回复格式异常，请稍后重试）"
                 else:
                     text = "（回复格式异常，请稍后重试）"
             except json.JSONDecodeError:
-                logger.warning("agent.json_reply_not_valid_json_skip", exc_info=True)  # 不是合法 JSON，继续后续清洗
-        # 清除 agent 前缀：支持多种格式（"小可："、"[小可] "、"【小可】"、"小可 "等）
-        # 根因：LLM 模仿历史消息中的 agent 前缀格式，输出 "[小可] 父亲..." 等
-        _agent_names = [get_agent_display_name(n) for n in ('xiaoda', 'xiaoli', 'xiaolang', 'xiaolian', 'xiaoke')]
-        _agent_names = [n for n in _agent_names if n]  # 过滤空值
-        prefixes = []
-        for name in _agent_names:
-            prefixes.extend([
-                f"{name}：", f"{name}:", f"{name} ", f"{name}\n",
-                f"[{name}]", f"[{name}] ", f"[{name}]：", f"[{name}]:",
-                f"【{name}】", f"【{name}】 ", f"【{name}】：",
-                f"（{name}）", f"({name})",
-            ])
-        prefixes.extend(["助手：", "助手:", "AI：", "AI:"])
-        for p in prefixes:
+                logger.warning("{}.json_reply_not_valid_json_skip", log_prefix, exc_info=True)  # 不是合法 JSON，继续后续清洗
+        return text
+
+    def _scan_canary_blocking(self, text: str, *, log_prefix: str) -> str:
+        """S6 Canary Token 泄露检测：检出即整条替换为安全消息。"""
+        try:
+            from security.canary import get_canary_detector
+            leaked, cleaned = get_canary_detector().scan_output_blocking(text)
+            if leaked:
+                logger.warning("{}.canary_leak_blocked reply_preview=%s", log_prefix, text[:100])
+                return "检测到潜在的系统信息泄露, 已屏蔽相关内容"
+            return cleaned
+        except ImportError:
+            logger.debug("{}.canary_detector_import_unavailable", log_prefix, exc_info=True)
+            return text
+        except Exception as e:  # noqa: BLE001 —— 检测器故障不阻断回复
+            logger.debug("{}.canary_scan_failed: {}", log_prefix, e)
+            return text
+
+    def _strip_agent_prefixes(self, text: str) -> str:
+        """剥离回复开头的 agent 前缀（两轮：推理清洗后第二行前缀可能上浮）。"""
+        for p in _get_agent_prefixes():
             if text.startswith(p):
                 text = text[len(p):].strip()
+        return text
+
+    def _clean_reply(self, text: str) -> str:
+        text = text.strip()
+        # JSON 格式回复提取：LLM（如 agnes-2.0-flash）有时返回 JSON 而非纯文本
+        text = self._extract_json_reply(text, log_prefix="agent")
+        # 清除 agent 前缀：支持多种格式（"小可："、"[小可] "、"【小可】"、"小可 "等）
+        # 根因：LLM 模仿历史消息中的 agent 前缀格式，输出 "[小可] 父亲..." 等
+        text = self._strip_agent_prefixes(text)
         text = strip_dsml(text)
         text = strip_reasoning(text)
         # N2/N3/N4: 清洗系统提示词/错误详情/对齐指令泄漏
@@ -348,18 +416,11 @@ class ToolExecutorMixin:
         text = strip_system_leak(text, context="clean_reply")
         # 二次前缀清洗：strip_reasoning 清除推理后，原本在第二行的 agent 前缀
         # （如 "[小狼] 雇主..."）可能暴露到开头，需要再清洗一次
-        for p in prefixes:
-            if text.startswith(p):
-                text = text[len(p):].strip()
+        text = self._strip_agent_prefixes(text)
         # 清除 XML 标签泄露：LLM 模仿工具返回的 XML 标签输出到回复里
-        # 如 <file_content>、<file>、<code>、<artifact> 等
-        import re as _re_xml
-        _xml_tag_re = _re_xml.compile(
-            r'</?(?:file_content|file|code|artifact|antArtifact|system-reminder|reminder|tool_result|tool_call)[^>]*>',
-            _re_xml.IGNORECASE
-        )
-        _xml_leaked = bool(_xml_tag_re.search(text))
-        text = _xml_tag_re.sub('', text).strip()
+        # 如 <file_content>、<file>、<code>、<artifact> 等（正则模块级预编译）
+        _xml_leaked = bool(_XML_TAG_RE.search(text))
+        text = _XML_TAG_RE.sub('', text).strip()
         if _xml_leaked:
             logger.warning("agent.xml_tag_leak_cleaned", preview=text[:80])
         # 清除日志时间戳泄露：LLM 从 conversation_logs 照搬 [HH:MM] / [HH:MM]~[HH:MM] 标记
@@ -372,17 +433,9 @@ class ToolExecutorMixin:
         # 去重：与 _finalize_reply 保持一致的清洗流水线
         from utils.llm_cleanup import deduplicate_multi_reply
         text = deduplicate_multi_reply(text)
-        # S6: Canary Token 泄露检测 —— 在输出返回给用户之前扫描
+        # S6: Canary Token 泄露检测 —— 在输出返回给用户之前扫描，
         # 检测到泄露时立即阻断, 替换为安全消息
-        try:
-            from security.canary import get_canary_detector
-            leaked, cleaned = get_canary_detector().scan_output_blocking(text)
-            if leaked:
-                logger.warning("agent.canary_leak_blocked reply_preview=%s", text[:100])
-                return "检测到潜在的系统信息泄露, 已屏蔽相关内容"
-            text = cleaned
-        except Exception as e:
-            logger.debug("canary.scan_failed: {}", e)
+        text = self._scan_canary_blocking(text, log_prefix="agent")
         return humanize(text, style="xiaoda")
 
     # ── 工具定义泄露检测 ──────────────────────────────────
@@ -498,25 +551,10 @@ class ToolExecutorMixin:
         确保回复清洗流程一致。_clean_reply_full 接管 dsml/reasoning/system_leak/
         image_gen_leak/log_ts/emotion/humanize/dedup/名称替换；本方法额外处理
         JSON 提取、<instruction> 标签、注入工具定义清理、Canary 检测。
+        JSON 提取与 Canary 复用 _clean_reply 的共享实现（_extract_json_reply /
+        _scan_canary_blocking），防两份拷贝漂移。
         """
-        text = reply.strip() if reply else ""
-        # JSON 格式回复提取：LLM 有时返回 JSON 而非纯文本
-        if text.startswith(('{', '[')):
-            try:
-                obj = json.loads(text)
-                if isinstance(obj, dict):
-                    for key in ('reply', 'text', 'content', 'message', 'body', 'response'):
-                        if key in obj and isinstance(obj[key], str):
-                            text = obj[key].strip()
-                            logger.debug("finalize.json_reply_extracted key={} len={}", key, len(text))
-                            break
-                    else:
-                        logger.warning("finalize.json_reply_no_text_field keys={}", list(obj.keys())[:5])
-                        text = "（回复格式异常，请稍后重试）"
-                else:
-                    text = "（回复格式异常，请稍后重试）"
-            except json.JSONDecodeError:
-                logger.warning("finalize.json_reply_not_valid_json_skip", exc_info=True)  # 不是合法 JSON，继续后续清洗
+        text = self._extract_json_reply((reply or "").strip(), log_prefix="finalize")
         # 清理指令层级标签（LLM 可能原样输出上下文中的 <instruction> 标记）
         text = re.sub(r'<instruction\s+level="[A-Z]+"\s+priority="\d+"[^>]*>', '', text)
         text = re.sub(r'</instruction>', '', text)
@@ -525,17 +563,7 @@ class ToolExecutorMixin:
         # 清除模型生成退化泄露的工具定义 JSON
         text = self._strip_injected_tool_defs(text)
         # S6: Canary Token 泄露检测
-        try:
-            from security.canary import get_canary_detector
-            leaked, cleaned = get_canary_detector().scan_output_blocking(text)
-            if leaked:
-                logger.warning("finalize.canary_leak_blocked reply_preview=%s", text[:100])
-                text = "检测到潜在的系统信息泄露, 已屏蔽相关内容"
-            else:
-                text = cleaned
-        except ImportError:
-            logger.debug("finalize.canary_detector_import_unavailable", exc_info=True)
-        return text
+        return self._scan_canary_blocking(text, log_prefix="finalize")
 
     def get_sticker_info(self, reply: str, user_emotion: str = "", force_sticker: bool = False) -> tuple[str, Path | None]:
         """从回复中提取情绪并匹配套餐表情包路径.
@@ -572,7 +600,7 @@ class ToolExecutorMixin:
                 if path:
                     return clean_reply, path
                 # 3. resolve_emotion 映射（如 "crying" → SAD → "sad" 目录）
-                from emotion.emotion_enum import resolve_emotion, STICKER_FALLBACK
+                from emotion.emotion_enum import STICKER_FALLBACK, resolve_emotion
                 resolved = resolve_emotion(filename)
                 mapped = STICKER_FALLBACK.get(resolved, "")
                 if mapped:
@@ -591,7 +619,7 @@ class ToolExecutorMixin:
         _emotion_match = _re.search(r'\[emotion:([^\]]+)\]', reply)
         detected = ""
         if _emotion_match:
-            from emotion.emotion_enum import resolve_emotion, STICKER_FALLBACK
+            from emotion.emotion_enum import STICKER_FALLBACK, resolve_emotion
             emotion = resolve_emotion(_emotion_match.group(1))
             detected = STICKER_FALLBACK.get(emotion, "happy")
 

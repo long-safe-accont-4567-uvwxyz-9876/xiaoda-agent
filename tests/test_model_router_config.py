@@ -17,10 +17,10 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-import model_router
-import model_router_config as mrc
 import pytest
 
+import model_router
+import model_router_config as mrc
 
 # ── 1. 独立可导入 + 无循环依赖 ────────────────────────────────────
 

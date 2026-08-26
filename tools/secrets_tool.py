@@ -6,8 +6,8 @@ LLM 通过这两个工具间接使用凭证，永远不接触原始 API Key：
 """
 from __future__ import annotations
 
-from tool_engine.tool_registry import register_tool, ToolPermission
 from security.secrets_broker import SecretsBroker
+from tool_engine.tool_registry import ToolPermission, register_tool
 
 # 模块级 Broker 单例（默认空凭证源；通过 init_secrets_tool 注入真实凭证）
 _broker = SecretsBroker()

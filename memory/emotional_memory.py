@@ -12,7 +12,6 @@
 from __future__ import annotations
 
 import json
-import os
 import re
 import time
 from dataclasses import dataclass, field
@@ -20,26 +19,29 @@ from pathlib import Path
 
 from loguru import logger
 
+from config_constants import env_optout_flag
+from emotion.emotion_enum import CN_TO_EN as _ENUM_CN_TO_EN
 from utils.atomic_write import atomic_json_write
 
 # 中文情绪标签 → 英文（用于 emotion_state 更新）
-# 覆盖标准标签 + 常用变体，确保 anchor 联动时标签匹配
-CN_TO_EN_MAP = {
-    # 标准 10 类
-    "喜悦": "happy", "兴奋": "excited", "悲伤": "sad", "愤怒": "angry",
-    "焦虑": "anxious", "害羞": "shy", "好奇": "confused", "思考": "thinking",
-    "恐惧": "fear", "平静": "neutral",
+# 标准部分直接派生自枚举模块单一事实源，杜绝双表漂移（2026-08 review #2）；
+# 变体仅收录口语同义词，语义与 emotion_enum.EMOTION_ALIASES 一致。
+CN_TO_EN_MAP: dict[str, str] = {
+    **_ENUM_CN_TO_EN,
     # 常用变体
     "开心": "happy", "快乐": "happy", "高兴": "happy",
     "难过": "sad", "伤心": "sad", "孤独": "sad", "失落": "sad",
     "生气": "angry", "不满": "angry", "烦躁": "angry",
     "担心": "anxious", "紧张": "anxious", "不安": "anxious",
     "害怕": "fear", "恐慌": "fear",
-    "感动": "happy", "欣慰": "happy",
-    "调皮": "playful", "撒娇": "pout",
-    "惊讶": "surprised", "困惑": "confused",
-    "喜欢": "love", "问候": "greeting",
+    "欣慰": "moved", "喜爱": "love",
+    # 存量兼容：历史记忆可能以旧规范标签"喜欢"存储
+    "喜欢": "love",
 }
+
+# 英文 → 标准中文（PAD 查表键）：反转枚举映射自动得到，
+# 与 pad_model.EMOTION_PAD_REFERENCE 的键集一一对应（2026-08 review #3）
+EN_TO_CN_PAD: dict[str, str] = {en: cn for cn, en in _ENUM_CN_TO_EN.items()}
 
 
 @dataclass
@@ -136,8 +138,7 @@ class EmotionalMemoryManager:
     @staticmethod
     def is_enabled() -> bool:
         """是否启用情感记忆（默认开启，可通过 EMOTIONAL_MEMORY_ENABLED 关闭）"""
-        val = os.environ.get("EMOTIONAL_MEMORY_ENABLED", "1").strip().lower()
-        return val not in ("0", "false", "off", "no", "")
+        return env_optout_flag("EMOTIONAL_MEMORY_ENABLED", True)
 
     # === Anchoring ===
     def anchor(self, user_id: str, event: str, emotion: str, context: str,
@@ -175,11 +176,13 @@ class EmotionalMemoryManager:
         # 联动：同步更新 emotion_state
         try:
             from emotion.emotion_state import get_emotion_state
-            from emotion.pad_model import from_emotion as pad_from_emotion
             _intensity_map = {
                 "喜悦": 0.6, "兴奋": 0.8, "悲伤": 0.7, "愤怒": 0.8,
                 "焦虑": 0.6, "害羞": 0.5, "好奇": 0.5, "思考": 0.3,
                 "恐惧": 0.8, "平静": 0.2,
+                # 与 emotion_enum 17 类对齐的补充（缺省时上面 get 默认 0.5）
+                "喜爱": 0.7, "调皮": 0.6, "感动": 0.7, "撒娇": 0.5,
+                "惊讶": 0.7, "问候": 0.3, "困惑": 0.4,
             }
             intensity = _intensity_map.get(emotion, 0.5)
             get_emotion_state(user_id).update(
@@ -313,19 +316,10 @@ class EmotionalMemoryManager:
             try:
                 from emotion.emotion_state import get_emotion_state
                 from emotion.pad_model import from_emotion as pad_from_emotion
-                # 反向映射：英文 → 标准中文标签（用于 PAD 查表）
-                _EN_TO_CN_PAD = {
-                    "happy": "喜悦", "excited": "兴奋", "sad": "悲伤",
-                    "angry": "愤怒", "anxious": "焦虑", "shy": "害羞",
-                    "confused": "好奇", "thinking": "思考", "fear": "恐惧",
-                    "neutral": "平静", "playful": "喜悦", "pout": "害羞",
-                    "surprised": "好奇", "love": "喜欢", "moved": "感动",
-                    "curious": "好奇", "greeting": "问候",
-                }
                 for mem in recalled[:2]:  # 最多用前2条记忆微调
-                    # 标准化标签：变体 → 标准中文 → PAD 查表
+                    # 标准化标签：变体 → 英文 → 标准中文 → PAD 查表
                     en_label = CN_TO_EN_MAP.get(mem.emotion, mem.emotion.lower())
-                    cn_standard = _EN_TO_CN_PAD.get(en_label, mem.emotion)
+                    cn_standard = EN_TO_CN_PAD.get(en_label, mem.emotion)
                     pad = pad_from_emotion(cn_standard, 0.5)
                     get_emotion_state(user_id).shift_pad(pad.to_dict(), weight=0.1)
             except Exception as e:

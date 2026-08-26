@@ -2,11 +2,18 @@
 import { ref, computed, nextTick, watch, onMounted, onBeforeUnmount } from 'vue'
 import SumeruIcon from '../../components/fx/SumeruIcon.vue'
 import { useMessage } from 'naive-ui'
-import { api } from '../../api'
 import { getWsClient } from '../../api/ws'
 import { t } from '../../i18n'
 import type { ChatRequestSnapshot } from '../../stores/chat'
 import WorkingDirSelector from '../workspace/WorkingDirSelector.vue'
+import { usePromptUploads } from './prompt-input/usePromptUploads'
+import { useVoiceRecording } from './prompt-input/useVoiceRecording'
+import { useTextareaAutogrow } from './prompt-input/useTextareaAutogrow'
+import { firstImageItemFile } from './prompt-input/fileIntake'
+import { formatRecordingTime } from './prompt-input/formatRecordingTime'
+import AttachmentPreviews from './prompt-input/AttachmentPreviews.vue'
+import RecordingIndicator from './prompt-input/RecordingIndicator.vue'
+import ImageLightbox from './prompt-input/ImageLightbox.vue'
 
 const props = withDefaults(defineProps<{
   modelValue: string
@@ -37,25 +44,34 @@ const message = useMessage()
 
 const showSearch = ref(false)
 const showThink = ref(false)
-const isRecording = ref(false)
-const isTranscribing = ref(false)
-const uploadedImage = ref<{ url: string; name: string } | null>(null)
-const uploadedDoc = ref<{ url: string; name: string; path: string; ext: string } | null>(null)
-const imagePreviewUrl = ref('')
-const uploadState = ref<'idle' | 'uploading' | 'error'>('idle')
 const statusKey = ref('')
-const recordingTime = ref(0)
-const showLightbox = ref(false)
-
-const textareaRef = ref<HTMLTextAreaElement | null>(null)
-const fileInputRef = ref<HTMLInputElement | null>(null)
 const isDragging = ref(false)
 
-let mediaRecorder: MediaRecorder | null = null
-let audioChunks: Blob[] = []
-let recordingTimer: ReturnType<typeof setInterval> | null = null
+const { textareaRef, autoGrow, focus, scheduleAutoGrow } = useTextareaAutogrow()
 
-const hasAttachment = computed(() => uploadedImage.value !== null || uploadedDoc.value !== null)
+const {
+  uploadedImage, uploadedDoc, imagePreviewUrl, uploadState,
+  hasAttachment: uploadHasAttachment, showLightbox,
+  uploadFile, removeImage, removeDoc, openLightbox, closeLightbox, resetAttachments,
+} = usePromptUploads(statusKey)
+
+const {
+  isRecording, isTranscribing, recordingTime, toggleRecording,
+} = useVoiceRecording({
+  message,
+  appendTranscript(text: string) {
+    emit('update:modelValue', props.modelValue + text)
+    nextTick(() => {
+      autoGrow()
+      focus()
+    })
+  },
+})
+
+const fileInputRef = ref<HTMLInputElement | null>(null)
+
+// Keep the public component contract explicit while attachment state lives in the upload composable.
+const hasAttachment = computed(() => uploadHasAttachment.value)
 const hasSendableContent = computed(() => props.modelValue.trim().length > 0 || hasAttachment.value)
 const canSend = computed(() =>
   hasSendableContent.value && uploadState.value !== 'uploading' &&
@@ -73,25 +89,13 @@ const currentPlaceholder = computed(() => {
   return props.placeholder
 })
 
+defineExpose({ focus, textareaRef, clearSubmittedDraft })
+
 function onInput(e: Event) {
   const val = (e.target as HTMLTextAreaElement).value
   emit('update:modelValue', val)
   autoGrow()
 }
-
-function autoGrow() {
-  const el = textareaRef.value
-  if (!el) return
-  el.style.height = 'auto'
-  el.style.height = Math.min(el.scrollHeight, 240) + 'px'
-}
-
-/** 聚焦输入框（供父组件通过 ref 调用，替代脆弱的 querySelector） */
-function focus() {
-  textareaRef.value?.focus()
-}
-
-defineExpose({ focus, textareaRef, clearSubmittedDraft })
 
 function handleKeydown(e: KeyboardEvent) {
   emit('keydown', e)
@@ -116,13 +120,10 @@ function handleSend() {
 }
 
 function clearSubmittedDraft() {
-  if (imagePreviewUrl.value) URL.revokeObjectURL(imagePreviewUrl.value)
-  uploadedImage.value = null
-  uploadedDoc.value = null
-  imagePreviewUrl.value = ''
+  resetAttachments()
   showSearch.value = false
   showThink.value = false
-  nextTick(() => autoGrow())
+  scheduleAutoGrow()
 }
 
 function retryConnection() {
@@ -152,62 +153,6 @@ async function onFileSelected(e: Event) {
   input.value = ''
 }
 
-async function uploadFile(file: File) {
-  // P0 修复（Task 1.9）：一键包含所有文件 — 自动检测类型并路由
-  // 图片 → vision API（uploadImage），文档 → document_reader 工具（uploadDoc）
-  // 用户要求"不要添加组件，一键包含所有文件"
-  const isImage = file.type.startsWith('image/')
-  const docExts = ['.pdf', '.docx', '.doc', '.pptx', '.ppt', '.xlsx', '.xls', '.txt', '.md']
-  const ext = '.' + (file.name.split('.').pop() || '').toLowerCase()
-  const isDoc = !isImage && docExts.includes(ext)
-  if (!isImage && !isDoc) {
-    uploadState.value = 'error'
-    statusKey.value = 'promptInput.unsupportedFile'
-    return
-  }
-  uploadState.value = 'uploading'
-  statusKey.value = ''
-  try {
-    if (isImage) {
-      if (imagePreviewUrl.value) URL.revokeObjectURL(imagePreviewUrl.value)
-      imagePreviewUrl.value = URL.createObjectURL(file)
-      const result = await api.uploadImage(file)
-      uploadedImage.value = result
-    } else {
-      // 文档上传：不走 vision API，返回路径供 document_reader 工具使用
-      const result = await api.uploadDoc(file)
-      uploadedDoc.value = result
-    }
-    uploadState.value = 'idle'
-  } catch {
-    if (imagePreviewUrl.value) URL.revokeObjectURL(imagePreviewUrl.value)
-    imagePreviewUrl.value = ''
-    uploadedImage.value = null
-    uploadedDoc.value = null
-    uploadState.value = 'error'
-    statusKey.value = 'promptInput.uploadFailed'
-  }
-}
-
-function removeImage() {
-  if (imagePreviewUrl.value) URL.revokeObjectURL(imagePreviewUrl.value)
-  uploadedImage.value = null
-  imagePreviewUrl.value = ''
-}
-
-// P0 新增（Task 1.9）：文档附件移除 — 与图片附件独立的清理路径
-function removeDoc() {
-  uploadedDoc.value = null
-}
-
-function openLightbox() {
-  showLightbox.value = true
-}
-
-function closeLightbox() {
-  showLightbox.value = false
-}
-
 // 拖拽
 function onDragOver(e: DragEvent) {
   e.preventDefault()
@@ -227,102 +172,10 @@ async function onDrop(e: DragEvent) {
 
 // 粘贴
 async function onPaste(e: ClipboardEvent) {
-  const items = e.clipboardData?.items
-  if (!items) return
-  for (const item of items) {
-    if (item.type.startsWith('image/')) {
-      e.preventDefault()
-      const file = item.getAsFile()
-      if (file) await uploadFile(file)
-      return
-    }
-  }
-}
-
-// 语音录音
-async function toggleRecording() {
-  if (isTranscribing.value) return  // 识别中不允许操作
-  if (isRecording.value) {
-    stopRecording()
-  } else {
-    await startRecording()
-  }
-}
-
-async function startRecording() {
-  // 非安全上下文（HTTP + 局域网 IP）navigator.mediaDevices 为 undefined，无法录音。
-  // 明确检测并提示，避免"点击无反应"。getUserMedia 失败也不再静默吞错。
-  const md = navigator.mediaDevices
-  if (!md || typeof md.getUserMedia !== 'function') {
-    message.error(t('promptInput.voiceUnsupported'))
-    return
-  }
-  try {
-    const stream = await md.getUserMedia({ audio: true })
-    mediaRecorder = new MediaRecorder(stream)
-    audioChunks = []
-    mediaRecorder.ondataavailable = (e) => {
-      if (e.data.size > 0) audioChunks.push(e.data)
-    }
-    mediaRecorder.onstop = async () => {
-      stream.getTracks().forEach(t => t.stop())
-      const blob = new Blob(audioChunks, { type: 'audio/webm' })
-      isTranscribing.value = true
-      try {
-        const result = await api.speechToText(new File([blob], 'recording.webm', { type: 'audio/webm' }))
-        if (result.text) {
-          emit('update:modelValue', props.modelValue + result.text)
-          nextTick(() => {
-            autoGrow()
-            focus()
-          })
-        }
-      } catch (e) {
-        // 识别失败显示提示，不再静默吞错
-        message.error(t('promptInput.voiceFailed'))
-      } finally {
-        isTranscribing.value = false
-        isRecording.value = false
-        recordingTime.value = 0
-      }
-    }
-    mediaRecorder.start()
-    isRecording.value = true
-    recordingTime.value = 0
-    recordingTimer = setInterval(() => {
-      recordingTime.value++
-    }, 1000)
-  } catch (e: any) {
-    isRecording.value = false
-    // 区分常见的麦克风失败原因，给出可操作提示（不再静默失败）
-    const name = e?.name || ''
-    if (name === 'NotAllowedError') {
-      message.error(t('promptInput.voicePermissionDenied'))
-    } else if (name === 'SecurityError') {
-      // 非安全上下文/页面策略拦截，与用户拒绝授权不同，提示无法开始录音
-      message.error(t('promptInput.voiceStartFailed'))
-    } else if (name === 'NotFoundError' || name === 'DevicesNotFoundError') {
-      message.error(t('promptInput.voiceNoDevice'))
-    } else {
-      message.error(t('promptInput.voiceStartFailed'))
-    }
-  }
-}
-
-function stopRecording() {
-  if (mediaRecorder && mediaRecorder.state !== 'inactive') {
-    mediaRecorder.stop()
-  }
-  if (recordingTimer) {
-    clearInterval(recordingTimer)
-    recordingTimer = null
-  }
-}
-
-function formatRecordingTime(seconds: number): string {
-  const m = Math.floor(seconds / 60)
-  const s = seconds % 60
-  return `${m.toString().padStart(2, '0')}:${s.toString().padStart(2, '0')}`
+  const hit = firstImageItemFile(e.clipboardData?.items ?? null)
+  if (!hit.found) return
+  e.preventDefault()
+  if (hit.file) await uploadFile(hit.file)
 }
 
 onMounted(() => {
@@ -332,16 +185,11 @@ onMounted(() => {
 
 onBeforeUnmount(() => {
   document.removeEventListener('paste', onPaste as any)
-  if (recordingTimer) clearInterval(recordingTimer)
-  if (mediaRecorder && mediaRecorder.state !== 'inactive') {
-    mediaRecorder.stop()
-  }
-  if (imagePreviewUrl.value) URL.revokeObjectURL(imagePreviewUrl.value)
 })
 
 // 外部 modelValue 变化时自动增高
 watch(() => props.modelValue, () => {
-  nextTick(() => autoGrow())
+  scheduleAutoGrow()
 })
 </script>
 
@@ -353,36 +201,16 @@ watch(() => props.modelValue, () => {
     @dragleave="onDragLeave"
     @drop="onDrop"
   >
-    <!-- 图片预览区 -->
-    <transition name="preview-slide">
-      <div v-if="uploadedImage || imagePreviewUrl" class="image-preview-area">
-        <div class="image-thumb" @click="openLightbox">
-          <img :src="imagePreviewUrl || uploadedImage?.url" :alt="t('chatView.preview')" />
-        </div>
-        <button class="image-remove" @click="removeImage" :title="t('promptInput.removeImage')" :aria-label="t('promptInput.removeImage')">✕</button>
-      </div>
-    </transition>
+    <AttachmentPreviews
+      :image="uploadedImage"
+      :preview-url="imagePreviewUrl"
+      :doc="uploadedDoc"
+      @remove-image="removeImage"
+      @open-lightbox="openLightbox"
+      @remove-doc="removeDoc"
+    />
 
-    <!-- P0 新增（Task 1.9）：文档附件预览 — 显示文件名+扩展名 chip，可移除 -->
-    <transition name="preview-slide">
-      <div v-if="uploadedDoc" class="doc-preview-area">
-        <div class="doc-chip">
-          <span class="doc-icon">📄</span>
-          <span class="doc-name">{{ uploadedDoc.name }}</span>
-          <span class="doc-ext">{{ uploadedDoc.ext }}</span>
-          <button class="doc-remove-btn" @click="removeDoc" :title="t('promptInput.removeDocument')" :aria-label="t('promptInput.removeDocument')">✕</button>
-        </div>
-      </div>
-    </transition>
-
-    <!-- 录音波形区 -->
-    <div v-if="isRecording" class="recording-area">
-      <div class="recording-indicator"></div>
-      <span class="recording-time">{{ formatRecordingTime(recordingTime) }}</span>
-      <div class="waveform">
-        <span v-for="i in 5" :key="i" class="wave-bar" :style="{ animationDelay: `${i * 0.12}s` }"></span>
-      </div>
-    </div>
+    <RecordingIndicator v-if="isRecording" :time="recordingTime" />
 
     <!-- Textarea 输入区 -->
     <textarea
@@ -394,6 +222,7 @@ watch(() => props.modelValue, () => {
       :disabled="disabled"
       rows="1"
       role="combobox"
+      :aria-label="currentPlaceholder"
       aria-autocomplete="list"
       :aria-expanded="comboboxExpanded"
       :aria-controls="comboboxControls"
@@ -505,24 +334,19 @@ watch(() => props.modelValue, () => {
       </button>
     </div>
 
-    <!-- Lightbox -->
-    <teleport to="body">
-      <transition name="lightbox-fade">
-        <div v-if="showLightbox" class="prompt-lightbox" @click="closeLightbox">
-          <img :src="imagePreviewUrl || uploadedImage?.url" :alt="t('chatView.preview')" />
-        </div>
-      </transition>
-    </teleport>
+    <ImageLightbox :show="showLightbox" :src="imagePreviewUrl || uploadedImage?.url || ''" @close="closeLightbox" />
   </div>
 </template>
 
 <style scoped>
 .prompt-input {
-  border-radius: 24px;
-  padding: 12px 16px;
+  width: 100%;
+  box-sizing: border-box;
+  border-radius: 8px;
+  padding: 10px 12px;
   display: flex;
   flex-direction: column;
-  gap: 8px;
+  gap: 6px;
   position: relative;
   transition: border-color 0.2s, box-shadow 0.2s;
 }
@@ -537,182 +361,9 @@ watch(() => props.modelValue, () => {
   pointer-events: none;
 }
 
-/* 图片预览区 */
-.image-preview-area {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  position: relative;
-  padding: 4px 0;
-}
-
-/* P0 新增（Task 1.9）：文档附件预览区 — 复用 image-preview-area 布局 */
-.doc-preview-area {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  position: relative;
-  padding: 4px 0;
-}
-
-.doc-chip {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  padding: 6px 12px;
-  border-radius: 10px;
-  background: var(--glass-bg, rgba(255, 255, 255, 0.08));
-  border: 1px solid var(--glass-border, rgba(255, 255, 255, 0.12));
-  font-size: 13px;
-  max-width: 280px;
-}
-
-.doc-icon {
-  font-size: 16px;
-  flex-shrink: 0;
-}
-
-.doc-name {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  flex-shrink: 1;
-  min-width: 0;
-}
-
-.doc-ext {
-  font-size: 11px;
-  opacity: 0.7;
-  text-transform: uppercase;
-  flex-shrink: 0;
-  padding: 1px 5px;
-  border-radius: 4px;
-  background: rgba(255, 255, 255, 0.1);
-}
-
-.doc-remove-btn {
-  width: 18px;
-  height: 18px;
-  border-radius: 50%;
-  background: rgba(217, 106, 95, 0.9);
-  color: #fff;
-  border: none;
-  cursor: pointer;
-  font-size: 10px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  flex-shrink: 0;
-  margin-left: 4px;
-  transition: transform 0.15s;
-}
-
-.doc-remove-btn:hover {
-  transform: scale(1.15);
-}
-
-.image-thumb {
-  width: 64px;
-  height: 64px;
-  border-radius: 12px;
-  overflow: hidden;
-  cursor: zoom-in;
-  border: 1px solid var(--glass-border);
-  flex-shrink: 0;
-}
-
-.image-thumb img {
-  width: 100%;
-  height: 100%;
-  object-fit: cover;
-}
-
-.image-remove {
-  position: absolute;
-  top: 0;
-  left: 52px;
-  width: 20px;
-  height: 20px;
-  border-radius: 50%;
-  background: rgba(217, 106, 95, 0.9);
-  color: #fff;
-  border: none;
-  cursor: pointer;
-  font-size: 11px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  transition: transform 0.15s;
-}
-
-.image-remove:hover {
-  transform: scale(1.15);
-}
-
-.preview-slide-enter-active,
-.preview-slide-leave-active {
-  transition: opacity 0.25s var(--ease-smooth), transform 0.25s var(--ease-smooth);
-}
-
-.preview-slide-enter-from,
-.preview-slide-leave-to {
-  opacity: 0;
-  max-height: 0;
-  padding: 0;
-}
-
-/* 录音波形区 */
-.recording-area {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  padding: 8px 0;
-  min-height: 40px;
-}
-
-.recording-indicator {
-  width: 10px;
-  height: 10px;
-  border-radius: 50%;
-  background: #f87171;
-  animation: pulse-red 1.2s ease-in-out infinite;
-  flex-shrink: 0;
-}
-
-@keyframes pulse-red {
-  0%, 100% { opacity: 1; box-shadow: 0 0 0 0 rgba(248, 113, 113, 0.6); }
-  50% { opacity: 0.7; box-shadow: 0 0 0 6px rgba(248, 113, 113, 0); }
-}
-
-.recording-time {
-  font-family: 'JetBrains Mono', monospace;
-  font-size: 14px;
-  color: #f87171;
-  min-width: 44px;
-}
-
-.waveform {
-  display: flex;
-  align-items: center;
-  gap: 3px;
-  flex: 1;
-  height: 24px;
-}
-
-.wave-bar {
-  width: 3px;
-  background: #f87171;
-  border-radius: 2px;
-  animation: wave-anim 0.8s ease-in-out infinite alternate;
-}
-
-@keyframes wave-anim {
-  0% { height: 4px; }
-  100% { height: 20px; }
-}
-
 /* Textarea */
 .prompt-textarea {
+  box-sizing: border-box;
   background: transparent;
   border: none;
   outline: none;
@@ -721,6 +372,7 @@ watch(() => props.modelValue, () => {
   font-size: 14px;
   line-height: 1.5;
   width: 100%;
+  min-width: 0;
   min-height: 24px;
   max-height: 240px;
   padding: 0;
@@ -738,34 +390,47 @@ watch(() => props.modelValue, () => {
 /* 底部工具栏 */
 .prompt-toolbar {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   justify-content: space-between;
-  margin-top: 4px;
+  gap: 4px 8px;
+  min-width: 0;
+  margin-top: 2px;
 }
 
 .toolbar-left {
   display: flex;
+  flex: 1 1 auto;
+  flex-wrap: wrap;
   align-items: center;
-  gap: 4px;
+  gap: 2px;
+  min-width: 0;
 }
 
 .toolbar-right {
   display: flex;
+  flex: 0 0 auto;
   align-items: center;
-  gap: 6px;
+  gap: 4px;
+  margin-left: auto;
 }
 
 .tool-btn {
+  min-width: 28px;
+  height: 28px;
+  box-sizing: border-box;
   background: none;
-  border: none;
+  border: 1px solid transparent;
   cursor: pointer;
   color: var(--moon-dim);
-  font-size: 16px;
-  padding: 4px 6px;
-  border-radius: 8px;
+  font-size: 15px;
+  padding: 0 6px;
+  border-radius: 6px;
   display: inline-flex;
   align-items: center;
+  justify-content: center;
   gap: 4px;
+  flex-shrink: 0;
   transition: background 0.2s, color 0.2s, border-color 0.2s;
   line-height: 1;
 }
@@ -810,19 +475,19 @@ watch(() => props.modelValue, () => {
 .tool-btn.search-active {
   background: rgba(127, 214, 80, 0.15);
   color: var(--dendro);
-  border: 1px solid var(--dendro);
+  border-color: var(--dendro);
 }
 
 .tool-btn.think-active {
   background: rgba(167, 139, 250, 0.15);
   color: #a78bfa;
-  border: 1px solid #a78bfa;
+  border-color: #a78bfa;
 }
 
 .mode-label {
   font-size: 11px;
   font-weight: 600;
-  letter-spacing: 0.3px;
+  letter-spacing: 0;
 }
 
 .search-label {
@@ -895,37 +560,114 @@ watch(() => props.modelValue, () => {
 }
 
 .stop-btn:hover {
-  transform: scale(1.1);
+  transform: scale(1.08);
   box-shadow: 0 0 12px rgba(248, 113, 113, 0.5);
 }
 
-/* Lightbox */
-.prompt-lightbox {
-  position: fixed;
-  inset: 0;
-  z-index: 1000;
-  background: rgba(4, 12, 8, 0.82);
-  backdrop-filter: blur(8px);
+.prompt-status {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
-  justify-content: center;
-  cursor: zoom-out;
+  gap: 4px 8px;
+  min-width: 0;
+  padding-top: 2px;
+  border-top: 1px solid rgba(127, 214, 80, 0.1);
+  color: var(--moon-dim);
+  font-size: 11px;
+  line-height: 1.4;
 }
 
-.prompt-lightbox img {
-  max-width: 92vw;
-  max-height: 92vh;
-  border-radius: 12px;
-  box-shadow: 0 12px 48px rgba(0, 0, 0, 0.5);
+.prompt-status > span {
+  flex: 1 1 180px;
+  min-width: 0;
+  overflow-wrap: anywhere;
 }
 
-.lightbox-fade-enter-active,
-.lightbox-fade-leave-active {
-  transition: opacity 0.25s;
+.reconnect-btn {
+  min-height: 28px;
+  flex: 0 0 auto;
+  padding: 3px 8px;
+  border: 1px solid rgba(127, 214, 80, 0.3);
+  border-radius: 6px;
+  background: rgba(127, 214, 80, 0.08);
+  color: var(--dendro);
+  font: inherit;
+  cursor: pointer;
+  transition: background 0.2s, border-color 0.2s;
 }
 
-.lightbox-fade-enter-from,
-.lightbox-fade-leave-to {
-  opacity: 0;
+.reconnect-btn:hover {
+  border-color: var(--dendro);
+  background: rgba(127, 214, 80, 0.14);
+}
+
+.tool-btn:focus-visible,
+.send-btn:focus-visible,
+.stop-btn:focus-visible,
+.reconnect-btn:focus-visible {
+  outline: 2px solid var(--dendro);
+  outline-offset: 2px;
+}
+
+@media (max-width: 600px) {
+  .prompt-input {
+    padding: 8px;
+  }
+
+  .prompt-toolbar {
+    align-items: flex-end;
+    gap: 4px;
+  }
+
+  .toolbar-left {
+    flex-basis: calc(100% - 40px);
+    gap: 1px;
+  }
+
+  .toolbar-left :deep(.ws-tool-group) {
+    gap: 1px;
+  }
+
+  .tool-divider,
+  .toolbar-left :deep(.tool-divider) {
+    margin-inline: 1px;
+  }
+
+  .tool-btn,
+  .toolbar-left :deep(.ws-btn) {
+    min-width: 28px;
+    height: 28px;
+    padding-inline: 5px;
+    border-radius: 6px;
+  }
+
+  .mode-label {
+    font-size: 10px;
+  }
+
+  .send-btn,
+  .stop-btn {
+    width: 30px;
+    height: 30px;
+  }
+
+  .prompt-status {
+    align-items: flex-start;
+  }
+
+  .prompt-status > span {
+    flex-basis: min(220px, 100%);
+  }
+}
+
+@media (max-width: 360px) {
+  .prompt-input {
+    padding-inline: 6px;
+  }
+
+  .tool-divider,
+  .toolbar-left :deep(.tool-divider) {
+    display: none;
+  }
 }
 </style>

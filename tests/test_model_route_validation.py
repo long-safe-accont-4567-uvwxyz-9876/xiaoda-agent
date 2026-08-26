@@ -6,7 +6,6 @@ Issue: A1 - MiniMax/MiniMax-M2.5 配置到 modelscope 导致 LLM 链路大面积
 Root cause: web/routers/models.py 的 update_route 缺少模型ID验证
 """
 
-import pytest
 
 
 def test_validate_model_route_correct_match():

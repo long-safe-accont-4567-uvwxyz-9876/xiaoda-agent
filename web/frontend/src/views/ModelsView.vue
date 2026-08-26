@@ -1,12 +1,14 @@
 <script setup lang="ts">
 import { ref, onMounted, onBeforeUnmount, computed } from 'vue'
 import SumeruIcon from '../components/fx/SumeruIcon.vue'
+import ViewTitleIcon from '../components/fx/ViewTitleIcon.vue'
 import {
   NButton, NSwitch, NInputNumber, NSelect, NTag, NPopconfirm, NSlider, NInput, NModal, useMessage,
 } from 'naive-ui'
 import { api, get, put, post } from '../api'
 import { providerApi } from '../api/providers'
 import type { CapabilityReport, ProviderDefinition } from '../api/providers'
+import type { CredentialStatus, ModelRouteInfo, UsageSummary } from '../api/types'
 import ProviderWizard from '../components/models/ProviderWizard.vue'
 import { useProvidersStore } from '../stores/providers'
 import { t } from '../i18n'
@@ -22,10 +24,10 @@ const message = useMessage()
 
 const providersStore = useProvidersStore()
 const providers = computed(() => providersStore.providers)
-const routes = ref<Record<string, any>>({})
+const routes = ref<Record<string, ModelRouteInfo>>({})
 const fallback = ref<Record<string, string>>({})
-const credentials = ref<any[]>([])
-const usage = ref<any>({ series: [], total: {} })
+const credentials = ref<CredentialStatus[]>([])
+const usage = ref<UsageSummary>({ days: 0, series: [], total: {} })
 const providerWizardOpen = ref(false)
 const editingProvider = ref<ProviderDefinition | null>(null)
 const providerTestResults = ref<Record<string, CapabilityReport>>({})
@@ -33,6 +35,7 @@ const routeTestResults = ref<Record<string, { ok: boolean; error?: string }>>({}
 const testingId = ref('')
 const chartEl = ref<HTMLElement | null>(null)
 let usageChart: echarts.ECharts | null = null
+let usageChartResizeObserver: ResizeObserver | null = null
 // 已发现的模型列表（按 provider 分组），用于路由表下拉选择
 const discoveredModels = ref<any[]>([])
 
@@ -69,9 +72,16 @@ function onRouteModelChange(r: any, modelId: string) {
 const builtinProviders = computed(() => providersStore.builtinProviders)
 const customProviders = computed(() => providersStore.customProviders)
 
-onMounted(loadAll)
+onMounted(() => {
+  void loadAll()
+  if (chartEl.value) {
+    usageChartResizeObserver = new ResizeObserver(() => usageChart?.resize())
+    usageChartResizeObserver.observe(chartEl.value)
+  }
+})
 
 onBeforeUnmount(() => {
+  usageChartResizeObserver?.disconnect(); usageChartResizeObserver = null
   usageChart?.dispose(); usageChart = null
   if (_tempSaveTimer) clearTimeout(_tempSaveTimer)
 })
@@ -82,9 +92,9 @@ async function loadAll() {
     // 页面先用核心数据渲染，discover 到货后单独更新（stale-while-revalidate 下通常 <20ms）
     const [p, r, c, u] = await Promise.all([
       providersStore.loadProviders(),
-      get('/models/routes'),
-      get<any[]>('/models/credentials/status'),
-      get('/models/usage?days=7'),
+      get<{ routes: Record<string, ModelRouteInfo>; fallback: Record<string, string> }>('/models/routes'),
+      get<CredentialStatus[]>('/models/credentials/status'),
+      get<UsageSummary>('/models/usage?days=7'),
     ])
     void p
     routes.value = r.routes
@@ -105,13 +115,13 @@ async function loadAll() {
 
 function renderChart() {
   if (!chartEl.value) return
-  const days = [...new Set(usage.value.series.map((s: any) => s.day))].sort()
-  const models = [...new Set(usage.value.series.map((s: any) => s.model))]
+  const days = [...new Set(usage.value.series.map(s => s.day))].sort()
+  const models = [...new Set(usage.value.series.map(s => s.model))]
   const series = models.map(m => ({
     name: m, type: 'bar', stack: 'tokens',
     data: days.map(d => {
-      const row = usage.value.series.find((s: any) => s.day === d && s.model === m)
-      return row ? (row.prompt_tokens + row.completion_tokens) : 0
+      const row = usage.value.series.find(s => s.day === d && s.model === m)
+      return row ? ((row.prompt_tokens || 0) + (row.completion_tokens || 0)) : 0
     }),
   }))
   if (!usageChart) usageChart = echarts.init(chartEl.value)
@@ -406,9 +416,11 @@ async function moveProvider(pid: string, dir: -1 | 1) {
 
 <template>
   <div class="models-view">
-    <div class="view-header">
-      <h2 class="view-title-icon"><SumeruIcon name="models" :size="20" variant="duo" tone="magic" interactive /> {{ t('modelsView.title') }}</h2>
-      <n-button type="primary" @click="openProviderForm(null)"><SumeruIcon name="plus" :size="14" variant="duo" tone="add" interactive /> {{ t('modelsView.customProvider') }}</n-button>
+    <div class="view-header page-header">
+      <h2 class="view-title-icon"><ViewTitleIcon name="models" /> {{ t('modelsView.title') }}</h2>
+      <div class="page-actions">
+        <n-button type="primary" @click="openProviderForm(null)"><SumeruIcon name="plus" :size="14" variant="duo" tone="add" interactive /> {{ t('modelsView.customProvider') }}</n-button>
+      </div>
     </div>
 
     <Tilt3D :max-x="4" :max-y="6">
@@ -466,36 +478,38 @@ async function moveProvider(pid: string, dir: -1 | 1) {
     <Tilt3D :max-x="4" :max-y="6">
     <section class="glass-panel section">
       <h3>{{ t('modelsView.taskRouting') }} <span class="hint">{{ t('modelsView.noRestartHint') }}</span></h3>
-      <table class="route-table">
-        <thead>
-          <tr><th>{{ t('modelsView.taskCol') }}</th><th>model</th><th>max_tokens</th><th>thinking</th><th></th></tr>
-        </thead>
-        <tbody>
-          <tr v-for="(r, task) in routes" :key="task">
-            <td class="mono">{{ task }}</td>
-            <td>
-              <n-select
-                v-model:value="r.model"
-                size="small"
-                filterable
-                :options="modelSelectOptions"
-                style="min-width:220px"
-                @update:value="(v: string) => onRouteModelChange(r, v)"
-              />
-            </td>
-            <td><n-input-number v-model:value="r.max_tokens" size="small" :min="64" :max="32768" :show-button="false" style="width:90px" /></td>
-            <td><n-switch v-model:value="r.thinking" size="small" /></td>
-            <td class="route-ops">
-              <n-button size="tiny" type="primary" secondary @click="saveRoute(task as string)">{{ t('modelsView.save') }}</n-button>
-              <n-button size="tiny" :loading="testingId === `route:${task}`" @click="testRoute(task as string)">{{ t('modelsView.test') }}</n-button>
-              <span v-if="routeTestResults[task as string]" class="test-badge"
-                    :class="{ ok: routeTestResults[task as string].ok }">
-                {{ routeTestResults[task as string].ok ? '✓' : '✗' }}
-              </span>
-            </td>
-          </tr>
-        </tbody>
-      </table>
+      <div class="table-scroll">
+        <table class="route-table">
+          <thead>
+            <tr><th>{{ t('modelsView.taskCol') }}</th><th>model</th><th>max_tokens</th><th>thinking</th><th></th></tr>
+          </thead>
+          <tbody>
+            <tr v-for="(r, task) in routes" :key="task">
+              <td class="mono">{{ task }}</td>
+              <td>
+                <n-select
+                  v-model:value="r.model"
+                  class="route-select"
+                  size="small"
+                  filterable
+                  :options="modelSelectOptions"
+                  @update:value="(v: string) => onRouteModelChange(r, v)"
+                />
+              </td>
+              <td><n-input-number v-model:value="r.max_tokens" class="route-number" size="small" :min="64" :max="32768" :show-button="false" /></td>
+              <td><n-switch v-model:value="r.thinking" size="small" /></td>
+              <td class="route-ops">
+                <n-button size="tiny" type="primary" secondary @click="saveRoute(task as string)">{{ t('modelsView.save') }}</n-button>
+                <n-button size="tiny" :loading="testingId === `route:${task}`" @click="testRoute(task as string)">{{ t('modelsView.test') }}</n-button>
+                <span v-if="routeTestResults[task as string]" class="test-badge"
+                      :class="{ ok: routeTestResults[task as string].ok }">
+                  {{ routeTestResults[task as string].ok ? '✓' : '✗' }}
+                </span>
+              </td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
       <div class="fallback-chain">
         {{ t('modelsView.degradeChain') }}<template v-for="(to, from, i) in fallback" :key="from">
           <span v-if="i > 0" class="chain-sep"> ｜ </span>
@@ -507,11 +521,11 @@ async function moveProvider(pid: string, dir: -1 | 1) {
 
     <Tilt3D :max-x="4" :max-y="6">
     <section class="glass-panel section">
-      <h3>Temperature 调节 <span class="hint">控制 LLM 回复的随机性，越低越确定，越高越发散 <span v-if="tempLoading" class="temp-saving">保存中...</span></span></h3>
+      <h3 class="parameter-heading">Temperature 调节 <span class="hint">控制 LLM 回复的随机性，越低越确定，越高越发散 <span v-if="tempLoading" class="temp-saving">保存中...</span></span></h3>
       <div class="temp-row">
         <span class="temp-val">{{ temperature.toFixed(2) }}</span>
-        <n-slider :value="temperature" :min="0" :max="2" :step="0.05"
-                  :tooltip="false" style="flex:1; margin: 0 16px;"
+        <n-slider class="parameter-slider" :value="temperature" :min="0" :max="2" :step="0.05"
+                  :tooltip="false"
                   @update:value="(v: number) => { temperature = v; onTempChange() }" />
       </div>
       <div class="temp-presets">
@@ -531,11 +545,11 @@ async function moveProvider(pid: string, dir: -1 | 1) {
 
     <Tilt3D :max-x="4" :max-y="6">
     <section class="glass-panel section">
-      <h3>Frequency Penalty 调节 <span class="hint">惩罚已出现 token 的重复频率，越高越抑制套模板重复 <span v-if="freqLoading" class="temp-saving">保存中...</span></span></h3>
+      <h3 class="parameter-heading">Frequency Penalty 调节 <span class="hint">惩罚已出现 token 的重复频率，越高越抑制套模板重复 <span v-if="freqLoading" class="temp-saving">保存中...</span></span></h3>
       <div class="temp-row">
         <span class="temp-val">{{ freqPenalty.toFixed(2) }}</span>
-        <n-slider :value="freqPenalty" :min="0" :max="2" :step="0.05"
-                  :tooltip="false" style="flex:1; margin: 0 16px;"
+        <n-slider class="parameter-slider" :value="freqPenalty" :min="0" :max="2" :step="0.05"
+                  :tooltip="false"
                   @update:value="(v: number) => { freqPenalty = v; onFreqChange() }" />
       </div>
       <div class="temp-presets">
@@ -550,11 +564,11 @@ async function moveProvider(pid: string, dir: -1 | 1) {
 
     <Tilt3D :max-x="4" :max-y="6">
     <section class="glass-panel section">
-      <h3>Presence Penalty 调节 <span class="hint">惩罚已出现 token 的再次生成，越高越抑制条件模式重复 <span v-if="presLoading" class="temp-saving">保存中...</span></span></h3>
+      <h3 class="parameter-heading">Presence Penalty 调节 <span class="hint">惩罚已出现 token 的再次生成，越高越抑制条件模式重复 <span v-if="presLoading" class="temp-saving">保存中...</span></span></h3>
       <div class="temp-row">
         <span class="temp-val">{{ presPenalty.toFixed(2) }}</span>
-        <n-slider :value="presPenalty" :min="0" :max="2" :step="0.05"
-                  :tooltip="false" style="flex:1; margin: 0 16px;"
+        <n-slider class="parameter-slider" :value="presPenalty" :min="0" :max="2" :step="0.05"
+                  :tooltip="false"
                   @update:value="(v: number) => { presPenalty = v; onPresChange() }" />
       </div>
       <div class="temp-presets">
@@ -570,19 +584,21 @@ async function moveProvider(pid: string, dir: -1 | 1) {
     <Tilt3D :max-x="4" :max-y="6">
     <section class="glass-panel section">
       <h3>{{ t('modelsView.credPoolStatus') }}</h3>
-      <table class="route-table">
-        <thead><tr><th>provider</th><th>key</th><th>{{ t('modelsView.statusCol') }}</th><th>{{ t('modelsView.usageCol') }}</th><th>{{ t('modelsView.errorCol') }}</th></tr></thead>
-        <tbody>
-          <tr v-for="c in credentials" :key="`${c.provider}-${c.index}`">
-            <td>{{ c.provider }}</td>
-            <td class="mono">{{ c.key_masked }}</td>
-            <td><n-tag size="small" :type="(stateColor[c.state] as any) || 'default'" :bordered="false">{{ c.state }}</n-tag></td>
-            <td>{{ c.use_count }}</td>
-            <td class="error-cell">{{ c.last_error || '—' }}</td>
-          </tr>
-          <tr v-if="!credentials.length"><td colspan="5" class="empty-cell">{{ t('modelsView.credPoolEmpty') }}</td></tr>
-        </tbody>
-      </table>
+      <div class="table-scroll">
+        <table class="route-table">
+          <thead><tr><th>provider</th><th>key</th><th>{{ t('modelsView.statusCol') }}</th><th>{{ t('modelsView.usageCol') }}</th><th>{{ t('modelsView.errorCol') }}</th></tr></thead>
+          <tbody>
+            <tr v-for="c in credentials" :key="`${c.provider}-${c.index}`">
+              <td>{{ c.provider }}</td>
+              <td class="mono">{{ c.key_masked }}</td>
+              <td><n-tag size="small" :type="(stateColor[c.state] as any) || 'default'" :bordered="false">{{ c.state }}</n-tag></td>
+              <td>{{ c.use_count }}</td>
+              <td class="error-cell">{{ c.last_error || '—' }}</td>
+            </tr>
+            <tr v-if="!credentials.length"><td colspan="5" class="empty-cell">{{ t('modelsView.credPoolEmpty') }}</td></tr>
+          </tbody>
+        </table>
+      </div>
     </section>
     </Tilt3D>
 
@@ -611,58 +627,101 @@ async function moveProvider(pid: string, dir: -1 | 1) {
 </template>
 
 <style scoped>
-.view-header {
-  display: flex; align-items: center; justify-content: space-between;
-  margin-bottom: 16px;
+.models-view {
+  width: 100%; max-width: 100%; min-width: 0;
 }
-.view-header h2 { font-family: 'Noto Serif SC', serif; }
+.models-view > * { max-width: 100%; min-width: 0; }
+.view-header h2 {
+  min-width: 0; margin: 0; overflow-wrap: anywhere;
+  font-family: 'Noto Serif SC', serif;
+}
+.view-header .page-actions { max-width: 100%; }
 
-.section { padding: 16px 18px; margin-bottom: 16px; }
-.section h3 { font-size: 15px; margin-bottom: 12px; color: var(--dendro); }
-.hint { font-size: 12px; color: var(--moon-dim); font-weight: 400; margin-left: 10px; }
+.section {
+  box-sizing: border-box; width: 100%; max-width: 100%; min-width: 0;
+  padding: 16px 18px; margin-bottom: 16px;
+}
+.section h3 {
+  font-size: 15px; margin-bottom: 12px; color: var(--dendro);
+  overflow-wrap: anywhere;
+}
+.hint {
+  font-size: 12px; color: var(--moon-dim); font-weight: 400; margin-left: 10px;
+  overflow-wrap: anywhere;
+}
 
-.provider-list { display: flex; flex-direction: column; gap: 8px; }
+.provider-list { display: flex; min-width: 0; flex-direction: column; gap: 8px; }
 .provider-row {
   display: flex; align-items: center; justify-content: space-between;
-  gap: 12px; padding: 8px 10px; border-radius: 8px;
+  gap: 10px 12px; min-width: 0; padding: 8px 10px; border-radius: 8px;
   border: 1px solid var(--glass-border);
   flex-wrap: wrap;
 }
-.provider-info { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; min-width: 0; }
-.p-label { font-weight: 600; }
-.p-url { font-size: 12px; color: var(--moon-dim); font-family: 'JetBrains Mono', monospace; }
-.provider-ops { display: flex; align-items: center; gap: 6px; }
+.provider-info {
+  display: flex; flex: 1 1 360px; align-items: center; gap: 6px 8px;
+  flex-wrap: wrap; min-width: 0; max-width: 100%;
+}
+.p-label { min-width: 0; max-width: 100%; font-weight: 600; overflow-wrap: anywhere; }
+.p-url {
+  min-width: 0; max-width: 100%; font-size: 12px; color: var(--moon-dim);
+  font-family: 'JetBrains Mono', monospace; overflow-wrap: anywhere; word-break: break-word;
+}
+.provider-ops {
+  display: flex; flex: 0 1 auto; align-items: center; gap: 6px;
+  flex-wrap: wrap; min-width: 0; max-width: 100%;
+}
+.provider-ops > .n-button,
+.provider-ops > .n-popconfirm { flex: 0 0 auto; }
 
-.test-badge { font-size: 12px; color: var(--alert); max-width: 260px; }
+.test-badge {
+  min-width: 0; max-width: min(100%, 360px); font-size: 12px; color: var(--alert);
+  overflow-wrap: anywhere; word-break: break-word;
+}
 .test-badge.ok { color: var(--dendro); }
 
+.table-scroll { max-width: 100%; }
 .route-table { width: 100%; border-collapse: collapse; font-size: 13px; }
 .route-table th {
   text-align: left; padding: 6px 8px; color: var(--moon-dim);
   border-bottom: 1px solid var(--glass-border); font-weight: 500;
 }
 .route-table td { padding: 6px 8px; border-bottom: 1px solid rgba(127, 214, 80, 0.08); }
-.route-ops { display: flex; align-items: center; gap: 6px; }
+.route-select { width: 220px; min-width: 220px; }
+.route-number { width: 90px; }
+.route-ops { display: flex; align-items: center; gap: 6px; white-space: nowrap; }
 .mono { font-family: 'JetBrains Mono', monospace; font-size: 12.5px; }
-.error-cell { font-size: 12px; color: var(--alert); max-width: 280px; overflow: hidden; text-overflow: ellipsis; }
+.error-cell {
+  max-width: 280px; font-size: 12px; color: var(--alert);
+  overflow-wrap: anywhere; word-break: break-word;
+}
 .empty-cell { text-align: center; color: var(--moon-dim); }
 
-.fallback-chain { margin-top: 10px; font-size: 12.5px; color: var(--wisdom); }
-
-.temp-row {
-  display: flex; align-items: center; gap: 8px; margin-bottom: 10px;
+.fallback-chain {
+  max-width: 100%; margin-top: 10px; font-size: 12.5px; color: var(--wisdom);
+  overflow-wrap: anywhere; word-break: break-word;
 }
+
+.parameter-heading { display: flex; align-items: baseline; flex-wrap: wrap; gap: 4px 10px; }
+.parameter-heading .hint { min-width: 0; margin-left: 0; }
+.temp-row {
+  display: flex; min-width: 0; align-items: center; gap: 12px; margin-bottom: 10px;
+}
+.parameter-slider { flex: 1 1 auto; min-width: 0; margin: 0 16px; }
 .temp-val {
   font-family: 'JetBrains Mono', monospace; font-size: 20px; font-weight: 700;
   color: var(--dendro); min-width: 48px; text-align: right;
 }
 .temp-presets {
-  display: flex; gap: 6px; flex-wrap: wrap; margin-bottom: 6px;
+  display: flex; gap: 4px; flex-wrap: wrap; margin-bottom: 6px;
 }
+.temp-presets > .n-button { flex: 0 1 auto; }
 .dedup-row {
-  display: flex; align-items: center; justify-content: space-between; gap: 12px;
-  margin-top: 10px; padding-top: 10px; border-top: 1px dashed rgba(255,255,255,.12);
+  display: flex; align-items: center; justify-content: space-between; gap: 8px 12px;
+  flex-wrap: wrap; min-width: 0; margin-top: 10px; padding-top: 10px;
+  border-top: 1px dashed rgba(255,255,255,.12);
 }
+.dedup-row .hint { flex: 1 1 320px; min-width: 0; margin-left: 0; }
+.dedup-row .n-switch { flex: 0 0 auto; }
 .temp-source {
   font-size: 12px; color: var(--moon-dim); margin-top: 4px;
 }
@@ -672,11 +731,38 @@ async function moveProvider(pid: string, dir: -1 | 1) {
 }
 @keyframes pulse { 0%,100% { opacity: 1; } 50% { opacity: 0.4; } }
 
-.usage-chart { height: 260px; }
-.key-modal-footer { display: flex; align-items: center; gap: 10px; margin-top: 12px; }
-.key-result { font-size: 12px; color: var(--dendro); }
+.usage-chart { width: 100%; max-width: 100%; height: 260px; }
+.key-modal-footer { display: flex; min-width: 0; align-items: center; gap: 10px; margin-top: 12px; flex-wrap: wrap; }
+.key-result { min-width: 0; font-size: 12px; color: var(--dendro); overflow-wrap: anywhere; }
 
 @media (max-width: 768px) {
-  .route-table { display: block; overflow-x: auto; }
+  .models-view > :deep(.tilt3d) { max-width: 100%; min-width: 0; }
+  .view-header.page-header { max-width: 100%; }
+  .view-header .page-actions,
+  .view-header .page-actions > .n-button { max-width: 100%; }
+  .view-header .page-actions > .n-button { white-space: normal; }
+  .section { padding: 14px 12px; }
+  .section h3 { line-height: 1.5; }
+  .parameter-heading { align-items: flex-start; flex-direction: column; gap: 2px; }
+  .provider-row { align-items: flex-start; padding: 8px; }
+  .provider-info,
+  .provider-ops { flex: 1 1 100%; width: 100%; }
+  .provider-ops { justify-content: flex-start; }
+  .provider-ops .test-badge { flex: 1 1 100%; max-width: 100%; }
+  .fallback-chain { line-height: 1.7; }
+  .temp-row { gap: 8px; }
+  .parameter-slider { margin: 0 4px; }
+  .temp-presets { gap: 2px 4px; }
+  .temp-presets > .n-button { padding-inline: 6px; }
+  .dedup-row { align-items: flex-start; }
+  .dedup-row .hint { flex-basis: calc(100% - 52px); }
+  .key-modal-footer { align-items: flex-start; flex-direction: column; }
+}
+
+@media (max-width: 420px) {
+  .section { padding-inline: 10px; }
+  .temp-val { min-width: 44px; font-size: 18px; }
+  .parameter-slider { margin-inline: 0; }
+  .dedup-row .hint { flex-basis: 100%; }
 }
 </style>

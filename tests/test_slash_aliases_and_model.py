@@ -9,14 +9,12 @@
 from __future__ import annotations
 
 import asyncio
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import MagicMock
 
 import pytest
 
 from slash_commands import (
     COMMAND_ALIASES,
-    COMMAND_META,
-    OWNER_ONLY_COMMANDS,
     SlashCommandHandler,
     get_argument_completions,
     resolve_command,
@@ -279,27 +277,6 @@ def test_get_argument_completions_model_is_dynamic():
     assert "mimo-pro" not in get_argument_completions("/model", "")
 
 
-# ── 动态模型发现函数 ──────────────────────────────────────
-
-def test_list_discovered_model_ids():
-    """list_discovered_model_ids 应从发现缓存枚举 provider/模型。"""
-    from model_router import list_discovered_model_ids
-    fake_cache = {"data": [
-        {"provider": "agnes", "models": [{"id": "agnes-2.0-flash"}]},
-        {"provider": "mimo", "models": [{"id": "mimo-v2.5"}, {"id": "mimo-v2.5-pro"}]},
-    ]}
-    with patch("web._discovery_cache._cache", fake_cache):
-        ids = list_discovered_model_ids()
-    assert ids == ["agnes/agnes-2.0-flash", "mimo/mimo-v2.5", "mimo/mimo-v2.5-pro"]
-
-
-def test_list_discovered_model_ids_empty_cache():
-    """发现缓存为空时返回空列表。"""
-    from model_router import list_discovered_model_ids
-    with patch("web._discovery_cache._cache", {"data": None}):
-        assert list_discovered_model_ids() == []
-
-
 def test_list_models_current_reflects_chat_model_not_preference():
     """list_models 的当前模型应来自 get_current_chat_model（CLI 与 WebUI 一变都变）。
 
@@ -318,7 +295,7 @@ def test_list_models_current_reflects_chat_model_not_preference():
 
 def test_list_models_current_falls_back_when_no_chat_model():
     """_current_chat_model 未初始化时回退到默认路由模型。"""
-    from model_router import ModelRouter, ROUTE_TABLE
+    from model_router import ROUTE_TABLE, ModelRouter
     router = object.__new__(ModelRouter)
     router._current_chat_model = None
     info = router.list_models()
@@ -356,6 +333,7 @@ def test_preference_getters_fallback_when_no_chat_model():
 def _complete(line: str, text: str) -> list[str]:
     """用假 readline buffer 调用 cli._cli_completer 收集所有候选。"""
     import readline as _rl
+
     import cli
     orig = _rl.get_line_buffer
     _rl.get_line_buffer = lambda: line

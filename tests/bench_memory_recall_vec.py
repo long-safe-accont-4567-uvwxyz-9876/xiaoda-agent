@@ -24,11 +24,10 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 os.environ.setdefault("TEST_MODE", "true")
 
+from db.database import DatabaseManager
 from memory.memory_manager import MemoryManager
 from memory.scope import Scope
 from memory.vector_store import VectorStore
-from db.database import DatabaseManager
-
 
 # ── 合成数据集（与 bench_memory_recall.py 同构，便于对比）────────
 DATASET = [

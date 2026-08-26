@@ -209,6 +209,38 @@ def e2e_instance_manager() -> tuple[InstanceManager, dict[str, E2ERuntime]]:
 
 
 @pytest.mark.asyncio
+async def test_prepared_instance_does_not_change_selection_until_commit():
+    instances, _ = e2e_instance_manager()
+    first = await instances.start("embedding-a")
+    before = instances.selection_identity(ModelPurpose.EMBEDDING)
+
+    prepared = await instances.start("embedding-b", select=False)
+
+    assert instances.selection_identity(ModelPurpose.EMBEDDING) == before
+    instances.select_instance(ModelPurpose.EMBEDDING, prepared.id)
+    assert instances.selection_identity(ModelPurpose.EMBEDDING)[0] == prepared.id
+    instances.select_instance(ModelPurpose.EMBEDDING, first.id)
+    await instances.stop(prepared.id)
+    assert instances.selection_identity(ModelPurpose.EMBEDDING)[0] == first.id
+
+
+@pytest.mark.asyncio
+async def test_selection_generation_cas_rejects_stale_transaction():
+    instances, _ = e2e_instance_manager()
+    first = await instances.start("embedding-a")
+    stale_generation = instances.selection_generation(ModelPurpose.EMBEDDING)
+    second = await instances.start("embedding-b")
+
+    with pytest.raises(RuntimeError, match="changed concurrently"):
+        instances.select_instance(
+            ModelPurpose.EMBEDDING,
+            first.id,
+            expected_generation=stale_generation,
+        )
+    assert instances.selection_identity(ModelPurpose.EMBEDDING)[0] == second.id
+
+
+@pytest.mark.asyncio
 async def test_production_services_follow_instances_started_after_bootstrap(tmp_path):
     instances, runtimes = e2e_instance_manager()
     services = await bootstrap._local_memory_services(
@@ -222,13 +254,12 @@ async def test_production_services_follow_instances_started_after_bootstrap(tmp_
         embed_mode="local",
         embedding_service=services.embedding,
     )
-    memory = MemoryManager(None, None, reranker_service=services.reranker)
 
     embedding_instance = await instances.start("embedding-a")
     reranker_instance = await instances.start("reranker-a")
 
     assert await vector_store.embed(["same"]) == [[1.0]]
-    assert await memory.rerank_with_selected_local_model("q", ["a", "b"]) == [
+    assert await services.reranker.rerank("q", ["a", "b"], top_n=2, return_documents=False) == [
         {"index": 1, "relevance_score": 3.0},
         {"index": 0, "relevance_score": 2.0},
     ]
@@ -241,7 +272,7 @@ async def test_production_services_follow_instances_started_after_bootstrap(tmp_
     with pytest.raises(LocalModelUnavailableError):
         await vector_store.embed(["new"])
     with pytest.raises(LocalModelUnavailableError):
-        await memory.rerank_with_selected_local_model("q", ["a"])
+        await services.reranker.rerank("q", ["a"], top_n=1)
 
 
 @pytest.mark.asyncio
@@ -608,9 +639,8 @@ async def test_stopping_selected_local_embedding_preserves_unavailable_selection
 async def test_selected_local_reranker_instance_is_used():
     runtime = FakeRerankerRuntime()
     service = LocalRerankerService(runtime)
-    manager = MemoryManager(None, None, reranker_service=service)
 
-    results = await manager.rerank_with_selected_local_model("q", ["a", "b"])
+    results = await service.rerank("q", ["a", "b"], top_n=2, return_documents=False)
 
     assert runtime.calls == [("q", ["a", "b"])]
     assert results == [
@@ -623,11 +653,10 @@ async def test_selected_local_reranker_instance_is_used():
 async def test_stopped_local_reranker_reports_unavailable():
     runtime = FakeRerankerRuntime()
     service = LocalRerankerService(runtime)
-    manager = MemoryManager(None, None, reranker_service=service)
     runtime.running = False
 
     with pytest.raises(LocalModelUnavailableError):
-        await manager.rerank_with_selected_local_model("q", ["a"])
+        await service.rerank("q", ["a"], top_n=1)
 
 
 @pytest.mark.asyncio
@@ -1299,6 +1328,7 @@ async def test_insight_rest_propagates_structured_local_unavailable():
 def test_real_http_response_preserves_local_unavailable_error(error, code, purpose):
     from fastapi import FastAPI
     from fastapi.testclient import TestClient
+
     from web.error_handler import register_error_handlers
 
     app = FastAPI()

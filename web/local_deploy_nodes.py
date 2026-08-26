@@ -19,8 +19,13 @@ from loguru import logger
 
 # 合法后端值（下沉到 node_registry，re-export 保持兼容）
 from web.node_registry import (  # noqa: E402,F401
-    _BACKENDS, NODES, _NODE_MAP,
-    valid_backend, get_backend, set_backend, get_local_model,
+    _BACKENDS,
+    _NODE_MAP,
+    NODES,
+    get_backend,
+    get_local_model,
+    set_backend,
+    valid_backend,
 )
 
 
@@ -64,6 +69,40 @@ async def _installed_models(core: Any) -> list[dict[str, str]]:
         return models
     except (RuntimeError, ImportError, OSError, ValueError):  # noqa: BLE001
         return []
+
+
+async def validate_local_selection(
+    core: Any, node: dict[str, Any], local_model: str
+) -> str:
+    """只读校验节点本地模型选择；不启动实例、不写配置。"""
+    node_id = node["id"]
+    if node_id == "asr":
+        raise ValueError("ASR 本地运行时尚未实现，请使用 API 或关闭节点")
+    model_name = str(local_model or "").strip()
+    if not model_name:
+        raise ValueError(f"node {node_id} requires local_model for local backend")
+    installed = await _installed_models(core)
+    registry_id = _find_registry_id(installed, model_name)
+    if registry_id is None:
+        raise ValueError(f"local model is not installed: {model_name}")
+    expected = node["model_purpose"]
+    record = next(
+        (item for item in installed
+         if item.get("id") == registry_id or item.get("catalog_id") == registry_id),
+        None,
+    )
+    actual = str((record or {}).get("purpose") or "")
+    aliases = {
+        "embedding": {"embedding", "embed"},
+        "reranker": {"reranker", "rerank"},
+        "chat": {"chat", "text-generation", "llm"},
+        "asr": {"asr", "stt", "speech", "whisper"},
+    }
+    if actual not in aliases[expected]:
+        raise ValueError(
+            f"model purpose mismatch for {node_id}: expected {expected}, got {actual or 'unknown'}"
+        )
+    return registry_id
 
 
 def _catalog_candidates(purpose: str) -> list[dict[str, str]]:
@@ -115,7 +154,10 @@ def _find_registry_id(installed: list[dict[str, str]], display_name: str) -> str
     return None
 
 
-async def ensure_local_instance(core: Any, node_id: str, local_model: str) -> bool:
+async def ensure_local_instance(
+    core: Any, node_id: str, local_model: str, *, required: bool = False,
+    select: bool = True,
+) -> Any:
     """确保节点绑定的本地模型实例已启动（常驻服务）。
 
     - 已安装模型（registry）→ 通过实例管理器启动对应实例，幂等（已运行则复用）
@@ -127,21 +169,52 @@ async def ensure_local_instance(core: Any, node_id: str, local_model: str) -> bo
     real_id = _find_registry_id(installed, local_model)
     if real_id is None:
         logger.info("local_deploy.node_no_installed_model node={} model={}", node_id, local_model)
+        if required:
+            raise ValueError(f"local model is not installed: {local_model}")
         return False
     manager = getattr(core, "local_ai_instances", None)
     if manager is None or not hasattr(manager, "start"):
+        if required:
+            raise ValueError("local instance manager is unavailable")
         return False
     try:
-        await manager.start(real_id)
+        instance = (
+            await manager.start(real_id)
+            if select else await manager.start(real_id, select=False)
+        )
         logger.info("local_deploy.node_instance_started node={} model={} registry_id={}", node_id, local_model, real_id)
-        return True
+        return instance
     except (RuntimeError, OSError, ValueError, ImportError) as e:  # noqa: BLE001
         logger.warning("local_deploy.node_instance_start_failed node={} model={} error={}", node_id, local_model, str(e))
+        if required:
+            raise ValueError(f"failed to start local model {local_model}: {e}") from e
         return False
 
 
-async def stop_node_instance(core: Any, node_id: str, local_model: str) -> None:
-    """停止节点绑定的本地模型实例（切回 API / 关闭时调用，关闭本地推理常驻）。"""
+async def model_has_other_local_references(
+    cfg: Any, node_id: str, local_model: str
+) -> bool:
+    target = _norm_model_id(local_model)
+    for node in NODES:
+        other_id = node["id"]
+        if other_id == node_id or get_backend(cfg, other_id) != "local":
+            continue
+        if _norm_model_id(get_local_model(cfg, other_id)) == target:
+            return True
+    return False
+
+
+async def stop_node_instance(core: Any, node_id: str, local_model: str,
+                             cfg: Any | None = None) -> None:
+    """停止节点绑定实例；仍被其他 local 节点引用时保留。"""
+    if cfg is not None and await model_has_other_local_references(
+        cfg, node_id, local_model
+    ):
+        logger.info(
+            "local_deploy.node_instance_kept_shared node={} model={}",
+            node_id, local_model,
+        )
+        return
     installed = await _installed_models(core)
     real_id = _find_registry_id(installed, local_model)
     if real_id is None:
@@ -253,8 +326,9 @@ def _node_local_models(node: dict[str, Any], installed: list[dict[str, str]]) ->
 
 async def build_status(core: Any, vs: Any, cfg: Any) -> list[dict[str, Any]]:
     """计算每个节点的状态：当前选择 / API 可用性 / 本地可用性 / 生效后端。"""
+    from web.prompt_profiles import profiles_for_node
+
     api_ok = _api_configured()
-    router_ok = _router_available(core)
     installed = await _installed_models(core)
     result: list[dict[str, Any]] = []
     for node in NODES:
@@ -287,6 +361,9 @@ async def build_status(core: Any, vs: Any, cfg: Any) -> list[dict[str, Any]]:
             "local_available": local_available,
             "local_model": get_local_model(cfg, node_id),
             "local_models": _node_local_models(node, installed),
+            "prompt_profiles": [
+                profile.public_summary() for profile in profiles_for_node(node_id)
+            ],
         })
     return result
 
@@ -326,6 +403,13 @@ def _apply_service_node(core: Any, vs: Any, node_id: str, backend: str, local_mo
         _try_set_backend(getattr(kg, "_kg_v2", None) if kg is not None else None, backend, local_model)
         return
     if node_id == "asr":
+        if backend == "local":
+            raise ValueError("ASR local runtime is not implemented")
+        return
+    if node_id == "intent_decomposition":
+        from web.routers.jspace import set_intent_backend
+
+        set_intent_backend(backend, local_model)
         return
 
 
@@ -368,11 +452,14 @@ def _apply_llm_node(core: Any, node_id: str, backend: str, local_model: str | No
         return
 
 
-_SERVICE_NODES = {"embedding", "reranker", "query_transform", "instinct", "error_rule", "kg_extract", "asr"}
+_SERVICE_NODES = {
+    "embedding", "reranker", "query_transform", "instinct", "error_rule",
+    "kg_extract", "asr", "intent_decomposition",
+}
 
 
 def apply_to_runtime(core: Any, vs: Any, node_id: str, backend: str, app: Any = None,
-                     local_model: str | None = None) -> None:
+                     local_model: str | None = None, strict: bool = False) -> None:
     try:
         if node_id in _SERVICE_NODES:
             _apply_service_node(core, vs, node_id, backend, local_model)
@@ -380,3 +467,5 @@ def apply_to_runtime(core: Any, vs: Any, node_id: str, backend: str, app: Any = 
             _apply_llm_node(core, node_id, backend, local_model, app)
     except (RuntimeError, OSError, ValueError, ImportError) as e:
         logger.warning("local_deploy.node_apply_failed node={} error={}", node_id, str(e))
+        if strict:
+            raise

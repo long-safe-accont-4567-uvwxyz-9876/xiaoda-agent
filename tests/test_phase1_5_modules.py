@@ -1,8 +1,9 @@
 """Phase 1-5 新增模块的单元测试"""
-import pytest
+import asyncio
 import os
 import sys
-import asyncio
+
+import pytest
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
@@ -136,14 +137,14 @@ class TestErrorCodes:
                 assert len(parts) == 3, f"{attr}={val} not 3-part"
 
     def test_make_error(self):
-        from core.error_codes import make_error, ErrorCode
+        from core.error_codes import ErrorCode, make_error
         err = make_error(ErrorCode.LLM_TIMEOUT, "LLM call timed out", provider="mimo")
         assert err.code == "01_2_001"
         assert err.recoverable is True
         assert err.context["provider"] == "mimo"
 
     def test_critical_not_recoverable(self):
-        from core.error_codes import make_error, ErrorCode
+        from core.error_codes import ErrorCode, make_error
         err = make_error(ErrorCode.LLM_CONTENT_FILTER, "blocked")
         assert err.recoverable is False
 
@@ -152,7 +153,7 @@ class TestTripleAxisDegradation:
     """Q2: 三轴退化模型"""
 
     def test_healthy_state(self):
-        from quality.triple_axis_degradation import TripleAxisState, QualityProxy
+        from quality.triple_axis_degradation import QualityProxy, TripleAxisState
         state = TripleAxisState(
             availability=True,
             latency_p95=500,
@@ -166,9 +167,7 @@ class TestTripleAxisDegradation:
         assert state.overall_health == 0.0
 
     def test_quality_degradation_detected(self):
-        from quality.triple_axis_degradation import (
-            TripleAxisState, QualityProxy, SilentDegradationDetector
-        )
+        from quality.triple_axis_degradation import QualityProxy, SilentDegradationDetector, TripleAxisState
         baseline = TripleAxisState(
             availability=True,
             latency_p95=500,
@@ -184,50 +183,12 @@ class TestTripleAxisDegradation:
         assert any("静默退化" in a for a in alerts)
 
     def test_latency_degradation(self):
-        from quality.triple_axis_degradation import (
-            TripleAxisState, SilentDegradationDetector
-        )
+        from quality.triple_axis_degradation import SilentDegradationDetector, TripleAxisState
         baseline = TripleAxisState(availability=True, latency_p95=500)
         current = TripleAxisState(availability=True, latency_p95=2000)
         detector = SilentDegradationDetector(baseline)
         alerts = detector.check(current)
         assert any("延迟退化" in a for a in alerts)
-
-
-class TestDegradationManager:
-    """Q4: 降级策略"""
-
-    def test_initial_full(self):
-        from core.degradation import DegradationManager
-        from core.degradation_strategy import DegradationLevel
-        mgr = DegradationManager()
-        assert mgr.level == DegradationLevel.L0_NORMAL
-        assert mgr.is_feature_available("tools")
-
-    def test_escalate(self):
-        from core.degradation import DegradationManager
-        from core.degradation_strategy import DegradationLevel
-        mgr = DegradationManager()
-        mgr.escalate("LLM down")
-        assert mgr.level == DegradationLevel.L1_DEGRADED
-        assert not mgr.is_feature_available("image")
-
-    def test_recover(self):
-        from core.degradation import DegradationManager
-        from core.degradation_strategy import DegradationLevel
-        mgr = DegradationManager()
-        mgr.escalate("test")
-        mgr.escalate("test2")
-        mgr.recover()
-        assert mgr.level == DegradationLevel.L2_MINIMAL
-
-    def test_emergency_disables_all(self):
-        from core.degradation import DegradationManager
-        from core.degradation_strategy import DegradationLevel
-        mgr = DegradationManager()
-        mgr.set_level(DegradationLevel.L3_EMERGENCY, "critical")
-        assert not mgr.is_feature_available("tools")
-        assert not mgr.is_feature_available("memory")
 
 
 class TestLazyLoader:
@@ -248,42 +209,8 @@ class TestLazyLoader:
 
 
 # ── Phase 3: 自我意识+Doctor ──────────────────────────────
-
-class TestMetaCognition:
-    """A1: 元认知引擎"""
-
-    def test_initial_state(self):
-        from core.meta_cognition import MetaCognition
-        mc = MetaCognition()
-        report = mc.get_status_report()
-        assert report["health_score"] > 0.5
-        assert report["diagnosis"] == "状态良好"
-
-    def test_record_success(self):
-        from core.meta_cognition import MetaCognition
-        mc = MetaCognition()
-        mc.record_success(500.0, 0.9)
-        mc.record_success(600.0, 0.95)
-        report = mc.get_status_report()
-        assert report["total_turns"] == 2
-        assert report["avg_response_ms"] > 0
-
-    def test_record_failure(self):
-        from core.meta_cognition import MetaCognition
-        mc = MetaCognition()
-        mc.record_success(500.0)
-        mc.record_failure(5000.0)
-        report = mc.get_status_report()
-        assert report["error_rate"] > 0
-
-    def test_fatigue_increases(self):
-        from core.meta_cognition import MetaCognition
-        mc = MetaCognition()
-        for _ in range(100):
-            mc.record_success(100.0)
-        report = mc.get_status_report()
-        assert report["fatigue"] > 0.3
-
+# （TestMetaCognition 已随 core/meta_cognition.py 死模块删除移除，
+#   见 docs/core_twin_modules_audit_2026-08-25.md 第二节）
 
 class TestLearningLoop:
     """A4: 学习反馈闭环"""
@@ -382,7 +309,7 @@ class TestFaultInjection:
 
     @pytest.mark.asyncio
     async def test_timeout_injection(self):
-        from tests.fault_injection import FaultInjectingLLMClient, FaultConfig, FaultType
+        from tests.fault_injection import FaultConfig, FaultInjectingLLMClient, FaultType
 
         class MockClient:
             async def complete(self, messages, **kwargs):
@@ -396,7 +323,7 @@ class TestFaultInjection:
 
     @pytest.mark.asyncio
     async def test_empty_response_injection(self):
-        from tests.fault_injection import FaultInjectingLLMClient, FaultConfig, FaultType
+        from tests.fault_injection import FaultConfig, FaultInjectingLLMClient, FaultType
 
         class MockClient:
             async def complete(self, messages, **kwargs):

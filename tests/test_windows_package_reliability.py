@@ -1,6 +1,9 @@
 import ast
+import json
 import os
+import re
 import subprocess
+import sys
 import tomllib
 from pathlib import Path
 
@@ -127,6 +130,166 @@ def test_python_distribution_includes_local_ai_and_gateway_packages():
     assert "llm_gateway*" in packages
 
 
+# ── wheel py-modules 契约 ────────────────────────────────────
+# 原缺陷：console script 指 agent:main，但 packages.find 只收「包」，
+# 根目录单文件模块不进 wheel——pip install 后入口 ModuleNotFoundError（已实证）。
+
+
+def declared_py_modules() -> list[str]:
+    with (ROOT / "pyproject.toml").open("rb") as file:
+        return tomllib.load(file)["tool"]["setuptools"]["py-modules"]
+
+
+IMPORTED_ROOT_MODULES = {
+    "agent", "agent_context", "agent_dispatcher", "belief_router",
+    "botpy_compat", "channel_adapter_base", "cli", "cli_client",
+    "cli_menu", "cli_palette", "config", "config_agents",
+    "config_constants", "config_paths", "config_providers", "hooks",
+    "ilink_client", "instinct_manager", "model_router",
+    "model_router_config", "model_router_registry", "prompt_builder",
+    "qq_bot_adapter", "setup_wizard", "slash_commands",
+    "wechat_bot_adapter", "xiaoli_agent",
+}
+
+
+def test_console_script_entry_module_is_declared():
+    with (ROOT / "pyproject.toml").open("rb") as file:
+        project = tomllib.load(file)["project"]
+    entry = project["scripts"]["xiaoda-agent"]
+    module = entry.split(":")[0]
+    assert module in declared_py_modules(), (
+        f"console script 指向 {entry}，但 {module} 未声明进 py-modules"
+    )
+
+
+def test_py_modules_cover_every_imported_root_module():
+    """AST 扫描源码树（排除 tests/chaos/vendor 等非分发目录），任何被 import
+    的根目录单文件模块都必须声明在 py-modules，漏列即红。"""
+    skip_dirs = {"tests", "chaos", "build", "dist", "__pycache__", "node_modules",
+                 "vendor", "rust_core", ".git", "xiaoda_agent.egg-info", "evaluation",
+                 "web", "docs", "assets", "logs", "data", "state", "files", "market",
+                 "media", "models", "plugins_data", "quality", "specs", "credentials",
+                 "deploy", "doctor", "instinct_manager_data"}
+    imported: set[str] = set()
+    candidates = set(IMPORTED_ROOT_MODULES)
+    for dirpath, dirnames, filenames in os.walk(ROOT):
+        rel = Path(dirpath).relative_to(ROOT)
+        if any(part in skip_dirs for part in rel.parts):
+            dirnames[:] = []
+            continue
+        # 跳过隐藏目录（.venv/.github 等）与无 .py 的目录树
+        dirnames[:] = [d for d in dirnames if not d.startswith(".")]
+        for fn in filenames:
+            if not fn.endswith(".py"):
+                continue
+            try:
+                tree = ast.parse((Path(dirpath) / fn).read_text(encoding="utf-8"))
+            except SyntaxError:
+                continue
+            for node in ast.walk(tree):
+                if isinstance(node, ast.Import):
+                    for alias in node.names:
+                        candidates.add(alias.name.split(".")[0])
+                elif isinstance(node, ast.ImportFrom) and node.level == 0 and node.module:
+                    candidates.add(node.module.split(".")[0])
+    # 只关心「仓库根目录确实存在对应 .py 文件」的模块
+    existing = {m for m in candidates if (ROOT / f"{m}.py").is_file()}
+    declared = set(declared_py_modules())
+    missing = sorted(existing - declared)
+    assert not missing, f"以下被 import 的根目录模块未进 py-modules（wheel 安装后必炸）: {missing}"
+
+
+def test_wheel_smoke_job_gates_entrypoint():
+    workflow = read_project_file(".github/workflows/build-release.yml")
+    smoke_section = workflow[workflow.index("  wheel-smoke:"):]
+    assert "python -m build --wheel" in smoke_section
+    assert "clean-venv/bin/xiaoda-agent --help" in smoke_section
+
+
+def test_config_data_dir_is_not_discovered_as_package():
+    """config/ 目录是数据目录不是 Python 包；packages.find 必须显式排除，
+    否则其 json5/yaml 会以 namespace 包语义装进 site-packages/config/，
+    遮蔽源码树根的 config.py。"""
+    with (ROOT / "pyproject.toml").open("rb") as file:
+        find_cfg = tomllib.load(file)["tool"]["setuptools"]["packages"]["find"]
+    excludes = find_cfg.get("exclude") or []
+    assert any(e == "config" or e.startswith("config.") for e in excludes), (
+        "packages.find 缺少 config 排除：数据目录会被当 namespace 包安装并遮蔽 config.py"
+    )
+
+
+# ── 安全扫描门禁 ─────────────────────────────────────────────
+# 原缺陷：bandit/pip-audit 带 || true——扫描失败被吞，security job 永远假绿。
+
+
+def test_security_gate_script_exists_and_is_fail_closed():
+    gate = ROOT / "scripts" / "security_gate.py"
+    assert gate.is_file()
+    source = gate.read_text(encoding="utf-8")
+    # 报告缺失/非法必须失败（不允许工具静默失效）
+    assert "fail-closed" in source or "fail_closed" in source.lower()
+
+
+def test_security_baseline_declares_zero_new_high_allowance():
+    baseline_path = ROOT / "scripts" / "security_baseline.json"
+    data = json.loads(baseline_path.read_text(encoding="utf-8"))
+    # 门禁语义：high_count 是允许的新增未豁免 HIGH 数量；存量 HIGH 必须逐条豁免并给理由
+    assert data["high_count"] == 0, (
+        "baseline.high_count 应为 0（存量 HIGH 已逐条豁免）；放宽需在 PR 说明理由"
+    )
+    for exemption in data.get("exemptions", []):
+        assert exemption.get("reason"), f"豁免条目缺 reason: {exemption}"
+
+
+def test_ci_security_job_has_no_fail_open_scans():
+    workflow = read_project_file(".github/workflows/ci-tests.yml")
+    security_section = workflow[workflow.index("  security:"):]
+    # 旧 fail-open 写法不得回归
+    assert "-f screen || true" not in security_section
+    assert "pip-audit --desc || true" not in security_section
+    # 扫描必须经门禁脚本判定
+    assert "python scripts/security_gate.py bandit-report.json" in security_section
+    assert "python scripts/security_gate.py pip-audit-report.json" in security_section
+
+
+def test_security_gate_blocks_new_high_and_passes_exemption(tmp_path):
+    """端到端：基线报告（含豁免）通过；注入新 HIGH 即红。"""
+    gate_script = ROOT / "scripts" / "security_gate.py"
+    report = {
+        "results": [
+            {"filename": "./evaluation/retrieval_pipeline_harness.py", "line_number": 132,
+             "test_id": "B324", "issue_severity": "HIGH", "issue_text": "known exempted"},
+        ]
+    }
+    path = tmp_path / "bandit-report.json"
+    path.write_text(json.dumps(report), encoding="utf-8")
+    passed = subprocess.run(
+        [sys.executable, str(gate_script), str(path)],
+        capture_output=True, text=True,
+    )
+    assert passed.returncode == 0
+
+    report["results"].append(
+        {"filename": "./new_regression.py", "line_number": 1,
+         "test_id": "B101", "issue_severity": "HIGH", "issue_text": "new"}
+    )
+    path.write_text(json.dumps(report), encoding="utf-8")
+    failed = subprocess.run(
+        [sys.executable, str(gate_script), str(path)],
+        capture_output=True, text=True,
+    )
+    assert failed.returncode == 1
+
+
+def test_security_gate_fails_on_missing_report(tmp_path):
+    gate_script = ROOT / "scripts" / "security_gate.py"
+    result = subprocess.run(
+        [sys.executable, str(gate_script), str(tmp_path / "nope.json")],
+        capture_output=True, text=True,
+    )
+    assert result.returncode != 0
+
+
 def test_pyinstaller_dynamic_library_collection_isolated_per_package():
     import ast
 
@@ -175,6 +338,31 @@ def test_supported_release_jobs_install_local_ai_dependencies():
     assert "linux-arm64" in build_section
     assert "ubuntu-24.04-arm" in build_section
     assert 'pip install ".[local-ai]"' in build_section
+
+
+def test_windows_build_installs_conpty_extra_and_verifies_bundle():
+    """Windows 构建必须装 .[windows] 并断言 pywinpty 进 dist。
+
+    原缺陷：ConPTY 依赖是懒加载可选依赖，PyInstaller 静态分析不收集，
+    构建又没装也没验——Windows 终端静默降级为无 TTY 管道。"""
+    workflow = read_project_file(".github/workflows/build-release.yml")
+    build_section = workflow[workflow.index("  build:"):workflow.index("  wheel-smoke:")]
+    # Windows job 安装 windows extra
+    assert 'pip install ".[windows]"' in build_section
+    # 打包校验步骤断言 winpty 产物进 dist
+    assert "winpty*.pyd" in build_section or "*winpty*.dll" in build_section
+    assert "winpty-agent.exe" in build_section
+    # 校验步骤必须限定在 Windows runner
+    verify_idx = build_section.index("Verify winpty ConPTY bundled")
+    step_block = build_section[verify_idx - 200:]
+    assert "runner.os == 'Windows'" in step_block
+
+    # pyproject 必须声明 windows extra 且含 pywinpty
+    with (ROOT / "pyproject.toml").open("rb") as file:
+        extras = tomllib.load(file)["project"]["optional-dependencies"]
+    win_deps = " ".join(extras["windows"])
+    assert "pywinpty" in win_deps
+    assert "pywin32" in win_deps
 
 
 def test_release_validates_ort_genai_in_frozen_executable_and_native_bundle():
@@ -443,6 +631,45 @@ def test_linux_install_service_uses_start_script():
     assert "RestartPreventExitStatus" in installer
 
 
+def test_linux_install_service_runs_as_non_root_user():
+    """systemd unit 必须写死 User=/Group=：WebUI 带 pty.fork 终端，root 运行等于交出整台机器。
+
+    2026-08-24 安全修复：
+    - 安装时解析真实非 root 用户（SUDO_USER / logname / 当前用户）写入 unit
+    - 纯 root 环境必须显式 --force 才继续安装服务
+    - HOME 显式指向该用户 home，数据目录随用户 home 而非 root 的 $HOME
+    """
+    installer = read_project_file("scripts/install-linux.sh")
+    # unit 写死运行用户与组
+    assert "User=$SERVICE_USER" in installer, "unit 缺少 User= 指令"
+    assert "Group=$SERVICE_GROUP" in installer, "unit 缺少 Group= 指令"
+    # HOME 显式指向服务用户 home
+    assert "Environment=HOME=$SERVICE_HOME" in installer, "unit 应显式设置 HOME"
+    # 用户解析链：SUDO_USER 优先，logname 兜底
+    assert "SUDO_USER" in installer, "应优先从 SUDO_USER 还原真实用户"
+    assert "logname" in installer, "应以 logname 兜底还原真实用户"
+    # root 执行且无真实用户时必须显式 --force
+    assert '--force' in installer and 'FORCE=1' in installer, \
+        "root 安装必须提供显式 --force 确认"
+    # 数据目录以服务用户 home 为准（而非安装时 shell 的 $HOME）
+    assert '$SERVICE_HOME/.ai-agent' in installer, "数据目录应基于服务用户 home"
+
+
+def test_linux_install_service_hardening_directives():
+    """systemd unit 应包含沙箱加固字段（2026-08-24 安全修复）。"""
+    installer = read_project_file("scripts/install-linux.sh")
+    for directive in (
+        "NoNewPrivileges=true",
+        "ProtectSystem=full",
+        "PrivateTmp=true",
+        "ProtectHome=read-only",
+    ):
+        assert directive in installer, f"unit 缺少加固指令: {directive}"
+    # 对数据目录的可写白名单（其余路径在 ProtectHome=read-only 下只读）
+    assert "ReadWritePaths=$DATA_DIR" in installer, \
+        "unit 应为 ~/.ai-agent 数据目录声明 ReadWritePaths"
+
+
 def test_dockerfile_injects_version():
     """Dockerfile 应从 pyproject.toml 注入 .version"""
     dockerfile = read_project_file("Dockerfile")
@@ -509,11 +736,196 @@ def test_linux_updater_rejects_release_downgrades():
     assert 'LATEST_VERSION" != "$CURRENT_VERSION' in updater
 
 
+# ── updater 平台名契约 ────────────────────────────────────────
+# 原缺陷：auto-update.sh 把 uname -m 的 aarch64 直接拼进资产名
+# （linux-aarch64），而发布矩阵产物是 linux-arm64——ARM 用户永远匹配不到
+# 资产、永远收不到更新。修复后 uname 输出经 resolve_release_platform 统一映射。
+
+
+def test_linux_updater_maps_uname_arch_to_release_asset_names():
+    updater = read_project_file("scripts/auto-update.sh")
+    # 提取 resolve_release_platform 函数体，在受控环境执行并断言映射结果
+    lines = updater.splitlines()
+    start = next(i for i, ln in enumerate(lines) if ln.startswith("resolve_release_platform()"))
+    end = next(i for i, ln in enumerate(lines[start:], start) if ln == "}")
+    function_body = "\n".join(lines[start:end + 1])
+
+    script = (
+        "set -euo pipefail\n"
+        + function_body
+        + "\n"
+        + 'case "$(resolve_release_platform "$1" "$2")" in\n'
+    )
+
+    def platform_for(os_name: str, arch: str, tmp_path: Path) -> str:
+        runner = tmp_path / "resolve_platform.sh"
+        runner.write_text(script + f'"{os_name}-*") ;;\n', encoding="utf-8")
+        return ""
+
+    # 用 bash 直接求值（避免拼 case 语法，简单调用即可）
+    results = {}
+    for os_name, arch in [("Linux", "x86_64"), ("Linux", "aarch64")]:
+        proc = subprocess.run(
+            ["bash", "-c", f"{function_body}\nresolve_release_platform {os_name} {arch}"],
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+        results[f"{os_name}-{arch}"] = proc.stdout.strip()
+
+    # 发布矩阵（build-release.yml）产物命名：这两个平台必须有精确资产可下载
+    assert results["Linux-x86_64"] == "linux-x86_64"
+    assert results["Linux-aarch64"] == "linux-arm64"
+    # 不支持平台必须返回空（触发跳过而非错误资产名）
+    proc = subprocess.run(
+        ["bash", "-c", f"{function_body}\nresolve_release_platform Darwin arm64"],
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    assert proc.stdout.strip() == ""
+
+
+def test_updater_asset_patterns_cover_every_release_matrix_platform(tmp_path):
+    """模拟 release JSON：每个构建矩阵平台都能命中资产名（updater 契约）。"""
+    workflow = read_project_file(".github/workflows/build-release.yml")
+
+    # 从 build-release.yml 矩阵中提取全部 platform 值
+    matrix_platforms = re.findall(r"platform:\s*(\S+)", workflow)
+    assert set(matrix_platforms) == {"windows-x64", "linux-x86_64", "linux-arm64"}
+    version = "9.9.9"
+
+    # 模拟 GitHub Release JSON：为每个矩阵平台生成真实命名的 tar.gz 资产
+    assets = {
+        f"xiaoda-agent-{p}-v{version}.tar.gz": f"https://example.com/xiaoda-agent-{p}-v{version}.tar.gz"
+        for p in matrix_platforms
+    }
+    release_json = json.dumps({
+        "tag_name": f"v{version}",
+        "assets": [
+            {"name": name, "browser_download_url": url}
+            for name, url in assets.items()
+        ],
+    })
+
+    for platform in matrix_platforms:
+        pattern = f"xiaoda-agent-{platform}-v{version}.tar.gz"
+
+        if platform == "windows-x64":
+            # Windows updater: '*windows-x64*.tar.gz' 通配
+            matched = [n for n in assets if "windows-x64" in n and n.endswith(".tar.gz")]
+            assert matched, f"Windows updater pattern misses asset for {platform}"
+        else:
+            # Linux updater: PATTERN="xiaoda-agent-${PLATFORM}-v${LATEST_VERSION}.${EXT}"
+            # 再现其两段匹配逻辑：精确 pattern → 模糊 ${PLATFORM}
+            exact = [n for n in assets if n == pattern]
+            fuzzy = [n for n in assets if platform in n]
+            assert exact or fuzzy, f"Linux updater cannot match any asset for {platform}"
+            assert exact, f"exact pattern should match: {pattern}"
+
+        # release JSON 中确实存在该平台资产（防「匹配逻辑对但资产缺失」）
+        assert pattern in assets
+
+    # aarch64 主机经 resolve_release_platform 映射后命中 linux-arm64 资产
+    updater = read_project_file("scripts/auto-update.sh")
+    lines = updater.splitlines()
+    start = next(i for i, ln in enumerate(lines) if ln.startswith("resolve_release_platform()"))
+    end = next(i for i, ln in enumerate(lines[start:], start) if ln == "}")
+    function_body = "\n".join(lines[start:end + 1])
+    mapped = subprocess.run(
+        ["bash", "-c", f"{function_body}\nresolve_release_platform Linux aarch64"],
+        capture_output=True, text=True, check=True,
+    ).stdout.strip()
+    assert f"xiaoda-agent-{mapped}-v{version}.tar.gz" in assets
+
+
+def test_linux_updater_is_fail_closed_on_missing_checksum():
+    """SHA256 校验文件缺失/非法必须中止安装，不允许 fail-open。"""
+    updater = read_project_file("scripts/auto-update.sh")
+    # 旧 fail-open 文案不得回归
+    assert "跳过校验" not in updater
+    assert "Warning: 未找到 SHA256" not in updater
+    # fail-closed 分支存在且中止
+    assert "fail-closed" in updater
+    missing_idx = updater.index("未找到 SHA256 校验文件")
+    # 缺失分支后必须置失败标志并中止
+    after_missing = updater[missing_idx:]
+    assert "VERIFY_FAILED=1" in after_missing[:400]
+    # 校验文件格式校验（64 位十六进制）
+    assert "[0-9a-f]{64}" in updater or "64}" in updater
+
+
+def test_windows_updater_is_fail_closed_on_missing_checksum():
+    """PowerShell updater 同样 fail-closed：缺 .sha256 即 exit 1。"""
+    updater = read_project_file("scripts/auto-update.ps1")
+    # 旧 fail-open 文案不得回归
+    assert "skipping verification" not in updater
+    assert "not found, skipping" not in updater
+    assert "(fail-closed)" in updater
+    # 缺失校验文件的分支必须 exit 1
+    missing_idx = updater.index("SHA256 checksum file not available")
+    assert "exit 1" in updater[missing_idx:missing_idx + 300]
+    # 格式校验
+    assert "^[0-9a-f]{64}$" in updater
+
+
 def test_local_run_package_starts_with_installer_shebang():
     release_script = read_project_file("scripts/build-release.sh")
     marker_idx = release_script.index("__ARCHIVE__")
     installer_idx = release_script.index('cat "$SCRIPT_DIR/install-linux.sh"')
     assert installer_idx < marker_idx
+
+
+# ── .run 自解压 marker 锚定契约 ──────────────────────────────
+# 原缺陷：install-linux.sh 用非锚定 grep '__ARCHIVE__' | head -1 定位 payload
+# 起点，脚本头部注释里的 __ARCHIVE__ 字样被误当 marker，tail 输出纯文本，
+# tar 解压必坏。修复后：只匹配整行 ^__ARCHIVE__$ 且取最后一次命中。
+
+
+def installer_marker_extraction_lines() -> list:
+    installer = read_project_file("scripts/install-linux.sh").splitlines()
+    return [
+        line.strip()
+        for line in installer
+        if "grep" in line and "__ARCHIVE__" in line and "grep -q" not in line
+    ]
+
+
+def test_linux_run_extraction_anchors_archive_marker_to_full_line():
+    locator = next(
+        line
+        for line in installer_marker_extraction_lines()
+        if "archive_line=" in line
+    )
+    # 必须锚定整行（^__ARCHIVE__$），防止注释/字符串中的字样被误判
+    assert "'^__ARCHIVE__$'" in locator or '"^__ARCHIVE__$"' in locator
+
+
+def test_linux_run_extraction_takes_last_marker_occurrence():
+    locator = next(
+        line
+        for line in installer_marker_extraction_lines()
+        if "archive_line=" in line
+    )
+    # 打包端在脚本之后追加 marker + payload，真实 marker 是最后一个锚定命中
+    assert "tail -1" in locator
+    assert "head -1" not in locator
+
+
+def test_linux_run_extraction_rejects_unanchored_first_match():
+    """旧缺陷写法（非锚定 + head -1）不得回归"""
+    updater = read_project_file("scripts/install-linux.sh")
+    assert "grep -n '__ARCHIVE__' \"$0\" | head -1" not in updater
+    assert 'grep -n \'__ARCHIVE__\' "$0"' not in updater
+
+
+def test_ci_smoke_tests_run_self_extracting_installer():
+    workflow = read_project_file(".github/workflows/build-release.yml")
+    assert "Smoke test .run self-extracting installer" in workflow
+    # smoke 必须验证 payload 以 gzip magic 开头，且对 decoy 注释免疫
+    assert "1f8b" in workflow
+    assert "^__ARCHIVE__$" in workflow
+    assert "decoy comment mentioning __ARCHIVE__" in workflow
 
 
 def test_release_waits_for_test_job():

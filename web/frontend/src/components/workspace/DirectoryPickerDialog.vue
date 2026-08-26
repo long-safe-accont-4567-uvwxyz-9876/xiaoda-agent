@@ -58,14 +58,14 @@ function enterDir(d: string) {
     <div style="margin-bottom: 8px">
       <NInput v-model:value="manualInput" placeholder="手动输入绝对路径" :disabled="loading" />
     </div>
-    <div v-if="currentPath" style="margin-bottom: 8px; color: #888; font-size: 13px">
+    <div v-if="currentPath" style="margin-bottom: 8px; color: var(--moon-dim); font-size: 13px">
       当前：{{ currentPath }}
     </div>
-    <div style="max-height: 320px; overflow-y: auto; border: 1px solid #eee; border-radius: 4px">
+    <div style="max-height: 320px; overflow-y: auto; border: 1px solid var(--line); border-radius: 4px; background: rgba(7, 18, 13, 0.45)">
       <div v-if="parentPath" class="dir-item" @click="browse(parentPath!)"><SumeruIcon name="folder" :size="14" variant="duo" tone="view" interactive /> ..（上级）</div>
       <div v-for="d in dirs" :key="d" class="dir-item" @click="enterDir(d)"><SumeruIcon name="folder" :size="14" variant="duo" tone="view" interactive /> {{ d }}</div>
-      <div v-if="!dirs.length && currentPath && !loading" style="padding: 12px; color: #999">无子目录</div>
-      <div v-if="loading" style="padding: 12px; color: #999">加载中...</div>
+      <div v-if="!dirs.length && currentPath && !loading" style="padding: 12px; color: var(--moon-faint)">无子目录</div>
+      <div v-if="loading" style="padding: 12px; color: var(--moon-faint)">加载中...</div>
     </div>
     <template #footer>
       <NButton @click="emit('cancel')">取消</NButton>
@@ -75,6 +75,6 @@ function enterDir(d: string) {
 </template>
 
 <style scoped>
-.dir-item { padding: 6px 12px; cursor: pointer; }
-.dir-item:hover { background: #f5f5f5; }
+.dir-item { padding: 6px 12px; cursor: pointer; color: var(--moon-soft); }
+.dir-item:hover { background: rgba(145, 232, 102, 0.08); }
 </style>

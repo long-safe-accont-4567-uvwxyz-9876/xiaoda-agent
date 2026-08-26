@@ -670,7 +670,7 @@ async function handleSave() {
 .disclaimer-scroll {
   max-height: 180px;
   overflow-y: auto;
-  background: rgba(0, 0, 0, 0.25);
+  background: rgba(10, 20, 14, 0.45);
   border-radius: 6px;
   padding: 10px 12px;
   margin-bottom: 8px;

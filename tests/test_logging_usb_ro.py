@@ -14,7 +14,6 @@ crash 证据 (均已早于 L6 修复, 现为回归锁定):
 """
 import sys
 from pathlib import Path
-from unittest.mock import patch
 
 import pytest
 

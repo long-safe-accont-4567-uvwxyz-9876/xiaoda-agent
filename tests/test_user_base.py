@@ -1,7 +1,7 @@
 """UserBase 基类测试。"""
 import pytest
-from agent_core.user_base import UserBase, AGENT_DISPLAY, STATUS_ICON
-from core.event_bus import AgentEvent, AgentEventType
+
+from agent_core.user_base import AGENT_DISPLAY, STATUS_ICON, UserBase
 
 
 def test_agent_display_contains_all_agents():

@@ -9,16 +9,15 @@ from __future__ import annotations
 
 import os
 import time
-import uuid
 from datetime import datetime
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request
 from loguru import logger
 from pydantic import BaseModel
 
-from security.permission_manager import get_permission_manager, AuditEntry
-from web.schemas import Envelope
+from security.permission_manager import get_permission_manager
 from web.routers.auth import get_current_user
+from web.schemas import Envelope
 
 router = APIRouter(prefix="/workspace", tags=["workspace"], dependencies=[Depends(get_current_user)])
 
@@ -126,8 +125,11 @@ async def confirm_workspace(body: ConfirmBody):
 
 
 @router.delete("")
-async def revoke_workspace():
+async def revoke_workspace(request: Request):
     """撤销工作目录授权"""
+    # 删除类接口统一要求确认头（CLAUDE.md 契约）
+    if request.headers.get("X-Confirm") != "yes":
+        raise HTTPException(400, "缺少 X-Confirm: yes 确认头")
     pm = get_permission_manager()
     pm.clear_cwd()
     _persist_workspace("", "")
@@ -172,8 +174,11 @@ async def add_to_whitelist(body: WhitelistBody):
 
 
 @router.delete("/whitelist/{command}")
-async def remove_from_whitelist(command: str):
+async def remove_from_whitelist(command: str, request: Request):
     """从白名单删除命令"""
+    # 删除类接口统一要求确认头（CLAUDE.md 契约）
+    if request.headers.get("X-Confirm") != "yes":
+        raise HTTPException(400, "缺少 X-Confirm: yes 确认头")
     pm = get_permission_manager()
     pm.remove_from_whitelist(command)
     _persist_whitelist(pm.get_whitelist())

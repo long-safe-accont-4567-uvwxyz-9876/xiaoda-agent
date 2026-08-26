@@ -3,10 +3,21 @@
 自 db/database.py 拆分（上帝文件 Phase 2）：函数体逐字节搬移，仅缩进调整。
 _create_tables 编排入口一并搬入（依赖 LegacyMigrationMixin._run_migrations，
 由 DatabaseManager 继承组合）。
+
+┌─ Schema 真相源说明 ──────────────────────────────────────────────┐
+│ 本文件只覆盖核心记忆/会话表。以下模块各自维护额外 DDL：           │
+│   db/legacy_migrations.py        — kg_v2/memory_v2 等迁移期表(21) │
+│   db/db_memory_reconciliation.py — 对账与 outbox 表(6)            │
+│   db/db_workflow.py              — workflow 运行时表(7)           │
+│   core/belief_router.py          — agent_beliefs(路由器自建)      │
+│ 全新库初始化必须让以上 init 与本文件一起执行，否则相关功能 500。  │
+└──────────────────────────────────────────────────────────────────┘
 """
 from __future__ import annotations
 
 from loguru import logger
+
+from .db_memory_reconciliation import create_schema as create_reconciliation_schema
 
 
 class DDLMixin:
@@ -51,7 +62,9 @@ class DDLMixin:
                 user_message TEXT DEFAULT '',
                 assistant_reply TEXT DEFAULT '',
                 emotion_label TEXT DEFAULT '',
-                model_used TEXT DEFAULT ''
+                model_used TEXT DEFAULT '',
+                session_id TEXT DEFAULT '',
+                request_context_json TEXT DEFAULT '{}'
             )
         """)
 
@@ -65,6 +78,26 @@ class DDLMixin:
                 detail TEXT DEFAULT ''
             )
         """)
+
+        # instincts（本能规则；insight 路由直用 raw SQL，新库缺失会 500）
+        await self._conn.execute("""
+            CREATE TABLE IF NOT EXISTS instincts (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                content TEXT NOT NULL,
+                confidence REAL NOT NULL DEFAULT 0.5,
+                source_session TEXT NOT NULL DEFAULT '',
+                status TEXT NOT NULL DEFAULT 'active',
+                created_at REAL NOT NULL,
+                last_used_at REAL NOT NULL,
+                use_count INTEGER NOT NULL DEFAULT 0
+            )
+        """)
+        await self._conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_instincts_status ON instincts(status)")
+        await self._conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_instincts_confidence ON instincts(confidence)")
+        await self._conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_instincts_last_used ON instincts(last_used_at)")
 
         # episodic_memories
         await self._conn.execute("""
@@ -90,9 +123,16 @@ class DDLMixin:
                 user_id TEXT DEFAULT 'default',
                 agent_id TEXT DEFAULT 'xiaoda',
                 is_raw INTEGER DEFAULT 0,
-                updated_at REAL DEFAULT 0
+                updated_at REAL DEFAULT 0,
+                memory_type TEXT DEFAULT 'event',
+                classification_status TEXT DEFAULT 'pending',
+                classification_version INTEGER DEFAULT 0,
+                classified_at REAL DEFAULT 0,
+                status TEXT NOT NULL DEFAULT 'active',
+                superseded_by INTEGER
             )
         """)
+        await create_reconciliation_schema(self._conn)
 
         # 触发器：summary 变更时自动维护 updated_at
         # SQLite 默认 recursive_triggers=OFF，AFTER UPDATE 内对同表非触发列的
@@ -285,6 +325,9 @@ class DDLMixin:
         await self._conn.execute("""CREATE INDEX IF NOT EXISTS idx_session_entries_created ON session_entries(created_at)""")
         await self._conn.execute("""CREATE INDEX IF NOT EXISTS idx_tool_error_rules_tool ON tool_error_rules(tool_name)""")
         await self._conn.execute("""CREATE INDEX IF NOT EXISTS idx_episodic_scope ON episodic_memories(user_id, agent_id, is_raw, timestamp DESC)""")
+        await self._conn.execute("""CREATE INDEX IF NOT EXISTS idx_episodic_memory_type ON episodic_memories(memory_type)""")
+        await self._conn.execute("""CREATE INDEX IF NOT EXISTS idx_episodic_classification_pending ON episodic_memories(user_id, agent_id, classification_status, id)""")
+        await self._conn.execute("""CREATE INDEX IF NOT EXISTS idx_episodic_active_scope ON episodic_memories(user_id, agent_id, status, is_raw, id)""")
         await self._conn.execute("""CREATE INDEX IF NOT EXISTS idx_memory_entities_name ON memory_entities(name)""")
         await self._conn.execute("""CREATE INDEX IF NOT EXISTS idx_memory_entities_type ON memory_entities(entity_type)""")
         await self._conn.execute("""CREATE INDEX IF NOT EXISTS idx_eml_entity ON entity_memory_links(entity_id)""")

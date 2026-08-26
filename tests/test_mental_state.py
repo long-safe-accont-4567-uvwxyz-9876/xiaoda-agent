@@ -15,17 +15,17 @@
 import json
 import time
 
+import pytest
 
 from core.mental_state import (
-    MentalState,
-    MentalStateManager,
     LongTermIdentity,
     MediumTermState,
+    MentalState,
+    MentalStateManager,
     ShortTermEmotion,
     get_mental_state_manager,
     reset_mental_state_manager,
 )
-
 
 # ── 初始化 ──────────────────────────────────────────────
 
@@ -240,6 +240,7 @@ def test_dream_consolidation(tmp_path):
 def test_dream_consolidation_via_dream_consolidator(tmp_path, monkeypatch):
     """DreamConsolidator.consolidate() 联动触发 mental state 清理 7 天前数据"""
     import asyncio
+
     from core.dream_consolidation import DreamConsolidator, Memory
     from core.mental_state import get_mental_state_manager, reset_mental_state_manager
 
@@ -264,8 +265,9 @@ def test_dream_consolidation_via_dream_consolidator(tmp_path, monkeypatch):
 def test_dream_consolidator_no_side_effect_when_uninitialized():
     """DreamConsolidator.consolidate() 在 mental state 未初始化时不创建副作用"""
     import asyncio
+
     from core.dream_consolidation import DreamConsolidator, Memory
-    from core.mental_state import reset_mental_state_manager, get_mental_state_manager_if_exists
+    from core.mental_state import get_mental_state_manager_if_exists, reset_mental_state_manager
 
     reset_mental_state_manager()
     assert get_mental_state_manager_if_exists() is None
@@ -342,3 +344,28 @@ def test_singleton(tmp_path, monkeypatch):
     m2 = get_mental_state_manager()
     assert m1 is m2
     reset_mental_state_manager()
+
+
+# ── 情绪语气引导（2026-08 review 二轮 Fix A：枚举归一替代手抄集合）──
+
+
+class TestEmotionGuidance:
+    @pytest.mark.parametrize("user_emotion,expected", [
+        # 规范标签
+        ("焦虑", "安抚"), ("悲伤", "安抚"), ("愤怒", "安抚"),
+        ("恐惧", "安抚"), ("困惑", "安抚"),
+        ("喜悦", "轻快"), ("兴奋", "轻快"), ("喜爱", "轻快"),
+        ("调皮", "轻快"), ("感动", "轻快"),
+        ("平静", "温柔"), ("好奇", "温柔"), ("问候", "温柔"),
+        # 关键词变体（此前手抄集合覆盖不到的）
+        ("烦躁", "安抚"), ("委屈", "安抚"), ("迷茫", "安抚"), ("孤独", "安抚"),
+        ("开心", "轻快"), ("暖心", "轻快"),
+        # emotion_llm 自由文本兜底
+        ("", "温柔"), ("完全未知的情绪", "温柔"),
+    ])
+    def test_guidance_classification(self, user_emotion, expected):
+        assert MentalStateManager._emotion_guidance(user_emotion) == expected
+
+    def test_guidance_soothing_beats_default_for_canonical_confused(self):
+        """回归锚点：规范标签"困惑"曾因不在手抄集合而错落"温柔\""""
+        assert MentalStateManager._emotion_guidance("困惑") == "安抚"

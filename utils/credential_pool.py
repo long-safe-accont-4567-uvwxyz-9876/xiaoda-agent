@@ -3,17 +3,18 @@
 借鉴 Hermes Agent 的凭证池机制，替代 ModelRouter 中简单的重试/降级逻辑
 """
 
-import asyncio
 import os
-import time
 import threading
-from enum import Enum
+import time
 from dataclasses import dataclass
+from enum import Enum
+
 from loguru import logger
 
-from .error_classifier import ClassifiedError, FailoverReason
-from utils.common import mask_api_key as _mask_api_key
 from config import get_base_url_for_provider
+from utils.common import mask_api_key as _mask_api_key
+
+from .error_classifier import ClassifiedError, FailoverReason
 
 
 class CredentialState(Enum):
@@ -117,15 +118,23 @@ class CredentialPool:
             logger.error("credential_pool.all_dead", provider=provider)
             return None
 
-    async def report_error(self, provider: str, error: ClassifiedError) -> None:
-        """报告错误，更新凭证状态"""
+    async def report_error(self, provider: str, error: ClassifiedError,
+                           api_key: str = "") -> None:
+        """报告错误，更新凭证状态。
+
+        api_key：发起失败请求的客户端实际持有的 Key。多凭证并发在途时，
+        "最近使用"启发式可能把失败记到别的凭证头上（误标 EXHAUSTED/DEAD
+        触发错误轮换），调用方应尽量传入以精确归因；缺省时退回旧启发式。
+        """
         with self._sync_lock:
             creds = self._pool.get(provider, [])
             if not creds:
                 return
 
-            # 找到最近使用的凭证（use_count 最大的 ok/exhausted 凭证）
-            target = self._find_active_credential(provider)
+            # 优先按实际出错 Key 精确归因，找不到再退回"最近使用的 ok/exhausted 凭证"
+            target = self._find_by_key(provider, api_key) if api_key else None
+            if target is None:
+                target = self._find_active_credential(provider)
             if target is None:
                 return
 
@@ -173,12 +182,14 @@ class CredentialPool:
                              provider=provider,
                              reason=error.reason.value)
 
-    async def report_success(self, provider: str) -> None:
-        """报告成功"""
+    async def report_success(self, provider: str, api_key: str = "") -> None:
+        """报告成功（api_key 语义同 report_error：精确归因优先）。"""
         with self._sync_lock:
             _creds = self._pool.get(provider, [])
-            # 找到最近使用的凭证，确认其状态为 ok
-            target = self._find_active_credential(provider)
+            # 优先按实际成功 Key 精确归因，找不到退回"最近使用的凭证"
+            target = self._find_by_key(provider, api_key) if api_key else None
+            if target is None:
+                target = self._find_active_credential(provider)
             if target and target.state == CredentialState.EXHAUSTED:
                 target.state = CredentialState.OK
                 target.exhausted_at = 0.0
@@ -212,6 +223,15 @@ class CredentialPool:
                         logger.info("credential_pool.exhausted_recovered",
                                     provider=provider,
                                     key_hash=_mask_api_key(cred.api_key))
+
+    def _find_by_key(self, provider: str, api_key: str) -> Credential | None:
+        """按 Key 精确查找凭证（归因锚点：出错/成功的客户端实际持有的 Key）。"""
+        if not api_key:
+            return None
+        for cred in self._pool.get(provider, []):
+            if cred.api_key == api_key:
+                return cred
+        return None
 
     def _find_active_credential(self, provider: str) -> Credential | None:
         """找到最近使用的活跃凭证（ok 或 exhausted 状态）

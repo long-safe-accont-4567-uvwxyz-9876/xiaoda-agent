@@ -20,22 +20,14 @@
 """
 from __future__ import annotations
 
-import asyncio
 import time
-from dataclasses import dataclass, field, asdict
+from dataclasses import asdict, dataclass, field
 from typing import Any
 
 from loguru import logger
 
-_pending_tasks: set[asyncio.Task] = set()
-
-
-def _fire_and_forget(coro) -> asyncio.Task:
-    """安全创建后台 Task，持有引用防止 GC 回收。"""
-    task = asyncio.create_task(coro)
-    _pending_tasks.add(task)
-    task.add_done_callback(_pending_tasks.discard)
-    return task
+# 实证无环（behavioral_health 同款）：introspection ← background_tasks 单向依赖
+from core.background_tasks import _spawn
 
 # J-Space Hook: 行为信号流采集 (非阻塞, 失败不影响主流程)
 try:
@@ -155,13 +147,9 @@ class AgentIntrospector:
         # J-Space Hook: emit cognitive_load signal (non-blocking)
         if _signal_stream is not None:
             try:
-                try:
-                    asyncio.get_running_loop()
-                except RuntimeError:
-                    logger.debug("introspection.no_event_loop_skip_async_close", exc_info=True)
-                else:
-                    _fire_and_forget(_signal_stream.emit(
-                        "cognitive_load", state.cognitive_load, "introspection"))
+                # _spawn 自带无事件循环降级与异常日志，无需额外 loop 探测
+                _spawn(_signal_stream.emit(
+                    "cognitive_load", state.cognitive_load, "introspection"))
             except Exception as e:
                 logger.debug("introspection.cognitive_load_signal_failed", error=str(e))
 
