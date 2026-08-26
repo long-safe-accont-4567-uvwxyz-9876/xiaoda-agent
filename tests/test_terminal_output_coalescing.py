@@ -75,8 +75,14 @@ async def test_oversized_chunk_flushes_immediately(clean_buffers, fake_session):
     _register_fake_session()
     big = "y" * (hub._TERM_FLUSH_MAX_CHARS + 1)
     hub._queue_term_output("t1", "c1", big)
-    await asyncio.sleep(0)  # 让 ensure_future 的冲刷任务跑起来
-    frames = [e for e in fake_session if e["type"] == "terminal_output"]
+    # 冲刷任务经 _spawn（带超时包装）需要两次 loop 迭代送达；轮询至帧到达，
+    # 上限远小于 16ms 合帧窗——若退化成"等定时器才发"此处必超时
+    frames: list[dict] = []
+    for _ in range(30):
+        await asyncio.sleep(0.005)
+        frames = [e for e in fake_session if e["type"] == "terminal_output"]
+        if frames:
+            break
     assert len(frames) == 1 and len(frames[0]["data"]) >= hub._TERM_FLUSH_MAX_CHARS
 
 
@@ -134,6 +140,9 @@ async def test_real_pty_session_end_to_end(clean_buffers):
         finally:
             hub.manager.send_to = orig_send
             hub._cleanup_pty("real")
+            # cleanup 会 spawn 冲刷/exit 帧任务；让 loop 至少迭代一次把它们
+            # 跑完，否则任务 pending 到 loop 关闭，泄漏进全局 _bg_tasks
+            await asyncio.sleep(0.05)
     finally:
         try:
             os.kill(child_pid, 9)

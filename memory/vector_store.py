@@ -69,6 +69,7 @@ import httpx as _httpx_embed
 
 from config_constants import env_flag
 from utils.http_pool import get_shared_client as _get_embed_shared_client
+from utils.thread_pools import to_thread_hot
 
 _EMBED_HTTP_TIMEOUT = _httpx_embed.Timeout(connect=15.0, read=5.0, write=10.0, pool=10.0)
 
@@ -557,7 +558,7 @@ class VectorStore:
                 if resolved_dimensions > 0:
                     self._dimensions = resolved_dimensions
 
-        self._vec_conn, is_fat = await asyncio.to_thread(self._init_db_sync)
+        self._vec_conn, is_fat = await to_thread_hot(self._init_db_sync)
 
         self._initialized = True
         pragma_desc = "DELETE+cache" if is_fat else "WAL+cache+mmap"
@@ -574,7 +575,7 @@ class VectorStore:
 
 
             try:
-                await asyncio.to_thread(self._load_brute_sync)
+                await to_thread_hot(self._load_brute_sync)
                 if self._brute.ready:
                     logger.info("vector_store.brute_ready", base_dir=self._brute_base_dir)
                 else:
@@ -662,7 +663,7 @@ class VectorStore:
                 cmd.extend(["--model", model, "--base-url", base_url, "--api-key", api_key])
 
             logger.info("vector_store.auto_rebuild_running cmd={}", " ".join(cmd[:2]))
-            result = await asyncio.to_thread(
+            result = await to_thread_hot(
                 subprocess.run, cmd,
                 capture_output=True, text=True, timeout=3600,
             )
@@ -695,7 +696,7 @@ class VectorStore:
                 shutil.rmtree(brute_dir, ignore_errors=True)
             # 重新初始化向量库连接（新维度）
             self._closed = False
-            self._vec_conn, is_fat = await asyncio.to_thread(self._init_db_sync)
+            self._vec_conn, is_fat = await to_thread_hot(self._init_db_sync)
             # 重新加载 numpy 暴力索引
             if self._brute_enabled:
                 from memory.numpy_index import NumpyBruteIndex
@@ -703,7 +704,7 @@ class VectorStore:
                 self._brute_base_dir = str(base_dir)
                 self._brute = NumpyBruteIndex(dim=self._dimensions, base_dir=base_dir)
                 try:
-                    await asyncio.to_thread(self._load_brute_sync)
+                    await to_thread_hot(self._load_brute_sync)
                     if self._brute.ready:
                         logger.info("vector_store.brute_ready_after_rebuild")
                     else:
@@ -756,10 +757,11 @@ class VectorStore:
                 conn.execute("PRAGMA cache_size=-20000")
                 if not is_fat:
                     conn.execute("PRAGMA mmap_size=67108864")
-                    # WAL checkpoint 阈值 1000→10000 页（4MB→40MB）：
-                    # 与 database.py 主连接一致，避免 agent_vec.db 每 4MB
-                    # checkpoint 写回外置盘（U 盘）造成 vec 检索/写入偶发阻塞。
-                    conn.execute("PRAGMA wal_autocheckpoint=10000")
+                    # WAL checkpoint 阈值统一 2000 页（8MB）：U 盘上大阈值
+                    # 造成周期性几十 MB 回写尖峰，撞上用户请求即整批卡顿。
+                    # （2026-08-27 复盘：agent.db WAL 因 10000 阈值 + 批量剪枝
+                    # 一度积到 2.3GB 且被常驻读连接挡住无法 TRUNCATE。）
+                    conn.execute("PRAGMA wal_autocheckpoint=2000")
 
                 # 维度策略：
                 # - 显式配置（dimensions > 0）时直接使用
@@ -879,7 +881,7 @@ class VectorStore:
                     self._vec_conn.close()
                     self._vec_conn = None
 
-        await asyncio.to_thread(_do_close)
+        await to_thread_hot(_do_close)
         # 本地推理 Provider：释放 ONNX session 与 tokenizer
         if self._local_provider is not None:
             self._local_provider.close()
@@ -1135,7 +1137,7 @@ class VectorStore:
                     logger.warning("vector_store.upsert_failed", row_id=row_id, error=str(e))
                     return False
 
-        return await asyncio.to_thread(_do_upsert)
+        return await to_thread_hot(_do_upsert)
 
     async def batch_upsert_children(self, items: list[tuple[int, str]]) -> bool:
         """批量子chunk向量写入。items = [(child_id, text), ...]"""
@@ -1187,7 +1189,7 @@ class VectorStore:
                     logger.warning("vector_store.batch_upsert_children_failed", error=str(e))
                     return False
 
-        return await asyncio.to_thread(_do_batch)
+        return await to_thread_hot(_do_batch)
 
     async def delete(self, row_id: int) -> bool:
         """删除指定 rowid 的向量记录"""
@@ -1211,7 +1213,7 @@ class VectorStore:
                     return False
 
         try:
-            return await asyncio.to_thread(_do_delete)
+            return await to_thread_hot(_do_delete)
         except Exception as e:
             logger.warning("vector_store.delete_failed", row_id=row_id, error=str(e))
             return False
@@ -1354,7 +1356,7 @@ class VectorStore:
                 return results[:top_k]
 
         try:
-            return await asyncio.to_thread(_do_search)
+            return await to_thread_hot(_do_search)
         except Exception as e:
             logger.warning("vector_store.search_failed", error=str(e))
             return []
@@ -1401,7 +1403,7 @@ class VectorStore:
                 return [{"id": r[0], "distance": r[1]} for r in rows]
 
         try:
-            return await asyncio.to_thread(_do_search)
+            return await to_thread_hot(_do_search)
         except Exception as e:
             logger.warning("vector_store.search_child_failed", error=str(e))
             return []
@@ -1485,7 +1487,7 @@ class VectorStore:
                     results.sort(key=lambda r: (r[1], r[0]))
                     return [{"rowid": r, "distance": d} for r, d in results[:k]]
 
-            return await asyncio.to_thread(_do_hyde_search)
+            return await to_thread_hot(_do_hyde_search)
         except Exception as e:
             logger.warning("vector_store.search_with_hyde_failed", error=str(e))
             tuples = await self.search(query, top_k=k, candidate_ids=cand_int)
@@ -1530,7 +1532,7 @@ class VectorStore:
                     logger.warning("vector_store.upsert_kg_entity_failed", row_id=row_id, error=str(e))
                     return False
 
-        return await asyncio.to_thread(_do_upsert)
+        return await to_thread_hot(_do_upsert)
 
     async def upsert_kg_relation(self, row_id: int, text: str) -> bool:
         """写入或更新 KG 关系向量（先删后插）。"""
@@ -1571,7 +1573,7 @@ class VectorStore:
                     logger.warning("vector_store.upsert_kg_relation_failed", row_id=row_id, error=str(e))
                     return False
 
-        return await asyncio.to_thread(_do_upsert)
+        return await to_thread_hot(_do_upsert)
 
     async def search_kg_entities(
         self,
@@ -1617,7 +1619,7 @@ class VectorStore:
                 return results[:top_k]
 
         try:
-            return await asyncio.to_thread(_do_search)
+            return await to_thread_hot(_do_search)
         except Exception as e:
             logger.warning("vector_store.search_kg_entities_failed", error=str(e))
             return []
@@ -1676,7 +1678,7 @@ class VectorStore:
                 return results[:top_k]
 
         try:
-            return await asyncio.to_thread(_do_search)
+            return await to_thread_hot(_do_search)
         except Exception as e:
             logger.warning("vector_store.search_kg_relations_failed", error=str(e))
             return []

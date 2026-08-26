@@ -39,6 +39,8 @@ from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.requests import Request
 from starlette.responses import JSONResponse
 
+from utils.thread_pools import to_thread_heavy
+
 # ── 写操作 HTTP 方法 (应用更严的写端点限制) ──
 _WRITE_METHODS = frozenset({"POST", "PUT", "DELETE", "PATCH"})
 
@@ -558,8 +560,7 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
             now = time.time()
             if now - self._last_save >= _SAVE_INTERVAL:
                 self._last_save = now  # 立即重置, 防止重入
-                loop = asyncio.get_running_loop()
-                loop.run_in_executor(None, self._save_states)
+                to_thread_heavy(self._save_states)  # fire-and-forget，重活池
                 self._evict_inactive_buckets()
 
         return await call_next(request)

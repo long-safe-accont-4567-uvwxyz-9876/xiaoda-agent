@@ -1,7 +1,6 @@
 """市场安装器 — 下载、验证、安装/卸载插件与技能"""
 from __future__ import annotations
 
-import asyncio
 import hashlib
 import json
 import os
@@ -14,6 +13,10 @@ from pathlib import Path
 from typing import Any
 
 from loguru import logger
+
+from utils.thread_pools import to_thread_heavy
+
+_DOWNLOAD_FLUSH_BYTES = 1 << 20  # 下载写盘攒批阈值（1MB）
 
 
 def _rmtree_with_retry(path, max_retries: int = 3) -> None:
@@ -549,9 +552,16 @@ class MarketInstaller:
             async with client.stream("GET", url) as resp:
                 resp.raise_for_status()
                 with open(dest_path, "wb") as f:
+                    buf = bytearray()
                     async for chunk in resp.aiter_bytes(chunk_size=8192):
-                        # 卸载到线程池，避免同步写阻塞事件循环
-                        await asyncio.to_thread(f.write, chunk)
+                        buf.extend(chunk)
+                        if len(buf) >= _DOWNLOAD_FLUSH_BYTES:
+                            # 攒 1MB 落盘一次：不阻塞 loop，也不再每 8KB
+                            # 压一次线程池（heavy-io 单 worker 即可跟上带宽）
+                            await to_thread_heavy(f.write, bytes(buf))
+                            buf.clear()
+                    if buf:
+                        await to_thread_heavy(f.write, bytes(buf))
 
         logger.debug("market.downloaded", url=url, size=dest_path.stat().st_size)
         return dest_path

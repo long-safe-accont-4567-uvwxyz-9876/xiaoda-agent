@@ -11,6 +11,7 @@ from typing import ClassVar
 from loguru import logger
 
 from utils.atomic_write import atomic_json_write
+from utils.thread_pools import HEAVY_POOL
 
 # J-Space Hook: 增强型路由 (非阻塞, 失败不影响主流程)
 try:
@@ -82,6 +83,10 @@ class BeliefRouter:
         self._beliefs: dict[str, AgentBelief] = {name: AgentBelief() for name in self.VALID_AGENTS}
         self._lock: threading.Lock = threading.Lock()
         self._db_path = db_path
+        # 保存合并状态：_save_in_flight=有保存任务在线程池中；
+        # _save_dirty=等待期间又有新更新需要补写
+        self._save_in_flight: bool = False
+        self._save_dirty: bool = False
         if db_path:
             self._load_from_db()
 
@@ -192,7 +197,13 @@ class BeliefRouter:
             logger.warning("belief_router.json_load_failed", error=str(e))
 
     async def _save_to_db(self) -> None:
-        """Save beliefs to database (non-blocking via thread pool)."""
+        """Save beliefs to database + JSON backup (all IO off the event loop).
+
+        合并写：在飞保存未完成时只置脏标记并立即返回，由在飞任务收尾时
+        补写最新快照——委托回报风暴下不再每个事件各开一个 sqlite 连接
+        全表重写。代价是极端并发下持久化最多延迟一轮（Thompson Sampling
+        为启发式路由统计，短暂滞后可接受）。
+        """
         # 快照独立于保存 try 块：赋值失败时提前返回，
         # 避免函数尾部 _save_to_json 引用未绑定变量
         try:
@@ -201,6 +212,13 @@ class BeliefRouter:
         except Exception as e:
             logger.warning("belief_router.snapshot_failed", error=str(e))
             return
+
+        # 与在飞保存合并：置脏即返，收尾兜底
+        if self._save_in_flight:
+            self._save_dirty = True
+            return
+        self._save_in_flight = True
+
         try:
             db_path = self._db_path
 
@@ -226,19 +244,29 @@ class BeliefRouter:
                 finally:
                     if conn:
                         conn.close()
+                # JSON 备份与 DB 同线程落盘——此前在协程内同步写，
+                # 位于每次 agent 结果的必经路径上
+                self._save_to_json(beliefs_snapshot)
 
-            # 使用线程池避免阻塞事件循环，await完成确保持久化
+            # 可等重活池避免阻塞事件循环；await 完成保证本轮快照已持久化。
+            # 不占默认执行器：委托风暴下这里是每事件一次的调用点，
+            # 会与消息路径的记忆检索争抢 worker（见 utils/thread_pools.py）。
             try:
                 loop = asyncio.get_running_loop()
-                await loop.run_in_executor(None, _do_save)
+                await loop.run_in_executor(HEAVY_POOL, _do_save)
             except RuntimeError:
                 # 没有运行中的事件循环，直接执行
                 _do_save()
         except Exception as e:
             logger.warning("belief_router.save_failed", error=str(e))
+        finally:
+            self._save_in_flight = False
 
-        # 原子写入 JSON 状态文件 (复用同一快照，避免竞态)
-        self._save_to_json(beliefs_snapshot)
+        # 等待期间又来过更新 → 用最新状态再落一轮（本轮已在无锁区，
+        # 极端下可能再次与在飞合并，最终一致即可）
+        if self._save_dirty:
+            self._save_dirty = False
+            await self._save_to_db()
 
     def _save_to_json(self, beliefs_snapshot: dict | None = None) -> None:
         """原子写入信念状态到 JSON 文件"""

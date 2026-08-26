@@ -221,7 +221,8 @@ class PermanentMemoryManager:
 
         try:
             loop = asyncio.get_running_loop()
-            loop.run_in_executor(None, _write)
+            from utils.thread_pools import HEAVY_POOL
+            loop.run_in_executor(HEAVY_POOL, _write)  # 可等重活池
         except RuntimeError:
             # No event loop, run synchronously
             _write()

@@ -171,8 +171,27 @@ class PluginContext:
 
     # ── Background Tasks ──
     def spawn_task(self, name: str, coro: Any) -> None:
-        """启动后台任务"""
-        task = asyncio.create_task(coro)
+        """启动后台任务（同名防覆盖：旧任务未结束则先取消并等待其退出）。
+
+        旧行为直接覆盖 dict 引用，旧任务仍在跑且永远失去取消入口——
+        插件热更新重连场景会造成同一协程双实例并行（副作用重复）。
+        """
+        old = self._background_tasks.get(name)
+        if old is not None and not old.done():
+            old.cancel()
+            logger.warning("plugin.task_superseded", plugin=self._plugin_id,
+                           task=name)
+        task = asyncio.create_task(coro, name=f"plugin:{self._plugin_id}:{name}")
+
+        def _done(done: asyncio.Task) -> None:
+            # 仅在"自己仍是登记实例"时清位，避免误删后来者
+            if self._background_tasks.get(name) is done:
+                self._background_tasks.pop(name, None)
+            if not done.cancelled() and done.exception() is not None:
+                logger.warning("plugin.task_failed", plugin=self._plugin_id,
+                               task=name, error=str(done.exception())[:200])
+
+        task.add_done_callback(_done)
         self._background_tasks[name] = task
         logger.info("plugin.task_spawned", plugin=self._plugin_id, task=name)
 

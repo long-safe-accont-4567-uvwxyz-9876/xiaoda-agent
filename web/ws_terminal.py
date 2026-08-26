@@ -273,9 +273,10 @@ def _queue_term_output(term_sid: str, conn_id: str, text: str) -> None:
         if not entry or not entry["buf"]:
             return
         sid_ = entry["conn_id"]
-        asyncio.ensure_future(manager.send_to(sid_, {
+        from core.background_tasks import _spawn
+        _spawn(manager.send_to(sid_, {
             "type": "terminal_output", "term_sid": term_sid,
-            "data": entry["buf"]}))
+            "data": entry["buf"]}), timeout=10)
 
     with _pty_sessions_lock:
         entry = _term_out_buf.get(term_sid)
@@ -386,13 +387,14 @@ def _reap_unix_child(pid: int) -> int:
 
 def _notify_terminal_exit(loop: asyncio.AbstractEventLoop, conn_id: str,
                           term_sid: str, rc: int) -> None:
+    from core.background_tasks import _spawn
     from web.ws_hub import manager  # 延迟导入:避免 server→ws_hub→本模块 模块级环
     try:
         loop.call_soon_threadsafe(
-            lambda: asyncio.ensure_future(
+            lambda: _spawn(
                 manager.send_to(conn_id, {
                     "type": "terminal_exit", "term_sid": term_sid, "returncode": rc
-                }), loop=loop))
+                }), timeout=10))
     except RuntimeError:
         logger.debug("ws.terminal_exit_send_failed term_sid={}", term_sid)
 
@@ -408,9 +410,10 @@ def _cleanup_pty(term_sid: str) -> None:
     if entry and entry["buf"]:
         if entry.get("timer") is not None:
             entry["timer"].cancel()
-        asyncio.ensure_future(manager.send_to(entry["conn_id"], {
+        from core.background_tasks import _spawn
+        _spawn(manager.send_to(entry["conn_id"], {
             "type": "terminal_output", "term_sid": term_sid,
-            "data": entry["buf"]}))
+            "data": entry["buf"]}), timeout=10)
     with _pty_sessions_lock:
         session = _pty_sessions.pop(term_sid, None)
     if not session:

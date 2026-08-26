@@ -45,6 +45,7 @@ from utils.common import safe_float as _safe_float
 from utils.common import safe_int as _safe_int
 from utils.llm_cleanup import strip_qq_face_tags
 from utils.logging_config import setup_logging
+from utils.thread_pools import to_thread_heavy
 
 setup_logging()
 
@@ -1307,7 +1308,7 @@ class AIQQBot(ChannelAdapterBase, botpy.Client):
                 with open(path_to_upload, "rb") as f:
                     return base64.b64encode(f.read()).decode()
 
-            file_data = await asyncio.to_thread(_read)
+            file_data = await to_thread_heavy(_read)
             if group:
                 payload = {
                     "group_openid": target,
@@ -2086,7 +2087,7 @@ class AIQQBot(ChannelAdapterBase, botpy.Client):
                 pilk.encode(str(pcm_path), str(silk_path), pcm_rate=16000, tencent=True)
                 return True
 
-            ok = await asyncio.to_thread(_do_convert)
+            ok = await to_thread_heavy(_do_convert)
 
             if ok and silk_path.exists() and silk_path.stat().st_size > 0:
                 converted = True

@@ -102,7 +102,13 @@ def _spawn(coro: Any, timeout: float | None = None,
         except Exception as e:
             logger.warning("bg.task_failed name={} error={}", task_name, str(e)[:200])
         finally:
-            _task_owner_var.reset(owner_token)
+            try:
+                _task_owner_var.reset(owner_token)
+            except ValueError:
+                # 任务在 loop 关停时被 finalizer 关闭时，finally 会跑在
+                # 与 set 时不同的 Context 里（GC 路径无 task 上下文绑定），
+                # reset 必然失败——此时放弃恢复即可，变量随上下文一起销毁。
+                pass
             elapsed = time.time() - start_time
             if elapsed > 30:
                 logger.warning("bg.task_slow name={} elapsed={:.1f}s", task_name, elapsed)

@@ -782,9 +782,7 @@ class RetrievalEngine(RecallChannelMixin, FusionRerankMixin, QueryTransformMixin
         if getattr(config, "RETRIEVAL_SMART_SKIP", True) and self._mm._is_retrieval_simple(query):
             return await self._retrieve_simple_path(
                 query, k, intent, config, scope, _cache_namespace,
-                _retry_attempted, apply_min_score)
-
-        # 查询变换 + 多查询检索
+                _retry_attempted, apply_min_score)        # 查询变换 + 多查询检索
         results = await self._run_query_search(query, context, k, scope, config)
 
         # 降级：纯向量检索
@@ -851,11 +849,22 @@ class RetrievalEngine(RecallChannelMixin, FusionRerankMixin, QueryTransformMixin
         """
         # A1: 智能短路 - 简单查询跳过查询变换，直接走混合检索
         if getattr(config, "RETRIEVAL_SMART_SKIP", True) and self._mm._is_retrieval_simple(query):
+            # P1-4 贯穿（2026-08-27）：预计算查询向量后传入混合检索。
+            # 简单路径此前 query_vec=None，vec 主通道与 child 向量子通道各
+            # embed 一次同一查询；本地 embed 在边缘设备上秒级，批内复用减半。
+            _query_vec: list[float] | None = None
+            if self._explicit_attr(self._mm, "vec") is not None:
+                try:
+                    _vecs = await self._mm.vec.embed([query])
+                    _query_vec = _vecs[0] if _vecs else None
+                except Exception as e:
+                    logger.debug("memory.simple_path_embed_failed", error=str(e))
             # 闲聊型查询跳过 KG 和 Reranker，节省检索成本
             use_reranker = intent != "chat"
             use_kg = intent != "chat"
             results = await self._mm.retrieve_memories_hybrid(
-                query, k=k, use_reranker=use_reranker, use_kg=use_kg, scope=scope)
+                query, k=k, use_reranker=use_reranker, use_kg=use_kg, scope=scope,
+                query_vec=_query_vec)
             if results:
                 # 简单路径使用与复杂路径一致的评分逻辑，保证评分尺度统一
                 results = await self._mm._apply_fsrs_scoring(results)
@@ -986,7 +995,7 @@ class RetrievalEngine(RecallChannelMixin, FusionRerankMixin, QueryTransformMixin
                 __st = time.time()
                 query_entities = await self._mm.kg.get_query_entities(query)
                 _stage_log("kg_query_entities", __st, query)
-            except Exception as e:
+            except (OSError, ValueError, TypeError, RuntimeError, AttributeError) as e:
                 logger.debug("memory.query_entities_failed", error=str(e))
 
         # KG 增强评分 + 综合评分 (复用已提取的 query_entities, 避免 N+1 LLM)

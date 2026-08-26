@@ -265,6 +265,31 @@ class EntityMixin:
             logger.debug("db_memory.get_entities_by_memory_failed", error=str(e))
             return []
 
+    async def get_entities_by_memory_ids(self, memory_ids: list[int]) -> dict[int, list[dict]]:
+        """批量查询多个记忆关联的实体，返回 {memory_id: [entity, ...]}。
+
+        消除 Entity Boost 精排阶段的 N+1（原实现对每个候选各发一次
+        JOIN 查询，60 候选 = 60 次串行 aiosqlite 往返挤占共享连接）。
+        """
+        if not memory_ids:
+            return {}
+        placeholders = ",".join("?" * len(memory_ids))
+        grouped: dict[int, list[dict]] = {mid: [] for mid in memory_ids}
+        try:
+            cursor = await self._read_conn().execute(
+                f"""SELECT eml.memory_id, me.* FROM entity_memory_links eml
+                    JOIN memory_entities me ON me.id = eml.entity_id
+                    WHERE eml.memory_id IN ({placeholders})""",
+                list(memory_ids),
+            )
+            for row in await cursor.fetchall():
+                d = dict(row)
+                grouped.setdefault(d.pop("memory_id"), []).append(d)
+            return grouped
+        except (OSError, ValueError, TypeError, KeyError) as e:
+            logger.debug("db_memory.get_entities_by_memories_failed", error=str(e))
+            return {}
+
     async def _search_entities_impl(self, entity_names: list[str], limit: int,
                                     scope: Any | None,
                                     event_label: str) -> list[dict]:
@@ -288,7 +313,7 @@ class EntityMixin:
             )
             rows = await cursor.fetchall()
             return _rows_to_entity_results(rows)
-        except Exception as e:
+        except (OSError, ValueError, TypeError, RuntimeError) as e:
             logger.warning(event_label, error=str(e))
             return []
 

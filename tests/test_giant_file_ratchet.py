@@ -33,11 +33,15 @@ ROOT = Path(__file__).resolve().parents[1]
 #   web/ws_hub.py 1118→1160 —— 每连接 chat 并发硬顶(MAX_CHAT_TASKS_PER_CONN=3,
 #     防换 msg_id 无限拉起 LLM 任务)+ ConnectionManager 封装方法(get/set_session、
 #     get/set_agent、notify_pong、inflight_chat_count)+媒体清理 IO 下放线程池；
+# 2026-08-27 上调记录（协议 b：必要增长）：
+#   qq_bot_adapter.py 2175→2176 —— ffmpeg/silk 转码与媒体上传文件读迁移到
+#     heavy-io 线程池（utils/thread_pools.py 双池隔离，解消息检索排队问题），
+#     import 行 +1；
 BASELINES: dict[str, int] = {
-    "qq_bot_adapter.py": 2175,
+    "qq_bot_adapter.py": 2176,
     "wechat_bot_adapter.py": 1591,
     "web/ws_hub.py": 1160,
-    "web/ws_terminal.py": 553,
+    "web/ws_terminal.py": 556,
     "prompt_builder/_prompt_scene.py": 783,
     "prompt_builder/_prompt_assembly.py": 661,
 }
@@ -77,8 +81,15 @@ def _line_count(rel: str) -> int:
 #   llm_gateway/router_execution.py 1097→1099 —— 凭证池错误归因精确化:
 #     report_error/report_success 传实际出错客户端 api_key(多凭证并发在途
 #     时旧启发式误伤健康凭证), 两处调用点各拆两行；
+# 2026-08-27 上调记录（协议 b：必要增长）：
+#   memory/vector_store.py 1682→1684 —— 全部 sqlite/embed 同步操作迁移到
+#     hot-io 延迟敏感线程池(utils/thread_pools.py)，import 行与注释；
+#   memory/retrieval/pipeline.py 1075→1084 —— 小妲 P1-4 贯穿：简单路径预计算
+#     查询向量传入混合检索(vec 主通道与 child 子通道批内复用, embed 减半)；
+#   core/background_tasks.py 950→956 —— _spawn finally 的 ContextVar reset
+#     增加 ValueError 防护(loop 关停 GC finalizer 路径 reset 必然失败抛错)；
 ALLOWLIST_BASELINES: dict[str, int] = {
-    "memory/vector_store.py": 1682,
+    "memory/vector_store.py": 1684,
     "web/server.py": 1404,
     "agent_context.py": 1345,
     "web/routers/setup.py": 1333,
@@ -89,13 +100,13 @@ ALLOWLIST_BASELINES: dict[str, int] = {
     "db/db_memory_reconciliation.py": 1102,
     "llm_gateway/router_execution.py": 1099,
     "tool_engine/mcp_client.py": 1090,
-    "memory/retrieval/pipeline.py": 1075,
+    "memory/retrieval/pipeline.py": 1084,
     "ilink_client.py": 1039,
     "agent_core/sub_agent_manager.py": 1131,
     "agent_core/sub_agent.py": 1036,
     "tools/_builtin_manifest.py": 1001,
     "web/routers/insight.py": 926,
-    "core/background_tasks.py": 950,
+    "core/background_tasks.py": 956,
     "web/agent_registry.py": 912,
     "web/routers/local_deploy.py": 919,
     "cli.py": 908,
