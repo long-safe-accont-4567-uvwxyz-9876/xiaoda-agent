@@ -549,6 +549,17 @@ class BackgroundTaskManager:
         except (ImportError, OSError, RuntimeError) as e:
             logger.warning("bg.concept_link_curator_schedule_failed", error=str(e))
 
+        # 15. WAL 守护（每小时）：wal_autocheckpoint 只做 PASSIVE 回填，
+        #     遇长生命周期读事务会持续失败 → WAL 无限堆积（2026-08-27 复盘：
+        #     agent.db-wal 积到 2.3GB，TRUNCATE 立即回收 2.1GB）。本任务周期性
+        #     尝试 TRUNCATE checkpoint 并暴露 WAL 尺寸 gauge，超阈值告警。
+        try:
+            if await self._should_run("wal_checkpoint_guard", interval_hours=1.0):
+                self._spawn_scheduled("wal_checkpoint_guard",
+                                      self._wal_checkpoint_guard_task())
+        except (ImportError, OSError, RuntimeError) as e:
+            logger.warning("bg.wal_checkpoint_guard_schedule_failed", error=str(e))
+
         # ── Self-Wake 检查（借鉴 OpenWorker selfwake.py）──
         # 检查到期唤醒并触发回调，不阻塞主调度流程。
         # 与 _should_run 逻辑并行，不替代原有调度。
@@ -691,6 +702,45 @@ class BackgroundTaskManager:
                         insight_communities=stats.get("insight_communities", 0))
         except Exception as e:
             logger.warning("dream_engine_v2.failed", error=str(e), exc_info=True)
+
+    async def _wal_checkpoint_guard_task(self) -> None:
+        """WAL 守护：TRUNCATE checkpoint + 尺寸 gauge + 超限告警。
+
+        根因（2026-08-27 复盘）：wal_autocheckpoint(PASSIVE) 遇到持锁的长
+        生命周期读事务时回填无法完成，agent.db-wal 曾积至 2.3GB（主库仅
+        226MB），所有新读者背着大 WAL 工作导致冷查询秒级卡顿。本任务每小时
+        显式 TRUNCATE；仍被钉住时不强攻（避免阻塞用户路径），只记 warning
+        提示存在长读事务，由人工/重启介入。
+        """
+        import os as _os
+
+        try:
+            warn_mb = float(_os.getenv("DB_WAL_WARN_MB", "200"))
+        except ValueError:
+            warn_mb = 200.0
+        try:
+            wal_path = self.db.db_path.parent / (self.db.db_path.name + "-wal")
+            size_before = wal_path.stat().st_size if wal_path.exists() else 0
+            metrics.gauge("db.wal_size_mb", round(size_before / 1048576, 1))
+
+            result = await self.db.raw_checkpoint_truncate()
+            busy = bool(result and int(result[0]) == 0)
+            metrics.inc("db.wal_checkpoint_truncate_ok" if not busy
+                        else "db.wal_checkpoint_truncate_busy")
+
+            size_after = wal_path.stat().st_size if wal_path.exists() else 0
+            metrics.gauge("db.wal_size_mb", round(size_after / 1048576, 1))
+            if size_after > warn_mb * 1048576:
+                logger.warning(
+                    "database.wal_oversize size_mb={:.1f} threshold_mb={:.0f} "
+                    "busy={} hint=存在长时间未释放的读事务，检查只读连接池/长游标，或择机重启",
+                    size_after / 1048576, warn_mb, busy)
+            elif size_before > 4 * 1048576 or busy:
+                logger.info("database.wal_guard_done before_mb={:.1f} after_mb={:.1f} "
+                            "busy={}", size_before / 1048576, size_after / 1048576, busy)
+            await self.db.set_cron_last_run("wal_checkpoint_guard")
+        except (OSError, RuntimeError, ValueError) as e:
+            logger.warning("bg.wal_checkpoint_guard_failed error={}", str(e))
 
     async def _warm_embedding_cache(self) -> None:
         """预热嵌入缓存：将最近 30 条情景记忆摘要写入向量缓存，减少查询时 cache miss。"""

@@ -300,6 +300,25 @@ class DatabaseManager(LegacyMigrationMixin, DDLMixin, ConversationLogMixin, Life
             except (OSError, RuntimeError) as e:
                 logger.warning("database.commit_failed: {}", e)
 
+    async def raw_checkpoint_truncate(self) -> tuple[int, int, int] | None:
+        """执行 PRAGMA wal_checkpoint(TRUNCATE)，返回 (busy, log, checkpointed)。
+
+        供后台 WAL 守护任务使用：TRUNCATE 会把 WAL 文件截断为 0（PASSIVE 只
+        回填不截断）。存在并发读事务时返回 busy=1，调用方据此告警而非重试。
+        通过主连接 aiosqlite 执行，busy_timeout 已在连接级设置（15s），不会
+        无限阻塞。
+        """
+        if not self._conn:
+            return None
+        try:
+            cursor = await self._conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+            row = await cursor.fetchone()
+            await cursor.close()
+            return (int(row[0]), int(row[1]), int(row[2])) if row else None
+        except (OSError, RuntimeError) as e:
+            logger.warning("database.checkpoint_truncate_failed: {}", e)
+            return None
+
     async def rollback(self) -> None:
         """回滚当前事务，清理脏事务残留。
 
