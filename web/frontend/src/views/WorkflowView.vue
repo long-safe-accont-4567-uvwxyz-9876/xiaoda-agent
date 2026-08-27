@@ -643,9 +643,12 @@ async function rollbackRevision(rev: any) {
   font-size: 12.5px; color: var(--moon-dim); min-height: 18px;
   display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden;
 }
-.wf-card-footer { display: flex; align-items: center; justify-content: space-between; margin-top: 4px; }
+/* 按钮多（编辑/启动/记录/版本/发布/删除）窄卡放不下：允许换行，
+   卡片高度随内容自适应（2026-08-27 真机反馈"删除"溢出被裁） */
+.wf-card-footer { display: flex; align-items: center; justify-content: space-between;
+  flex-wrap: wrap; gap: 6px; margin-top: 4px; }
 .wf-meta { display: flex; align-items: center; gap: 8px; }
-.wf-card-actions { display: flex; gap: 6px; }
+.wf-card-actions { display: flex; gap: 6px; flex-wrap: wrap; row-gap: 4px; }
 .empty-state { grid-column: 1 / -1; padding: 40px 0; }
 
 /* ── 编辑器 ── */
