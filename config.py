@@ -223,7 +223,7 @@ def _warn_once_webui_read_failed(fn: str, exc: BaseException) -> None:
 def get_temperature(default: float = 0.7) -> float:
     """读取全局 temperature：优先 webui_overrides，回退 default。"""
     try:
-        from web.config_service import get_config_service
+        from core_runtime.config_service import get_config_service
         override = get_config_service().get("models.temperature")
         if override is not None:
             return float(override)
@@ -235,7 +235,7 @@ def get_temperature(default: float = 0.7) -> float:
 def get_frequency_penalty(default: float = 1.0) -> float:
     """读取全局 frequency_penalty：优先 webui_overrides，回退 default。"""
     try:
-        from web.config_service import get_config_service
+        from core_runtime.config_service import get_config_service
         override = get_config_service().get("models.frequency_penalty")
         if override is not None:
             return float(override)
@@ -247,7 +247,7 @@ def get_frequency_penalty(default: float = 1.0) -> float:
 def get_presence_penalty(default: float = 1.0) -> float:
     """读取全局 presence_penalty：优先 webui_overrides，回退 default。"""
     try:
-        from web.config_service import get_config_service
+        from core_runtime.config_service import get_config_service
         override = get_config_service().get("models.presence_penalty")
         if override is not None:
             return float(override)
@@ -259,7 +259,7 @@ def get_presence_penalty(default: float = 1.0) -> float:
 def get_reply_dedup_enabled(default: bool = True) -> bool:
     """读取跨对话回复去重开关：优先 webui_overrides，回退 default（默认开启）。"""
     try:
-        from web.config_service import get_config_service
+        from core_runtime.config_service import get_config_service
         override = get_config_service().get("models.reply_dedup_enabled")
         if override is not None:
             return bool(override)

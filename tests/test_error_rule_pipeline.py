@@ -77,7 +77,10 @@ class TestErrorRulePipelineCheck(unittest.TestCase):
 
     def test_check_rules_match(self):
         """预置规则 pattern=url_not_http（拆为 ['url','http']，'not' 被停用词过滤），
-        args 同时含 'url' 和 'http' token → 匹配（AND 逻辑）"""
+        参数值同时含 'url' 和 'http' token → 匹配（AND 逻辑）。
+
+        2026-08-27 值感知匹配改造：匹配只看参数**值**文本、不再含键名
+        （旧实现 json 全文匹配撞键名导致 question_empty 类规则线上误拦 22 次）。"""
         rows = [{
             "id": 1, "tool_name": "web_browse",
             "pattern": "url_not_http", "rule_text": "URL 必须以 http 开头",
@@ -87,10 +90,26 @@ class TestErrorRulePipelineCheck(unittest.TestCase):
         cursor = self.mock_db._conn.execute.return_value
         cursor.fetchall.return_value = rows
         matched = asyncio.run(
-            self.pipeline.check_rules("web_browse", {"url": "http://bad"})
+            self.pipeline.check_rules(
+                "web_browse", {"note": "url must start with http"})
         )
         self.assertEqual(len(matched), 1)
         self.assertEqual(matched[0]["pattern"], "url_not_http")
+
+    def test_check_rules_no_match_key_only(self):
+        """值感知回归防护（rule#27 教训）：token 只出现在键名、参数值不含时不得误拦。"""
+        rows = [{
+            "id": 27, "tool_name": "call_xiaoda",
+            "pattern": "question_empty", "rule_text": "参数 question 不能为空",
+            "hit_count": 22, "created_at": 0,
+        }]
+        cursor = self.mock_db._conn.execute.return_value
+        cursor.fetchall.return_value = rows
+        matched = asyncio.run(
+            self.pipeline.check_rules(
+                "call_xiaoda", {"question": "我之前让你帮我写过什么脚本吗?"})
+        )
+        self.assertEqual(matched, [])
 
     def test_check_rules_no_match(self):
         """pattern token 都不在参数 JSON 中 → 返回空列表"""

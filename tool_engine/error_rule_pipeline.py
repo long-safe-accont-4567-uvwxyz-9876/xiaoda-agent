@@ -59,6 +59,34 @@ def _pattern_to_tokens(pattern: str) -> list[str]:
     return [t for t in tokens if len(t) >= 3 and t not in _PATTERN_STOPWORDS]
 
 
+def _args_values_text(args: Any) -> str:
+    """把 args 序列化为"仅值文本"用于规则匹配（小写）。
+
+    2026-08-27 误拦修复：旧实现 json.dumps(args) 整体匹配，键名会被 token 命中
+    （如 pattern=question_empty 经停用词过滤只剩 ['question']，任何携带 question
+    键的调用——即便值非空——都会命中并拦截，rule#27 线上误拦 22 次、LLM 反复重试
+    拖长耗时 23s 且最终降级）。现只取**叶子值**拼接，且空值/空串不产生文本：
+    "参数值非空才可能与失败特征相关"，键名永不相配。
+    """
+    parts: list[str] = []
+
+    def _walk(value: Any) -> None:
+        if isinstance(value, dict):
+            for v in value.values():
+                _walk(v)
+        elif isinstance(value, (list, tuple)):
+            for v in value:
+                _walk(v)
+        elif value is None or (isinstance(value, (str, list, dict, tuple)) and not value):
+            # 空/None 值不计入文本："empty/missing"类失败特征本就该让值缺席
+            return
+        else:
+            parts.append(str(value))
+
+    _walk(args)
+    return " ".join(parts).lower()
+
+
 class ErrorRulePipeline:
     """失败经验 → 规则 提取与查询管线。
 
@@ -69,7 +97,7 @@ class ErrorRulePipeline:
     def _render_extract_prompt(tool_name: str, args_str: str, error: str) -> str:
         """渲染规则提取提示词：production override 优先，缺省回退内置模板。"""
         try:
-            from web.prompt_profile_repository import try_resolve
+            from core_runtime.prompt_profile_repository import try_resolve
 
             override = try_resolve("error_rule.extract", {
                 "tool_name": tool_name, "args": args_str, "error": error,
@@ -189,7 +217,7 @@ class ErrorRulePipeline:
     def _render_extract_prompt(tool_name: str, args: str, error: str) -> str:
         """渲染错误规则提取提示词：production override 优先，缺省回退内置模板。"""
         try:
-            from web.prompt_profile_repository import try_resolve
+            from core_runtime.prompt_profile_repository import try_resolve
 
             override = try_resolve("error_rule.extract", {
                 "tool_name": tool_name, "args": args, "error": error,
@@ -298,7 +326,7 @@ class ErrorRulePipeline:
             if not rows:
                 return []
 
-            args_str = json.dumps(args, ensure_ascii=False).lower()
+            args_str = _args_values_text(args)
             matched: list[dict] = []
             for row in rows:
                 rule = dict(row)
@@ -307,7 +335,7 @@ class ErrorRulePipeline:
                 # 没有 token 的规则无法匹配，跳过
                 if not tokens:
                     continue
-                # 所有 token 都出现在参数 JSON 中才视为匹配（AND 逻辑，避免误伤）
+                # 所有 token 都出现在参数值文本中才视为匹配（AND 逻辑，避免误伤）
                 if all(tok in args_str for tok in tokens):
                     matched.append(rule)
             return matched

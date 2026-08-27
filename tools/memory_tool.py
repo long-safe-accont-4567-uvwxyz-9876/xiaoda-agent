@@ -96,6 +96,9 @@ async def remember(content: str, tags: str = "", importance: float = 0.5) -> Too
 )
 async def recall(query: str, top_k: int = 8) -> ToolResult:
     _start = time.time()
+    if not (query or "").strip():
+        # 2026-08-27：error_rule#35(query_empty) 因误拦已废除；空参数防线回归工具本体
+        return ToolResult.fail("参数 query 不能为空")
     try:
         mm = _get_memory_manager()
         # N9 修复（2026-07-25 17:48-17:51 生产事故根因）：

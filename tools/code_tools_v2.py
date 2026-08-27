@@ -622,6 +622,9 @@ def calculator(expression: str) -> ToolResult:
 )
 def call_xiaoda(question: str) -> ToolResult:
     """委托问题给主体小妲处理（返回 DelegationRequest 占位）。"""
+    if not (question or "").strip():
+        # 2026-08-27：error_rule#27(question_empty) 因误拦已废除；空参数防线回归工具本体
+        return ToolResult.fail("参数 question 不能为空")
     try:
         from core.delegation import DelegationRequest
     except ImportError as e:
