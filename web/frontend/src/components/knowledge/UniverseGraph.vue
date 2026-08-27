@@ -139,7 +139,10 @@ async function loadGraph(retries = 0) {
     // 按需展开模型：重置累积状态，拉起步实体在指定深度内的邻域；
     // 用户后续单击节点仍可增量展开，不再一次性拉全图
     acc.reset()
-    const startEntity = props.entity.trim()
+    // 根实体 = 搜索框当前关键词（2026-08-27 修"以我输入的关键词为核心"：
+    // 此前恒用 props.entity（空）→ 永远全图模式以度数最高者为根，搜索
+    // 只挪镜头不换树干，深度调整在 40 节点的小邻域里自然毫无变化）
+    const startEntity = searchText.value.trim()
     engine?.resetWorld(startEntity) // 全量重载：清空落梢状态，检索实体优先作为根球
     const data = await getKnowledgeGraph(startEntity, activeDepth.value ?? 1)
     if (destroyed) return
@@ -245,8 +248,18 @@ function setActiveDepth(d: number | null) {
 function onSearchEnter() {
   const q = searchText.value.trim()
   if (!q) return
-  focusOnEntity(q)
+  // 已在当前树根上的关键词不重复加载
+  if (q === currentRoot.value) {
+    focusOnEntity(q)
+    return
+  }
+  // 换根重建：以关键词为树干、按当前深度重新外扩（后端 graph 接口
+  // 实体不存在时返回空图，由 loadGraph 的空态自然呈现，不打断操作流）
+  loadGraph()
 }
+
+/** 当前树的根实体（根球名称；空 = 全图模式） */
+const currentRoot = computed(() => searchText.value.trim())
 
 // 强制进入 3D（绕过降级）
 function forceEnter3D() {
