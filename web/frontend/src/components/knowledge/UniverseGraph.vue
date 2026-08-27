@@ -80,6 +80,11 @@ const activeDepth = ref<number>(props.depth)
 let destroyed = false
 let retryTimer: ReturnType<typeof setTimeout> | null = null
 let debounceTimer: ReturnType<typeof setTimeout> | null = null
+// 全量加载代际号：setActiveDepth 连击/快速连续操作时丢弃过期响应
+// （此前 depth=1 与 depth=10 两个请求乱序返回，后到的小深度结果覆盖
+//  已显示的大深度图——"深度调了没反应"的真凶，2026-08-27）
+let loadSeq = 0
+let depthDebounce: ReturnType<typeof setTimeout> | null = null
 let resizeObserver: ResizeObserver | null = null
 // 用户点击"仍要进入 3D"后置 true，loadGraph 跳过节点 >2000 降级判断
 let bypassDegrade = false
@@ -128,6 +133,7 @@ async function loadGraph(retries = 0) {
   // 容器尚未可见（模态隐藏）时跳过，等 ResizeObserver 唤醒
   if (containerEl.value.clientWidth === 0) return
 
+  const seq = ++loadSeq
   loading.value = true
   try {
     // 按需展开模型：重置累积状态，拉起步实体在指定深度内的邻域；
@@ -137,12 +143,17 @@ async function loadGraph(retries = 0) {
     engine?.resetWorld(startEntity) // 全量重载：清空落梢状态，检索实体优先作为根球
     const data = await getKnowledgeGraph(startEntity, activeDepth.value ?? 1)
     if (destroyed) return
+    // 过期响应丢弃：期间用户又改了深度/刷新/WS 触发了新一次加载，
+    // 本批数据作废（否则旧深度结果覆盖新深度图，且可能 merge 进
+    // 新请求 reset 后的累积器造成节点半缺失）
+    if (seq !== loadSeq) return
 
     acc.merge(data.nodes || [], data.edges || [])
     if (startEntity) acc.markExpanded(startEntity)
 
     applyAccumulatedToGraph()
   } catch (e: any) {
+    if (seq !== loadSeq) return  // 已被新一次加载取代，静默退出
     if (retries < RETRY_DELAYS.length) {
       retryTimer = setTimeout(() => loadGraph(retries + 1), RETRY_DELAYS[retries])
     } else {
@@ -226,7 +237,9 @@ function focusOnEntity(name: string) {
 function setActiveDepth(d: number | null) {
   const v = Math.max(1, Math.min(12, Math.round(d ?? 1)))
   activeDepth.value = v
-  loadGraph()
+  // n-input-number 每击键都触发（输入"10"= 两次 loadGraph），300ms 防抖
+  if (depthDebounce) clearTimeout(depthDebounce)
+  depthDebounce = setTimeout(() => { depthDebounce = null; if (!destroyed) loadGraph() }, 300)
 }
 
 function onSearchEnter() {
@@ -482,6 +495,8 @@ onBeforeUnmount(() => {
   window.removeEventListener('keydown', onKeydown)
   if (retryTimer) clearTimeout(retryTimer)
   if (debounceTimer) clearTimeout(debounceTimer)
+  if (depthDebounce) clearTimeout(depthDebounce)
+  loadSeq++  // 在途响应全部作废
   resizeObserver?.disconnect()
   resizeObserver = null
   // 引擎完整销毁链见 universe/engine.ts::shutdown（定时器→RAF→涟漪 dispose→渲染器析构）
