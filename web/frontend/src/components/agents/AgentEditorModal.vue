@@ -4,9 +4,11 @@
  * 状态与保存链路在 useAgentEditor；基础表单/权限/测试/表情包各自成组件。
  * 通过 defineExpose(open) 供视图调用。
  */
+import { ref, watch, nextTick } from 'vue'
 import { NModal, NTabs, NTabPane, NButton, NInput, NDynamicTags } from 'naive-ui'
 import { t } from '../../i18n'
 import { useAgentEditor } from '../../composables/useAgentEditor'
+import { shakeEl } from '../../utils/gsapMotion'
 import type { AgentEditModel } from './types'
 import AgentBasicForm from './AgentBasicForm.vue'
 import AgentPermissionsPanel from './AgentPermissionsPanel.vue'
@@ -15,10 +17,19 @@ import AgentStickerPanel from './AgentStickerPanel.vue'
 
 const {
   showEditor, isCreate, editing, personality, permissions, permDirty, saving,
-  isMain, toolGroups, modelOptions, switchingModel,
+  saveFailedTick, isMain, toolGroups, modelOptions, switchingModel,
   open, save, close, onModelChange, onAdvancedInput,
   togglePerm, toggleMcpPerm, groupSetAll, applyPermissions,
 } = useAgentEditor()
+
+// 保存失败的差异化反馈：toast 报原因（composable 内），震颤指向弹窗本体。
+// 失败计数在弹窗打开期间才消费，避免上次会话的残留触发
+const modalBodyEl = ref<HTMLElement | null>(null)
+watch(saveFailedTick, async () => {
+  if (!showEditor.value) return
+  await nextTick()
+  if (modalBodyEl.value) shakeEl(modalBodyEl.value)
+})
 
 function openEditor(agent: AgentEditModel | null) {
   open(agent)
@@ -31,6 +42,7 @@ defineExpose({ open: openEditor })
   <n-modal v-model:show="showEditor" preset="card" class="agent-modal"
            :title="isCreate ? t('agentsView.createSub') : `${t('agentsView.editDot')}${editing.display_name || editing.name}`"
            style="width: min(860px, 94vw); max-height: 88vh; overflow-y: auto;">
+    <div ref="modalBodyEl">
     <n-tabs type="line" animated>
       <n-tab-pane name="base" :tab="t('agentsView.basicConfig')">
         <AgentBasicForm :editing="editing"
@@ -75,6 +87,7 @@ defineExpose({ open: openEditor })
         <AgentStickerPanel :agent-name="editing.name || ''" />
       </n-tab-pane>
     </n-tabs>
+    </div>
 
     <template #footer>
       <div class="modal-footer">

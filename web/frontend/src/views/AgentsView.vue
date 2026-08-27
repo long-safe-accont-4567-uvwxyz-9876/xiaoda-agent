@@ -1,8 +1,9 @@
 <script setup lang="ts">
-import { ref, onMounted } from 'vue'
+import { ref, computed, onMounted } from 'vue'
 import { NButton, useMessage } from 'naive-ui'
 import { post, del } from '../api'
 import { useAgentsStore } from '../stores/agents'
+import { useStaggerEntrance } from '../composables/useStaggerEntrance'
 import { t } from '../i18n'
 import SumeruIcon from '../components/fx/SumeruIcon.vue'
 import Tilt3D from '../components/fx/Tilt3D.vue'
@@ -14,6 +15,10 @@ import type { AgentInfo } from '../api/types'
 const message = useMessage()
 const agentsStore = useAgentsStore()
 const editorRef = ref<InstanceType<typeof AgentEditorModal> | null>(null)
+
+// Agent 卡片"首次加载 → 内容"stagger 入场（缓存命中不播，护栏自动跳过）
+const gridEl = ref<HTMLElement | null>(null)
+useStaggerEntrance(gridEl, computed(() => agentsStore.agents))
 
 onMounted(() => {
   agentsStore.load().catch((e) => message.error(e.message))
@@ -51,7 +56,7 @@ async function removeAgent(agent: AgentInfo) {
       <n-button type="primary" @click="openEditor(null)"><SumeruIcon name="plus" :size="14" variant="duo" tone="add" interactive /> {{ t('agentsView.createSub') }}</n-button>
     </div>
 
-    <div class="agent-grid">
+    <div ref="gridEl" class="agent-grid">
       <Tilt3D v-for="a in agentsStore.agents" :key="a.name">
         <AgentCard :agent="a"
                    @edit="openEditor" @toggle="toggleEnabled" @remove="removeAgent" />

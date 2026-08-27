@@ -6,6 +6,7 @@ import {
   NTabs, NTabPane, useMessage,
 } from 'naive-ui'
 import { get, put, post, del } from '../api'
+import { useStaggerEntrance } from '../composables/useStaggerEntrance'
 import { t, tf } from '../i18n'
 import Tilt3D from '../components/fx/Tilt3D.vue'
 import ViewTitleIcon from '../components/fx/ViewTitleIcon.vue'
@@ -85,6 +86,10 @@ const filtered = computed(() =>
     (!search.value || t.name.includes(search.value) || t.description.includes(search.value)) &&
     (!categoryFilter.value || t.category === categoryFilter.value) &&
     (!sourceFilter.value || t.source === sourceFilter.value)))
+
+// 工具卡片"首次加载 → 内容"stagger 入场（缓存不适用：tools 每次进页都拉取）
+const toolListEl = ref<HTMLElement | null>(null)
+useStaggerEntrance(toolListEl, filtered, { staggerEach: 0.04 })
 
 async function updateTool(tool: any, patch: Record<string, any>) {
   try {
@@ -350,7 +355,7 @@ async function testSkill(item: any) {
           <n-select v-model:value="sourceFilter" :options="sources" :placeholder="t('toolsView.sourcePh')" clearable style="max-width: 160px" />
         </div>
 
-        <div class="tool-list">
+        <div ref="toolListEl" class="tool-list">
           <Tilt3D v-for="tool in filtered" :key="tool.name">
           <div class="tool-row glass-panel"
                :class="{ disabled: !tool.enabled }">

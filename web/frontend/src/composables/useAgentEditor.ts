@@ -28,6 +28,8 @@ export function useAgentEditor() {
 
   const showEditor = ref(false)
   const isCreate = ref(false)
+  /** save() 每失败一次自增；动效外壳 watch 它做失败震颤，成功不变动 */
+  const saveFailedTick = ref(0)
   const editing = ref<AgentEditModel>({})
   const personality = ref('')
   const permissions = ref<AgentPermissions>({ tools: {}, mcp_servers: {}, is_main: false })
@@ -210,6 +212,8 @@ export function useAgentEditor() {
       await refreshAgentNames()  // 刷新全局名称映射
     } catch (e: any) {
       message.error(e.message)
+      // 保存失败信号（纯状态计数）：外壳层可据此做震颤等差异化反馈
+      saveFailedTick.value++
     } finally {
       saving.value = false
     }
@@ -257,6 +261,7 @@ export function useAgentEditor() {
   return {
     showEditor,
     isCreate,
+    saveFailedTick,
     editing,
     personality,
     permissions,

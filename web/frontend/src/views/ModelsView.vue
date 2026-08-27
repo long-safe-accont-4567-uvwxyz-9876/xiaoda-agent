@@ -11,6 +11,7 @@ import type { CapabilityReport, ProviderDefinition } from '../api/providers'
 import type { CredentialStatus, ModelRouteInfo, UsageSummary } from '../api/types'
 import ProviderWizard from '../components/models/ProviderWizard.vue'
 import { useProvidersStore } from '../stores/providers'
+import { useStaggerEntrance } from '../composables/useStaggerEntrance'
 import { t } from '../i18n'
 import Tilt3D from '../components/fx/Tilt3D.vue'
 import * as echarts from 'echarts/core'
@@ -71,6 +72,10 @@ function onRouteModelChange(r: any, modelId: string) {
 
 const builtinProviders = computed(() => providersStore.builtinProviders)
 const customProviders = computed(() => providersStore.customProviders)
+
+// 供应商行"首次加载 → 内容"stagger 入场（内置+自定义同容器，统一编排）
+const providerListEl = ref<HTMLElement | null>(null)
+useStaggerEntrance(providerListEl, providers, { distance: 12, staggerEach: 0.045 })
 
 onMounted(() => {
   void loadAll()
@@ -426,7 +431,7 @@ async function moveProvider(pid: string, dir: -1 | 1) {
     <Tilt3D :max-x="4" :max-y="6">
     <section class="glass-panel section">
       <h3>{{ t('modelsView.providerList') }}</h3>
-      <div class="provider-list">
+      <div ref="providerListEl" class="provider-list">
         <div v-for="p in builtinProviders" :key="p.id" class="provider-row">
           <div class="provider-info">
             <span class="p-label">{{ p.label }}</span>
