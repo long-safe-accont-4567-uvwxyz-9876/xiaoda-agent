@@ -676,18 +676,27 @@ export function createUniverseEngine(
     el.addEventListener('dblclick', onDblClickReset)
 
     // 空枝尖芽点拾取（2026-08-27 记忆树编辑专项）：pointerdown/up 位移 <6px
-    // 视为点击（区别于轨道旋转拖拽），Raycaster 对芽点 Points 阈值拾取
+    // 视为点击（区别于轨道旋转拖拽），Raycaster 对芽点 Points 阈值拾取。
+    // 竞争修复（真机反馈"点记忆球也弹新建"）：hoveredNode 非空 = 指针在
+    // 记忆球上，本轮放行给 onNodeClick，芽点拾取不参与——球与芽点同挂枝尖
+    // 附近，几何上必然重叠，必须按"谁先命中"仲裁而非各自独立触发。
+    // threshold 按屏幕像素反算（世界单位会随相机距离失真）：
+    //   world ≈ 2·dist·tan(fov/2)·px / viewportH
     let downX = 0, downY = 0
     el.addEventListener('pointerdown', (e: PointerEvent) => { downX = e.clientX; downY = e.clientY })
     el.addEventListener('pointerup', (e: PointerEvent) => {
       if (!ctx.onBudClick || !tree || !tree.budIndices.size) return
       if (Math.hypot(e.clientX - downX, e.clientY - downY) > 6) return
+      if (ctx.hoveredNode.value) return  // 指针在记忆球上：交给节点点击链路
       const rect = el.getBoundingClientRect()
       const ndc = new THREE.Vector2(
         ((e.clientX - rect.left) / rect.width) * 2 - 1,
         -((e.clientY - rect.top) / rect.height) * 2 + 1)
-      raycaster.setFromCamera(ndc, g.camera())
-      raycaster.params.Points = { threshold: 6 }
+      const cam = g.camera() as THREE.PerspectiveCamera
+      const dist = cam.position.length()
+      const pxToWorld = 2 * dist * Math.tan((cam.fov * Math.PI / 180) / 2) / rect.height
+      raycaster.setFromCamera(ndc, cam)
+      raycaster.params.Points = { threshold: Math.max(1.5, pxToWorld * 14) }  // ~14px 半径
       const hits = raycaster.intersectObject(tree.budPoints, false)
       if (hits.length) { ctx.selectedNode.value = null; ctx.onBudClick(); resetIdleTimer() }
     })
