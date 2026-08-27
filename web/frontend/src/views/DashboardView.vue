@@ -3,6 +3,7 @@ import { ref, onMounted, onBeforeUnmount, nextTick } from 'vue'
 import ViewTitleIcon from '../components/fx/ViewTitleIcon.vue'
 import { useMessage, NButton } from 'naive-ui'
 import { get, put } from '../api'
+import { countTo } from '../utils/gsapMotion'
 import type {
   AuditLogRow, MetricsSnapshot, PermissionModeInfo, SystemConfig,
   TodaySummary, UsageSummary,
@@ -19,6 +20,8 @@ echarts.use([LineChart, BarChart, GridComponent, TooltipComponent, CanvasRendere
 const message = useMessage()
 
 const stats = ref({ messages: 0, cost: 0, toolCalls: 0, memories: 0 })
+// 统计卡显示层：真实值存 display，数据到达后由 countTo 滚动过渡（护栏下静态直达）
+const statDisplay = ref({ messages: 0, cost: 0, toolCalls: 0, memories: 0 })
 const system = ref<any>({})
 const monitorEnabled = ref(false)
 const audit = ref<any[]>([])
@@ -102,11 +105,16 @@ async function loadAll() {
     stats.value.messages = today.stats.conversations
     stats.value.toolCalls = today.stats.tool_calls
     stats.value.memories = today.stats.memories
+    // 四张统计卡数字滚动（首次进位从 0 滚到实际值）
+    countTo((v) => { statDisplay.value.messages = v }, today.stats.conversations)
+    countTo((v) => { statDisplay.value.toolCalls = v }, today.stats.tool_calls)
+    countTo((v) => { statDisplay.value.memories = v }, today.stats.memories)
     permissionMode.value = perm.mode
     const todayStr = new Date().toLocaleDateString('sv-SE')
     stats.value.cost = usage.series
       .filter(s => s.day === todayStr)
       .reduce((sum, s) => sum + (s.cost_usd || 0), 0)
+    countTo((v) => { statDisplay.value.cost = v }, stats.value.cost, { decimals: 4 })
     audit.value = auditRows
     await nextTick()
     renderCostChart(usage.series)
@@ -208,16 +216,16 @@ function diskLabel(d: any): string {
 
     <div class="stat-grid">
       <Tilt3D><div class="stat-card glass-panel">
-        <span class="stat-num">{{ stats.messages }}</span><span class="stat-label">{{ t('dashboardView.todayRounds') }}</span>
+        <span class="stat-num">{{ statDisplay.messages }}</span><span class="stat-label">{{ t('dashboardView.todayRounds') }}</span>
       </div></Tilt3D>
       <Tilt3D><div class="stat-card glass-panel">
-        <span class="stat-num">${{ stats.cost.toFixed(4) }}</span><span class="stat-label">{{ t('dashboardView.todayCost') }}</span>
+        <span class="stat-num">${{ statDisplay.cost.toFixed(4) }}</span><span class="stat-label">{{ t('dashboardView.todayCost') }}</span>
       </div></Tilt3D>
       <Tilt3D><div class="stat-card glass-panel">
-        <span class="stat-num">{{ stats.toolCalls }}</span><span class="stat-label">{{ t('dashboardView.todayTools') }}</span>
+        <span class="stat-num">{{ statDisplay.toolCalls }}</span><span class="stat-label">{{ t('dashboardView.todayTools') }}</span>
       </div></Tilt3D>
       <Tilt3D><div class="stat-card glass-panel">
-        <span class="stat-num">{{ stats.memories }}</span><span class="stat-label">{{ t('dashboardView.todayMemories') }}</span>
+        <span class="stat-num">{{ statDisplay.memories }}</span><span class="stat-label">{{ t('dashboardView.todayMemories') }}</span>
       </div></Tilt3D>
     </div>
 

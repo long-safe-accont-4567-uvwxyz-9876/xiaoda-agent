@@ -4,6 +4,7 @@ import { useAuthStore } from '../stores/auth'
 import { useAgentsStore } from '../stores/agents'
 import { useRouter } from 'vue-router'
 import { api, get } from '../api'
+import { playEntrance } from '../utils/gsapMotion'
 import Tilt3D from '../components/fx/Tilt3D.vue'
 import DendroEmblem from '../components/fx/DendroEmblem.vue'
 import { wallpaperKind } from '../utils/wallpaper'
@@ -34,6 +35,8 @@ function onLoginVideoError() {
 }
 
 onMounted(async () => {
+  // 登录卡一次性入场：徽标→标题→表单错峰浮现（护栏下立即还原，无动画直显）
+  void playEntrance(document.querySelector('.login-card'), { stagger: 0.09, distance: 18 })
   try {
     const data = await get<{ wallpaper?: string }>('/agents/public-wallpaper')
     if (data?.wallpaper) {

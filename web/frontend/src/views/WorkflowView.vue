@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, onMounted, onUnmounted, watch } from 'vue'
+import { ref, nextTick, onMounted, onUnmounted, watch } from 'vue'
 import SumeruIcon from '../components/fx/SumeruIcon.vue'
 import { useRouter } from 'vue-router'
 import {
@@ -7,6 +7,7 @@ import {
 } from 'naive-ui'
 import { api, type Workflow, type WorkflowNode, type WorkflowSummary } from '../api'
 import { useChatStore } from '../stores/chat'
+import { flipCapture } from '../utils/gsapMotion'
 import { t, tf } from '../i18n'
 import Tilt3D from '../components/fx/Tilt3D.vue'
 import ViewTitleIcon from '../components/fx/ViewTitleIcon.vue'
@@ -230,16 +231,35 @@ function addNode(type: WorkflowNode['type']) {
 }
 
 function removeNode(id: string) {
-  if (!editing.value) return
-  editing.value.nodes = editing.value.nodes.filter(n => n.id !== id)
+  const wf = editing.value
+  if (!wf) return
+  replayNodesLayout(async () => {
+    wf.nodes = wf.nodes.filter(n => n.id !== id)
+  })
 }
 
 function moveNode(idx: number, dir: -1 | 1) {
-  if (!editing.value) return
-  const nodes = editing.value.nodes
+  const wf = editing.value
+  if (!wf) return
+  const nodes = wf.nodes
   const newIdx = idx + dir
   if (newIdx < 0 || newIdx >= nodes.length) return
-  ;[nodes[idx], nodes[newIdx]] = [nodes[newIdx], nodes[idx]]
+  replayNodesLayout(() => {
+    ;[nodes[idx], nodes[newIdx]] = [nodes[newIdx], nodes[idx]]
+  })
+}
+
+// 节点增删/排序的 FLIP 平滑重排：捕获旧位置 → 数据变更 → nextTick 后补间到新位置。
+// 护栏（low-gpu / reduced-motion）或 Flip 加载失败时无动画，列表行为不变
+const nodesSectionEl = ref<HTMLElement | null>(null)
+
+function replayNodesLayout(mutate: () => void) {
+  void (async () => {
+    const finish = await flipCapture(nodesSectionEl.value)
+    mutate()
+    await nextTick()
+    finish()
+  })()
 }
 
 // 节点选择资源时，自动更新 label
@@ -476,7 +496,7 @@ async function rollbackRevision(rev: any) {
       </div></Tilt3D>
 
       <!-- 节点链 -->
-      <div class="nodes-section">
+      <div ref="nodesSectionEl" class="nodes-section">
         <Tilt3D v-if="editing.nodes.length === 0" :max-x="4" :max-y="6"><div class="nodes-empty glass-panel">
           {{ t('workflowView.addStepHint') }}
         </div></Tilt3D>

@@ -39,7 +39,8 @@ export function useStaggerEntrance(
   // 挂载时列表非空视为缓存命中，本次生命周期不再编排
   let armed = !isFilled(source.value)
   let disposed = false
-  let tl: gsap.core.Timeline | null = null
+  let ctx: gsap.Context | null = null
+  let tlRef: gsap.core.Timeline | null = null
 
   function isFilled(v: unknown): boolean {
     return Array.isArray(v) ? v.length > 0 : !!v
@@ -76,39 +77,42 @@ export function useStaggerEntrance(
     const seqTargets = targets.slice(0, seqCount)
     const restTargets = targets.slice(seqCount)
 
-    gsap.set(targets, { autoAlpha: 0, y: distance })
-    reveal(targets) // 可见性交由 autoAlpha 内联管理
-
-    tl = gsap.timeline({
-      onComplete: () => gsap!.set(targets, { clearProps: 'opacity,visibility,transform' }),
-    })
-    tl.to(seqTargets, {
-      autoAlpha: entranceDefaults.autoAlpha,
-      y: entranceDefaults.y,
-      duration: entranceDefaults.duration,
-      ease: entranceDefaults.ease,
-      stagger: targets.length > MAX_SEQUENCED_ITEMS ? Math.max(0.02, staggerEach / 2) : staggerEach,
-    }, 0)
-    if (restTargets.length) {
-      tl.to(restTargets, {
+    // context 包裹：组件卸载（含动画进行中）统一 revert，
+    // 自动恢复被动画元素的内联样式，比手写 kill 多一层保险
+    ctx = gsap.context((self: gsap.Context) => {
+      const tl = gsap.timeline({
+        onComplete: () => {
+          gsap.set(targets, { clearProps: 'opacity,visibility,transform' })
+          self.kill()
+        },
+      })
+      tl.to(seqTargets, {
         autoAlpha: entranceDefaults.autoAlpha,
         y: entranceDefaults.y,
         duration: entranceDefaults.duration,
-      }, 0.28)
-    }
+        ease: entranceDefaults.ease,
+        stagger: targets.length > MAX_SEQUENCED_ITEMS ? Math.max(0.02, staggerEach / 2) : staggerEach,
+      }, 0)
+      if (restTargets.length) {
+        tl.to(restTargets, {
+          autoAlpha: entranceDefaults.autoAlpha,
+          y: entranceDefaults.y,
+          duration: entranceDefaults.duration,
+        }, 0.28)
+      }
+      tlRef = tl
+    }, el)
   }, { flush: 'post' })
 
   onScopeDispose(() => {
     disposed = true
-    if (tl) {
-      tl.kill()
-      tl = null
-    }
+    ctx?.revert()
+    ctx = null
   })
 
   /** 供视图探测是否仍处于编排期（调试用） */
   function isPlaying(): boolean {
-    return !!tl?.isActive()
+    return !!tlRef?.isActive()
   }
 
   return { isPlaying }

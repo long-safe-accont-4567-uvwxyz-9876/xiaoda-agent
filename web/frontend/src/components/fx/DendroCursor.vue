@@ -1,14 +1,15 @@
 <script setup lang="ts">
 import { onMounted, onBeforeUnmount, ref, watch } from 'vue'
 import { useUiStore } from '../../stores/ui'
+import { createFollower } from '../../utils/gsapMotion'
 
 /**
  * 草元素光标 · 小叶片
- * - 叶片箭头快速贴合鼠标 + 露珠光环慢速拖尾（双层 lerp → 丝滑跟随）
+ * - 叶片箭头快速贴合鼠标 + 露珠光环慢速拖尾（GSAP quickTo 双层跟随，
+ *   静止时补间休眠零 CPU；护栏/触屏自动降级，设置页可开关）
  * - hover 可点击元素：叶片舒展、光环绽放
  * - 文本输入框：化作草茎 I 光标
  * - 点击：按压回弹 + 草光涟漪
- * - 触屏 / 弱 GPU / 减弱动效 自动降级；设置页可开关
  */
 
 const ui = useUiStore()
@@ -18,10 +19,12 @@ const ringEl = ref<HTMLElement | null>(null)
 const active = ref(false)
 const shown = ref(false)
 
-let mx = -100, my = -100   // 鼠标目标点
-let lx = -100, ly = -100   // 叶片当前点（快层）
-let rx = -100, ry = -100   // 光环当前点（慢层）
-let raf = 0
+// 双层 quickTo 跟随：叶片快贴合、光环慢拖尾；静止时补间休眠零 CPU
+// （旧自绘 rAF 循环每帧都在算 lerp，弱 GPU 设备上属常驻开销）
+type Follower = Awaited<ReturnType<typeof createFollower>>
+let leafFollower: Follower | null = null
+let ringFollower: Follower | null = null
+let mx = -100, my = -100
 let state: 'default' | 'pointer' | 'text' = 'default'
 let pressing = false
 
@@ -49,9 +52,12 @@ function onMove(e: MouseEvent) {
   my = e.clientY
   if (!shown.value) {
     // 首次进入：直接瞬移到鼠标处，避免从角落飞入
-    lx = mx; ly = my; rx = mx; ry = my
+    leafFollower?.move(mx, my)
+    ringFollower?.move(mx, my)
     shown.value = true
   }
+  leafFollower?.move(mx, my)
+  ringFollower?.move(mx, my)
 }
 
 function onOver(e: MouseEvent) {
@@ -90,20 +96,6 @@ function spawnRipple(x: number, y: number) {
   s.addEventListener('animationend', () => s.remove(), { once: true })
 }
 
-function loop() {
-  const kLeaf = reduceMotion ? 1 : 0.55   // 叶片：快速贴合
-  const kRing = reduceMotion ? 1 : 0.16   // 光环：慢速拖尾
-  lx += (mx - lx) * kLeaf
-  ly += (my - ly) * kLeaf
-  rx += (mx - rx) * kRing
-  ry += (my - ry) * kRing
-  const l = leafEl.value
-  const r = ringEl.value
-  if (l) l.style.transform = `translate3d(${lx.toFixed(2)}px, ${ly.toFixed(2)}px, 0)`
-  if (r) r.style.transform = `translate3d(${rx.toFixed(2)}px, ${ry.toFixed(2)}px, 0) translate(-50%, -50%)`
-  raf = requestAnimationFrame(loop)
-}
-
 function enable() {
   if (coarsePointer || active.value) return
   active.value = true
@@ -114,14 +106,28 @@ function enable() {
   window.addEventListener('pointerup', onUp, { passive: true })
   document.documentElement.addEventListener('mouseleave', onLeave)
   document.documentElement.addEventListener('mouseenter', onEnter)
-  document.addEventListener('visibilitychange', onVisibility)
-  raf = requestAnimationFrame(loop)
+  // 双层跟随：叶片快贴合（0.12s）、光环慢拖尾（0.55s）；reduced-motion 直贴。
+  // follower 就绪前鼠标事件里 ? 可选调用不生效，故就绪后补一次当前位置
+  void createFollower(leafEl.value!, { duration: reduceMotion ? 0.01 : 0.12 }).then((f) => {
+    if (!active.value) return f.stop()   // 等待期间已被关闭：直接丢弃
+    leafFollower = f
+    f.move(mx, my)
+  })
+  void createFollower(ringEl.value!, { duration: reduceMotion ? 0.01 : 0.55, center: true }).then((f) => {
+    if (!active.value) return f.stop()
+    ringFollower = f
+    f.move(mx, my)
+  })
 }
 
 function disable() {
   if (!active.value) return
   active.value = false
   shown.value = false
+  leafFollower?.stop()
+  ringFollower?.stop()
+  leafFollower = null
+  ringFollower = null
   document.body.classList.remove('dendro-cursor')
   window.removeEventListener('mousemove', onMove)
   window.removeEventListener('mouseover', onOver)
@@ -129,18 +135,6 @@ function disable() {
   window.removeEventListener('pointerup', onUp)
   document.documentElement.removeEventListener('mouseleave', onLeave)
   document.documentElement.removeEventListener('mouseenter', onEnter)
-  document.removeEventListener('visibilitychange', onVisibility)
-  cancelAnimationFrame(raf)
-}
-
-// 窗口隐藏/最小化时停 rAF（浏览器通常自动节流，这里显式兜底，防 WebView2 边缘情况）
-function onVisibility() {
-  if (document.hidden) {
-    cancelAnimationFrame(raf)
-    raf = 0
-  } else if (active.value && !raf) {
-    raf = requestAnimationFrame(loop)
-  }
 }
 
 onMounted(() => {
