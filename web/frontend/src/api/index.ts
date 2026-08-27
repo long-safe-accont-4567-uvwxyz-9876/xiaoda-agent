@@ -365,6 +365,10 @@ export const deleteKnowledgeRelation = (id: string) =>
 export const listKnowledgeEntities = (limit = 200) =>
   get<KnowledgeEntityRow[]>(`/insight/knowledge/entities?limit=${limit}`)
 
+/** 单实体详情（含 observations）——记忆树编辑气泡用（2026-08-27） */
+export const getKnowledgeEntity = (name: string) =>
+  get<KnowledgeEntityRow>(`/insight/knowledge/entities/${encodeURIComponent(name)}`)
+
 export const listKnowledgeRelations = (limit = 200) =>
   get<KnowledgeRelationRow[]>(`/insight/knowledge/relations?limit=${limit}`)
 

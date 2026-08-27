@@ -25,8 +25,11 @@
  *  - 闲置公转通过 controlType:'orbit' 的 OrbitControls.autoRotate 实现（引擎每帧调用 controls.update）。
  */
 import { ref, computed, onMounted, onBeforeUnmount, watch } from 'vue'
-import { NInput, NButton, NTag, useMessage, NInputNumber } from 'naive-ui'
-import { getKnowledgeGraph } from '../../api'
+import { NInput, NButton, NTag, useMessage, NInputNumber, NSelect, NPopconfirm } from 'naive-ui'
+import {
+  getKnowledgeGraph, getKnowledgeEntity, createKnowledgeEntity, updateKnowledgeEntity,
+  deleteKnowledgeEntity, createKnowledgeRelation, deleteKnowledgeRelation,
+} from '../../api'
 import { getWsClient, type WsEvent } from '../../api/ws'
 import { useKnowledgeGraphData } from '../../composables/useKnowledgeGraphData'
 import { t, tf } from '../../i18n'
@@ -95,6 +98,8 @@ function ensureEngine(): UniverseEngine {
       heavyEdges,
       fps,
       onExpandRequest: expandAround,
+      // 空枝尖芽点点击 → "新记忆"面板（挂接父球留空 = 长成独立新枝）
+      onBudClick: () => openCreate(),
     })
   }
   return engine
@@ -111,7 +116,7 @@ const acc = useKnowledgeGraphData<GraphNode, GraphLink>(
     kind: raw.kind,
     val: degree + 1,
   }),
-  (raw) => ({ source: String(raw.from), target: String(raw.to), relation: raw.relation }),
+  (raw) => ({ source: String(raw.from), target: String(raw.to), relation: raw.relation, id: raw.id }),
 )
 const accNodes = computed(() => acc.nodes.value)
 const accLinks = computed(() => acc.edges.value)
@@ -270,8 +275,172 @@ const lightLabel = computed(() => qualityTier.value === 'high'
 const selectedRelations = computed(() => {
   const node = selectedNode.value
   if (!node) return []
-  return findRelations(links.value, node.id as string, 10, t('universeGraph.defaultRelation'))
+  return findRelations(links.value, node.id as string, 30, t('universeGraph.defaultRelation'))
 })
+
+// ── 记忆球编辑（2026-08-27 记忆树编辑专项）──
+// 模式：view 只读详情 / edit 编辑实体 / create 新建实体（空枝尖或工具栏入口）
+const detailMode = ref<'view' | 'edit' | 'create'>('view')
+const editKind = ref('')
+const editObs = ref('')
+const editSaving = ref(false)
+const createName = ref('')
+// 新建：挂接父球（可选，建一条 parent → new 的关系让新球长在父球枝头）
+const createParentId = ref<string | null>(null)
+const createRelation = ref('')
+const createLinkOptions = computed(() =>
+  nodes.value.map(n => ({ label: n.name, value: n.id as string })))
+// 删除实体：输入实体名确认（破坏性操作，防误删）
+const deleteConfirmName = ref('')
+const deleting = ref(false)
+// 添加连接
+const addLinkOpen = ref(false)
+const addLinkTarget = ref<string | null>(null)
+const addLinkRelation = ref('')
+const addLinkSaving = ref(false)
+
+const KIND_OPTIONS = ['entity', 'person', 'place', 'concept', 'event']
+
+// 3D 场景点击其他节点时：气泡回到只读态（编辑/新建表单一律不跨节点保留）
+watch(selectedNode, () => {
+  if (detailMode.value !== 'create') resetDetailMode()
+})
+
+function openEdit() {
+  const node = selectedNode.value
+  if (!node) return
+  detailMode.value = 'edit'
+  editKind.value = node.kind || 'entity'
+  editObs.value = ''
+  // 拉观察记录（graph 接口只带 name/kind）
+  getKnowledgeEntity(node.name)
+    .then(row => { if (detailMode.value === 'edit') editObs.value = row.observations || '' })
+    .catch(() => { /* 拉不到就留空，保存时以空串不覆盖语义仍成立 */ })
+}
+
+function resetDetailMode() {
+  detailMode.value = 'view'
+  deleteConfirmName.value = ''
+  addLinkOpen.value = false
+  createParentId.value = null
+  createRelation.value = ''
+  createName.value = ''
+}
+
+async function saveEntityEdit() {
+  const node = selectedNode.value
+  if (!node) return
+  editSaving.value = true
+  try {
+    await updateKnowledgeEntity(node.name, { kind: editKind.value, observations: editObs.value })
+    node.kind = editKind.value
+    message.success(t('universeGraph.saved'))
+    detailMode.value = 'view'
+  } catch (e: any) {
+    message.error(e.message)
+  } finally {
+    editSaving.value = false
+  }
+}
+
+async function removeEntity() {
+  const node = selectedNode.value
+  if (!node || deleteConfirmName.value !== node.name) return
+  deleting.value = true
+  try {
+    await deleteKnowledgeEntity(node.name)
+    message.success(tf('universeGraph.deleted', node.name))
+    selectedNode.value = null
+    resetDetailMode()
+    await refreshAfterMutation()
+  } catch (e: any) {
+    message.error(e.message)
+  } finally {
+    deleting.value = false
+  }
+}
+
+async function removeRelation(relId?: string) {
+  if (!relId) return
+  try {
+    await deleteKnowledgeRelation(relId)
+    message.success(t('universeGraph.relationDeleted'))
+    await refreshAfterMutation()
+  } catch (e: any) {
+    message.error(e.message)
+  }
+}
+
+async function submitAddLink() {
+  const node = selectedNode.value
+  if (!node || !addLinkTarget.value) return
+  addLinkSaving.value = true
+  try {
+    await createKnowledgeRelation({
+      from: node.name, to: addLinkTarget.value,
+      relation: addLinkRelation.value.trim() || t('universeGraph.defaultRelation'),
+    })
+    message.success(t('universeGraph.relationAdded'))
+    addLinkOpen.value = false
+    addLinkTarget.value = null
+    addLinkRelation.value = ''
+    await refreshAfterMutation()
+  } catch (e: any) {
+    message.error(e.message)
+  } finally {
+    addLinkSaving.value = false
+  }
+}
+
+/** 新建实体：空枝尖入口不挂父球；记忆球入口必须选父球（关系可空用默认） */
+function openCreate(parentId?: string) {
+  resetDetailMode()
+  detailMode.value = 'create'
+  selectedNode.value = null
+  createParentId.value = parentId ?? null
+  editKind.value = 'entity'
+  editObs.value = ''
+  createRelation.value = ''
+}
+
+async function submitCreate(name: string) {
+  const trimmed = name.trim()
+  if (!trimmed) return
+  editSaving.value = true
+  try {
+    await createKnowledgeEntity({ name: trimmed, kind: editKind.value, observations: editObs.value })
+    if (createParentId.value) {
+      const parent = nodes.value.find(n => n.id === createParentId.value)
+      if (parent) {
+        await createKnowledgeRelation({
+          from: parent.name, to: trimmed,
+          relation: createRelation.value.trim() || t('universeGraph.defaultRelation'),
+        })
+      }
+    }
+    message.success(tf('universeGraph.created', trimmed))
+    resetDetailMode()
+    await refreshAfterMutation()
+    // 聚焦新球
+    const fresh = nodes.value.find(n => n.name === trimmed)
+    if (fresh) setTimeout(() => { if (!destroyed) engine?.focusOnNode(fresh) }, 600)
+  } catch (e: any) {
+    message.error(e.message)
+  } finally {
+    editSaving.value = false
+  }
+}
+
+/** 增删改后局部刷新：不重置视角/树，仅合并新数据（保持场景连续性） */
+async function refreshAfterMutation() {
+  try {
+    const focus = selectedNode.value?.name || ''
+    const data = await getKnowledgeGraph(focus || searchText.value, activeDepth.value ?? 1)
+    if (destroyed) return
+    acc.merge(data.nodes || [], data.edges || [])
+    applyAccumulatedToGraph()
+  } catch { /* 刷新失败不打断操作流，WS 同步会再补 */ }
+}
 
 // ── 生命周期 ──
 onMounted(() => {
@@ -361,6 +530,7 @@ watch(() => props.depth, (d) => {
         <n-button size="tiny" quaternary @click="resetView" :title="t('universeGraph.resetView')">{{ t('universeGraph.resetView') }}</n-button>
         <n-button size="tiny" quaternary @click="toggleLight">{{ lightLabel }}</n-button>
         <n-button size="tiny" quaternary @click="loadGraph()">{{ t('universeGraph.refresh') }}</n-button>
+        <n-button size="tiny" type="primary" @click="openCreate()">{{ t('universeGraph.createTitle') }}</n-button>
         <n-button class="universe-close" size="tiny" type="primary" @click="emit('close')">{{ t('universeGraph.close') }}</n-button>
         <n-button size="tiny" quaternary @click="toolbarCollapsed = true">▴</n-button>
       </template>
@@ -391,21 +561,110 @@ watch(() => props.depth, (d) => {
       <n-button size="small" type="primary" @click="emit('close')">{{ t('universeGraph.close') }}</n-button>
     </div>
 
-    <!-- 节点详情浮层 -->
-    <div v-if="selectedNode" class="universe-detail glass-panel">
-      <div class="detail-head">
-        <span class="detail-name">{{ selectedNode.name }}</span>
-        <n-tag size="tiny" :bordered="false">{{ kindLabel(selectedNode.kind) }}</n-tag>
-        <span class="detail-degree">{{ t('universeGraph.degree') }} {{ (selectedNode.val ?? 1) - 1 }}</span>
-        <n-button size="tiny" quaternary @click="selectedNode = null">✕</n-button>
-      </div>
-      <div class="detail-relations">
-        <div v-for="(r, i) in selectedRelations" :key="i" class="rel-row">
-          <span class="rel-arrow">{{ r.other }}</span>
-          <n-tag size="tiny" type="info" :bordered="false">{{ r.relation }}</n-tag>
+    <!-- 节点详情/编辑气泡（view 只读 / edit 编辑实体 / create 新建实体） -->
+    <div v-if="selectedNode || detailMode === 'create'" class="universe-detail glass-panel">
+      <!-- 只读视图 -->
+      <template v-if="detailMode === 'view' && selectedNode">
+        <div class="detail-head">
+          <span class="detail-name">{{ selectedNode.name }}</span>
+          <n-tag size="tiny" :bordered="false">{{ kindLabel(selectedNode.kind) }}</n-tag>
+          <span class="detail-degree">{{ t('universeGraph.degree') }} {{ (selectedNode.val ?? 1) - 1 }}</span>
+          <n-button size="tiny" quaternary @click="selectedNode = null; resetDetailMode()">✕</n-button>
         </div>
-        <div v-if="!selectedRelations.length" class="rel-empty">{{ t('universeGraph.noRelations') }}</div>
-      </div>
+        <div class="detail-actions">
+          <n-button size="tiny" @click="openEdit">{{ t('universeGraph.edit') }}</n-button>
+          <n-button size="tiny" @click="openCreate(selectedNode.id as string)">{{ t('universeGraph.addChild') }}</n-button>
+        </div>
+        <div class="detail-relations">
+          <div v-for="r in selectedRelations" :key="(r.id ?? '') + r.other" class="rel-row">
+            <span class="rel-arrow">{{ r.other }}</span>
+            <n-tag size="tiny" type="info" :bordered="false">{{ r.relation }}</n-tag>
+            <n-popconfirm v-if="r.id" @positive-click="removeRelation(r.id)">
+              <template #trigger>
+                <n-button size="tiny" quaternary type="error" class="rel-del">✕</n-button>
+              </template>
+              {{ t('universeGraph.delRelationConfirm') }} {{ r.other }}？
+            </n-popconfirm>
+          </div>
+          <div v-if="!selectedRelations.length" class="rel-empty">{{ t('universeGraph.noRelations') }}</div>
+        </div>
+        <div v-if="!addLinkOpen" class="detail-actions">
+          <n-button size="tiny" quaternary @click="addLinkOpen = true">+ {{ t('universeGraph.addRelation') }}</n-button>
+        </div>
+        <div v-else class="detail-form">
+          <n-select v-model:value="addLinkTarget" size="tiny" filterable
+                    :options="createLinkOptions" :placeholder="t('universeGraph.targetPh')" />
+          <n-input v-model:value="addLinkRelation" size="tiny"
+                   :placeholder="t('universeGraph.relationPh')" />
+          <div class="form-row">
+            <n-button size="tiny" type="primary" :loading="addLinkSaving" :disabled="!addLinkTarget"
+                      @click="submitAddLink">{{ t('universeGraph.addRelation') }}</n-button>
+            <n-button size="tiny" quaternary @click="addLinkOpen = false">{{ t('universeGraph.cancel') }}</n-button>
+          </div>
+        </div>
+      </template>
+
+      <!-- 编辑实体 -->
+      <template v-else-if="detailMode === 'edit' && selectedNode">
+        <div class="detail-head">
+          <span class="detail-name">{{ selectedNode.name }}</span>
+          <n-button size="tiny" quaternary @click="resetDetailMode">✕</n-button>
+        </div>
+        <div class="detail-form">
+          <span class="form-label">{{ t('universeGraph.kindLabel') }}</span>
+          <n-select v-model:value="editKind" size="tiny" :options="KIND_OPTIONS.map(k => ({ label: t('universeGraph.kind' + k), value: k }))" />
+          <span class="form-label">{{ t('universeGraph.observations') }}</span>
+          <n-input v-model:value="editObs" type="textarea" :rows="6"
+                   :placeholder="t('universeGraph.obsPh')" />
+          <div class="form-row">
+            <n-button size="tiny" type="primary" :loading="editSaving" @click="saveEntityEdit">{{ t('universeGraph.save') }}</n-button>
+            <n-button size="tiny" quaternary @click="resetDetailMode">{{ t('universeGraph.cancel') }}</n-button>
+          </div>
+        </div>
+        <div class="detail-danger">
+          <span class="form-label">{{ t('universeGraph.dangerZone') }}</span>
+          <n-input v-model:value="deleteConfirmName" size="tiny"
+                   :placeholder="t('universeGraph.deleteConfirmPh')" />
+          <n-popconfirm :disabled="deleteConfirmName !== selectedNode.name" @positive-click="removeEntity">
+            <template #trigger>
+              <n-button size="tiny" type="error" :disabled="deleteConfirmName !== selectedNode.name" :loading="deleting">
+                {{ t('universeGraph.deleteEntity') }}
+              </n-button>
+            </template>
+            {{ t('universeGraph.deleteEntityConfirm') }}
+          </n-popconfirm>
+        </div>
+      </template>
+
+      <!-- 新建实体 -->
+      <template v-else-if="detailMode === 'create'">
+        <div class="detail-head">
+          <span class="detail-name">{{ t('universeGraph.createTitle') }}</span>
+          <n-button size="tiny" quaternary @click="resetDetailMode">✕</n-button>
+        </div>
+        <div class="detail-form">
+          <template v-if="createParentId">
+            <span class="form-label">{{ t('universeGraph.parentLabel') }}</span>
+            <n-select v-model:value="createParentId" size="tiny" filterable :options="createLinkOptions" />
+          </template>
+          <span class="form-label">{{ t('universeGraph.nameLabel') }}</span>
+          <n-input v-model:value="createName" size="tiny" :placeholder="t('universeGraph.namePh')"
+                   @keydown.enter="submitCreate(createName)" />
+          <span class="form-label">{{ t('universeGraph.kindLabel') }}</span>
+          <n-select v-model:value="editKind" size="tiny" :options="KIND_OPTIONS.map(k => ({ label: t('universeGraph.kind' + k), value: k }))" />
+          <template v-if="createParentId">
+            <span class="form-label">{{ t('universeGraph.relationLabel') }}</span>
+            <n-input v-model:value="createRelation" size="tiny" :placeholder="t('universeGraph.relationPh')" />
+          </template>
+          <span class="form-label">{{ t('universeGraph.observations') }}</span>
+          <n-input v-model:value="editObs" type="textarea" :rows="4" :placeholder="t('universeGraph.obsPh')" />
+          <div class="form-row">
+            <n-button size="tiny" type="primary" :loading="editSaving" :disabled="!createName.trim()"
+                      @click="submitCreate(createName)">{{ t('universeGraph.create') }}</n-button>
+            <n-button size="tiny" quaternary @click="resetDetailMode">{{ t('universeGraph.cancel') }}</n-button>
+          </div>
+        </div>
+      </template>
     </div>
   </div>
 </template>
@@ -612,5 +871,48 @@ watch(() => props.depth, (d) => {
   font-size: 12px;
   color: var(--moon-dim);
   padding: 4px 0;
+}
+
+.detail-actions {
+  display: flex;
+  gap: 8px;
+  margin: 8px 0;
+}
+
+.detail-form {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin: 8px 0;
+}
+
+.form-label {
+  font-size: 11px;
+  color: var(--moon-dim);
+  margin-top: 2px;
+}
+
+.form-row {
+  display: flex;
+  gap: 8px;
+  margin-top: 4px;
+}
+
+.rel-del {
+  margin-left: auto;
+  opacity: 0.55;
+}
+
+.rel-row:hover .rel-del {
+  opacity: 1;
+}
+
+.detail-danger {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-top: 10px;
+  padding-top: 10px;
+  border-top: 1px solid var(--line-soft);
 }
 </style>

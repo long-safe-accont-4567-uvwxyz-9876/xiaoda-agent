@@ -326,7 +326,8 @@ export interface KnowledgeEntityRow {
 
 export interface KnowledgeGraphData {
   nodes: Array<{ name: string; kind?: string }>
-  edges: Array<{ from?: string; to?: string; relation?: string }>
+  /** id：关系主键（2026-08-27 记忆树编辑功能新增），删/改连接凭此定位 */
+  edges: Array<{ from?: string; to?: string; relation?: string; id?: string }>
 }
 
 /** GET /insight/knowledge/relations 行（knowledge_relations 表全列，SELECT * 直出） */

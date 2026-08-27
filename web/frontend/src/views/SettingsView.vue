@@ -649,8 +649,9 @@ const permLabel = computed<Record<string, string>>(() => ({
 .settings-view {
   min-width: 0;
   max-width: 100%;
-  overflow-x: hidden;
-  overflow-x: clip;
+  /* 不设 overflow-x：倾斜外扩需越过面板左缘绘制，裁剪交给外层 .content 兜底。
+     2026-08-27 截图对照定位：邮箱页 .mail-view 无任何 overflow 声明故永不裁，
+     本行的 clip 是设置页面板左缘被切出垂直线的直接原因（两者余量同样为零） */
 }
 .view-title { font-family: 'Noto Serif SC', serif; margin-bottom: 14px; }
 
@@ -663,6 +664,16 @@ const permLabel = computed<Record<string, string>>(() => ({
 .settings-tabs :deep(.v-x-scroll) {
   min-width: 0;
   max-width: 100%;
+}
+/* 倾斜裁剪修复第二层（2026-08-27 无头复测定位）：naive-ui pane-wrapper 自带
+   overflow:hidden 且裁剪口与面板左缘零余量重合（189=189），是 .settings-view
+   放开后的下一个切点（外扩实测 110.5px 全被它切）。解除后由 main-area/content
+   （clipLeft=68，余量 121px > 110.5px）兜底，面板视觉位置经 padding+负 margin
+   保持不变 */
+.settings-tabs :deep(.n-tabs-pane-wrapper) {
+  overflow: visible;
+  padding: 0 24px;
+  margin: 0 -24px;
 }
 
 .section { padding: 16px 18px; margin-bottom: 14px; }

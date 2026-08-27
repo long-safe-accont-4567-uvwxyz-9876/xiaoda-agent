@@ -25,6 +25,13 @@ const SEGMENTS_PER_BRANCH = 3  // 每段枝的圆柱分段数
 export interface WorldTree {
   /** 全部枝尖锚点（世界坐标，含群组偏移；已按 近干/居中优先 排序；自动生长的新梢会追加在尾部） */
   anchors: THREE.Vector3[]
+  /** 空枝尖芽点：未被记忆球占用的枝尖下标集合（世界树编辑：点击芽点新建记忆），
+   *  由引擎每帧按 placement 占用状态刷新 */
+  readonly budIndices: Set<number>
+  /** 芽点几何（Raycaster 拾取用；位置已随风摆同步） */
+  readonly budPoints: THREE.Points
+  /** 占用状态变化后重建芽点几何（引擎低频调用） */
+  rebuildBudGeometry(): void
   /** 建议初始相机距离 */
   viewDistance: number
   /** 树群组（引擎用于拖拽时的树冠倾斜弹性） */
@@ -221,6 +228,37 @@ export function buildWorldTree(scene: THREE.Scene): WorldTree {
   group.add(tipPoints)
   disposables.push(tipGeo, tipMat)
 
+  // ── 空枝尖芽点（2026-08-27 记忆树编辑专项）──
+  // 与 tipPoints 同源同风摆，但独立几何+呼吸材质：占用状态由引擎每帧写入
+  // budIndices，worldTree 据此重建芽点几何（枝尖数量少，重建成本可忽略）
+  const budIndices = new Set<number>()
+  const budGeo = new THREE.BufferGeometry()
+  const budMat = new THREE.PointsMaterial({
+    color: '#d8ffb0',
+    size: 5.6,
+    transparent: true,
+    opacity: 0.75,
+    blending: THREE.AdditiveBlending,
+    depthWrite: false,
+    sizeAttenuation: true,
+  })
+  const budPoints = new THREE.Points(budGeo, budMat)
+  budPoints.frustumCulled = false
+  group.add(budPoints)
+  disposables.push(budGeo, budMat)
+
+  function rebuildBudGeometry(): void {
+    const arr: number[] = []
+    for (const i of budIndices) {
+      if (i * 3 + 2 < tipBase.length) {
+        // 与 update() 的风摆同步同款：tipBase 是局部坐标，绘制在 group 内即可
+        arr.push(tipBase[i * 3], tipBase[i * 3 + 1], tipBase[i * 3 + 2])
+      }
+    }
+    budGeo.setAttribute('position', new THREE.Float32BufferAttribute(arr, 3))
+    budGeo.attributes.position.needsUpdate = true
+  }
+
   // ── 动态生长层：梢容量耗尽后自动延伸的新枝（合批合并，同享风摆材质）──
   const dynGeos: THREE.BufferGeometry[] = []
   let dynDirty = false
@@ -405,6 +443,9 @@ export function buildWorldTree(scene: THREE.Scene): WorldTree {
 
   return {
     anchors,
+    budIndices,
+    budPoints,
+    rebuildBudGeometry,
     viewDistance: totalH * 1.55,
     group,
     originY: groupY,
@@ -430,6 +471,20 @@ export function buildWorldTree(scene: THREE.Scene): WorldTree {
         posAttr.array[i + 2] = tipBase[i + 2] + windTmp.z
       }
       posAttr.needsUpdate = true
+      // 芽点风摆同步（几何顶点与 tipBase 同源）+ 呼吸脉动
+      if (budIndices.size) {
+        const bAttr = budGeo.attributes.position as THREE.BufferAttribute
+        let bi = 0
+        for (const idx of budIndices) {
+          if (idx * 3 + 2 >= tipBase.length) continue
+          windOffset(tipBase[idx * 3 + 1], time, windTmp)
+          bAttr.array[bi] = tipBase[idx * 3] + windTmp.x
+          bAttr.array[bi + 2] = tipBase[idx * 3 + 2] + windTmp.z
+          bi += 3
+        }
+        bAttr.needsUpdate = true
+      }
+      budMat.opacity = 0.45 + 0.3 * Math.sin(time * 2.1)
       // 光尘螺旋上升，越顶回卷
       for (let i = 0; i < MOTES; i++) {
         moteAngle[i] += moteRot[i] * dt

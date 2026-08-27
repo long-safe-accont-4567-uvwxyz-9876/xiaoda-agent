@@ -65,6 +65,8 @@ export interface UniverseEngineContext {
   fps: Ref<number>
   /** 单击节点的业务追加动作（增量拉邻域），在选中→高亮→聚焦→涟漪之后同步触发 */
   onExpandRequest: (node: GraphNode) => void
+  /** 空枝尖芽点被点击（2026-08-27 记忆树编辑专项）：打开"新记忆"面板 */
+  onBudClick?: () => void
 }
 
 export interface UniverseEngine {
@@ -152,12 +154,26 @@ export function createUniverseEngine(
   const knownIds = new Set<string>()                       // 已落梢的节点 id
 
   // ── 记忆球落梢（算法在 memoryPlacement.ts，2026-08-25 门禁专项抽出）──
+  const raycaster = new THREE.Raycaster()
   const placement = createMemoryPlacement({
     getTree: () => tree,
     getRootHintId: () => rootHintId,
     bumpCanopyCursor: () => canopyCursor++,
     getNeighborsCache: () => neighborsCache,
   })
+  let budSyncCounter = 0
+  /** 空枝尖 → 芽点集合；几何按需重建（点击拾取在 onCanvasClick） */
+  function syncBudOccupancy(): void {
+    if (!tree) return
+    let changed = false
+    const n = Math.min(tree.anchors.length, 1 << 12)
+    for (let i = 0; i < n; i++) {
+      const used = placement.isAnchorUsed(i)
+      if (used && tree.budIndices.has(i)) { tree.budIndices.delete(i); changed = true }
+      else if (!used && !tree.budIndices.has(i)) { tree.budIndices.add(i); changed = true }
+    }
+    if (changed) tree.rebuildBudGeometry()
+  }
   const spawnTimes = new Map<string, number>()             // 生长动画：id → 出生时刻
   const recentSpawn = new Map<string, number>()            // 新生宽限期：宽限内不被聚焦调暗
   const springState = new Map<string, { sx: number; sy: number; sz: number }>()
@@ -363,6 +379,8 @@ export function createUniverseEngine(
       lastT = now
       spinStarLayers(starLayers)
       tree?.update(dt)
+      // 芽点占用状态低频同步（枝尖占用仅随落梢/删除变化，30 帧一次足够）
+      if (tree && (++budSyncCounter % 30 === 0)) syncBudOccupancy()
       applyTreeSprings(dt)
       ripples.update(instance ? instance.scene() : null)
       growthStep(now)
@@ -656,6 +674,23 @@ export function createUniverseEngine(
 
     // 双击空白处复位全局视角（全屏模式快速回到总览）
     el.addEventListener('dblclick', onDblClickReset)
+
+    // 空枝尖芽点拾取（2026-08-27 记忆树编辑专项）：pointerdown/up 位移 <6px
+    // 视为点击（区别于轨道旋转拖拽），Raycaster 对芽点 Points 阈值拾取
+    let downX = 0, downY = 0
+    el.addEventListener('pointerdown', (e: PointerEvent) => { downX = e.clientX; downY = e.clientY })
+    el.addEventListener('pointerup', (e: PointerEvent) => {
+      if (!ctx.onBudClick || !tree || !tree.budIndices.size) return
+      if (Math.hypot(e.clientX - downX, e.clientY - downY) > 6) return
+      const rect = el.getBoundingClientRect()
+      const ndc = new THREE.Vector2(
+        ((e.clientX - rect.left) / rect.width) * 2 - 1,
+        -((e.clientY - rect.top) / rect.height) * 2 + 1)
+      raycaster.setFromCamera(ndc, g.camera())
+      raycaster.params.Points = { threshold: 6 }
+      const hits = raycaster.intersectObject(tree.budPoints, false)
+      if (hits.length) { ctx.selectedNode.value = null; ctx.onBudClick(); resetIdleTimer() }
+    })
   }
 
   function destroyInstance(): void {
@@ -692,6 +727,7 @@ export function createUniverseEngine(
     // 新增节点 → 落梢到父节点枝尖附近的空梢（一球一梢）
     const fresh = nodes.filter(n => !knownIds.has(n.id as string))
     placement.assignAnchors(fresh)
+    syncBudOccupancy()
     const now = performance.now()
     for (const n of fresh) {
       knownIds.add(n.id as string)

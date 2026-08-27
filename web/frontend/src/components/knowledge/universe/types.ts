@@ -16,6 +16,8 @@ export interface GraphLink {
   source: string | GraphNode
   target: string | GraphNode
   relation?: string
+  /** 关系主键（删/改连接凭此定位；graph 接口 2026-08-27 起返回） */
+  id?: string
 }
 
 export interface StarLayer {

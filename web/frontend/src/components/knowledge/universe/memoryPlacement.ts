@@ -40,6 +40,8 @@ function hashStr(s: string): number {
 export interface MemoryPlacement {
   assignAnchors(fresh: GraphNode[]): void
   reset(): void
+  /** 枝尖下标是否已被记忆球占用（空枝尖=芽点，可点击新建） */
+  isAnchorUsed(i: number): boolean
 }
 
 export function createMemoryPlacement(deps: MemoryPlacementDeps): MemoryPlacement {
@@ -194,5 +196,5 @@ export function createMemoryPlacement(deps: MemoryPlacementDeps): MemoryPlacemen
     occGrid.clear()
   }
 
-  return { assignAnchors, reset }
+  return { assignAnchors, reset, isAnchorUsed: (i: number) => usedAnchors.has(i) }
 }

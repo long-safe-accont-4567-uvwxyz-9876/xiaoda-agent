@@ -335,7 +335,8 @@ async def knowledge_graph(request: Request,
                 ent_map[row["name"]] = dict(row)
         for rel in hop_rels:
             edges.append({"from": rel["from_entity"], "to": rel["to_entity"],
-                          "relation": rel.get("relation_type", "")})
+                          "relation": rel.get("relation_type", ""),
+                          "id": rel["id"]})
         prev_kept |= {r["from_entity"] for r in hop_rels} | {r["to_entity"] for r in hop_rels}
         frontier = list(set(next_frontier))
 
@@ -351,6 +352,16 @@ async def list_entities(request: Request, limit: int = Query(default=200, le=500
     kdb = core.db.knowledge
     rows = await kdb.get_all_entities(limit=limit)
     return Envelope(data=rows)
+
+
+@router.get("/insight/knowledge/entities/{name}", response_model=Envelope[dict])
+async def get_entity(name: str, request: Request) -> Any:
+    """单实体详情（含 observations）——记忆树编辑气泡打开时拉取（2026-08-27）。"""
+    core = request.app.state.core
+    row = await core.db.knowledge.get_knowledge_entity(name)
+    if not row:
+        raise HTTPException(404, f"实体 {name} 不存在")
+    return Envelope(data=row)
 
 
 @router.get("/insight/knowledge/relations", response_model=Envelope[list[dict]])

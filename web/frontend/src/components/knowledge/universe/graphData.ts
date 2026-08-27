@@ -27,6 +27,8 @@ export function buildNeighbors(ns: GraphNode[], ls: GraphLink[]): Map<string, Se
 export interface NodeRelation {
   relation: string
   other: string
+  /** 关系主键（删/改连接凭此定位） */
+  id?: string
 }
 
 /** 选中节点的关系列表（详情面板，最多 limit 条） */
@@ -42,6 +44,7 @@ export function findRelations(
     .map(l => ({
       relation: l.relation || fallbackRelation,
       other: linkId(l.source) === nodeId ? linkId(l.target) : linkId(l.source),
+      id: l.id,
     }))
 }
 
