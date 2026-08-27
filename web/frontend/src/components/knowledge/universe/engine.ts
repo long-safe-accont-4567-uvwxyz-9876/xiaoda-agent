@@ -193,11 +193,17 @@ export function createUniverseEngine(
   const windV = new THREE.Vector3()
 
   const ripples = createRippleManager()
+  // 手动开灯优先（2026-08-27 真机反馈"开灯一直自动关"）：用户点开灯后，
+  // 帧率监测不再自动降档关灯——低帧率只让 fps 徽标变红提示，是否关灯
+  // 由用户决定。重载/降档重建后标记复位
+  let manualLightPinned = false
   const perf = createPerfMonitor({
     fps: ctx.fps,
     qualityTier: ctx.qualityTier,
     isAlive: () => alive,
     onTierApplied: applyQualityTier,
+    /** 手动开灯期间禁止自动降档（灯是用户点名要的） */
+    autoDowngradeAllowed: () => !manualLightPinned,
   })
 
   function getOrbitControls(): OrbitLikeControls | null {
@@ -714,6 +720,7 @@ export function createUniverseEngine(
 
   function resetWorld(rootId?: string): void {
     knownIds.clear()
+    manualLightPinned = false  // 全量重载：灯回到自动调节
     placement.reset()
     spawnTimes.clear()
     recentSpawn.clear()
@@ -819,6 +826,8 @@ export function createUniverseEngine(
   // 开灯/关灯：Bloom 二态开关（high=灯开，medium=灯关）
   function toggleLight(): void {
     ctx.qualityTier.value = ctx.qualityTier.value === 'high' ? 'medium' : 'high'
+    // 开灯 = 用户手动要求 high：此后帧率监测不得再自动关灯
+    manualLightPinned = ctx.qualityTier.value === 'high'
     perf.resetStreak()
     applyQualityTier()
   }

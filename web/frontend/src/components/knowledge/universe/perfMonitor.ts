@@ -15,6 +15,8 @@ export interface PerfMonitorOptions {
   isAlive: () => boolean
   /** 判定降档后同步调用（引擎应用新档位） */
   onTierApplied: () => void
+  /** 返回 false 时禁止自动降档（手动开灯优先，2026-08-27） */
+  autoDowngradeAllowed?: () => boolean
 }
 
 export interface PerfMonitor {
@@ -47,6 +49,13 @@ export function createPerfMonitor(opts: PerfMonitorOptions): PerfMonitor {
       if (elapsed >= SAMPLE_INTERVAL_MS) {
         opts.fps.value = Math.round((frameCount * 1000) / elapsed)
         if (opts.fps.value < LOW_FPS_THRESHOLD) {
+          // 手动开灯钉住期间：低帧率只反映在 fps 徽标，不自动关灯
+          if (opts.autoDowngradeAllowed && !opts.autoDowngradeAllowed()) {
+            frameCount = 0
+            lastPerfTime = now
+            raf = requestAnimationFrame(tick)
+            return
+          }
           lowFpsStreak++
           if (lowFpsStreak >= STREAK_TO_MEDIUM && opts.qualityTier.value === 'high') {
             opts.qualityTier.value = 'medium'
