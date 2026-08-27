@@ -212,6 +212,23 @@ jobs:
           LC_ALL: C.UTF-8
           LANG: C.UTF-8
 
+      - name: Bundle winpty x64 (ConPTY agent plus dll from official release)
+        if: runner.os == 'Windows'
+        shell: bash
+        run: |
+          # pywinpty wheel 只带 winpty.dll，缺少 ConPTY 会话必需的 winpty-agent.exe。
+          # 从 winpty 官方 Release (0.4.3) 取配套 x64 二进制，整体覆盖 _internal/winpty/，
+          # 保证 dll 与 agent 版本一致（混搭版本可能导致 IPC 协议不匹配）。
+          mkdir -p .ci-tmp
+          curl -sL -o .ci-tmp/winpty.zip \
+            https://github.com/rprichard/winpty/releases/download/0.4.3/winpty-0.4.3-msvc2015.zip
+          python -c "import zipfile; zipfile.ZipFile('.ci-tmp/winpty.zip').extractall('.ci-tmp/winpty-src')"
+          mkdir -p dist/xiaoda-agent/_internal/winpty
+          cp .ci-tmp/winpty-src/x64/bin/winpty.dll .ci-tmp/winpty-src/x64/bin/winpty-agent.exe \
+             dist/xiaoda-agent/_internal/winpty/
+          ls -lh dist/xiaoda-agent/_internal/winpty/
+          rm -rf .ci-tmp
+
       - name: Verify pilk C extension bundled (voice messages)
         shell: bash
         run: |
