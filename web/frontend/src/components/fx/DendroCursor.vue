@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { onMounted, onBeforeUnmount, ref, watch } from 'vue'
+import { onMounted, onBeforeUnmount, nextTick, ref, watch } from 'vue'
 import { useUiStore } from '../../stores/ui'
 import { createFollower } from '../../utils/gsapMotion'
 
@@ -106,17 +106,20 @@ function enable() {
   window.addEventListener('pointerup', onUp, { passive: true })
   document.documentElement.addEventListener('mouseleave', onLeave)
   document.documentElement.addEventListener('mouseenter', onEnter)
-  // 双层跟随：叶片快贴合（0.12s）、光环慢拖尾（0.55s）；reduced-motion 直贴。
-  // follower 就绪前鼠标事件里 ? 可选调用不生效，故就绪后补一次当前位置
-  void createFollower(leafEl.value!, { duration: reduceMotion ? 0.01 : 0.12 }).then((f) => {
-    if (!active.value) return f.stop()   // 等待期间已被关闭：直接丢弃
-    leafFollower = f
-    f.move(mx, my)
-  })
-  void createFollower(ringEl.value!, { duration: reduceMotion ? 0.01 : 0.55, center: true }).then((f) => {
-    if (!active.value) return f.stop()
-    ringFollower = f
-    f.move(mx, my)
+  // v-if 的 DOM 在下一个 tick 才存在：先等渲染，再建双层 quickTo 跟随
+  // （叶片快贴合 0.12s、光环慢拖尾 0.55s；reduced-motion 直贴）
+  void nextTick().then(() => {
+    if (!active.value || !leafEl.value || !ringEl.value) return
+    void createFollower(leafEl.value, { duration: reduceMotion ? 0.01 : 0.12 }).then((f) => {
+      if (!active.value) return f.stop()
+      leafFollower = f
+      f.move(mx, my)
+    })
+    void createFollower(ringEl.value, { duration: reduceMotion ? 0.01 : 0.55, center: true }).then((f) => {
+      if (!active.value) return f.stop()
+      ringFollower = f
+      f.move(mx, my)
+    })
   })
 }
 

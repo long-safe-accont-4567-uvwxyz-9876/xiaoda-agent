@@ -135,7 +135,10 @@ if (!auth.isLoggedIn) {
   overflow: auto;
   padding: 22px clamp(16px, 2.2vw, 32px) 32px;
   scroll-padding-top: 20px;
-  contain: layout paint;
+  /* 只留 layout：paint 会把容器变成后代绘制裁剪边界，
+     Tilt3D 卡片贴边倾斜时溢出部分被裁平（看起来像被遮挡）；
+     溢出剪裁已由 overflow:auto 保证，无需 paint */
+  contain: layout;
 }
 
 .content > :deep(*) {
