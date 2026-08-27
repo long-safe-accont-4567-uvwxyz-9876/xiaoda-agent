@@ -148,7 +148,7 @@ class IntentDecomposer:
     def _build_messages(output: str) -> list[dict]:
         """构建分析消息：production override 优先（system+user 双槽），缺省回退内置。"""
         try:
-            from web.prompt_profile_repository import try_resolve
+            from core_runtime.prompt_profile_repository import try_resolve
 
             override = try_resolve("intent.decompose", {"text": output})
         except Exception:

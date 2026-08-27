@@ -47,8 +47,8 @@ BASELINES: dict[str, int] = {
 }
 
 WEB_TEST_BASELINES: dict[str, int] = {
-    "web/frontend/src/i18n/zh.ts": 1536,
-    "web/frontend/src/i18n/en.ts": 1535,
+    "web/frontend/src/i18n/zh.ts": 1562,
+    "web/frontend/src/i18n/en.ts": 1561,
     "web/frontend/src/views/ChatView.vue": 962,
     "web/frontend/src/views/RetrievalView.vue": 915,
     "tests/test_local_ai_device_registry.py": 2260,
@@ -89,8 +89,14 @@ def _line_count(rel: str) -> int:
 #     查询向量传入混合检索(vec 主通道与 child 子通道批内复用, embed 减半)；
 #   core/background_tasks.py 950→956 —— _spawn finally 的 ContextVar reset
 #     增加 ValueError 防护(loop 关停 GC finalizer 路径 reset 必然失败抛错)；
+#   以上四项 2026-08-27 二次上调——归属小妲已入库批次(非本会话改动):
+#     vector_store 1686→1732 —— embed 批量路径 EmbedCache 接入(95302d29,
+#       仅 miss 子集送推理)+ provider 耗时直方图(a8e4f85d)；
+#     insight 926→937 / background_tasks 956→1006 —— 记忆树原地编辑与
+#       WAL 守护任务接入(a833ca4d/457dd118)；zh/en i18n 1536→1562/1535→1561
+#       —— GSAP 编排批次文案扩充(b1e5db3b 等)；
 ALLOWLIST_BASELINES: dict[str, int] = {
-    "memory/vector_store.py": 1686,
+    "memory/vector_store.py": 1732,
     "web/server.py": 1404,
     "agent_context.py": 1345,
     "web/routers/setup.py": 1333,
@@ -106,8 +112,8 @@ ALLOWLIST_BASELINES: dict[str, int] = {
     "agent_core/sub_agent_manager.py": 1131,
     "agent_core/sub_agent.py": 1036,
     "tools/_builtin_manifest.py": 1001,
-    "web/routers/insight.py": 926,
-    "core/background_tasks.py": 956,
+    "web/routers/insight.py": 937,
+    "core/background_tasks.py": 1006,
     "web/agent_registry.py": 912,
     "web/routers/local_deploy.py": 919,
     "cli.py": 908,

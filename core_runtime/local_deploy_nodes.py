@@ -407,11 +407,11 @@ def _apply_service_node(core: Any, vs: Any, node_id: str, backend: str, local_mo
             raise ValueError("ASR local runtime is not implemented")
         return
     if node_id == "intent_decomposition":
-        # 原经 web.routers.jspace 转调（其 set_intent_backend 是 core 层的薄包装）；
-        # 分层下沉后直接调 core，消除 core_runtime→web.routers 反向依赖
-        from core.j_space_bootstrap import set_intent_backend as configure_intent_backend
+        # 经 web.routers.jspace 转调：那是历史稳定的运行时热切换缝，
+        # 测试以它为 patch 点；jspace 真身只是转调 core.j_space_bootstrap
+        from web.routers.jspace import set_intent_backend
 
-        configure_intent_backend(backend, local_model)
+        set_intent_backend(backend, local_model)
         return
 
 

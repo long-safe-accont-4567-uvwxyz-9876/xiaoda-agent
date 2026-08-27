@@ -163,7 +163,7 @@ class ModelRouter(ExecutionMixin, CostTrackingMixin, ClientLifecycleMixin, Fallb
         _agnes_key = os.getenv("AGNES_API_KEY", "")
         if not _agnes_key:
             try:
-                from web._provider_keys import load_provider_key
+                from core_runtime._provider_keys import load_provider_key
                 _agnes_key = load_provider_key("agnes") or ""
             except Exception:
                 logger.debug("router.agnes_key_file_load_failed", exc_info=True)
@@ -393,7 +393,7 @@ class ModelRouter(ExecutionMixin, CostTrackingMixin, ClientLifecycleMixin, Fallb
         # Step 6: 同步 chat_model 字段到 ConfigService（WebUI 显示用）
         # CodeRabbit#1 修复：chat_model 写入失败时回滚 Step 4 的所有 task + DEFAULT_PROVIDER
         try:
-            from web.config_service import get_config_service
+            from core_runtime.config_service import get_config_service
             cfg = get_config_service()
             cfg.set("models.chat_model", {"provider": provider, "model_id": model_id})
         except Exception as e:
@@ -460,7 +460,7 @@ class ModelRouter(ExecutionMixin, CostTrackingMixin, ClientLifecycleMixin, Fallb
         """获取自定义 provider 的默认模型 ID。"""
         # 优先从配置服务获取
         try:
-            from web.config_service import get_config_service
+            from core_runtime.config_service import get_config_service
             cfg = get_config_service()
             record = cfg.get(f"models.providers.{provider}", {}) or {}
             dm = record.get("default_model", "")
@@ -508,7 +508,7 @@ class ModelRouter(ExecutionMixin, CostTrackingMixin, ClientLifecycleMixin, Fallb
         """
         providers: list[dict] = []
         try:
-            from web._discovery_cache import _cache as _disc_cache
+            from core_runtime._discovery_cache import _cache as _disc_cache
             _data = (_disc_cache.get("data") or []) if _disc_cache else []
             for _pg in _data:
                 _provider = _pg.get("provider", "")

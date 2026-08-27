@@ -65,13 +65,13 @@ _OLLAMA_ALLOWED_HOSTS = {
 
 class ProviderCredentialStore:
     def read(self, provider_id: str) -> str:
-        from web._provider_keys import load_provider_key
+        from core_runtime._provider_keys import load_provider_key
 
         return load_provider_key(provider_id)
 
     def write(self, provider_id: str, value: str) -> None:
+        from core_runtime._provider_keys import _encode_key, _key_file
         from utils.atomic_write import _restrict_file_permissions_windows, atomic_write
-        from web._provider_keys import _encode_key, _key_file
 
         path = _key_file(provider_id)
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -83,7 +83,7 @@ class ProviderCredentialStore:
             logger.debug("provider_service.key_chmod_failed: {}", path, exc_info=True)
 
     def delete(self, provider_id: str) -> None:
-        from web._provider_keys import _key_file
+        from core_runtime._provider_keys import _key_file
 
         _key_file(provider_id).unlink(missing_ok=True)
 
@@ -803,7 +803,7 @@ class ProviderService:
                 base_url=f"{definition.endpoint.base_url.rstrip('/')}/v1",
             )
         if definition.protocol is ProviderProtocol.CUSTOM_MAPPING:
-            from web.custom_providers import CustomMappingCompatClient
+            from core_runtime.custom_providers import CustomMappingCompatClient
 
             headers = dict(definition.metadata.get("headers") or {})
             if definition.auth.header and definition.auth.header not in headers and credential:
@@ -819,7 +819,7 @@ class ProviderService:
                 chat_path=definition.endpoint.chat_path,
                 models_path=definition.endpoint.models_path,
             )
-        from web.custom_providers import build_client
+        from core_runtime.custom_providers import build_client
 
         format_name = "anthropic" if definition.protocol is ProviderProtocol.ANTHROPIC else "openai"
         return build_client(format_name, definition.endpoint.base_url, credential or "ollama")

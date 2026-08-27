@@ -322,7 +322,7 @@ class AgentCore(MessageProcessorMixin, ToolExecutorMixin, SubAgentManagerMixin):
         try:
             if source == "qq_group" and not is_master:
                 return user_id
-            from web.config_service import get_config_service
+            from core_runtime.config_service import get_config_service
             cfg = get_config_service()
             platforms = cfg.get("context.shared_platforms", []) or []
             if not platforms:

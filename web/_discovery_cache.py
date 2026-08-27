@@ -1,28 +1,27 @@
-"""模型发现缓存 —— 从 web.routers.model_discovery 抽取.
+"""桥接 shim — 实现已下沉 core_runtime/_discovery_cache.py（H1 分层下沉 2026-08-27）。
 
-原 web.routers.models 顶层 `from web.routers.model_discovery import invalidate_discovery_cache`,
-而 model_discovery 函数内又 `from web.routers.models import load_provider_key`, 形成:
-    web.routers.models <-> web.routers.model_discovery
-
-将缓存 (_cache / _CACHE_TTL) 与失效函数 (invalidate_discovery_cache) 抽到本模块,
-该模块不依赖任何 web.routers 或 model_router, 从而打破循环.
+本模块所有属性读写（含测试 monkeypatch 的符号如 resolve_and_pin/_cache）
+实时转发 core_runtime 真身：普通 from-import 快照语义会让 web 层与
+core_runtime 名字分叉，patch 失效。新代码请直接 import core_runtime._discovery_cache。
 """
+from types import ModuleType
 
-import asyncio
-
-_cache: dict = {"data": None, "ts": 0.0, "refreshing": False}
-_CACHE_TTL = 30 * 60
-_cache_lock = asyncio.Lock()
+from core_runtime import _discovery_cache as _impl
 
 
-async def invalidate_discovery_cache() -> None:
-    """清除模型发现缓存，使下次请求重新获取。
+class _ForwardModule(ModuleType):
+    """属性读写双向转发到真身模块的 shim。"""
 
-    refreshing 一并复位：失效语义 = "现有数据与在途刷新结果都不可信"。
-    若恰有刷新在飞，复位后最坏情形是多一次并发抓取（幂等覆盖），代价远小于
-    标志被异常路径搁浅后 SWR 永久静默失效。
-    """
-    async with _cache_lock:
-        _cache["data"] = None
-        _cache["ts"] = 0.0
-        _cache["refreshing"] = False
+    def __getattr__(self, name: str):
+        return getattr(_impl, name)
+
+    def __setattr__(self, name: str, value) -> None:
+        setattr(_impl, name, value)
+
+    def __delattr__(self, name: str) -> None:
+        delattr(_impl, name)
+
+
+import sys as _sys  # noqa: E402
+
+_sys.modules[__name__].__class__ = _ForwardModule

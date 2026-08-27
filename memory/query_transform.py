@@ -246,7 +246,7 @@ class QueryTransformer:
         context_block = context[-200:] if context else '无'
         override = None
         try:
-            from web.prompt_profile_repository import try_resolve
+            from core_runtime.prompt_profile_repository import try_resolve
 
             override = try_resolve("query.rewrite", {
                 "original_query": original_query, "context_block": context_block,
@@ -307,7 +307,7 @@ class QueryTransformer:
 
         override = None
         try:
-            from web.prompt_profile_repository import try_resolve
+            from core_runtime.prompt_profile_repository import try_resolve
 
             override = try_resolve("query.expand", {
                 "n": str(n), "query": query,
@@ -394,7 +394,7 @@ class QueryTransformer:
 
         override = None
         try:
-            from web.prompt_profile_repository import try_resolve
+            from core_runtime.prompt_profile_repository import try_resolve
 
             override = try_resolve("query.hyde", {"query": query})
         except Exception:
@@ -466,7 +466,7 @@ class QueryTransformer:
         if llm_classify and self._available:
             override = None
             try:
-                from web.prompt_profile_repository import try_resolve
+                from core_runtime.prompt_profile_repository import try_resolve
 
                 override = try_resolve("query.classify", {"query": query})
             except Exception:

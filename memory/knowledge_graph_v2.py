@@ -84,8 +84,8 @@ class KnowledgeGraphV2(KnowledgeGraph):
             "不要用markdown代码块包裹。"
         )
         try:
-            from web.config_service import get_config_service
-            from web.prompt_profile_repository import PromptProfileRepository
+            from core_runtime.config_service import get_config_service
+            from core_runtime.prompt_profile_repository import PromptProfileRepository
 
             override = PromptProfileRepository(get_config_service()).resolve(
                 "kg.extract_episode", {"summary": clipped},
@@ -254,7 +254,7 @@ class KnowledgeGraphV2(KnowledgeGraph):
         """LLM 重写 summary。"""
         # production override 优先（kg.summarize_entity），缺省回退内置模板
         try:
-            from web.prompt_profile_repository import try_resolve
+            from core_runtime.prompt_profile_repository import try_resolve
 
             override = try_resolve("kg.summarize_entity", {
                 "old_summary": old_summary,
@@ -407,7 +407,7 @@ class KnowledgeGraphV2(KnowledgeGraph):
             )
             # production override 优先（kg.resolve_conflict），缺省回退内置模板
             try:
-                from web.prompt_profile_repository import try_resolve
+                from core_runtime.prompt_profile_repository import try_resolve
 
                 override = try_resolve("kg.resolve_conflict", {
                     "new_fact": new_fact,

@@ -382,8 +382,8 @@ class AgentCoreBootstrapper:
         # 维度兜底 512 会与 1024 维向量库冲突（local_deploy mode=local 时 init_failed）。
         # server.py 启动后还有一次幂等恢复（同一 model_id 已运行则复用）。
         try:
-            from web.config_service import get_config_service
-            from web.local_deploy_nodes import restore_local_instances
+            from core_runtime.config_service import get_config_service
+            from core_runtime.local_deploy_nodes import restore_local_instances
 
             await restore_local_instances(core, get_config_service())
             logger.info("bootstrap.local_instances_restored")
@@ -486,8 +486,8 @@ class AgentCoreBootstrapper:
         core = self.core
 
         # 1. Reranker + QueryTransformer（硅基流动免费模型，可按节点选择本地/API）
-        from web.config_service import get_config_service
-        from web.local_deploy_nodes import get_backend
+        from core_runtime.config_service import get_config_service
+        from core_runtime.local_deploy_nodes import get_backend
         _cfg_svc = get_config_service()
 
         reranker = self._init_reranker(config)
@@ -648,9 +648,9 @@ class AgentCoreBootstrapper:
     @staticmethod
     def _init_query_transformer(config: Any, router: Any = None) -> Any:
         """初始化 QueryTransformer（硅基流动免费模型，可按节点选本地=主 LLM）。"""
+        from core_runtime.config_service import get_config_service
+        from core_runtime.local_deploy_nodes import get_backend
         from memory.query_transform import QueryTransformer
-        from web.config_service import get_config_service
-        from web.local_deploy_nodes import get_backend
         if not getattr(config, "QUERY_TRANSFORM_ENABLED", True):
             logger.info("query_transformer.disabled_by_config")
             return None
@@ -682,8 +682,8 @@ class AgentCoreBootstrapper:
         core.instinct_manager = InstinctManager(db=core.db, router=core.router)
         await core.instinct_manager.init()
         # Instinct 提取：按节点后端选择注入免费模型（local=本地模型 / off=禁用）
-        from web.config_service import get_config_service
-        from web.local_deploy_nodes import get_backend
+        from core_runtime.config_service import get_config_service
+        from core_runtime.local_deploy_nodes import get_backend
         instinct_backend = get_backend(get_config_service(), "instinct")
         if instinct_backend == "off":
             core.instinct_manager.set_backend("off")

@@ -107,8 +107,8 @@ class MemoryDistiller:
     def _render_recall_prompt(memories_text: str, agent_name: str) -> str:
         """渲染回忆笔记提示词：production override 优先，缺省回退内置模板。"""
         try:
-            from web.config_service import get_config_service
-            from web.prompt_profile_repository import PromptProfileRepository
+            from core_runtime.config_service import get_config_service
+            from core_runtime.prompt_profile_repository import PromptProfileRepository
 
             override = PromptProfileRepository(get_config_service()).resolve(
                 "memory.build_recall_note",
@@ -139,7 +139,7 @@ class MemoryDistiller:
     def _render_compress_prompt(memories_text: str) -> str:
         """渲染记忆蒸馏提示词：production override 优先，缺省回退内置模板。"""
         try:
-            from web.prompt_profile_repository import try_resolve
+            from core_runtime.prompt_profile_repository import try_resolve
 
             override = try_resolve(
                 "memory.compress_episode", {"memories_text": memories_text},

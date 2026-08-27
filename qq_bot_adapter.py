@@ -473,7 +473,7 @@ class AIQQBot(ChannelAdapterBase, botpy.Client):
     @staticmethod
     def _get_config_service() -> Any:
         try:
-            from web.config_service import get_config_service
+            from core_runtime.config_service import get_config_service
             return get_config_service()
         except (ImportError, AttributeError):
             logger.debug("qq_bot_adapter.config_service_not_found", exc_info=True)
@@ -518,7 +518,7 @@ class AIQQBot(ChannelAdapterBase, botpy.Client):
                     # 恢复 nudge 功能节点的后端/本地模型选择（on_ready 晚于 lifespan 的
                     # restore，若 bot 未就绪 restore 会跳过，这里在就绪后补一次恢复）
                     try:
-                        from web.node_registry import get_backend, get_local_model
+                        from core_runtime.node_registry import get_backend, get_local_model
                         _cfg = self._get_config_service()
                         if _cfg is not None:
                             _nudge_backend = get_backend(_cfg, "nudge")

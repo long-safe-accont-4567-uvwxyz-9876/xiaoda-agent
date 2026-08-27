@@ -72,8 +72,8 @@ async def detect_emotion_llm(
     prompt = _build_prompt(text, context)
     system_prompt = _SYSTEM_PROMPT
     try:
-        from web.config_service import get_config_service
-        from web.prompt_profile_repository import PromptProfileRepository
+        from core_runtime.config_service import get_config_service
+        from core_runtime.prompt_profile_repository import PromptProfileRepository
 
         override = PromptProfileRepository(get_config_service()).resolve(
             "emotion.analyze", {"input": text, "context": context}

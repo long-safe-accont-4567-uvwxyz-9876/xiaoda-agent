@@ -91,7 +91,7 @@ def _build_consolidate_prompt(old_section: Any, recent_memories: Any, recent_not
     from config import get_agent_display_name
     agent_name = get_agent_display_name("xiaoda")
     try:
-        from web.prompt_profile_repository import try_resolve
+        from core_runtime.prompt_profile_repository import try_resolve
 
         override = try_resolve("portrait.consolidate", {
             "agent_name": agent_name,

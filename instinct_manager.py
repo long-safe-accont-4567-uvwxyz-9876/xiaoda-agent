@@ -111,7 +111,7 @@ class InstinctManager:
     def _render_extract_prompt(user_input: str, reply: str) -> str:
         """渲染本能提取提示词：production override 优先，缺省回退内置模板。"""
         try:
-            from web.prompt_profile_repository import try_resolve
+            from core_runtime.prompt_profile_repository import try_resolve
 
             override = try_resolve(
                 "instinct.extract", {"user_input": user_input, "reply": reply},

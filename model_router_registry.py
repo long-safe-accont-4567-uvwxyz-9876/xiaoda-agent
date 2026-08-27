@@ -57,7 +57,7 @@ class ModelRouteRegistry:
         if self._cfg is not None:
             return self._cfg
         try:
-            from web.config_service import get_config_service
+            from core_runtime.config_service import get_config_service
             self._cfg = get_config_service()
         except (ImportError, RuntimeError) as e:
             logger.warning("registry.config_service_unavailable error={}", str(e))

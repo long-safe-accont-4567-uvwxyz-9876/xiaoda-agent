@@ -167,7 +167,7 @@ class StoragePolicy:
 
     def __init__(self, config_service: Any = None) -> None:
         if config_service is None:
-            from web.config_service import get_config_service
+            from core_runtime.config_service import get_config_service
             config_service = get_config_service()
         self._config = config_service
 

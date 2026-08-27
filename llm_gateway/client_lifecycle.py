@@ -95,7 +95,7 @@ class ClientLifecycleMixin:
         初始化时即被注册，不依赖 Web 服务的 _register_env_providers 流程。
         """
         try:
-            from web.custom_providers import register_into_router
+            from core_runtime.custom_providers import register_into_router
         except ImportError:
             logger.debug("router.credential_pool_register_skip web module unavailable")
             return
@@ -124,9 +124,9 @@ class ClientLifecycleMixin:
     def _lazy_register_provider(self, provider: str) -> None:
         """懒注册：从 config_service 恢复未注册的自定义 provider。"""
         try:
-            from web._provider_keys import load_provider_key
-            from web.config_service import get_config_service
-            from web.custom_providers import register_into_router
+            from core_runtime._provider_keys import load_provider_key
+            from core_runtime.config_service import get_config_service
+            from core_runtime.custom_providers import register_into_router
             cfg = get_config_service()
             record = cfg.get(f"models.providers.{provider}")
             if record:

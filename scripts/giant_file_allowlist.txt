@@ -44,3 +44,7 @@ web/frontend/src/views/RetrievalView.vue
 # ── 测试(阈值1500,超限入册)──
 tests/test_local_ai_device_registry.py
 tests/test_provider_onboarding.py
+
+# ── 前端 Vue(2026-08-27 登记,归属 webui GSAP/记忆树批次提交;后续拆分另开专项)──
+web/frontend/src/components/knowledge/UniverseGraph.vue
+web/frontend/src/views/SettingsView.vue
