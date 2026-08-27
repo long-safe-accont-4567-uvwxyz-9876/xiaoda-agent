@@ -11,7 +11,7 @@ on:
       version:
         description: 'Release version (must match pyproject.toml, e.g. 0.2.0)'
         required: true
-        default: '0.5.76'
+        default: '0.5.80'
 
 jobs:
   build:
