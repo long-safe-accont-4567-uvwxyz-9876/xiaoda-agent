@@ -205,8 +205,10 @@ jobs:
           echo "Sanitized developer PII from config/workspace/"
 
       - name: Build with PyInstaller
+        shell: bash
         run: pyinstaller xiaoda-agent.spec --clean --noconfirm
         env:
+          PYTHONIOENCODING: utf-8
           LC_ALL: C.UTF-8
           LANG: C.UTF-8
 

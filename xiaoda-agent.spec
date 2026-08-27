@@ -548,8 +548,8 @@ if _rc_binary is not None:
     binaries.append(_rc_binary)
     print(f'[spec] rust_core hybrid extension bundled: {_rc_binary[0]}')
 else:
-    print('[spec] rust_core: 构建产物缺失 — 打包版检索将回退纯 Python '
-          '(bash rust_core/build.sh 或安装 rust_core wheel 可获得)')
+    print('[spec] rust_core: build artifact missing - will fall back to pure Python '
+          '(run bash rust_core/build.sh or install rust_core wheel to enable)')
 
 # ---------------------------------------------------------------------------
 # Excludes – trim the bundle by removing unused heavy modules
