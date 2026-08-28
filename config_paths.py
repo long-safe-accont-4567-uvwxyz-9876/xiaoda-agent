@@ -417,6 +417,58 @@ def _init_workspace_templates(bundled_config: Path) -> None:
 _workspace_initialized = False
 
 
+def _merge_tree(old_dir: Path, new_dir: Path, name: str) -> None:
+    """递归合并旧目录到新目录：文件缺失才复制，同名不覆盖（幂等）。
+
+    _merge_dir 只合并顶层条目——旧目录 media/wallpapers/ 在目标已有 wallpapers/
+    子目录时会被单层 continue 整体跳过，子目录深处的用户文件仍然丢失。
+    本函数按相对路径逐文件补缺，任意深度的旧独有内容都能迁入。
+    """
+    if not old_dir.exists():
+        return
+    copied = 0
+    try:
+        for item in old_dir.rglob("*"):
+            target = new_dir / item.relative_to(old_dir)
+            if item.is_dir():
+                target.mkdir(parents=True, exist_ok=True)
+                continue
+            if target.exists():
+                continue  # 目标已有同名文件，保留（不覆盖用户新数据）
+            target.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(item, target)
+            copied += 1
+        if copied:
+            print(f"[config] {name} merged {copied} files from {old_dir} to {new_dir}")
+    except OSError as e:
+        logger.warning("config.merge_tree_failed name={} error={}", name, e)
+
+
+def _merge_exe_dir_user_content(exe_base: Path) -> None:
+    """exe 目录 → 用户目录的用户内容迁移（逐项合并，绝不覆盖既有文件）。
+
+    整体跳过语义（_migrate_old_data）在目标已被部分填充时会永久丢弃旧数据。
+    字段机 0.5.80 实测：NSIS 安装器先把旧 dist 壁纸备份进
+    ~/.ai-agent/media/wallpapers（只增不覆盖），随后 media 迁移因目标非空
+    整体跳过——老版本 exe 目录 media/ 里的用户上传壁纸从此滞留丢失。
+    逐项合并只补缺失（6c11c84 同款教训），两种来源的内容共存。
+    """
+    _merge_tree(exe_base / "stickers", STICKER_DIR, "stickers")
+    _merge_tree(exe_base / "xiaoli-stickers", XIAOLI_STICKER_DIR, "xiaoli-stickers")
+    _merge_tree(exe_base / "agent-stickers", AGENT_STICKER_BASE, "agent-stickers")
+    _merge_tree(exe_base / "media", MEDIA_DIR, "media")
+    # 旧版（v0.5.5x 静态资源架构）壁纸存放在 exe 目录 web/dist/assets/wallpapers/，
+    # 新版改为用户数据目录 MEDIA_DIR/wallpapers/（避免安装包覆盖/升级丢失）。
+    _merge_tree(
+        exe_base / "web" / "dist" / "assets" / "wallpapers",
+        MEDIA_DIR / "wallpapers",
+        "wallpapers",
+    )
+    _merge_tree(exe_base / "voice_refs", VOICE_REF_DIR, "voice_refs")
+    _merge_tree(exe_base / "memory_state", MEMORY_STATE_DIR, "memory_state")
+    _merge_tree(exe_base / "plugins", PLUGINS_CONFIG_DIR, "plugins")
+
+
 def _ensure_workspace() -> None:
     """惰性初始化：frozen 模式下复制打包资源、迁移旧数据。
 
@@ -470,25 +522,13 @@ def _ensure_workspace() -> None:
     # 解决更新安装包导致数据丢失（"刷机"）的问题
     if getattr(sys, 'frozen', False):
         _exe_base = Path(sys.executable).parent
+        # database/logs/workspace/files 保持整体跳过：db 半合并可能引入
+        # 新旧混杂的损坏状态；files 可能是 U 盘上的大体积数据
         _migrate_old_data(_exe_base / "data", DATA_DIR, "database")
         _migrate_old_data(_exe_base / "logs", LOG_DIR, "logs")
         _migrate_old_data(Path(os.path.expanduser("~/.ai-agent/workspace")), WORKSPACE_DIR, "workspace")
-        _migrate_old_data(_exe_base / "stickers", STICKER_DIR, "stickers")
-        _migrate_old_data(_exe_base / "xiaoli-stickers", XIAOLI_STICKER_DIR, "xiaoli-stickers")
-        _migrate_old_data(_exe_base / "agent-stickers", AGENT_STICKER_BASE, "agent-stickers")
         _migrate_old_data(_exe_base / "files", FILE_DIR, "files")
-        _migrate_old_data(_exe_base / "media", MEDIA_DIR, "media")
-        # 旧版（v0.5.5x 静态资源架构）壁纸存放在 exe 目录 web/dist/assets/wallpapers/，
-        # 新版改为用户数据目录 MEDIA_DIR/wallpapers/（避免安装包覆盖/升级丢失）。
-        # 新目录已有壁纸（非空）时自动跳过，不覆盖用户自定义壁纸。
-        _migrate_old_data(
-            _exe_base / "web" / "dist" / "assets" / "wallpapers",
-            MEDIA_DIR / "wallpapers",
-            "wallpapers",
-        )
-        _migrate_old_data(_exe_base / "voice_refs", VOICE_REF_DIR, "voice_refs")
-        _migrate_old_data(_exe_base / "memory_state", MEMORY_STATE_DIR, "memory_state")
-        _migrate_old_data(_exe_base / "plugins", PLUGINS_CONFIG_DIR, "plugins")
+        _merge_exe_dir_user_content(_exe_base)
 
     # 是否实际使用外置盘：仅当显式配置 KIOXIA_DATA_DIR 且 DATA_DIR 落在其上时。
     # 修复：原 (_KIOXIA_BASE/"db").exists() 在未设 KIOXIA_DATA_DIR 时查询
