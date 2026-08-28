@@ -29,14 +29,17 @@ try:
     # 统一策略（2026-08-22 dotenv 收敛）：override=False——进程已有环境变量优先
     # （systemd 单元/部署环境的显式配置是最高真相），.env 只补缺。
     # 例外仅限用户动作后的显式重载点（向导完成/凭证保存，见 :88/:371）。
-    _webui_port_preload = os.environ.get("WEBUI_PORT")
+    _legacy_keys = ("WEBUI_PORT", "WEBUI_HOST")
+    _env_preload = {key: os.environ.get(key) for key in _legacy_keys}
     load_dotenv(_env_path, override=False)
-    # 打包版迁移：老安装 first-run 复制的 .env 固化了旧默认 WEBUI_PORT=8080，
-    # 升级后看门狗一直以 --port 8080 拉起（违背"安装包统一 8082"）。原位改写
-    # 后清掉进程变量让本次启动即生效；真实环境变量（systemd 等）优先级不变。
+    # 打包版迁移：老安装 first-run 复制的 .env 固化了旧默认（WEBUI_PORT=8080
+    # 导致看门狗以 --port 8080 拉起；WEBUI_HOST=0.0.0.0 + 无密码触发 VULN-11
+    # fail-closed 连本机也 403，前端却强制输密码——死结）。原位改写后清掉进程
+    # 变量让本次启动即生效；真实环境变量（systemd 等）优先级不变。
     if getattr(sys, "frozen", False):
-        if _migrate_legacy_env_defaults(_env_path) and _webui_port_preload is None:
-            os.environ.pop("WEBUI_PORT", None)
+        for key in _migrate_legacy_env_defaults(_env_path):
+            if _env_preload.get(key) is None:
+                os.environ.pop(key, None)
 except Exception:
     # dotenv 加载失败时写日志，防止 exe 静默崩溃
     import pathlib
