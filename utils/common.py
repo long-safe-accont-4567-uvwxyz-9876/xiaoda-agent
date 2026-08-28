@@ -6,6 +6,47 @@ import hashlib
 # system 路由）统一引用此常量，避免 "8082" 魔法数字散落多处导致端口不一致。
 DEFAULT_WEBUI_PORT = 8082
 
+# 旧版随包分发的 .env 默认值 → 当前默认值。first-run 会把 .env.example 复制进
+# 用户目录（frozen: ~/.ai-agent/.env），之后升级安装不覆盖用户数据——旧默认值
+# 从此固化并毒化端口解析（agent.py --port 默认读 WEBUI_PORT env）。字段机
+# 0.5.80 实测：.env 遗留 WEBUI_PORT=8080，看门狗以 --port 8080 拉起主进程。
+_LEGACY_ENV_DEFAULTS = {
+    "WEBUI_PORT": ("8080", str(DEFAULT_WEBUI_PORT)),
+}
+
+
+def migrate_legacy_env_defaults(env_path) -> bool:
+    """把用户 .env 中与旧 shipped 默认相等的键原位迁移为当前默认值。
+
+    只动"值恰好等于旧默认"的行——用户显式自定义过的值（如 9090）不受影响，
+    注释行不碰。返回是否发生了改写；文件缺失/不可写时静默返回 False。
+    """
+    try:
+        with open(env_path, "r", encoding="utf-8") as fp:
+            lines = fp.readlines()
+    except OSError:
+        return False
+    changed = False
+    for i, line in enumerate(lines):
+        stripped = line.strip()
+        if not stripped or stripped.startswith("#"):
+            continue
+        key, sep, value = stripped.partition("=")
+        if not sep:
+            continue
+        legacy = _LEGACY_ENV_DEFAULTS.get(key.strip())
+        if legacy is not None and value.strip() == legacy[0]:
+            lines[i] = f"{key.strip()}={legacy[1]}\n"
+            changed = True
+    if not changed:
+        return False
+    try:
+        with open(env_path, "w", encoding="utf-8") as fp:
+            fp.writelines(lines)
+    except OSError:
+        return False
+    return True
+
 # LLM 响应 max_tokens 的默认值（生成 token 上限）。transport 层与 model_router /
 # message_processor 统一引用，避免 "4096" 魔法数字散落多处。
 DEFAULT_MAX_TOKENS = 4096

@@ -11,6 +11,7 @@ from loguru import logger
 
 from config_constants import env_flag
 from utils.common import DEFAULT_WEBUI_PORT
+from utils.common import migrate_legacy_env_defaults as _migrate_legacy_env_defaults
 from utils.common import safe_int as _safe_int
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -28,7 +29,14 @@ try:
     # 统一策略（2026-08-22 dotenv 收敛）：override=False——进程已有环境变量优先
     # （systemd 单元/部署环境的显式配置是最高真相），.env 只补缺。
     # 例外仅限用户动作后的显式重载点（向导完成/凭证保存，见 :88/:371）。
+    _webui_port_preload = os.environ.get("WEBUI_PORT")
     load_dotenv(_env_path, override=False)
+    # 打包版迁移：老安装 first-run 复制的 .env 固化了旧默认 WEBUI_PORT=8080，
+    # 升级后看门狗一直以 --port 8080 拉起（违背"安装包统一 8082"）。原位改写
+    # 后清掉进程变量让本次启动即生效；真实环境变量（systemd 等）优先级不变。
+    if getattr(sys, "frozen", False):
+        if _migrate_legacy_env_defaults(_env_path) and _webui_port_preload is None:
+            os.environ.pop("WEBUI_PORT", None)
 except Exception:
     # dotenv 加载失败时写日志，防止 exe 静默崩溃
     import pathlib
