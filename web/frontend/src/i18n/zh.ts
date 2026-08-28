@@ -344,7 +344,7 @@ export default {
     passwordPlaceholder: '输入访问密码…',
     enter: '进入世界树',
     connecting: '草元素凝聚中…',
-    noPassword: '未设置密码，点击按钮直接进入',
+    noPassword: '未设置登录密码，正在前往设置向导…',
     wrongPassword: '密码错误',
     loginFailed: '登录失败',
     tokenExpired: '登录已过期，请重新登录',

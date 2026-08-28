@@ -343,7 +343,7 @@ export default {
     passwordPlaceholder: 'Enter access password…',
     enter: 'Enter System',
     connecting: 'Connecting…',
-    noPassword: 'No password set, click to enter',
+    noPassword: 'No password set — redirecting to setup wizard…',
     wrongPassword: 'Wrong password',
     loginFailed: 'Login failed',
     tokenExpired: 'Session expired, please log in again',

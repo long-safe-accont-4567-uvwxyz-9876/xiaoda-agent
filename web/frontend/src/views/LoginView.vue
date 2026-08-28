@@ -84,10 +84,14 @@ onMounted(async () => {
   }
   // 检测是否设置了密码
   try {
-    const result = await api.login('')
-    if (result.token) {
-      noPassword.value = true
-    }
+    // 空密码探测：成功 = 未设置密码。store 版 login 会落地 token，
+    // 向导的 /setup/keys 等鉴权接口才能用。
+    await auth.login('')
+    // 无密码用户不再旁路直进：统一跳转向导补设登录密码
+    // （needsPassword 必填 + 密保问题，设完自动回登录页）
+    noPassword.value = true
+    router.replace('/setup')
+    return
   } catch {
     noPassword.value = false
   }
@@ -99,6 +103,12 @@ async function handleLogin() {
   try {
     // 无密码时传空字符串，后端会自动放行
     await auth.login(password.value)
+    if (!password.value.trim()) {
+      // 空密码登录成功 = 未设置密码：与 onMounted 探测同策略，
+      // 引导去向导补设登录密码，不旁路进入主界面
+      router.replace('/setup')
+      return
+    }
     // 登录成功后检查用户资料是否完成
     try {
       const data = await api.getSetupFirstRun()
