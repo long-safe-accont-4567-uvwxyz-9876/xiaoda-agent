@@ -33,17 +33,38 @@ def _registry(request: Request) -> Any:
 
 @router.get("/agents/public-wallpaper", response_model=Envelope[dict])
 async def get_public_wallpaper(request: Request) -> Any:
-    """无需认证的公开接口，返回主 Agent 壁纸（供登录页使用）。"""
+    """无需认证的公开接口，返回主 Agent 壁纸（供登录页使用）。
+
+    字段机 0.5.80：老配置残留的壁纸文件在版本迁移/重装中丢失，接口原样返回
+    死链 → 登录页 CSS 背景 404 静默空白（图片背景无 onerror 兜底），默认壁纸
+    永远不会被尝试。对 /media/wallpapers/ 路径做存在性校验，文件缺失一律回
+    空串，客户端走自带默认图。
+    """
     try:
         agents = _registry(request).list()
         main = next((a for a in agents if a.get("is_main")), None)
-        if main and main.get("wallpaper"):
-            return Envelope(data={"wallpaper": main["wallpaper"]})
+        wallpaper = str(main.get("wallpaper") or "") if main else ""
+        if wallpaper:
+            wallpaper = _existing_wallpaper_url(wallpaper)
+        if wallpaper:
+            return Envelope(data={"wallpaper": wallpaper})
     except (OSError, KeyError, ValueError, RuntimeError, TypeError) as e:
         logger.debug("agents.public_wallpaper_failed: {}", e)
     except Exception:
         logger.exception("agents.get_public_wallpaper.unexpected_error")
     return Envelope(data={"wallpaper": ""})
+
+
+def _existing_wallpaper_url(url: str) -> str:
+    """/media/wallpapers/ 壁纸 URL 的文件存在性闸门：缺失回空串，其余原样放行。"""
+    if not url.startswith("/media/wallpapers/"):
+        return url
+    name = url[len("/media/wallpapers/"):]
+    if not name or "/" in name or ".." in name:
+        return ""
+    from config import MEDIA_DIR
+
+    return url if (MEDIA_DIR / "wallpapers" / name).is_file() else ""
 
 
 async def _audit(request: Request, action: str, detail: str) -> None:

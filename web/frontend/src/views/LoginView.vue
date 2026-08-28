@@ -11,6 +11,8 @@ import { wallpaperKind } from '../utils/wallpaper'
 import { t } from '../i18n'
 
 const DEFAULT_BG = '/assets/webui_background.jpg'
+// 须弥深绿基色：壁纸与默认图全部加载失败时仍保证非空背景（字段机白屏修复）
+const BASE_COLOR = '#0b1f14'
 
 const auth = useAuthStore()
 const agentsStore = useAgentsStore()
@@ -26,7 +28,11 @@ const bgStyle = computed(() => {
   if (loginBgKind.value === 'video') return undefined
   // encodeURI + 引号转义：壁纸 URL 来自服务端配置，防止 ' 提前闭合 url() 造成 CSS 注入面
   const safeUrl = encodeURI(loginBg.value).replace(/'/g, '%27')
-  return { backgroundImage: `var(--backdrop-tint), url('${safeUrl}')` }
+  // backgroundColor 垫底：CSS 背景图 404 是静默失败（无 onerror），纯色防白屏
+  return {
+    backgroundColor: BASE_COLOR,
+    backgroundImage: `var(--backdrop-tint), url('${safeUrl}')`,
+  }
 })
 
 function onLoginVideoError() {
@@ -34,17 +40,39 @@ function onLoginVideoError() {
   agentsStore.setMainWallpaper('')
 }
 
+// CSS 背景图没有 onerror，用 Image() 预加载探测死链：
+// 配置壁纸失效 → 清缓存回退默认图；默认图也失效 → 仅剩纯色底（页面仍可用）
+function probeImage(url: string): Promise<boolean> {
+  return new Promise((resolve) => {
+    const img = new Image()
+    img.onload = () => resolve(true)
+    img.onerror = () => resolve(false)
+    img.src = url
+  })
+}
+
+async function ensureBackdropAvailable() {
+  let url = loginBg.value
+  if (await probeImage(url)) return
+  if (url !== DEFAULT_BG) {
+    agentsStore.setMainWallpaper('')
+    url = DEFAULT_BG
+  }
+  await probeImage(url)
+}
+
 onMounted(async () => {
   // 登录卡一次性入场：徽标→标题→表单错峰浮现（护栏下立即还原，无动画直显）
   void playEntrance(document.querySelector('.login-card'), { stagger: 0.09, distance: 18 })
   try {
     const data = await get<{ wallpaper?: string }>('/agents/public-wallpaper')
-    if (data?.wallpaper) {
-      agentsStore.setMainWallpaper(data.wallpaper)
-    }
+    // 无条件同步（含空串）：后端已做文件存在性校验，空串即权威"无可用壁纸"，
+    // 必须清掉 sessionStorage 里可能残留的死链缓存
+    agentsStore.setMainWallpaper(data?.wallpaper || '')
   } catch {
     // 忽略，使用默认背景
   }
+  void ensureBackdropAvailable()
   try {
     const data = await api.getSetupFirstRun()
     if (data?.first_run) {
