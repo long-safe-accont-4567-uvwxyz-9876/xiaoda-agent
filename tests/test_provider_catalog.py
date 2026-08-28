@@ -104,11 +104,11 @@ def test_catalog_rejects_duplicate_provider_keys(tmp_path: Path):
 @pytest.mark.parametrize(
     ("metadata", "message"),
     [
-        ({"providers": {}}, "schema_version is required"),
         ({"schema_version": 2, "providers": {}}, "unsupported schema_version: 2"),
+        ({"schema_version": "1", "providers": {}}, "unsupported schema_version: 1"),
     ],
 )
-def test_catalog_rejects_missing_or_unsupported_schema_version(
+def test_catalog_rejects_unsupported_schema_version(
     tmp_path: Path,
     metadata: dict,
     message: str,
@@ -120,6 +120,21 @@ def test_catalog_rejects_missing_or_unsupported_schema_version(
 
     with pytest.raises(ValueError, match=message):
         ProviderCatalog.from_path(path)
+
+
+def test_catalog_missing_schema_version_loads_as_v1(tmp_path: Path):
+    """旧版/手写覆盖文件缺 schema_version：按 v1 宽容加载，不再拒载（字段机修复）。"""
+    from llm_gateway.provider_catalog import ProviderCatalog
+
+    path = tmp_path / "providers.json"
+    path.write_text(
+        json.dumps({"providers": {"acme": {"protocol": "openai_compatible"}}}),
+        encoding="utf-8",
+    )
+
+    catalog = ProviderCatalog.from_path(path)
+    assert catalog.get("acme").protocol.value == "openai_compatible"
+    assert catalog.get("acme").default_model == ""
 
 
 def test_catalog_falls_back_to_bundled_metadata_when_user_metadata_is_invalid(

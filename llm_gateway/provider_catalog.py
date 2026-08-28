@@ -53,9 +53,11 @@ class ProviderCatalog:
         )
         if not isinstance(data, Mapping):
             raise ValueError("provider metadata must be an object")
-        if "schema_version" not in data:
-            raise ValueError("schema_version is required")
-        if data["schema_version"] != _SCHEMA_VERSION:
+        # 兼容契约：schema_version 强校验（e5f6d739）会拒载旧版/手写的无版本号用户覆盖
+        # 文件——字段机上表现为整份用户元数据失效、静默回退内置目录（自定义 provider
+        # 全部丢失，仅剩一条 warning）。v1 是唯一存在过的版本，缺版本号按 v1 宽容处理；
+        # 显式写出的不匹配版本仍拒绝，保住未来格式迁移的闸门。
+        if data.get("schema_version", _SCHEMA_VERSION) != _SCHEMA_VERSION:
             raise ValueError(f"unsupported schema_version: {data['schema_version']}")
         providers = data.get("providers", {})
         if not isinstance(providers, Mapping):
@@ -172,8 +174,10 @@ def _definition_from_metadata(
         raise ValueError(f"provider endpoint must be an object: {provider_id}")
     if not isinstance(capabilities_raw, Mapping):
         raise ValueError(f"provider capabilities must be an object: {provider_id}")
-    aliases = auth_raw.get("environment_aliases", raw.get("environment_aliases", ()))
-    if not isinstance(aliases, list):
+    aliases = auth_raw.get("environment_aliases", raw.get("environment_aliases"))
+    if aliases is None:
+        aliases = ()  # 缺省放行：无别名 = 不走环境变量鉴权（与下方 AuthDefinition 默认一致）
+    elif not isinstance(aliases, list):
         raise ValueError(f"environment_aliases must be a list: {provider_id}")
     protocol = ProviderProtocol(raw.get("protocol", ProviderProtocol.OPENAI_COMPATIBLE.value))
     return ProviderDefinition(
