@@ -30,10 +30,10 @@ SetCompressor /SOLID lzma
 !define MUI_ICON "dist\xiaoda-agent\xiaoda-icon.ico"
 !define MUI_UNICON "dist\xiaoda-agent\xiaoda-icon.ico"
 
-; ── 视觉（2026-08-26 安装界面文艺化）：与 WebUI 须弥设计语言同源 ──
-;   侧栏图 164×314：暖白纸感底 + 四叶草 + 风絮（assets/installer-sidebar.bmp）
+; ── 视觉（2026-08-28 安装界面升级）：水彩植物风，与 WebUI 须弥设计语言同源 ──
+;   侧栏图 164×314：水彩蒲公英 + 风絮 + 四叶草簇（assets/installer-sidebar.bmp）
 ;   头部图 150×57：同语言横幅（assets/installer-header.bmp）
-;   源文件由 PIL 程序化绘制（无手绘依赖），重生成见 git 历史 assets/ 生成脚本
+;   源图由 gpt-image-2 生成，scripts/make_installer_art.py 裁剪/文字重绘为 24 位 BMP
 !define MUI_WELCOMEFINISHPAGE_BITMAP "assets\installer-sidebar.bmp"
 !define MUI_UNWELCOMEFINISHPAGE_BITMAP "assets\installer-sidebar.bmp"
 !define MUI_HEADERIMAGE
