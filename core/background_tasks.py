@@ -896,6 +896,7 @@ class BackgroundTaskManager:
 #   lag 即可在阻塞“进行中”dump 全部线程栈，主线程此刻正停留在阻塞点。
 _watchdog_thread: _threading.Thread | None = None
 _watchdog_stop: _threading.Event | None = None
+_loop_lag_task: "asyncio.Task | None" = None
 
 
 def _watchdog_thread_main(
@@ -994,13 +995,24 @@ def start_event_loop_watchdog() -> None:
         daemon=True,
     )
     _watchdog_thread.start()
+    # 亚秒级漂移采样（utils/loop_lag_monitor）：本线程阈值 10s 只能抓长阻塞，
+    # Windows 实机"卡"多为短阻塞——采样器量化 lag_ms，与本线程栈取证互补
+    global _loop_lag_task
+    try:
+        from utils.loop_lag_monitor import start_loop_lag_monitor
+        _loop_lag_task = start_loop_lag_monitor()
+    except (ImportError, RuntimeError) as e:
+        logger.warning("event_loop.lag_monitor_start_failed error={}", str(e))
     logger.info("event_loop.watchdog_started interval=5s threshold=10s")
 
 
 def stop_event_loop_watchdog() -> None:
     """停止事件循环 watchdog。"""
-    global _watchdog_thread, _watchdog_stop
+    global _watchdog_thread, _watchdog_stop, _loop_lag_task
     if _watchdog_stop is not None:
         _watchdog_stop.set()
+    if _loop_lag_task is not None:
+        _loop_lag_task.cancel()
+        _loop_lag_task = None
     _watchdog_thread = None
     _watchdog_stop = None

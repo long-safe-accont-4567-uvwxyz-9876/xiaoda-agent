@@ -89,6 +89,9 @@ def _line_count(rel: str) -> int:
 #     查询向量传入混合检索(vec 主通道与 child 子通道批内复用, embed 减半)；
 #   core/background_tasks.py 950→956 —— _spawn finally 的 ContextVar reset
 #     增加 ValueError 防护(loop 关停 GC finalizer 路径 reset 必然失败抛错)；
+#   core/background_tasks.py 1006→1018 —— 事件循环亚秒级漂移采样接线
+#     (Windows"卡"定位)：watchdog 启/停挂起/取消 utils/loop_lag_monitor
+#     采样任务，与 10s 栈取证互补；web/server.py 为止血对象不接线；
 #   以上四项 2026-08-27 二次上调——归属小妲已入库批次(非本会话改动):
 #     vector_store 1686→1732 —— embed 批量路径 EmbedCache 接入(95302d29,
 #       仅 miss 子集送推理)+ provider 耗时直方图(a8e4f85d)；
@@ -113,7 +116,7 @@ ALLOWLIST_BASELINES: dict[str, int] = {
     "agent_core/sub_agent.py": 1036,
     "tools/_builtin_manifest.py": 1001,
     "web/routers/insight.py": 937,
-    "core/background_tasks.py": 1006,
+    "core/background_tasks.py": 1018,
     "web/agent_registry.py": 912,
     "web/routers/local_deploy.py": 919,
     "cli.py": 908,

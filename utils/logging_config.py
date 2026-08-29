@@ -148,11 +148,18 @@ def setup_logging() -> None:
         )
     else:
         # 默认文本格式（保留原有彩色输出，Windows 不支持 ANSI 时自动关闭）
+        # stderr 级别：打包版默认 INFO——Windows 控制台（conhost）渲染比 Linux
+        # PTY 慢一个量级，DEBUG 全量滚屏本身就是卡顿源（"只有 Windows 卡"老
+        # 问题头号嫌疑之一）；开发态保持 DEBUG。LOG_LEVEL env 可覆盖。
+        _stderr_level = os.environ.get(
+            "LOG_LEVEL",
+            "INFO" if getattr(sys, "frozen", False) else "DEBUG",
+        )
         _colorize = _supports_ansi()
         logger.add(
             sys.stderr,
             format="<green>{time:HH:mm:ss}</green> | <level>{level: <8}</level> | <cyan>{extra[trace_id]}</cyan> | {message}",
-            level="DEBUG",
+            level=_stderr_level,
             colorize=_colorize,
         )
 
