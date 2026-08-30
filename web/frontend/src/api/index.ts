@@ -51,23 +51,14 @@ async function request<T>(path: string, options?: RequestInit, confirm = false,
     throw new Error(e?.message || 'Network error')
   })
   if (res.status === 401) {
-    localStorage.removeItem('token')
     // token 失效/未登录时一律引导到登录页（无密码环境同样需要点击"进入"，
     // 不做静默空密码重登——那样会绕过登录页）。设置页保存场景的 401 已由
     // 后端 profile 端点免认证（_profile_endpoint_access）根治，无需前端兜底。
-    if (!location.hash.includes('login')) location.hash = '#/login'
+    handleUnauthorized()
     throw new Error(t('login.tokenExpired'))
   }
   // 滑动续期：后端在响应头返回新 token 时自动替换本地存储
-  const newToken = res.headers.get('X-New-Token')
-  if (newToken) {
-    const newExpiry = res.headers.get('X-New-Token-Expiry')
-    localStorage.setItem('token', newToken)
-    if (newExpiry) localStorage.setItem('expires_at', newExpiry)
-    window.dispatchEvent(new CustomEvent('xiaoda-auth-renewed', {
-      detail: { token: newToken, expiresAt: Number(newExpiry) || 0 },
-    }))
-  }
+  consumeAuthRenewal(res)
   let body: ApiEnvelope<T>
   // 204/205 无响应体（如模型删除），跳过 JSON 解析避免 SyntaxError
   if (res.status === 204 || res.status === 205) {
@@ -80,6 +71,7 @@ async function request<T>(path: string, options?: RequestInit, confirm = false,
   }
   if (!res.ok || !body.ok) {
     let msg: string | undefined = body?.error?.message
+    let errCode: string | undefined = body?.error?.code
     if (!msg && (body as ApiDetailError)?.detail !== undefined) {
       const d = (body as ApiDetailError).detail
       // 兼容结构化 detail（如 {code, message}）与纯字符串 detail
@@ -87,6 +79,7 @@ async function request<T>(path: string, options?: RequestInit, confirm = false,
         msg = d
       } else if (d && typeof d === 'object') {
         const rec = d as Record<string, unknown>
+        if (!errCode && typeof rec.code === 'string') errCode = rec.code
         msg = rec.message !== undefined ? String(rec.message)
           : rec.code !== undefined ? String(rec.code)
             : JSON.stringify(d)
@@ -95,9 +88,35 @@ async function request<T>(path: string, options?: RequestInit, confirm = false,
       }
     }
     if (!msg) msg = `HTTP ${res.status}`
-    throw new Error(typeof msg === 'string' ? msg : JSON.stringify(msg))
+    // 错误码附到 Error 上（如 SETUP_TOKEN_REQUIRED）：调用方按 e.code
+    // 精确分支，而不是解析本地化 message 文本
+    const err = new Error(typeof msg === 'string' ? msg : JSON.stringify(msg)) as Error & { code?: string }
+    if (errCode) err.code = errCode
+    throw err
   }
   return body.data as T
+}
+
+/** 滑动续期共享路径：读 X-New-Token/X-New-Token-Expiry → 更新本地存储 →
+ *  派发 xiaoda-auth-renewed（WS 客户端据此用新 token 重连）。
+ *  request() 与 uploadFile() 共用：
+ *  audit-fix-20260829 —— multipart 上传原先不消费续签，长会话上传后
+ *  浏览器持有的 token 过期，下一次 JSON 请求必 401。 */
+function consumeAuthRenewal(res: Response): void {
+  const newToken = res.headers.get('X-New-Token')
+  if (!newToken) return
+  const newExpiry = res.headers.get('X-New-Token-Expiry')
+  localStorage.setItem('token', newToken)
+  if (newExpiry) localStorage.setItem('expires_at', newExpiry)
+  window.dispatchEvent(new CustomEvent('xiaoda-auth-renewed', {
+    detail: { token: newToken, expiresAt: Number(newExpiry) || 0 },
+  }))
+}
+
+/** 401 统一清理路径：清除本地 token 并引导到登录页（request/uploadFile 共用） */
+function handleUnauthorized() {
+  localStorage.removeItem('token')
+  if (!location.hash.includes('login')) location.hash = '#/login'
 }
 
 export const get = <T>(path: string) => request<T>(path)
@@ -110,7 +129,7 @@ export const patch = <T = void>(path: string, body?: unknown, extraHeaders?: Rec
 export const del = <T = void>(path: string, confirm = false) =>
   request<T>(path, { method: 'DELETE' }, confirm)
 
-/** 通用文件上传（FormData POST），统一 token 注入与错误处理 */
+/** 通用文件上传（FormData POST），统一 token 注入、错误处理与滑动续签消费 */
 async function uploadFile<T>(url: string, formData: FormData, errorMsg = 'Upload failed'): Promise<T> {
   const token = localStorage.getItem('token')
   const res = await fetch(`${BASE}${url}`, {
@@ -118,6 +137,13 @@ async function uploadFile<T>(url: string, formData: FormData, errorMsg = 'Upload
     headers: { ...(token ? { Authorization: `Bearer ${token}` } : {}) },
     body: formData,
   })
+  if (res.status === 401) {
+    handleUnauthorized()
+    throw new Error(t('login.tokenExpired'))
+  }
+  // XHR/fetch 的响应头读取约定：续签头与 JSON request 同路消费
+  // （getResponseHeader 等价于 Response.headers.get，同源请求可直接读到）
+  consumeAuthRenewal(res)
   interface UploadEnvelope {
     ok: boolean
     data?: T | null

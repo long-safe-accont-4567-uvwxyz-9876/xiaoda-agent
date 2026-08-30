@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import asyncio
+import base64
 import contextvars
 import json
 import os
@@ -81,6 +82,9 @@ class ConnectionManager:
         self._connections: dict[str, WebSocket] = {}
         self._agent_map: dict[str, str] = {}      # conn_id -> 当前受话 agent
         self._session_map: dict[str, str] = {}    # conn_id -> session_id
+        # 凭证轮换驱逐：conn_id -> 该连接认证 token 内嵌的 epoch（None=未记录，
+        # 不参与驱逐）。改密/恢复/revoke-all 递增 epoch 后按此关闭旧连接。
+        self._conn_epochs: dict[str, int | None] = {}
         self._tasks: dict[tuple[str, str], asyncio.Task] = {}
         # G5: 心跳状态 —— pong 事件 + 每连接心跳协程
         self._pong_events: dict[str, asyncio.Event] = {}
@@ -102,14 +106,20 @@ class ConnectionManager:
         self._completed_results: dict[tuple[str, str], float] = {}
         self._MSG_RESULT_TTL_SECONDS = 60.0
 
-    def register(self, ws: WebSocket) -> str:
-        """注册一个新连接, 返回生成的连接 ID."""
+    def register(self, ws: WebSocket, token_epoch: int | None = None) -> str:
+        """注册一个新连接, 返回生成的连接 ID.
+
+        token_epoch: 该连接认证 token 内嵌的 epoch（由握手处从 token 解析后
+        传入，见 websocket_endpoint / _extract_token_epoch）。未提供时记为
+        None，该连接不会被 close_all_for_epoch 驱逐（向后兼容旧调用方）。
+        """
         if len(self._connections) >= self.MAX_CONNECTIONS:
             raise ValueError(f"连接数已达上限 {self.MAX_CONNECTIONS}，拒绝新连接")
         conn_id = uuid.uuid4().hex[:8]
         self._connections[conn_id] = ws
         self._agent_map[conn_id] = "xiaoda"
         self._session_map[conn_id] = f"web_{uuid.uuid4().hex[:12]}"
+        self._conn_epochs[conn_id] = token_epoch
         # G5: 初始化 pong 事件 + 启动心跳协程
         self._pong_events[conn_id] = asyncio.Event()
         self._heartbeat_tasks[conn_id] = asyncio.create_task(
@@ -143,6 +153,7 @@ class ConnectionManager:
         self._connections.pop(conn_id, None)
         self._agent_map.pop(conn_id, None)
         self._session_map.pop(conn_id, None)
+        self._conn_epochs.pop(conn_id, None)
         current = asyncio.current_task()
         # G5: 取消心跳任务 + 清理 pong event（永不取消调用者自身）
         task = self._heartbeat_tasks.pop(conn_id, None)
@@ -161,6 +172,36 @@ class ConnectionManager:
                 self.cancel_connection_tasks(conn_id), timeout=5.0)
         except asyncio.TimeoutError:
             logger.warning("ws.unregister.reap_timeout conn_id={}", conn_id)
+
+    async def close_all_for_epoch(self, epoch: int) -> int:
+        """关闭所有以严格更旧 epoch 认证的连接（凭证轮换驱逐），返回驱逐数。
+
+        改密/恢复/revoke-all 递增 token epoch 后调用：/ws 仅在握手时验 token，
+        收帧循环不再校验，旧 token 的连接在 REST 层已 401 后仍可继续操作，
+        必须在此主动关闭。关闭码 4001 与握手未授权语义一致（前端 onclose
+        对 4001 停止重连，见 tests/test_ws_unauthorized_no_reconnect.py）。
+
+        epoch 传递增后的新值：epoch 严格小于新值的连接（即旧 epoch 认证的
+        连接）全部驱逐；bump 之后以新 epoch 注册的连接不受影响。epoch 未
+        记录（None）的连接不参与驱逐。映射清理复用 unregister（幂等，含
+        心跳/写入任务、在途 chat 任务与发送队列回收）。
+        """
+        stale = [cid for cid, ep in self._conn_epochs.items()
+                 if ep is not None and ep < epoch]
+        for cid in stale:
+            ws = self._connections.get(cid)
+            if ws is not None:
+                try:
+                    # 先以 4001 关闭（客户端契约：停止重连）；unregister 内的
+                    # 兜底 close 对已关闭连接会抛 RuntimeError，被防御性吞掉
+                    await ws.close(code=4001, reason="Unauthorized")
+                except (RuntimeError, OSError, ConnectionError) as e:
+                    logger.debug("ws.epoch_evict_close_failed conn_id={} error={}",
+                                 cid, str(e))
+            await self.unregister(cid)
+        if stale:
+            logger.info("ws.epoch_evicted epoch={} count={}", epoch, len(stale))
+        return len(stale)
 
     def track_message_task(self, conn_id: str, msg_id: str, task: asyncio.Task) -> bool:
         """登记在途消息任务（put-if-absent 幂等）。
@@ -733,6 +774,24 @@ async def process_and_serialize(core: Any, text: str, session_id: str,
 # ── WebSocket 端点 ───────────────────────────────────────────────
 
 
+def _extract_token_epoch(token: str) -> int | None:
+    """从 token 中解析认证时的 epoch（凭证轮换驱逐用），失败返回 None。
+
+    token payload 与 auth._validate_token 的构造一致：
+    base64url("expiry.nonce.epoch.sig")，epoch 为第 3 段。解析放在本文件
+    而非 auth.py：Task 3 约定 auth.py 仅允许三处端点调用点改动。
+    """
+    try:
+        decoded = base64.urlsafe_b64decode(
+            (token + "=" * (-len(token) % 4)).encode()).decode()
+        parts = decoded.rsplit(".", 3)
+        if len(parts) != 4:
+            return None
+        return int(parts[2])
+    except (ValueError, TypeError):
+        return None
+
+
 @router.websocket("/ws")
 async def websocket_endpoint(ws: WebSocket) -> None:
     # 先验证 token 再 accept，防止无 token 连接耗尽资源
@@ -754,13 +813,17 @@ async def websocket_endpoint(ws: WebSocket) -> None:
         await ws.close(code=4001, reason="Unauthorized")
         return
 
+    # 凭证轮换驱逐：握手时读取 token 内嵌的 epoch 并随连接登记，
+    # 供改密/恢复/revoke-all 递增 epoch 后按旧 epoch 关闭本连接
+    token_epoch = _extract_token_epoch(token)
+
     if subprotocol_token:
         await ws.accept(subprotocol=subprotocol_token)
     else:
         await ws.accept()
 
     try:
-        conn_id = manager.register(ws)
+        conn_id = manager.register(ws, token_epoch=token_epoch)
     except ValueError:
         await ws.send_json({"type": "error", "code": "MAX_CONNECTIONS",
                             "message": f"连接数已达上限 {manager.MAX_CONNECTIONS}，请稍后重试"})
@@ -975,8 +1038,10 @@ async def _handle_chat(conn_id: str, msg: dict, msg_id: str, ws: WebSocket) -> N
     app = ws.scope.get("app")
     core = app.state.core
 
-    from web._msg_context import current_msg_id
+    from web._msg_context import current_conn_id, current_msg_id
     token = current_msg_id.set(msg_id)
+    # 同处设置来源连接 ID：工具事件据此定向发送给发起会话（不广播工具参数）
+    conn_token = current_conn_id.set(conn_id)
     from core.background_tasks import (
         reset_current_request_context,
         set_current_request_context,
@@ -1040,6 +1105,7 @@ async def _handle_chat(conn_id: str, msg: dict, msg_id: str, ws: WebSocket) -> N
             "code": "CHAT_ERROR", "message": "生成回复失败，请稍后重试或查看服务端日志"})
     finally:
         reset_current_request_context(request_context_token)
+        current_conn_id.reset(conn_token)
         current_msg_id.reset(token)
 
 

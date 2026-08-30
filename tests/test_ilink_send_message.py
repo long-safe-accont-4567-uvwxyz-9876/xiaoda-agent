@@ -145,6 +145,111 @@ def test_verify_token_ok_via_timeout():
     assert ok is True and msg == "ok"
 
 
+def test_verify_token_with_msgs_does_not_persist_cursor(monkeypatch):
+    """探测响应含 msgs（服务端有积压消息）时不得持久化新游标。
+
+    原缺陷：探测返回 msgs+新游标时先持久化新游标，消息被探测"消费"却从未
+    处理（后续 poller 从新游标起步）——永久丢失。修复后不落盘，poller 从
+    旧游标重新拉取并正常消费这批消息（deferred_to_poller）。
+    """
+    fake = FakeAsyncClient([
+        {"ret": 0, "msgs": [{"msg_id": "m1"}], "get_updates_buf": "C-NEW"},
+    ])
+    client = ILinkClient(bot_token="tok", client=fake)
+    monkeypatch.setattr(ILinkClient, "_load_probe_cursor", staticmethod(lambda: ""))
+    persisted: list[str] = []
+    monkeypatch.setattr(
+        ILinkClient, "_persist_verify_cursor",
+        staticmethod(lambda c: persisted.append(c)),
+    )
+    ok, msg = asyncio.run(client.verify_token())
+    assert ok is True and msg == "ok"
+    assert persisted == [], "含 msgs 时不得持久化游标（消息留给 poller 消费）"
+
+
+def test_verify_token_without_msgs_persists_cursor(monkeypatch):
+    """无 msgs 时探测推进的新游标照常持久化，且值正确（原 Q7 语义保留）。"""
+    fake = FakeAsyncClient([{"ret": 0, "msgs": [], "get_updates_buf": "C1"}])
+    client = ILinkClient(bot_token="tok", client=fake)
+    monkeypatch.setattr(ILinkClient, "_load_probe_cursor", staticmethod(lambda: ""))
+    persisted: list[str] = []
+    monkeypatch.setattr(
+        ILinkClient, "_persist_verify_cursor",
+        staticmethod(lambda c: persisted.append(c)),
+    )
+    ok, msg = asyncio.run(client.verify_token())
+    assert ok is True and msg == "ok"
+    assert persisted == ["C1"]
+
+
+def test_persist_verify_cursor_before_credentials_saved(monkeypatch, tmp_path):
+    """扫码确认后、凭证落盘前验证 token：无消息游标仍应持久化。"""
+    import json as _json
+    from pathlib import Path as _Path
+
+    fake_home = tmp_path / "home"
+    (fake_home / ".ai-agent").mkdir(parents=True)
+    monkeypatch.setattr(_Path, "home", lambda: fake_home)
+    ILinkClient(bot_token="fresh")._persist_verify_cursor("CUR-FRESH")
+    data = _json.loads(
+        (fake_home / ".ai-agent" / "wechat_cursor.json").read_text(encoding="utf-8"))
+    assert data == {"cursor": "CUR-FRESH", "dead": {}}
+
+
+def test_persist_verify_cursor_rejects_different_saved_token(monkeypatch, tmp_path):
+    """已有凭证属于新会话时，旧验证 client 不得覆盖游标状态。"""
+    import json as _json
+    from pathlib import Path as _Path
+
+    root = tmp_path / "home" / ".ai-agent"
+    root.mkdir(parents=True)
+    (root / "wechat_credentials.json").write_text(
+        _json.dumps({"bot_token": "new"}), encoding="utf-8")
+    monkeypatch.setattr(_Path, "home", lambda: tmp_path / "home")
+    ILinkClient(bot_token="old")._persist_verify_cursor("OLD-CURSOR")
+    assert not (root / "wechat_cursor.json").exists()
+
+
+@pytest.mark.parametrize("corrupt_root", [[], None, "token"])
+def test_persist_verify_cursor_rejects_non_object_credentials(monkeypatch, tmp_path, corrupt_root):
+    """合法 JSON 但非对象的凭证应安全拒绝，不得让验证流程抛异常。"""
+    import json as _json
+    from pathlib import Path as _Path
+
+    root = tmp_path / "home" / ".ai-agent"
+    root.mkdir(parents=True)
+    (root / "wechat_credentials.json").write_text(
+        _json.dumps(corrupt_root), encoding="utf-8")
+    monkeypatch.setattr(_Path, "home", lambda: tmp_path / "home")
+    ILinkClient(bot_token="tok")._persist_verify_cursor("CUR")
+    assert not (root / "wechat_cursor.json").exists()
+
+
+def test_persist_verify_cursor_preserves_dead_table(monkeypatch, tmp_path):
+    """_persist_verify_cursor 重写游标文件时必须保留既有 dead 死信表。
+
+    微信适配器在同一文件维护死信表；若探测落盘把文件重写为仅含 cursor，
+    死信被抹掉，重启后新实例会对重放的同一条消息重复处理。
+    """
+    import json as _json
+    from pathlib import Path as _Path
+
+    fake_home = tmp_path / "home"
+    cursor_path = fake_home / ".ai-agent" / "wechat_cursor.json"
+    cursor_path.parent.mkdir(parents=True)
+    cursor_path.write_text(_json.dumps(
+        {"cursor": "OLD", "dead": {"mx": 123.0}}, ensure_ascii=False,
+    ), encoding="utf-8")
+    (cursor_path.parent / "wechat_credentials.json").write_text(
+        _json.dumps({"bot_token": "tok"}), encoding="utf-8")
+    monkeypatch.setattr(_Path, "home", lambda: fake_home)
+
+    ILinkClient(bot_token="tok")._persist_verify_cursor("NEW")
+    data = _json.loads(cursor_path.read_text(encoding="utf-8"))
+    assert data["cursor"] == "NEW"
+    assert data["dead"] == {"mx": 123.0}, "死信表不得被游标落盘抹掉"
+
+
 def test_verify_token_connect_timeout_is_failure():
     """getupdates 连接超时 → 未到达服务端，不能当作认证通过。"""
     import httpx

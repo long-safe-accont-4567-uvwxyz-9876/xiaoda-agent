@@ -258,11 +258,19 @@ class ToolExecutor:
 
         # ── Approver 审批检查（借鉴 OpenWorker TurnEngine 的 out-of-band 审批）──
         # 在沙箱和工作目录检查通过后、实际执行前检查审批器。
-        # 不传 approver 时 DefaultApprover 直接返回 ONCE（放行），不影响原有逻辑。
+        # 不传 approver 时 DefaultApprover 对低/中风险直接返回 ONCE（放行），
+        # 高风险 fail-closed 拒绝（见 DefaultApprover）。
+        # 注册表声明的 requires_confirmation 强制执行：此类工具（如 forget、
+        # service_manage）即使权限档位不高也必须走审批——将本次审批请求的
+        # risk_level 提升为执行器风险枚举最高档（high），使任何 approver
+        # 都必须走审批，不再可被模型静默直接执行。
+        risk_level = self._get_tool_risk_level(tool_name)
+        if tool.get("requires_confirmation"):
+            risk_level = "high"
         approval_req = ApprovalRequest(
             tool_name=tool_name,
             arguments=arguments,
-            risk_level=self._get_tool_risk_level(tool_name),
+            risk_level=risk_level,
             user_id=user_id,
         )
         try:

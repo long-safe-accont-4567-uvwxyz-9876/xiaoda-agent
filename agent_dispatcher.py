@@ -113,11 +113,15 @@ class AgentDispatcher:
                 except (OSError, RuntimeError):
                     logger.debug("agent_dispatcher.close_sub_agent_error", exc_info=True)
 
-    async def dispatch_single(self, name: str, task: str, context: str = "", status_callback: Any | None=None, address_term: str = "爸爸", extra_system_prompt: str = "", interjections: list | None = None) -> str | None:
+    async def dispatch_single(self, name: str, task: str, context: str = "", status_callback: Any | None=None, address_term: str = "爸爸", extra_system_prompt: str = "", interjections: list | None = None, tool_results_sink: list | None = None) -> str | None:
         """单子代理调度（原 dispatch 方法）。
 
         保留为独立方法以与并行调度（SubAgentManagerMixin.parallel_dispatch）区分；
         ``dispatch`` 仍作为向后兼容别名指向本方法。
+
+        tool_results_sink（审计 Fix7）：调用方创建并持有的列表，本次调用的
+        原始 ToolResult 会追加进去，dispatch 返回后调用方从同一列表读取
+        （提取媒体用）。每次调用传独立列表，天然并发安全。
         """
         from agent_core.subagents import SubAgentInvocation
 
@@ -134,6 +138,7 @@ class AgentDispatcher:
             address_term=address_term,
             extra_system_prompt=extra_system_prompt,
             interjections=interjections,
+            tool_results_sink=tool_results_sink,
         )
 
     async def _chat_with_scope(self, agent: SubAgent, message: str, **kwargs: Any) -> str:

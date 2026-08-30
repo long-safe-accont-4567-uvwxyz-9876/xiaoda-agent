@@ -5,7 +5,15 @@ set -euo pipefail
 # 用法: curl -sL https://raw.githubusercontent.com/.../install-linux.sh | bash
 # 或:   bash install-linux.sh
 
-INSTALL_DIR="${INSTALL_DIR:-$HOME/.xiaoda-agent}"
+# 安装目录：默认取调用 shell 的 $HOME。sudo 提权安装时 $HOME 是 root 的
+# home，之后会在 resolve_service_user 中按服务用户 home 重算（仅当用户
+# 未显式指定 INSTALL_DIR 时）；显式指定则原样尊重。
+_INSTALL_DIR_EXPLICIT=0
+if [ -n "${INSTALL_DIR:-}" ]; then
+    _INSTALL_DIR_EXPLICIT=1
+else
+    INSTALL_DIR="$HOME/.xiaoda-agent"
+fi
 SERVICE_NAME="xiaoda-agent"
 SERVICE_FILE="/etc/systemd/system/${SERVICE_NAME}.service"
 
@@ -82,6 +90,10 @@ ENVEOF
     if [ -n "$SERVICE_USER" ] && [ "$SERVICE_USER" != "root" ]; then
         chown -R "$SERVICE_USER:$SERVICE_GROUP" "$DATA_DIR" 2>/dev/null || \
             warn "无法将 $DATA_DIR 归属到 $SERVICE_USER，服务可能无写入权限"
+        # 安装目录同样归属服务用户（修复：sudo 安装时目录属 root，服务用户
+        # 既读不了 frozen 可执行文件，自动更新器也无权写安装目录）
+        chown -R "$SERVICE_USER:$SERVICE_GROUP" "$INSTALL_DIR" 2>/dev/null || \
+            warn "无法将 $INSTALL_DIR 归属到 $SERVICE_USER，服务可能无读取权限"
     fi
     info "用户数据目录已创建 ($DATA_DIR)"
 }
@@ -183,6 +195,18 @@ resolve_service_user() {
     if [ "$SERVICE_USER" = "root" ] || [ -z "$SERVICE_USER" ]; then
         DATA_DIR="${HOME}/.ai-agent"
     fi
+
+    # 修复（2026-08-30）：sudo 提权安装时调用 shell 的 $HOME 是 root 的 home，
+    # 顶部默认的 INSTALL_DIR 会落在 /root/.xiaoda-agent，而服务以真实用户运行
+    # ——WorkingDirectory/ExecStart 指向 root 私有目录，服务无法启动。
+    # 与数据目录同一解析时机：默认值取自调用 HOME 且服务用户非 root 时，
+    # 重算到服务用户 home 下；用户显式指定的 INSTALL_DIR 原样尊重。
+    # （--force 的纯 root 环境 SERVICE_USER=root，此处不重算，保持原路径。）
+    if [ "$_INSTALL_DIR_EXPLICIT" -eq 0 ] && [ "$SERVICE_USER" != "root" ] && [ -n "$SERVICE_HOME" ] \
+        && [ "$INSTALL_DIR" = "${HOME}/.xiaoda-agent" ]; then
+        INSTALL_DIR="$SERVICE_HOME/.xiaoda-agent"
+        info "安装目录按服务用户 home 重算: $INSTALL_DIR"
+    fi
 }
 
 # ── 创建 systemd 服务 ─────────────────────────────────────
@@ -205,20 +229,23 @@ Type=simple
 User=$SERVICE_USER
 Group=$SERVICE_GROUP
 Environment=HOME=$SERVICE_HOME
-WorkingDirectory=$INSTALL_DIR
-ExecStart=$INSTALL_DIR/scripts/start-linux.sh --web --host 127.0.0.1 --port \${WEBUI_PORT}
+# 路径一律加引号：安装目录可能含空格，systemd 按词拆分会拿到坏路径
+WorkingDirectory="$INSTALL_DIR"
+ExecStart="$INSTALL_DIR/scripts/start-linux.sh" --web --host 127.0.0.1 --port \${WEBUI_PORT}
 Restart=on-failure
 RestartSec=5
 # 看门狗达到 MAX_RESTARTS 后 exit 0 停止重启，systemd 不应对 exit 0 重启
 RestartPreventExitStatus=0
 Environment=PYTHONUNBUFFERED=1
-EnvironmentFile=$INSTALL_DIR/.env
+EnvironmentFile="$INSTALL_DIR/.env"
 # ── 沙箱加固：限制 root 提权 / 文件系统 / tmp 写入 ──
 NoNewPrivileges=true
 ProtectSystem=full
 PrivateTmp=true
 ProtectHome=read-only
-ReadWritePaths=$DATA_DIR
+# 可写白名单：用户数据目录 + 安装目录（后者供自动更新器写入；
+# ProtectHome=read-only 下若只放行数据目录，更新器永远装不上新版）
+ReadWritePaths="$DATA_DIR" "$INSTALL_DIR"
 
 [Install]
 WantedBy=multi-user.target
@@ -270,13 +297,20 @@ main() {
         if grep -q '^__ARCHIVE__$' "$0" 2>/dev/null; then
             local archive_line
             archive_line=$(grep -n '^__ARCHIVE__$' "$0" | tail -1 | cut -d: -f1)
-            local tmp_tarball=$(mktemp /tmp/xiaoda-agent-XXXXXX.tar.gz)
+            local tmp_tarball
+            tmp_tarball=$(mktemp /tmp/xiaoda-agent-XXXXXX.tar.gz)
+            # trap 清理临时 tar 包：成功/失败/中断（EXIT 对 INT/TERM 同样触发）
+            # 都要删除，避免几十 MB 的 payload 泄漏在 /tmp。
+            # 捕获期即展开路径（双引号）——EXIT 触发时 local 变量可能已出栈。
+            trap "rm -f '${tmp_tarball}'" EXIT
             tail -n +$((archive_line + 1)) "$0" > "$tmp_tarball"
             tarball="$tmp_tarball"
             info "检测到自解压安装包"
         else
-            # 在当前目录查找
-            tarball=$(ls xiaoda-agent-linux-x86_64-*.tar.gz 2>/dev/null | head -1)
+            # 在当前目录查找（x86_64 与 arm64 命名均支持，与发布资产命名对齐）；
+            # ls 无命中经 pipefail 会让赋值非零触发 set -e 退出，|| true 保住
+            # 下方"请指定 tar.gz 文件"的友好报错路径
+            tarball=$(ls xiaoda-agent-linux-x86_64-*.tar.gz xiaoda-agent-linux-arm64-*.tar.gz 2>/dev/null | head -1 || true)
         fi
     fi
 

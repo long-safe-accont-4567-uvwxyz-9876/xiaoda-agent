@@ -80,13 +80,23 @@ class Approver(Protocol):
 
 
 class DefaultApprover:
-    """默认审批器 — 不拦截任何调用，兼容旧行为。
+    """默认审批器 — 未注入 approver 时的兜底实现。
 
-    当 ToolExecutor 未传入 approver 时使用此实现，
-    所有调用直接返回 ONCE（放行但不记忆）。
+    低/中风险直接返回 ONCE（放行，兼容旧行为）；
+    高风险（high/critical，如 EXECUTE 权限工具或注册表声明的
+    requires_confirmation 提升档）不自动放行，返回 DENY（fail-closed）：
+    无审批器即无人工确认通道，高危操作宁拒勿放，防止 requires_confirmation
+    声明被静默绕过。
     """
 
     async def approve(self, request: ApprovalRequest) -> ApprovalDecision:
+        # 高风险不自动放行（fail-closed）：DefaultApprover 没有任何人工确认手段，
+        # 对 high/critical 一律拒绝，避免执行器判定的高风险被兜底审批器静默执行。
+        if (request.risk_level or "").lower() in ("high", "critical"):
+            return ApprovalDecision(
+                outcome=ApprovalOutcome.DENY,
+                reason="default approver: 高风险工具需显式审批，未配置审批器时拒绝执行",
+            )
         return ApprovalDecision(
             outcome=ApprovalOutcome.ONCE,
             reason="default: no approver configured",

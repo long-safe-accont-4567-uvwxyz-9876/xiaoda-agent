@@ -9,6 +9,7 @@ import pytest
 import agent_core.mixins.verification as verification_module
 from agent_core.mixins.streaming import StreamingMixin
 from agent_core.mixins.verification import VerificationMixin
+from llm_gateway import router_execution as router_execution_module
 from llm_gateway.router_execution import ExecutionMixin
 from llm_gateway.stream_protocol import ModelStreamEvent, StreamTurnResult
 from llm_gateway.transports.base import ToolCall
@@ -145,6 +146,62 @@ async def test_legacy_chat_stream_still_yields_only_text() -> None:
         [{"role": "user", "content": "weather"}],
         tools=[{"type": "function", "function": {"name": "weather"}}],
     )] == ["visible"]
+
+
+@pytest.mark.asyncio
+async def test_legacy_chat_stream_records_usage_and_success_exactly_once(monkeypatch) -> None:
+    """修复（2026-08-29 审计）：_finalize_stream 是 chat_stream 唯一记账点。
+
+    原实现在 _finalize_stream（记 usage + success + duration）返回后，调用方
+    又重复记一次 usage + success，导致流式费用双倍、success 指标翻倍。
+    """
+    usage = SimpleNamespace(prompt_tokens=5, completion_tokens=7, total_tokens=12)
+    router = _StructuredRouter([_Stream([
+        _chunk(content="第一段"),
+        _chunk(content="第二段"),
+        SimpleNamespace(choices=[], usage=usage),  # usage 终止 chunk
+    ])])
+    metrics_mock = MagicMock()
+    monkeypatch.setattr(router_execution_module, "metrics", metrics_mock)
+
+    parts = [part async for part in router.chat_stream(
+        [{"role": "user", "content": "你好"}],
+    )]
+
+    assert parts == ["第一段", "第二段"]
+    # usage 记账仅一次
+    assert router._record_stream_usage.await_count == 1
+    # success 计数 +1 仅一次（原实现重复记账为 +2）
+    success_incs = [
+        call for call in metrics_mock.inc.call_args_list
+        if call.args and call.args[0] == "model_route.chat.success"
+    ]
+    assert len(success_incs) == 1
+    # duration 观测同样仅一次
+    assert metrics_mock.observe.call_count == 1
+
+
+@pytest.mark.asyncio
+async def test_legacy_chat_stream_without_usage_still_counts_success_once(monkeypatch) -> None:
+    """非 usage 终止的流：不记 usage，success 也只记一次"""
+    router = _StructuredRouter([_Stream([
+        _chunk(content="只有内容"),
+        _chunk(finish_reason="stop"),
+    ])])
+    metrics_mock = MagicMock()
+    monkeypatch.setattr(router_execution_module, "metrics", metrics_mock)
+
+    parts = [part async for part in router.chat_stream(
+        [{"role": "user", "content": "你好"}],
+    )]
+
+    assert parts == ["只有内容"]
+    assert router._record_stream_usage.await_count == 0
+    success_incs = [
+        call for call in metrics_mock.inc.call_args_list
+        if call.args and call.args[0] == "model_route.chat.success"
+    ]
+    assert len(success_incs) == 1
 
 
 @pytest.mark.asyncio

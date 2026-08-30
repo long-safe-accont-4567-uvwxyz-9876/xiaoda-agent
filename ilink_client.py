@@ -31,23 +31,11 @@ import uuid
 from typing import Any, Optional
 
 import httpx
-from loguru import logger
-
-try:
-    from utils.atomic_write import _restrict_file_permissions_windows, atomic_write
-except (ImportError, AttributeError):
-    atomic_write = None  # type: ignore[assignment]
-    def _restrict_file_permissions_windows(path):  # type: ignore[no-redef]
-        return
-
-except Exception:
-    logger.exception(".ilink_client.unexpected")
-    atomic_write = None  # type: ignore[assignment]
-    def _restrict_file_permissions_windows(path):  # type: ignore[no-redef]
-        return
-
 from cryptography.hazmat.primitives import padding
 from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
+from loguru import logger
+
+from utils.wechat_cursor_state import update_probe_cursor
 
 # ============================================================================
 # 常量定义
@@ -845,21 +833,22 @@ class ILinkClient:
                 data={"get_updates_buf": probe_cursor},
                 timeout=2.0,
             )
-            # Q7 修复：探测会推进服务端消息游标（消费积压消息）——
-            # 将返回的新游标持久化到 ~/.ai-agent/wechat_cursor.json（与
-            # wechat_bot_adapter 同路径），供后续长轮询接续，避免消息被
-            # 探测消费后丢失或按旧游标重放（重复处理）。
+            # 丢消息修复（2026-08-29）：探测响应含 msgs 说明服务端有积压消息，
+            # 此时不得持久化新游标——否则这批消息被探测"消费"却从未处理（永久
+            # 丢失，后续 poller 会从新游标起步）。不落盘则 poller 从旧游标重新
+            # 拉取并正常消费这批消息。仅当无 msgs 时才持久化探测推进的游标
+            # （原 Q7 语义，仅对"无积压消息"场景保留）。
             next_cursor = payload.get("get_updates_buf", "") or ""
-            if next_cursor:
-                self._persist_verify_cursor(next_cursor)
             msgs = payload.get("msgs", []) or []
             if msgs:
                 logger.warning(
-                    "ilink.verify_token.consumed_pending_msgs count={} cursor_len={} "
-                    "note=messages_consumed_by_probe_without_processing "
-                    "hint=only_happens_when_no_active_poller",
+                    "ilink.verify_token.pending_msgs count={} cursor_len={} "
+                    "note=cursor_not_persisted deferred_to_poller "
+                    "hint=poller_refetches_from_old_cursor",
                     len(msgs), len(next_cursor),
                 )
+            elif next_cursor:
+                self._persist_verify_cursor(next_cursor)
             # ret=0：token 有效，且本次没有新消息
             logger.info("ilink.verify_token.ok")
             return True, "ok"
@@ -905,41 +894,20 @@ class ILinkClient:
             )
         return ""
 
-    @staticmethod
-    def _persist_verify_cursor(cursor: str) -> None:
-        """持久化 verify_token 探测后推进的服务端游标。
+    def _persist_verify_cursor(self, cursor: str) -> None:
+        """无积压消息时更新探针游标，并保留同文件死信表。"""
+        from pathlib import Path as _Path
 
-        探测用空游标 getupdates，服务端会把这些消息标记已投递并推进游标；
-        若不持久化，后续轮询按旧游标拉取会重放历史消息（重复处理）或丢消息。
-        路径与 wechat_bot_adapter._cursor_path 保持一致（凭证同目录）。
-        """
-        if not cursor:
-            return
+        cursor_path = _Path.home() / ".ai-agent" / "wechat_cursor.json"
+        credentials_path = cursor_path.with_name("wechat_credentials.json")
         try:
-            import json as _json
-            import os as _os
-            from pathlib import Path as _Path
-
-            cursor_path = _Path.home() / ".ai-agent" / "wechat_cursor.json"
             cursor_path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
-            content = _json.dumps({"cursor": cursor}, ensure_ascii=False)
-            if atomic_write is not None:
-                # Minor#4（R3）：游标含会话状态信息，权限对齐凭证文件（0600），
-                # 避免 umask 默认权限（如 0644）导致同机其他用户可读。
-                atomic_write(cursor_path, content, mode=0o600, encoding="utf-8")
-            else:
-                # fallback: 固定 tmp 方式（atomic_write 不可用时）
-                tmp = cursor_path.with_suffix(".tmp")
-                tmp.write_text(content, encoding="utf-8")
-                _os.chmod(tmp, 0o600)  # Unix: 限制为仅用户可读写
-                _restrict_file_permissions_windows(tmp)  # Windows: 用 ACL 补偿
-                tmp.replace(cursor_path)
-            logger.info("ilink.verify_cursor_persisted len={}", len(cursor))
-        except Exception as e:
-            logger.warning(
-                "ilink.verify_cursor_persist_failed error={}",
-                str(e)[:120],
-            )
+            if update_probe_cursor(
+                cursor_path, credentials_path, self._bot_token, cursor,
+            ):
+                logger.info("ilink.verify_cursor_persisted len={}", len(cursor))
+        except OSError as e:
+            logger.warning("ilink.verify_cursor_persist_failed error={}", str(e)[:120])
 
     async def send_test_message(self, bot_token: str, user_id: str) -> tuple[bool, str]:
         """验证登录是否成功（通过 token 探测，不发消息）。

@@ -45,6 +45,29 @@ class RiskLevel(str, Enum):
     CRITICAL = "critical"
 
 
+# 风险等级严重度排序（用于取 max：按名分类的风险不得低于执行器判定值）
+_RISK_SEVERITY: dict[RiskLevel, int] = {
+    RiskLevel.LOW: 0,
+    RiskLevel.MEDIUM: 1,
+    RiskLevel.HIGH: 2,
+    RiskLevel.CRITICAL: 3,
+}
+
+
+def _coerce_risk_level(value: Any) -> RiskLevel:
+    """将审批请求携带的风险等级（str 或 RiskLevel）转为枚举。
+
+    未知/缺失值按 LOW 处理——此时按名分类的风险仍参与 max，不会因此放行高危。
+    """
+    if isinstance(value, RiskLevel):
+        return value
+    try:
+        return RiskLevel(str(value).strip().lower())
+    except ValueError:
+        logger.debug("approval.unknown_risk_level value={}", value)
+        return RiskLevel.LOW
+
+
 # 默认高危操作清单
 HIGH_RISK_OPERATIONS = {
     "shell_command": RiskLevel.HIGH,
@@ -504,15 +527,21 @@ class HumanApprovalApprover:
         # 延迟导入避免循环依赖
         from tool_engine.approver import ApprovalDecision, ApprovalOutcome
 
+        # 审批风险取 max（按严重度）：固定名单按名分类的风险与执行器判定的
+        # request.risk_level（如 requires_confirmation/EXECUTE 提升后的 high）
+        # 取较严重者。未知 mcp_*/插件名不再因名单缺失被按名降级为低风险静默放行。
+        name_risk = self._gate.get_risk_level(request.tool_name)
+        req_risk = _coerce_risk_level(getattr(request, "risk_level", RiskLevel.LOW))
+        risk_level = max((name_risk, req_risk), key=_RISK_SEVERITY.__getitem__)
+
         # 非高危操作直接放行
-        if not self._gate.is_high_risk(request.tool_name):
+        if risk_level not in (RiskLevel.HIGH, RiskLevel.CRITICAL):
             return ApprovalDecision(
                 outcome=ApprovalOutcome.ONCE,
                 reason="low risk, auto-approved",
             )
 
         # 发起审批请求
-        risk_level = self._gate.get_risk_level(request.tool_name)
         # 优先使用请求携带的运行时 user_id（ToolExecutor.execute 传入），
         # 构造时绑定的 user_id 仅作兜底（无状态单例接线场景）。
         user_id = getattr(request, "user_id", "") or self._user_id

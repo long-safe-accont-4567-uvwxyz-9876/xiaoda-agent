@@ -145,8 +145,20 @@ class TestExecuteConfirmPauseResume:
         assert "超时" in (result.error or "")
 
     @pytest.mark.asyncio
-    async def test_allow_proceeds_past_confirmation(self, executor, global_pm, tmp_path):
-        """确认放行后，命令不再以“需确认”失败，而是继续执行并返回真实输出。"""
+    async def test_allow_proceeds_past_confirmation(self, global_pm, tmp_path):
+        """确认放行后，命令不再以“需确认”失败，而是继续执行并返回真实输出。
+
+        2026-08-29 审计修复：DefaultApprover 对高风险（shell_command 为 EXECUTE）
+        不再自动放行（fail-closed），故注入一个已配置的放行 approver，
+        继续验证"暂停-确认-继续"流程本身（生产接线见 agent_core/core.py）。
+        """
+        from tool_engine.approver import ApprovalDecision, ApprovalOutcome
+
+        class AllowAllApprover:
+            async def approve(self, request):
+                return ApprovalDecision(outcome=ApprovalOutcome.ONCE, reason="test: approver configured")
+
+        executor = ToolExecutor(approver=AllowAllApprover())
         global_pm.set_cwd(str(tmp_path))
         global_pm.set_whitelist([])
         executor._decision_provider = lambda rid: "allow"

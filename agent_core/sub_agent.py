@@ -28,6 +28,11 @@ from config import get_agent_display_name
 from core.message import AgentMessage
 from emotion.emoji_config import get_status_msg
 from emotion.tts_engine import TTSEngine
+from security.instruction_hierarchy import (
+    InstructionLevel,
+    format_instruction,
+    sanitize_external_content,
+)
 from tool_engine.tool_call_handler import _extract_path_from_args
 from tool_engine.tool_executor import ToolExecutor, ToolResult
 from tool_engine.tool_guardrails import get_tool_guardrails
@@ -68,6 +73,31 @@ SUB_AGENT_PROFILE_TOOLS = frozenset({
 SUB_AGENT_MEMORY_TOOL = "submit_memory"
 SUB_AGENT_MESSAGE_TOOL = "send_message_to_agent"
 SUB_AGENT_EXTRA_TOOLS = frozenset({SUB_AGENT_MEMORY_TOOL, SUB_AGENT_MESSAGE_TOOL})
+
+# 记忆工具白名单（与 tool_engine.tool_call_handler._TRUSTED_MEMORY_TOOLS 保持一致）：
+# 返回的是用户自己的记忆数据，属可信内容，不做 EXTERNAL 边界标记
+_SUB_AGENT_TRUSTED_MEMORY_TOOLS: frozenset[str] = frozenset({
+    "recall", "remember", "forget", "confirm_memory", "correct_memory",
+})
+
+# MCP 工具的 registry category → 名称前缀（tool_engine/mcp_client.py 注册时约定：
+# stdio/SSE 服务器注册为 mcp_{server}_{tool}，进程内 SDK 服务器注册为 sdk_{server}_{tool}）
+_MCP_CATEGORY_PREFIX: dict[str, str] = {"mcp": "mcp_", "sdk_mcp": "sdk_"}
+
+
+def _sanitize_sub_agent_tool_result(text: str, tool_name: str) -> str:
+    """子代理工具结果消毒（审计 Fix3，与主路径 tool_call_handler._sanitize_tool_result 同源）。
+
+    成功工具结果（web/文档/邮件/MCP 等外部数据）经 sanitize_external_content
+    清理注入模式后，用 format_instruction 标记为 EXTERNAL 级别（最低优先级），
+    防止外部内容伪装指令覆盖系统提示。记忆工具返回用户自己的数据，不标记。
+    """
+    if not text:
+        return text or ""
+    if tool_name in _SUB_AGENT_TRUSTED_MEMORY_TOOLS:
+        return text
+    sanitized = sanitize_external_content(text)
+    return format_instruction(sanitized, InstructionLevel.EXTERNAL)
 
 
 def _safe_log_path(path: str) -> str:
@@ -134,6 +164,8 @@ class SubAgent:
         self._credential_pool: CredentialPool | None = None
         self._memory_submit_count = 0  # 子代理单次任务记忆提交计数（上限 3）
         self._communicating_with: str | None = None  # 子代理间直接通信防循环标记
+        # 工具原始结果不存实例状态（审计 Fix7）：由每次 chat 调用方传入的
+        # tool_results_sink 收集器收集，避免并发 chat 互相覆盖/串写媒体。
 
     async def init(self) -> None:
         self._load_personality()
@@ -251,12 +283,61 @@ class SubAgent:
             | {SUB_AGENT_MEMORY_TOOL}
         )
 
+    def _mcp_tool_owner(self, tool_name: str) -> str | None:
+        """判定全局注册 MCP 工具的归属 server（审计 Fix5）。
+
+        MCP 工具由 tool_engine/mcp_client.py 全局注册进 tool_registry，
+        归属 server 编码在名称前缀里（mcp_{server}_ / sdk_{server}_），
+        registry 元数据的 category（mcp / sdk_mcp）标记其来源。
+
+        返回值约定：
+        - None：非 MCP 工具（不受 MCP 作用域管辖，放行）；
+        - ""：是 MCP 工具但无法判定归属（fail-closed，按越界处理）；
+        - 其他：归属 server 名。
+        """
+        from tool_engine.tool_registry import get_tool
+        meta = get_tool(tool_name)
+        category = meta.get("category") if meta else None
+        prefix = _MCP_CATEGORY_PREFIX.get(category or "")
+        if prefix is None or not tool_name.startswith(prefix):
+            return None
+        mgr = getattr(self, "_core", None) and getattr(self._core, "_mcp_manager", None)
+        server_names: list[str] = []
+        if mgr is not None:
+            server_names = [
+                *(getattr(mgr, "_clients", {}) or {}).keys(),
+                *(getattr(mgr, "_sdk_servers", {}) or {}).keys(),
+            ]
+        # 最长 server 名优先匹配，避免 server 名互为前缀时误判归属
+        for server in sorted(server_names, key=len, reverse=True):
+            if tool_name.startswith(f"{prefix}{server}_"):
+                return server
+        return ""
+
+    def _mcp_tool_in_scope(self, tool_name: str) -> bool:
+        """全局工具是否在本代理 config.mcp_servers 声明的作用域内。
+
+        非 MCP 工具恒为 True；MCP 工具仅当归属 server ∈ mcp_servers 时放行，
+        归属无法判定时 fail-closed 拒绝。主代理工具表不经过此过滤，行为不变。
+        """
+        owner = self._mcp_tool_owner(tool_name)
+        if owner is None:
+            return True
+        return owner in set(getattr(self.config, "mcp_servers", None) or [])
+
     def _filtered_tools(self) -> list[dict] | None:
         if not self._tool_executor:
             return None
         all_tools = to_openai_tools()
         excluded = self._excluded_tool_names()
-        tools = [t for t in all_tools if t["function"]["name"] not in excluded]
+        # 审计 Fix5：起点是全局工具表（含全部全局注册 MCP 工具），
+        # 必须按本代理 mcp_servers 作用域过滤，否则给 A 代理配置的
+        # MCP 工具对所有子代理可见。
+        tools = [
+            t for t in all_tools
+            if t["function"]["name"] not in excluded
+            and self._mcp_tool_in_scope(t["function"]["name"])
+        ]
 
         if self._memory_submission_scope() is not None:
             tools.append({
@@ -307,12 +388,16 @@ class SubAgent:
             },
         })
 
-        # Add MCP tools if available
+        # Add MCP tools if available（按 config.mcp_servers 作用域追加；
+        # 与全局表中已在作用域内的同名工具去重，避免重复条目）
         if hasattr(self._core, '_mcp_manager') and self._core._mcp_manager:
             mcp_server_names = self.config.mcp_servers
             if mcp_server_names:
                 mcp_tools = self._core._mcp_manager.get_tools_for_agent(mcp_server_names)
-                tools.extend(mcp_tools)
+                known_names = {t["function"]["name"] for t in tools}
+                tools.extend(
+                    t for t in mcp_tools if t["function"]["name"] not in known_names
+                )
 
         return tools if tools else None
 
@@ -320,13 +405,21 @@ class SubAgent:
         if not self._tool_executor:
             return set()
         excluded = self._excluded_tool_names()
-        names = {t["function"]["name"] for t in to_openai_tools() if t["function"]["name"] not in excluded}
+        # 审计 Fix5：执行 allowlist 与工具表同源过滤（MCP 作用域），
+        # 防止模型凭幻觉直接点名作用域外的 MCP 工具执行。
+        names = {
+            t["function"]["name"]
+            for t in to_openai_tools()
+            if t["function"]["name"] not in excluded
+            and self._mcp_tool_in_scope(t["function"]["name"])
+        }
         names.update({SUB_AGENT_MESSAGE_TOOL})
         if self._memory_submission_scope() is not None:
             names.add(SUB_AGENT_MEMORY_TOOL)
         return names
 
-    async def chat(self, message: str, context: str = "", status_callback: Any | None=None, address_term: str = "爸爸", extra_system_prompt: str = "", invocation: Any | None = None, interjections: list | None = None) -> str:
+    async def chat(self, message: str, context: str = "", status_callback: Any | None=None, address_term: str = "爸爸", extra_system_prompt: str = "", invocation: Any | None = None, interjections: list | None = None, tool_results_sink: list | None = None) -> str:
+        """单次任务对话。tool_results_sink：调用方持有的本次调用工具结果收集器（审计 Fix7）。"""
         if self._degraded:
             self._router = getattr(self._core, "router", None)
             if self._router is not None:
@@ -337,7 +430,7 @@ class SubAgent:
         if not self.available:
             return f"{self.config.display_name}{TIRED_MSG}"
 
-        # 单次任务开始时重置记忆提交计数
+        # 单次任务开始时重置记忆提交计数（工具结果收集器随调用传入，无需重置）
         self._memory_submit_count = 0
 
         if status_callback:
@@ -384,14 +477,16 @@ class SubAgent:
         success = False
         try:
             response = await self._chat_loop(messages, tools, invocation=invocation,
-                                             interjections=interjections)
+                                             interjections=interjections,
+                                             tool_results_sink=tool_results_sink)
             success = True
         except (TimeoutError, OSError, RuntimeError, ValueError) as e:
             logger.warning("sub_agent.chat_failed name={} error={}", self.config.name, str(e))
             if tools and _is_tool_unsupported_error(str(e)):
                 try:
                     response = await self._chat_loop(messages, None, invocation=invocation,
-                                                     interjections=interjections)
+                                                     interjections=interjections,
+                                                     tool_results_sink=tool_results_sink)
                     success = True
                 except (TimeoutError, OSError, RuntimeError, ValueError) as e2:
                     logger.warning("sub_agent.fallback_failed name={} error={}", self.config.name, str(e2))
@@ -445,7 +540,11 @@ class SubAgent:
             else:
                 result_text = "主Agent现在不在...先自己想想办法吧！"
         elif result.success:
-            result_text = json.dumps(result.data, ensure_ascii=False) if not isinstance(result.data, str) else result.data
+            raw_text = json.dumps(result.data, ensure_ascii=False) if not isinstance(result.data, str) else result.data
+            # 审计 Fix3：成功工具结果与主路径同源消毒 + EXTERNAL 边界。
+            # 此前 web/文档/邮件/MCP 等外部内容原样进入 role=tool 消息，
+            # 子代理上下文完全没有不可信内容边界，易被 prompt injection。
+            result_text = _sanitize_sub_agent_tool_result(raw_text, tool_name)
         else:
             result_text = f"错误: {result.error}"
         if len(result_text) > 4000:
@@ -492,8 +591,8 @@ class SubAgent:
     def _drain_interjections(interjections: list | None) -> list[dict]:
         return _drain_interjections(interjections)
 
-    async def _chat_loop(self, messages: list[dict], tools: list[dict] | None, invocation: Any | None = None, interjections: list | None = None) -> list | str:
-        """主循环：调用 LLM → 提取工具调用 → 执行 → 反馈，最多 max_rounds 轮。"""
+    async def _chat_loop(self, messages: list[dict], tools: list[dict] | None, invocation: Any | None = None, interjections: list | None = None, tool_results_sink: list | None = None) -> list | str:
+        """主循环：调用 LLM → 提取工具调用 → 执行 → 反馈，最多 max_rounds 轮；sink 原样下传执行层（Fix7）。"""
         max_rounds = self.config.max_turns if self.config.max_turns is not None else 5
         working = list(messages)
         tool_names = self._filtered_tool_names()
@@ -561,7 +660,8 @@ class SubAgent:
             working.append(self._build_assistant_msg(msg, extracted, is_dsml))
 
             # 统一执行工具调用
-            await self._execute_round_tool_calls(extracted, working, invocation=invocation)
+            await self._execute_round_tool_calls(extracted, working, invocation=invocation,
+                                                 tool_results_sink=tool_results_sink)
 
         # 达到最大轮次：让 LLM 基于已有工具结果做总结回复
         remaining = total_deadline - asyncio.get_running_loop().time()
@@ -648,12 +748,14 @@ class SubAgent:
         # 防御性兜底: retry_count 为负数时 for 循环不执行, 确保始终有返回值
         return f"{self.config.display_name}思考时间太长了，请稍后再试吧～"
 
-    async def _execute_round_tool_calls(self, extracted: Any, working: list[dict], invocation: Any | None = None) -> None:
+    async def _execute_round_tool_calls(self, extracted: Any, working: list[dict], invocation: Any | None = None, tool_results_sink: list | None = None) -> None:
         """并行执行本轮工具调用, 将结果 (含错误) 追加到 working"""
         try:
             tool_results = await asyncio.wait_for(
                 asyncio.gather(
-                    *[self._exec_one_tool_call(tc, invocation=invocation) for tc in extracted],
+                    *[self._exec_one_tool_call(tc, invocation=invocation,
+                                               tool_results_sink=tool_results_sink)
+                      for tc in extracted],
                     return_exceptions=True,
                 ),
                 timeout=120,
@@ -690,11 +792,18 @@ class SubAgent:
             assistant_msg["reasoning_content"] = msg_rc
         return assistant_msg
 
-    async def _exec_one_tool_call(self, tc: Any, invocation: Any | None = None) -> dict:
-        """执行单个工具调用：风暴检测 → 截断修复 → 授权/路径/权限检查 → 执行 → 后处理。"""
+    async def _exec_one_tool_call(self, tc: Any, invocation: Any | None = None, tool_results_sink: list | None = None) -> dict:
+        """执行单个工具调用：风暴检测 → 截断修复 → 授权/路径/权限检查 → 执行 → 后处理。
+
+        tool_results_sink 非空时把原始 ToolResult 追加进去（审计 Fix7，归本次调用所有）。"""
         tool_name = tc.name
         args_str = tc.arguments_json
 
+        # 审计 Fix4：修复（repair_truncation）产出合法 JSON 时直接用它解析参数。
+        # 原实现把修复结果存进局部 args_str 后，仍调 tc.parse_arguments() 解析
+        # 原始截断的 arguments_json（解析失败返回 {}），修复结果被完全忽略，
+        # 导致截断调用一律以空参数执行。
+        args: dict | None = None
         if self._tool_repair:
             # 风暴检测：拦截重复调用同一工具+相同参数的循环
             if self._tool_repair.detect_storm(tool_name, args_str):
@@ -704,8 +813,16 @@ class SubAgent:
             repaired = self._tool_repair.repair_truncation(args_str)
             if repaired:
                 args_str = repaired
+                try:
+                    parsed = json.loads(args_str)
+                except json.JSONDecodeError:
+                    parsed = None
+                # 仅接受 dict 形态的修复结果；非 dict/仍非法时回退原始解析，行为不变
+                if isinstance(parsed, dict):
+                    args = parsed
 
-        args = tc.parse_arguments()
+        if args is None:
+            args = tc.parse_arguments()
 
         # 结构化隔离调用的工具授权检查（allowed_tools + 禁止嵌套代理通信）
         denied = self._check_invocation_authorization(tc, tool_name, invocation)
@@ -750,6 +867,11 @@ class SubAgent:
             return {"tool_call_id": tc.id, "content": f"错误: {guard_msg}"}
 
         result = await self._tool_executor.execute(tool_name, args)
+
+        # 审计 Fix7：原始 ToolResult（含生图/生视频数据）写入调用方本次调用的
+        # 收集器（供 manager 直接 dispatch 路径提取媒体）；不写实例状态，并发 chat 互不串写。
+        if tool_results_sink is not None:
+            tool_results_sink.append(result)
 
         # 记录工具调用到护栏
         await guardrails.record_call(tool_name, args, result.success,

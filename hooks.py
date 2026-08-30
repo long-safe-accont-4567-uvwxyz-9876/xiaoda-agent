@@ -94,6 +94,20 @@ class HookEngine:
         self._hooks[hook.hook_type].append(hook)
         logger.debug("hooks.registered", name=hook.name, type=hook.hook_type.value)
 
+    def unregister(self, hook: BaseHook) -> bool:
+        """按对象身份取消注册钩子；未注册或已移除时返回 False。"""
+        hooks = self._hooks[hook.hook_type]
+        for index, registered in enumerate(hooks):
+            if registered is hook:
+                hooks.pop(index)
+                logger.debug(
+                    "hooks.unregistered",
+                    name=hook.name,
+                    type=hook.hook_type.value,
+                )
+                return True
+        return False
+
     def reset_evidence_gate(self) -> None:
         """清空证据门禁的读取记录（请求间隔离）。
 

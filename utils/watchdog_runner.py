@@ -59,6 +59,12 @@ DEFAULTS = {
     "log_file": "",              # 空=只打 stdout；否则同时写文件
     "log_max_bytes": 10 * 1024 * 1024,  # I3: 日志轮转上限
     "log_backup_count": 5,       # I3: 日志保留份数
+    # 退出码 0 是否视为"需重启"（2026-08-30：按守护模式分流，不按平台特判）：
+    # - web 模式（服务语义）：True —— /system/restart 以 os._exit(0) 结束子进程，
+    #   依赖看门狗重启拉起（Linux 服务链路）
+    # - desktop 模式：False —— 0 = 用户关窗干净退出，不重启（防"关窗即复活"）
+    # build_watchdog_config 会按 args.mode 覆盖此值
+    "restart_on_zero": False,
 }
 
 
@@ -196,6 +202,9 @@ class Watchdog:
         self.cmd = cmd
         self.cwd = cwd
         self.cfg = cfg
+        # 退出码 0 是否触发重启：由 build_watchdog_config 按 --mode 注入
+        # （web=True 服务语义 / desktop=False 关窗即退出），缺省按不复活处理
+        self._restart_on_zero = bool(cfg.get("restart_on_zero", False))
         self.log = _setup_log(cfg.get("log_file", ""))
         self._proc: subprocess.Popen | None = None
         self._restart_history: list[float] = []
@@ -334,9 +343,9 @@ class Watchdog:
         self.log.info("ping_url=%s  check_interval=%ds  freeze_threshold=%ds",
                       self.cfg["ping_url"], self.cfg["check_interval"],
                       self.cfg["freeze_threshold"])
-        self.log.info("max_restarts=%d/%ds  ping_retries=%d",
+        self.log.info("max_restarts=%d/%ds  ping_retries=%d  restart_on_zero=%s",
                       self.cfg["max_restarts"], self.cfg["restart_window"],
-                      self.cfg["ping_retries"])
+                      self.cfg["ping_retries"], self._restart_on_zero)
         self.log.info("=" * 55)
 
         # W2: 首次启动失败时退避重试
@@ -355,10 +364,14 @@ class Watchdog:
         ping_retries = self.cfg.get("ping_retries", 1)
 
         while self._running:
-            # 1. 进程已退出 → 直接重启
+            # 1. 进程已退出 → 按退出码分流：
+            #    77 = 已有实例，不重启；其他非零 = 崩溃，重启；
+            #    0 按守护模式分流（restart_on_zero，由 build_watchdog_config 注入）：
+            #      - desktop（False）= 用户正常关闭，看门狗随之退出，不重启
+            #      - web（True）= /system/restart 以 os._exit(0) 结束子进程，
+            #        必须重启拉起（2026-08-30 回归修复：0 不能一刀切当干净退出）
             if self._proc is not None and self._proc.poll() is not None:
                 exit_code = self._proc.poll()
-                self.log.error("watchdog.proc_exited exit_code=%d", exit_code)
                 if exit_code == _EXIT_ALREADY_RUNNING:
                     # 主进程以专用退出码 77 退出 = 已有 desktop 实例在运行
                     # （单实例锁生效），不是崩溃。继续重启只会无限循环，
@@ -367,6 +380,20 @@ class Watchdog:
                         "watchdog.already_running — 已有实例在运行，看门狗退出"
                     )
                     break
+                if exit_code == 0 and not self._restart_on_zero:
+                    # 主进程以 0 退出 = 用户正常关闭（如桌面窗口关闭后的干净退出），
+                    # 不是崩溃。旧逻辑把 0 当崩溃重启，导致"关窗即复活"——
+                    # 看门狗随主进程一起退出，把是否再启动的决定权交还用户。
+                    self.log.info(
+                        "watchdog.proc_exited_clean exit_code=0 — 正常退出，看门狗随之退出"
+                    )
+                    break
+                if exit_code == 0:
+                    # web 模式：0 是预期退出路径之一（/system/restart 主动退出），
+                    # 与其他非零码一样按"需拉起"处理，恢复服务守护语义
+                    self.log.warning("watchdog.proc_exited_zero — web 模式重启拉起服务")
+                else:
+                    self.log.error("watchdog.proc_exited exit_code=%d", exit_code)
                 if not self._restart("proc_exited"):
                     break
                 last_ok = time.time()
@@ -461,4 +488,9 @@ def build_watchdog_config(args: argparse.Namespace) -> dict:
     cfg["max_restarts"] = args.max_restarts
     cfg["ping_retries"] = args.ping_retries
     cfg["log_file"] = args.log_file
+    # 退出码 0 是否重启按守护模式分流（不按平台特判）：
+    # - web：/system/restart 以 os._exit(0) 结束子进程，看门狗必须重启拉起
+    #   （Linux 服务链路回归修复，2026-08-30）
+    # - desktop：0 = 用户关窗干净退出，看门狗随之退出（防"关窗即复活"）
+    cfg["restart_on_zero"] = getattr(args, "mode", "web") != "desktop"
     return cfg

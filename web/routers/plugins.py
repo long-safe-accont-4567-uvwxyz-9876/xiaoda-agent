@@ -147,7 +147,13 @@ async def unload_plugin(plugin_id: str, request: Request) -> Any:
 async def get_plugin_config(plugin_id: str, request: Request) -> Any:
     """获取插件配置"""
     mgr = _get_manager(request)
-    return Envelope(data=mgr.get_plugin_config(plugin_id))
+    record = mgr.get_plugin(plugin_id)
+    if not record:
+        raise HTTPException(status_code=404, detail=f"Plugin '{plugin_id}' not found")
+    return Envelope(data={
+        "schema": record.manifest.config_schema or {},
+        "values": mgr.get_plugin_config(plugin_id),
+    })
 
 
 @router.put("/{plugin_id}/config", response_model=Envelope[dict])

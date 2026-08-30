@@ -83,6 +83,33 @@ export const useChatStore = defineStore('chat', () => {
   // 超限淘汰最旧记录（与后端 _MAX_STREAM_SESSIONS=256 同策略）
   const STREAM_STATES_MAX = 256
 
+  // msg_id → 发起时所在会话（audit-fix-20260829）：会话切换后，旧会话迟到
+  // 的流式/终态/工具事件一律按"发起时会话 ≠ 当前会话"丢弃，防止写入新会话
+  // UI。记录带发起时间，配合 TTL 与加载/新建时的修剪，防止映射无界增长。
+  const MSG_SESSION_TTL_MS = 5 * 60 * 1000
+  const msgSessionMap = new Map<string, { session: string; sentAt: number }>()
+  function recordMsgSession(msgId: string) {
+    msgSessionMap.set(msgId, { session: sessionId.value, sentAt: Date.now() })
+  }
+  function inCurrentSession(msgId: string): boolean {
+    const entry = msgSessionMap.get(msgId)
+    // 无映射记录（如后端主动推送）不拦截
+    if (!entry) return true
+    return entry.session === sessionId.value
+  }
+  function pruneMsgSessions() {
+    const cutoff = Date.now() - MSG_SESSION_TTL_MS
+    for (const [id, entry] of msgSessionMap) {
+      if (entry.sentAt < cutoff) msgSessionMap.delete(id)
+    }
+  }
+  function clearProcessing() {
+    isProcessing.value = false
+    currentStage.value = ''
+    statusText.value = ''
+    pendingMsgId.value = ''
+  }
+
   const pendingTimers: ReturnType<typeof setTimeout>[] = []
 
   // 初始化时主动同步 WS 状态（避免竞态：WS 在 chat store 初始化前已连接，ws_connected 事件被错过）
@@ -151,6 +178,11 @@ export const useChatStore = defineStore('chat', () => {
   const onStreamText = (e: WsEvent) => {
     const msgId = e.msg_id as string
     if (!msgId) return
+    // 会话切换场景：旧会话迟到的流式帧直接丢弃，防止写入新会话 UI
+    if (!inCurrentSession(msgId)) {
+      console.debug('[chat] 丢弃旧会话迟到流式事件', msgId)
+      return
+    }
     let msg = messages.value.find(m => m.id === `a-${msgId}`)
     if (!msg) {
       msg = {
@@ -174,6 +206,11 @@ export const useChatStore = defineStore('chat', () => {
   const onToolEvent = (e: WsEvent) => {
     const msgId = (e.msg_id as string) || pendingMsgId.value
     if (!msgId) return
+    // 会话切换场景：旧会话迟到的工具事件丢弃（含以 pendingMsgId 兜底的路径）
+    if (!inCurrentSession(msgId)) {
+      console.debug('[chat] 丢弃旧会话迟到工具事件', msgId)
+      return
+    }
     let msg = messages.value.find(m => m.id === `a-${msgId}`)
     if (!msg) {
       msg = {
@@ -208,6 +245,15 @@ export const useChatStore = defineStore('chat', () => {
 
   const onFinal = (e: WsEvent) => {
     const msgId = e.msg_id as string
+    if (!msgId) return
+    // 会话切换场景：旧会话迟到的终态帧丢弃，不得写入新会话。
+    // 若它正是当前 pending 的那条（会话切换时 isProcessing 仍为 true），
+    // 顺手收尾清理，避免状态卡死在"处理中"。
+    if (!inCurrentSession(msgId)) {
+      console.debug('[chat] 丢弃旧会话迟到终态事件', msgId)
+      if (msgId === pendingMsgId.value) clearProcessing()
+      return
+    }
     let msg = messages.value.find(m => m.id === `a-${msgId}`)
     if (!msg) {
       msg = { id: `a-${msgId}`, role: 'assistant', content: '', timestamp: Date.now() }
@@ -227,11 +273,14 @@ export const useChatStore = defineStore('chat', () => {
     currentStage.value = ''
     statusText.value = ''
     pendingMsgId.value = ''
+    // 终态消息的会话映射已无用处，就地移除防映射增长
+    msgSessionMap.delete(msgId)
   }
 
   // Task 6: 异步 TTS 合成完成 —— 更新对应消息的 audioUrl
   const onAudioReady = (e: WsEvent) => {
     const msgId = e.msg_id as string
+    if (!msgId || !inCurrentSession(msgId)) return
     const msg = messages.value.find(m => m.id === `a-${msgId}`)
     if (msg) {
       msg.audioUrl = (e.audio_url as string) || undefined
@@ -240,6 +289,14 @@ export const useChatStore = defineStore('chat', () => {
   }
 
   const onError = (e: WsEvent) => {
+    const msgId = e.msg_id as string
+    // 与流式/终态/工具事件同规（audit-fix-20260829）：带 msg_id 的
+    // ABORTED/CHAT_ERROR/EMPTY_REQUEST/DUPLICATE_* 等错误帧按发起时会话
+    // 过滤——旧会话迟到的错误不得写入新会话 UI，也不得误清新会话在途状态。
+    if (msgId && !inCurrentSession(msgId)) {
+      console.debug('[chat] 丢弃旧会话迟到错误事件', msgId)
+      return
+    }
     isProcessing.value = false
     currentStage.value = ''
     pendingMsgId.value = ''
@@ -299,6 +356,8 @@ export const useChatStore = defineStore('chat', () => {
     }
     if (isProcessing.value) return { ok: false, reason: 'PROCESSING' }
     const msgId = `${Date.now()}-${Math.random().toString(36).slice(2, 6)}`
+    // 记录此 msg_id 发出的会话：后续收到的流式/终态/工具事件按此过滤
+    recordMsgSession(msgId)
     const image = request.attachments.find(attachment => attachment.kind === 'image')
     const document = request.attachments.find(attachment => attachment.kind === 'document')
     const displayText = request.text.trim() || (image ? '📷 图片' : `📄 ${document?.name || ''}`)
@@ -366,6 +425,7 @@ export const useChatStore = defineStore('chat', () => {
 
   async function newSession() {
     loadSessionGeneration++
+    pruneMsgSessions()
     const data = await api.createSession()
     sessionId.value = data.session_id
     ws.send({ type: 'set_session', session_id: data.session_id })
@@ -399,6 +459,7 @@ export const useChatStore = defineStore('chat', () => {
 
   async function loadSession(sid: string) {
     const generation = ++loadSessionGeneration
+    pruneMsgSessions()
     sessionId.value = sid
     ws.send({ type: 'set_session', session_id: sid })
     const history = await api.getMessages(sid)

@@ -1,8 +1,9 @@
 #!/bin/bash
 # =============================================================================
 #  Xiaoda Agent — Auto-Update Script (Linux)
-#  原子更新协议：校验候选包 → 备份安装目录 → 复制 → 校验关键文件 → 写版本号
-#  任何步骤失败都会回滚到备份，不会留下半更新状态
+#  原子更新协议：校验候选包 → 备份安装目录 → 清空安装目录（摘出 state 文件）
+#  → 拷贝候选包 → 校验关键文件 → 放回 state 文件 → 写版本号
+#  任何步骤失败都会回滚到备份（先清后拷），不会留下半更新状态
 # =============================================================================
 set -euo pipefail
 
@@ -189,10 +190,28 @@ BACKUP_DIR="$(mktemp -d)/xiaoda-agent-backup-v${CURRENT_VERSION:-unknown}"
 BACKUP_READY=false
 mkdir -p "$BACKUP_DIR"
 
-# 停止运行中的实例（排除自身 PID）
+# 停止运行中的实例（限当前用户，排除自身 PID）
+# 修复（2026-08-30）：原实现仅 pkill -f agent.py，有两类错误——frozen 服务跑的
+# 是 ${INSTALL_DIR}/xiaoda-agent（根本杀不到），而任何命令行含 agent.py 的
+# 无关进程（如编辑器/grep）都会被误杀。改为只匹配两类模式：
+#   1) 本安装目录的 frozen 可执行文件
+#   2) agent.py（源码模式服务/看门狗进程）
+# 用 pgrep -u 限定当前用户，过滤掉自身 PID 后逐个 kill。
+# 修复（2026-08-30 二次）：INSTALL_DIR 拼进 pgrep -f 的 ERE 前必须转义正则
+# 元字符——安装目录含 +.()[]{} 等字符（如 "App (x86)"）时，未转义路径被当
+# 正则语法解析，导致漏杀（模式错配）或误杀。
+escape_ere() {
+    printf '%s' "$1" | sed -e 's/[][\.^$(){}?+*|]/\\&/g'
+}
 echo "  停止运行中的服务..."
 SELF_PID=$$
-pkill -f "agent.py" 2>/dev/null || true
+UPDATE_USER="$(id -un)"
+for _pid in $(pgrep -u "$UPDATE_USER" -f -- "$(escape_ere "${INSTALL_DIR}/xiaoda-agent")" 2>/dev/null || true); do
+    [ "$_pid" = "$SELF_PID" ] || kill "$_pid" 2>/dev/null || true
+done
+for _pid in $(pgrep -u "$UPDATE_USER" -f -- 'agent\.py' 2>/dev/null || true); do
+    [ "$_pid" = "$SELF_PID" ] || kill "$_pid" 2>/dev/null || true
+done
 sleep 1
 
 # 备份安装目录（排除 .venv 以节省时间和空间）
@@ -220,11 +239,22 @@ if [ -d "$INSTALL_DIR" ]; then
     fi
 fi
 
-# ── 原子更新：复制候选包到安装目录 ────────────────────────
+# ── 原子更新：干净替换（先清后拷）─────────────────────────
+# 修复（2026-08-30）：原 cp -a 覆盖式复制不会删除候选包中不存在的旧文件，
+# 新版已移除的文件随多次更新越积越多。改为"清空安装目录内容 → 拷贝候选包"：
+# - 候选包已通过关键文件校验、安装目录已完整备份（BACKUP_READY），清空可回滚
+# - 只删内容不删目录本身，保留目录属主与权限（服务用户可写）
+# - 用户数据不在安装目录（~/.ai-agent/data/），不受影响；安装目录内的
+#   state 文件（.env 用户配置 / .auto_update 更新开关）先摘出，拷贝后放回；
+#   .version 属程序文件，由候选包带入、成功后才覆写
 UPDATE_FAILED=false
-# 注意：cp -a 仅覆盖复制，不删除候选包中不存在的旧文件
-# 用户数据目录（.env, data, credentials 等）不在候选包中，不受影响
-# cp -a 保留权限和时间戳
+STATE_FILES=".env .auto_update"
+STATE_STASH="${TMP_DIR}/state-stash"
+mkdir -p "$STATE_STASH"
+for _sf in $STATE_FILES; do
+    [ -e "${INSTALL_DIR}/${_sf}" ] && mv "${INSTALL_DIR}/${_sf}" "$STATE_STASH/" 2>/dev/null || true
+done
+find "${INSTALL_DIR}" -mindepth 1 -maxdepth 1 -exec rm -rf {} +
 if ! cp -a "${CANDIDATE_DIR}/." "${INSTALL_DIR}/" 2>&1; then
     echo "  $(red "复制更新文件失败")"
     UPDATE_FAILED=true
@@ -245,7 +275,9 @@ fi
 if [ "$UPDATE_FAILED" = "true" ]; then
     echo "  $(red "更新失败，开始回滚...")"
     if [ "$BACKUP_READY" = "true" ] && [ -d "$BACKUP_DIR" ]; then
-        # 恢复备份
+        # 回滚同样先清后拷（与成功路径同语义）：失败版拷入的新增文件不能残留
+        find "${INSTALL_DIR}" -mindepth 1 -maxdepth 1 -exec rm -rf {} +
+        # 恢复备份（含 .env / .auto_update / .version 等 state 文件）
         cp -a "${BACKUP_DIR}/." "${INSTALL_DIR}/" 2>/dev/null || true
         # 校验回滚后关键文件
         ROLLBACK_OK=true
@@ -272,12 +304,15 @@ if [ "$UPDATE_FAILED" = "true" ]; then
     exit 1
 fi
 
-# 恢复用户配置（.env 在安装目录，其他用户数据在 ~/.ai-agent/data/）
-# config.py 在 Linux 上将 data/credentials/config 等路由到 ~/.ai-agent/data/
-# 这些不在候选包中，更新不会覆盖它们；此处仅恢复 .env（安装目录内）
-if [ -e "$BACKUP_DIR/.env" ] && [ ! -e "${INSTALL_DIR}/.env" ]; then
-    cp -a "$BACKUP_DIR/.env" "${INSTALL_DIR}/" 2>/dev/null || true
-fi
+# 恢复安装目录内的 state 文件（干净替换把它们摘出到了临时区）
+# .env：用户配置（候选包不含）；.auto_update：自动更新开关（用户显式启用，
+# 候选包按约定不带）。候选包若自带同名文件则保留候选包版本。
+# 用户数据主体在 ~/.ai-agent/data/，不在安装目录，无需恢复。
+for _sf in $STATE_FILES; do
+    if [ -e "${STATE_STASH}/${_sf}" ] && [ ! -e "${INSTALL_DIR}/${_sf}" ]; then
+        mv "${STATE_STASH}/${_sf}" "${INSTALL_DIR}/${_sf}" 2>/dev/null || true
+    fi
+done
 
 # ── 仅在所有校验成功后写版本号 ────────────────────────────
 echo "$LATEST_VERSION" > "$VERSION_FILE"

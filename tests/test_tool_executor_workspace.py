@@ -219,3 +219,56 @@ class TestWorkspaceAuditBuffer:
         # I2 加强断言：验证隔离效果，确保只有本用例写入的 1 条 delete 审计
         assert len(entries) == 1, f"期望仅 1 条 delete 审计，实际 {len(entries)} 条"
         assert entries[0]["action"] == "delete"
+
+
+class TestExecutionCwdAlignment:
+    """执行器子进程 CWD 对齐授权工作区（Task 8 Fix 2）。
+
+    修复前 shell_command / python_executor 一律 cwd=~：用户在 WebUI 授权
+    工作区根后，pwd/相对路径读写实际发生在 ~，与 UI 声明不符。修复后
+    PermissionManager 已授权工作区根（tool_executor 边界检查同源）优先，
+    未授权回退 ~（默认行为不变）。
+    """
+
+    @pytest.fixture
+    def cwd_modules(self):
+        from tools import code_tools_v2, file_tools_v2
+        return file_tools_v2, code_tools_v2
+
+    def test_default_cwd_is_home(self, cwd_modules, pm):
+        """未授权工作区 → 回退 ~（历史默认行为，既有测试基线）"""
+        pm.clear_cwd()
+        file_tools_v2, code_tools_v2 = cwd_modules
+        home = os.path.expanduser("~")
+        assert file_tools_v2._execution_cwd() == home
+        assert code_tools_v2._execution_cwd() == home
+
+    def test_authorized_workspace_root_used_as_cwd(self, cwd_modules, pm, tmp_path):
+        """已授权工作区根 → 两个执行器均以该根为 CWD"""
+        pm.set_cwd(str(tmp_path))
+        file_tools_v2, code_tools_v2 = cwd_modules
+        assert file_tools_v2._execution_cwd() == pm.cwd
+        assert code_tools_v2._execution_cwd() == pm.cwd
+
+    def test_authorized_but_missing_dir_falls_back_to_home(self, cwd_modules, pm, tmp_path):
+        """已授权但目录已消失 → 回退 ~（不产生 OSError）"""
+        ghost = tmp_path / "ghost"
+        ghost.mkdir()
+        pm.set_cwd(str(ghost))
+        ghost.rmdir()
+        file_tools_v2, code_tools_v2 = cwd_modules
+        assert file_tools_v2._execution_cwd() == os.path.expanduser("~")
+        assert code_tools_v2._execution_cwd() == os.path.expanduser("~")
+
+    @pytest.mark.asyncio
+    async def test_shell_command_runs_inside_authorized_root(self, pm, tmp_path):
+        """端到端：授权工作区根后 shell 子进程的 pwd 落在该根内"""
+        from tools import file_tools_v2
+
+        pm.set_cwd(str(tmp_path))
+        result = await file_tools_v2.shell_command("pwd")
+        assert result.success
+        # set_cwd 已 realpath 规范化，子进程 getcwd 返回物理路径，两者应一致
+        assert pm.cwd in (result.data or ""), (
+            f"shell 子进程应运行在授权工作区根 {pm.cwd}，实际输出: {result.data!r}"
+        )

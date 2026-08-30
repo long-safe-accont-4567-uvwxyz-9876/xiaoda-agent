@@ -55,7 +55,10 @@ detect_platform() {
 
     case "$(uname -m)" in
         x86_64|amd64)  arch="x86_64" ;;
-        aarch64|arm64) arch="aarch64" ;;
+        # arm64：与发布资产命名契约对齐（build-release.yml matrix.platform 是
+        # linux-arm64，auto-update.sh 的 resolve_release_platform 也映射到
+        # linux-arm64）。此前本地构建拼成 linux-aarch64，更新器永远匹配不到。
+        aarch64|arm64) arch="arm64" ;;
         armv7l)         arch="armv7l" ;;
         *)              die "Unsupported architecture: $(uname -m)" ;;
     esac

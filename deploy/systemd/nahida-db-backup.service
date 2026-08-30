@@ -5,4 +5,8 @@ After=local-fs.target
 [Service]
 Type=oneshot
 User=orangepi
+# 环境注入：KIOXIA_DATA_DIR / XIAODA_BACKUP_DIR 与安装 .env 对齐（config_paths.py
+# 同源的"环境变量优先"语义）。前缀 "-" 表示文件缺失不阻断 unit；脚本自身亦会
+# 以项目根 .env 兜底解析，此处注入保证 systemd 环境与交互登录环境一致。
+EnvironmentFile=-/home/orangepi/ai-agent/.env
 ExecStart=/home/orangepi/ai-agent/scripts/db_backup.sh

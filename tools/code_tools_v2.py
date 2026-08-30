@@ -11,6 +11,7 @@ from zoneinfo import ZoneInfo
 from loguru import logger
 
 from config import get_agent_display_name
+from security.permission_manager import get_permission_manager
 from tool_engine.tool_registry import ToolPermission, ToolResult, register_tool
 
 _NAHIDA_DN = get_agent_display_name('xiaoda')
@@ -250,6 +251,26 @@ if "_result" in local_vars:
 '''
 
 
+def _execution_cwd() -> str:
+    """解析子进程执行 CWD：已授权工作区根优先，回退用户主目录（历史行为）。
+
+    与 tools/file_tools_v2.py 同源：工作区根单一事实源是 PermissionManager
+    （WebUI /workspace/confirm 授权写入，tool_executor 边界检查同源），此处
+    只读消费，不引入新全局态。修复前 python_executor 一律 cwd=~：用户授权
+    工作区后相对路径读写实际发生在 ~，与 UI 声明不符。未授权或目录已消失
+    时回退 expanduser("~")，既有测试断言的默认行为不变。
+    """
+    try:
+        pm = get_permission_manager()
+        if pm.is_cwd_authorized():
+            root = pm.cwd
+            if root and os.path.isdir(root):
+                return root
+    except (OSError, RuntimeError, ValueError):
+        logger.debug("pyexec.execution_cwd_fallback", exc_info=True)
+    return os.path.expanduser("~")
+
+
 @register_tool(
     name="get_current_time",
     description="获取当前的日期和时间（北京时间 Asia/Shanghai）。无需输入参数。",
@@ -330,7 +351,8 @@ def python_executor(code: str) -> ToolResult:
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
                 env=child_env,
-                cwd=os.path.expanduser("~"),
+                # 已授权工作区根优先（见 _execution_cwd），未授权回退 ~（历史行为）
+                cwd=_execution_cwd(),
                 preexec_fn=preexec_fn,
                 creationflags=creationflags,
             )

@@ -29,12 +29,23 @@ export const useAuthStore = defineStore('auth', () => {
     getWsClient().connect(data.token)
   }
 
-  function logout() {
+  async function logout() {
+    // 先 best-effort 通知后端吊销当前 bearer（POST /api/v1/auth/logout：
+    // 拉黑 token + 清媒体 cookie）。失败忽略——本地清理照旧执行，不阻塞跳转。
+    const currentToken = localStorage.getItem('token')
+    try {
+      if (currentToken) {
+        await fetch('/api/v1/auth/logout', {
+          method: 'POST',
+          headers: { Authorization: `Bearer ${currentToken}` },
+        })
+      }
+    } catch { /* 网络异常/服务不可达：登出仍按本地清理完成 */ }
     token.value = ''
     expiresAt.value = 0
     localStorage.removeItem('token')
     localStorage.removeItem('expires_at')
-    // 清理会话级壁纸缓存：避免登出后同标签页短暂残留上一会话的背景（review P2）
+    // 清理会话级壁纸缓存：避免登出后同标签页短暂残留上一会话的背景
     try { sessionStorage.removeItem(WALLPAPER_CACHE_KEY) } catch { /* 存储不可用则跳过 */ }
     getWsClient().disconnect()
   }

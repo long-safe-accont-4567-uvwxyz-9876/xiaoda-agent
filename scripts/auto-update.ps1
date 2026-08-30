@@ -7,7 +7,7 @@
 #     1. 下载 + SHA256 校验
 #     2. 解压后校验候选目录包含全部关键文件
 #     3. 备份用户数据 + 整个安装目录
-#     4. 停止旧进程 → 覆盖安装目录
+#     4. 停止旧进程 → 清空安装目录（摘出 state 文件）→ 拷贝候选包 → 放回 state 文件
 #     5. 校验安装后的关键文件齐全
 #     6. 任何步骤失败 → 从备份恢复安装目录，不写新版本号
 #     7. 全部成功 → 写 .version，清理临时文件
@@ -186,7 +186,7 @@ try {
         Write-Host "  Program directory backed up to $programBackupDir"
     }
 
-    # ── Step 6: 停止旧进程并覆盖安装目录 ──
+    # ── Step 6: 停止旧进程并干净替换安装目录 ──
     Write-Host "  Installing update..."
     $proc = Get-Process -Name 'xiaoda-agent' -ErrorAction SilentlyContinue
     if ($proc) {
@@ -194,9 +194,29 @@ try {
         Stop-Process -Name 'xiaoda-agent' -Force -ErrorAction SilentlyContinue
         Start-Sleep -Seconds 2
     }
-    Remove-Item -Recurse -Force ($installDir + '\_internal\web\dist') -ErrorAction SilentlyContinue
-    Remove-Item -Recurse -Force ($installDir + '\web\dist') -ErrorAction SilentlyContinue
+    # 先清后拷（2026-08-30 修复，与 Linux auto-update.sh 同语义）：仅删两个
+    # dist 目录会让候选包中已移除的旧文件残留（vite hash 前端资源随升级越积
+    # 越多）。候选包已通过关键文件校验且安装目录已完整备份，清空是可回滚的。
+    # state 文件（.env 用户兜底配置 / .auto_update 更新开关）先摘出到临时区，
+    # 拷贝后放回；.version 由候选包带入，校验全部通过后才覆写。
+    # 注：清空若因文件占用失败会抛异常进入 catch 回滚（fail-closed），
+    # 不允许半清半拷留下混合新旧文件的安装目录。
+    $stateFiles = @('.env', '.auto_update')
+    $stateStash = Join-Path $extractDir 'state-stash'
+    New-Item -ItemType Directory -Path $stateStash -Force | Out-Null
+    foreach ($sf in $stateFiles) {
+        $stateSrc = Join-Path $installDir $sf
+        if (Test-Path $stateSrc) { Move-Item -Force $stateSrc $stateStash }
+    }
+    Get-ChildItem -Path $installDir -Force | Remove-Item -Recurse -Force
     Get-ChildItem -Path $updateSrc | Copy-Item -Recurse -Force -Destination $installDir\
+    foreach ($sf in $stateFiles) {
+        $stashedFile = Join-Path $stateStash $sf
+        $stateDest = Join-Path $installDir $sf
+        if ((Test-Path $stashedFile) -and (-not (Test-Path $stateDest))) {
+            Move-Item -Force $stashedFile $stateDest
+        }
+    }
 
     # ── Step 7: 校验安装后关键文件齐全 ──
     # xiaoda-agent.exe 是主程序入口，必须显式校验（也是版本写入的前置条件）

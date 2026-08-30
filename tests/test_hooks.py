@@ -64,6 +64,17 @@ class TestHookEngine(unittest.TestCase):
         self.assertEqual(hooks[0]["name"], "allow_hook")
         self.assertEqual(hooks[0]["type"], "pre_tool_use")
 
+    def test_unregister_hook_removes_only_registered_instance(self):
+        """取消注册使用钩子对象身份，重复取消安全返回 False。"""
+        hook = AllowHook()
+        other = AllowHook()
+        self.engine.register(hook)
+        self.engine.register(other)
+
+        self.assertTrue(self.engine.unregister(hook))
+        self.assertFalse(self.engine.unregister(hook))
+        self.assertEqual(len(self.engine.get_registered_hooks()), 1)
+
     def test_fire_pre_tool_use_allow(self):
         """无钩子拒绝时返回 allowed"""
         # 注册允许钩子

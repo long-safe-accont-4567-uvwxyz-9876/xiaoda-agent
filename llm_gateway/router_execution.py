@@ -65,7 +65,7 @@ from model_router_config import (
     translate_model_for_provider,
 )
 from utils.common import DEFAULT_MAX_TOKENS
-from utils.error_classifier import RecoveryAction
+from utils.error_classifier import FailoverReason, RecoveryAction
 from utils.llm_cleanup import merge_continuation
 from utils.metrics import metrics
 
@@ -145,6 +145,7 @@ class ExecutionMixin:
         _chunk_count = 0
         _stream_usage: Any = None
         _content_yielded = False
+        _retry_state: dict = {}  # 整次调用仅允许一次认证轮换重试
 
         for attempt in range(MAX_RETRIES + 1):
             try:
@@ -197,32 +198,15 @@ class ExecutionMixin:
                 await self._finalize_stream(
                     task_type, model, provider, _stream_finish_reason, _stream_usage,
                     _chunk_count, user_openid, session_id, mt, _start)
-
-                # CR-Major-1：流式 usage 记录费用（include_usage=True 时 _stream_usage 非空）
-                if _stream_usage is not None:
-                    try:
-                        await self._record_stream_usage(
-                            task_type, model, type("R", (), {"usage": _stream_usage})(),
-                            user_openid=user_openid, session_id=session_id,
-                            provider=provider,
-                        )
-                    except (AttributeError, TypeError, OSError) as _ue:
-                        logger.debug("router.stream_usage_record_skip: {}", _ue)
-                metrics.inc(f"model_route.{task_type}.success")
-                metrics.observe(f"model_route.{task_type}.duration", time.time() - _start)
-                metrics.maybe_report()
-                logger.info("llm.call", event="llm_call", model=model,
-                            task=task_type, duration_ms=int((time.time() - _start) * 1000),
-                            user_id=user_openid, session_id=session_id, stream=True,
-                            finish_reason=_stream_finish_reason)
-                return
+                return  # _finalize_stream 是唯一 usage/success 记账点
             except (RuntimeError, OSError, KeyError, ValueError, _openai_mod.APIError,
                     asyncio.TimeoutError, LLMError) as e:
                 # CR-Major-1：补 LLMError 捕获（与 route() 对齐）
                 # P0 修复：捕获 stall timeout（asyncio.TimeoutError），正确关闭流并走重试
                 stream, last_error, should_retry = await self._handle_stream_error(
                     e, provider, task_type, model, attempt, stream,
-                    _content_yielded, _stall_timeout, _chunk_count)
+                    _content_yielded, _stall_timeout, _chunk_count,
+                    retry_state=_retry_state)
                 if not should_retry:
                     break
 
@@ -282,6 +266,7 @@ class ExecutionMixin:
         last_error: Exception | None = None
         stall_timeout = float(os.getenv("LLM_STREAM_STALL_TIMEOUT", "15"))
         output_yielded = False
+        retry_state: dict = {}  # 整次调用仅允许一次认证轮换重试
 
         for attempt in range(MAX_RETRIES + 1):
             finish_reason = None
@@ -356,6 +341,7 @@ class ExecutionMixin:
                 stream, last_error, should_retry = await self._handle_stream_error(
                     error, provider, task_type, model, attempt, stream,
                     output_yielded, stall_timeout, chunk_count,
+                    retry_state=retry_state,
                 )
                 if not should_retry:
                     break
@@ -601,8 +587,9 @@ class ExecutionMixin:
     async def _handle_stream_error(self, e: Exception, provider: str, task_type: str,
                                    model: str, attempt: int, stream: Any,
                                    _content_yielded: bool, _stall_timeout: float,
-                                   _chunk_count: int) -> tuple[Any | None, Exception | None, bool]:
-        """流式异常处理：关闭流 + stall 诊断 + 重试判断。返回 (stream, last_error, should_retry)。"""
+                                   _chunk_count: int,
+                                   retry_state: dict | None = None) -> tuple[Any | None, Exception | None, bool]:
+        """关闭异常流并判断是否重试。"""
         last_error = e
         if stream:
             with contextlib.suppress(AttributeError, OSError):
@@ -618,7 +605,7 @@ class ExecutionMixin:
                            chunk_count=_chunk_count,
                            hint="流式响应中途停滞，可能 provider 故障")
         should_retry = await self._handle_route_exception(
-            e, provider, task_type, model, attempt,
+            e, provider, task_type, model, attempt, retry_state=retry_state,
         )
         return stream, last_error, should_retry
 
@@ -961,18 +948,21 @@ class ExecutionMixin:
 
     async def _handle_route_exception(self, e: Exception, provider: str,
                                       task_type: str, model: str,
-                                      attempt: int) -> bool:
-        """处理路由异常：分类、报告、轮换凭证。返回 True 表示可重试，False 表示已耗尽。
+                                      attempt: int,
+                                      retry_state: dict | None = None) -> bool:
+        """处理路由异常：分类、报告、轮换凭证，并判断是否重试。
 
-        对于 ABORT 或不可重试错误，直接 raise 传播给调用方。
+        认证失败且确实换入新凭证时，允许本次调用紧接一次重试；retry_state
+        防止重试失败后再次授予。其他不可重试错误保持原行为。
         """
         classified = self._error_classifier.classify(e)
         await self._credential_pool.report_error(
             provider, classified, api_key=self._active_api_key(provider))
 
         # 根据恢复策略执行不同操作
+        rotated = False
         if classified.action == RecoveryAction.ROTATE_CREDENTIAL:
-            await self._rotate_credential_on_error(provider, classified)
+            rotated = await self._rotate_credential_on_error(provider, classified)
 
         if classified.action == RecoveryAction.ABORT:
             logger.error("router.call_aborted", task=task_type, model=model,
@@ -981,6 +971,17 @@ class ExecutionMixin:
             raise e
 
         if not classified.is_retryable:
+            if (rotated
+                    and classified.reason == FailoverReason.AUTH_ERROR
+                    and attempt < MAX_RETRIES
+                    and retry_state is not None
+                    and not retry_state.get("rotation_retry_used")):
+                retry_state["rotation_retry_used"] = True
+                logger.warning(
+                    "router.retry_after_credential_rotation task={} model={} attempt={} reason={} error={}: {}",
+                    task_type, model, attempt + 1, classified.reason.value, type(e).__name__, e,
+                )
+                return True
             logger.error("router.call_failed", task=task_type, model=model,
                          attempt=attempt + 1, reason=classified.reason.value,
                          action=classified.action.value,
@@ -989,9 +990,7 @@ class ExecutionMixin:
 
         if attempt < MAX_RETRIES:
             backoff = classified.backoff_seconds if classified.backoff_seconds > 0 else 1 * (attempt + 1)
-            # P0 修复（2026-08-05）：loguru extra 字段在当前日志格式下不打印，
-            # 导致 router.retry 只显示 event name，看不到 reason/error。
-            # 改为 f-string 写入 message，确保 agnes 失败原因可见。
+            # f-string 确保当前日志格式能打印 reason/error。
             logger.warning(
                 f"router.retry task={task_type} model={model} "
                 f"attempt={attempt + 1} reason={classified.reason.value} "
@@ -1026,6 +1025,7 @@ class ExecutionMixin:
         messages = self._apply_prompt_caching(provider, messages)
         # 主路由路径也需过滤工具，防止小模型收到工具定义后输出退化
         tools = self._filter_tools_for_model(tools, model)
+        _retry_state: dict = {}  # 整次调用仅允许一次认证轮换重试
 
         for attempt in range(MAX_RETRIES + 1):
             try:
@@ -1048,7 +1048,7 @@ class ExecutionMixin:
                 # 但必须让它作为 last_error 抛出到 route 的降级链（见 route 的注释）
                 last_error = e
                 should_retry = await self._handle_route_exception(
-                    e, provider, task_type, model, attempt,
+                    e, provider, task_type, model, attempt, retry_state=_retry_state,
                 )
                 if not should_retry:
                     break

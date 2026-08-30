@@ -11,3 +11,7 @@ import contextvars
 
 # 当前请求关联的 msg_id (由 ws_hub 在 process 前设置, 使工具事件能对上消息气泡)
 current_msg_id: contextvars.ContextVar[str] = contextvars.ContextVar("ws_msg_id", default="")
+
+# 当前请求来源连接 ID (由 ws_hub 消息分发处在设置 msg_id 的同一位置设置,
+# 使工具事件可经 manager.send_to 定向发送给发起会话, 不再广播工具参数)
+current_conn_id: contextvars.ContextVar[str] = contextvars.ContextVar("ws_conn_id", default="")

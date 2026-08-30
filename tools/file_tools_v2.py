@@ -12,6 +12,7 @@ from security.dangerous_targets import (
     BLOCKED_WORD_RES,
     INJECTION_SHELL_RE,
 )
+from security.permission_manager import get_permission_manager
 from tool_engine.tool_registry import ToolPermission, ToolResult, register_tool
 
 try:
@@ -277,6 +278,27 @@ def _sanitize_output(output: str) -> str:
     return sanitized
 
 
+def _execution_cwd() -> str:
+    """解析子进程执行 CWD：已授权工作区根优先，回退用户主目录（历史行为）。
+
+    工作区根的单一事实源是 PermissionManager（WebUI /workspace/confirm 授权
+    时经 set_cwd 写入并 realpath 规范化，tool_executor 的边界检查同源），
+    此处只读消费，不引入新全局态。修复前执行器一律 cwd=~：用户授权
+    /tmp/project 后 pwd、git status、相对路径读写实际发生在 ~，与 UI 声明
+    不符，可能读写错误的目录树。未授权或目录已消失时回退 expanduser("~")，
+    既有测试断言的默认行为不变。
+    """
+    try:
+        pm = get_permission_manager()
+        if pm.is_cwd_authorized():
+            root = pm.cwd
+            if root and os.path.isdir(root):
+                return root
+    except (OSError, RuntimeError, ValueError):
+        logger.debug("file_tools.execution_cwd_fallback", exc_info=True)
+    return os.path.expanduser("~")
+
+
 @register_tool(
     name="shell_command",
     description="执行 Shell 命令。输入要执行的命令字符串。",
@@ -330,7 +352,8 @@ async def shell_command(command: str) -> ToolResult:
             command,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
-            cwd=os.path.expanduser("~"),
+            # 已授权工作区根优先（见 _execution_cwd），未授权回退 ~（历史行为）
+            cwd=_execution_cwd(),
         )
     except (OSError, RuntimeError, ValueError) as e:
         return ToolResult.fail(f"启动子进程失败: {e!s}")

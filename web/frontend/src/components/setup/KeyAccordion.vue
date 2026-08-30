@@ -76,8 +76,14 @@ function onTest(key: string) {
       class="accordion-item glass-panel"
       :class="{ 'is-expanded': isExpanded(item.key) }"
     >
-      <!-- 标题行 -->
-      <div class="accordion-header" @click="toggle(item.key)">
+      <!-- 标题行：裸 div 改 button，键盘 Enter/Space 天然可展开（a11y） -->
+      <button
+        type="button"
+        class="accordion-header"
+        :aria-expanded="isExpanded(item.key)"
+        :aria-controls="`key-acc-body-${item.key}`"
+        @click="toggle(item.key)"
+      >
         <span class="tag" :class="item.required ? 'tag-required' : 'tag-optional'">
           {{ item.required ? t('keyAccordion.required') : t('keyAccordion.optional') }}
         </span>
@@ -109,11 +115,15 @@ function onTest(key: string) {
           </template>
         </span>
         <span class="arrow" :class="{ 'arrow-open': isExpanded(item.key) }">❯</span>
-      </div>
+      </button>
 
       <!-- 展开内容 -->
       <Transition name="accordion">
-        <div v-if="isExpanded(item.key)" class="accordion-body">
+        <div
+          v-if="isExpanded(item.key)"
+          :id="`key-acc-body-${item.key}`"
+          class="accordion-body"
+        >
           <p class="item-desc">{{ item.desc }}</p>
           <div class="item-url">
             <span class="url-label">{{ t('keyAccordion.getUrl') }}</span>
@@ -179,19 +189,31 @@ function onTest(key: string) {
   box-shadow: var(--shadow-glow);
 }
 
-/* 标题行 */
+/* 标题行（button 语义，重置浏览器默认按钮样式，视觉与原先裸 div 一致） */
 .accordion-header {
   display: flex;
   align-items: center;
   gap: 10px;
+  width: 100%;
   padding: 12px 16px;
   cursor: pointer;
   user-select: none;
   transition: background 0.2s;
+  background: none;
+  border: none;
+  text-align: left;
+  font: inherit;
+  color: inherit;
 }
 
 .accordion-header:hover {
   background: rgba(127, 214, 80, 0.06);
+}
+
+.accordion-header:focus-visible {
+  outline: 2px solid var(--dendro);
+  outline-offset: -2px;
+  border-radius: 6px;
 }
 
 .tag {

@@ -173,8 +173,24 @@ class SubAgentManagerMixin:
         context_str = self._build_sub_agent_context(
             include_personal=allow_personal_context,
         )
+        # 审计 Fix7：本次调用专属的工具结果收集器（调用方创建并持有），经
+        # dispatch → chat → _exec_one_tool_call 下传写入；取代原实例级
+        # _last_tool_results（并发 dispatch 打到同一子代理会互相串媒体）。
+        sub_tool_results: list = []
         sub_reply = await self._dispatch_sub_agent_with_events(
-            target, clean_input, display_name, context_str, _ctx, task_id)
+            target, clean_input, display_name, context_str, _ctx, task_id,
+            tool_results_sink=sub_tool_results)
+
+        # 审计 Fix6：直接 dispatch 路径补齐媒体提取——子代理生图/生视频的工具结果
+        # 此前在 ProcessResult 中丢失（无 tool_results/image_paths/video_path），
+        # WebUI/QQ 收不到子代理生成的图片。复用主路径 _extract_media_from_tool_results
+        # （AgentCore 组合了 ToolExecutorMixin，生产环境必有；缺失或无工具结果时跳过，
+        # 兼容仅实现部分方法的测试桩）。dispatch 契约（返回 str）保持不变。
+        media_image_paths: list = []
+        media_video_path = None
+        if sub_tool_results and hasattr(self, "_extract_media_from_tool_results"):
+            media_image_paths, media_video_path, sub_reply = \
+                await self._extract_media_from_tool_results(sub_tool_results, sub_reply)
 
         emotion = detect_emotion(clean_input)
         if _ctx:
@@ -226,12 +242,16 @@ class SubAgentManagerMixin:
         if sub_audio_path:
             clean_sub_reply = clean_sub_reply + "\n\n🎙️ 语音消息已发送～"
 
-        return ProcessResult(reply=clean_sub_reply, emotion=emotion_label, sticker_path=sticker_path, audio_path=sub_audio_path, tts_pending=sub_tts_pending, tts_text=sub_tts_text)
+        return ProcessResult(reply=clean_sub_reply, emotion=emotion_label, sticker_path=sticker_path,
+                             audio_path=sub_audio_path, tool_results=sub_tool_results,
+                             image_paths=media_image_paths, video_path=media_video_path,
+                             tts_pending=sub_tts_pending, tts_text=sub_tts_text)
 
     async def _dispatch_sub_agent_with_events(self, target: str, clean_input: str,
                                               display_name: str, context_str: str,
-                                              _ctx: Any, task_id: str) -> str:
-        """dispatch 子代理 + 事件 emit + BeliefRouter 反馈 + 异常降级。"""
+                                              _ctx: Any, task_id: str,
+                                              tool_results_sink: list | None = None) -> str:
+        """dispatch 子代理 + 事件 emit + BeliefRouter 反馈 + 异常降级；sink 原样透传（审计 Fix7）。"""
         # 注入情绪标签规则：@ 直接对话模式下，子 Agent 回复需带 [emotion:xxx] 标签
         # 以触发专属表情包系统（delegate_task 工具调用不注入，保持"不加标签"）
         # CancelToken 仅用于主动取消（timeout=None 不创建后台 timer task），
@@ -240,7 +260,7 @@ class SubAgentManagerMixin:
         try:
             token.check()  # 检查是否已被主动取消
             sub_reply = await asyncio.wait_for(
-                self.dispatcher.dispatch(target, clean_input, context=context_str, status_callback=_ctx.status_callback if _ctx else None, address_term=self.context.current_address_term, extra_system_prompt=self._sub_agent_emotion_rule(target)),
+                self.dispatcher.dispatch(target, clean_input, context=context_str, status_callback=_ctx.status_callback if _ctx else None, address_term=self.context.current_address_term, extra_system_prompt=self._sub_agent_emotion_rule(target), tool_results_sink=tool_results_sink),
                 timeout=SUB_AGENT_DISPATCH_TIMEOUT_S,
             )
             token.check()  # 检查是否在 dispatch 期间被主动取消

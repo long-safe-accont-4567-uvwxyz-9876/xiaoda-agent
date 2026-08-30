@@ -19,7 +19,6 @@ export default {
   // 品牌名
   brand: 'Xiaoda Agent',
   tagline: '「知识是智慧的种子」',
-
   // 品牌署名
   brand_signature: {
     text: '由 飞 二创开发',
@@ -27,7 +26,6 @@ export default {
     author: '飞',
     byAuthor: (author: string) => `由 ${author} 二创`,
   },
-
   // 免责协议
   disclaimer: {
     title: '免责声明',
@@ -43,7 +41,6 @@ export default {
     agreedAt: '同意时间',
     content: '本 Agent 由作者飞个人学习用途二创开发，禁止用户生成任何违禁内容，禁止用于任何商业用途，否则一切后果与开发者无关，由用户一人承担。\n\n免责声明\n\n本项目是一个非官方的二次创作，不是原作的续作、衍生品或官方合作项目，与原作权利方没有任何隶属、授权或赞助关系。\n\n项目中用到的角色名称、形象、语音、表情素材等知识产权归原版权方所有，代码仅供个人学习研究，不用于商业目的。表情素材来自社区公开资源，如有不妥请联系我，我会立即处理。\n\n本项目基于 MIT 协议开源，第三方素材的版权和许可以各自原始项目为准。\n\n使用本软件生成的内容由用户自行承担风险——AI 会犯错，请自行核实。第三方 API 服务的可用性和隐私政策由对应服务商负责。\n\n如有任何问题或建议，欢迎 GitHub Issues 反馈。',
   },
-
   // 赞助页
   sponsor: {
     navTitle: '请作者喝杯小甜水',
@@ -54,7 +51,6 @@ export default {
     warning: '⚠️ 警示：未成年人请勿进行转账打赏；若未成年人私自打赏，监护人可通过仓库 Issue 联系我全额原路退款。',
     footerNote: '一杯小甜水，半日好心情',
   },
-
   // 侧边栏导航
   nav: {
     chat: '对话',
@@ -79,7 +75,6 @@ export default {
     openNavigation: '打开导航',
     closeNavigation: '关闭导航',
   },
-
   // 本地部署页
   localDeployView: {
     title: '本地部署',
@@ -143,7 +138,6 @@ export default {
     npuUnavailableDesc: '未检测到可用 NPU（需 Linux + VIP9000 驱动 + sudo 免密）',
     gpuUnavailableDesc: '此模型暂不支持 GPU 推理',
   },
-
   // 系统设置页
   settings: {
     title: '⚙️ 系统设置',
@@ -1103,6 +1097,10 @@ export default {
     recoveryHint: '忘记密码时，回答此问答即可重置密码，请务必牢记',
     passwordTooShort: '登录密码至少需要 8 位',
     recoveryRequired: '请填写找回问题与找回答案（忘记密码时用于找回）',
+    setupTokenRequired: '首次配置需要引导令牌：请填写上方"初始化令牌"后重试（令牌不会显示在错误信息中）',
+    setupTokenTitle: '初始化令牌',
+    setupTokenHint: '引导令牌来自服务启动日志输出，文件位于 ~/.ai-agent/config/setup_bootstrap_secret（仅本机可读）',
+    setupTokenPlaceholder: '请输入初始化令牌…',
     fallback: {
       MIMO_API_KEY: { label: 'MiMo API 密钥', desc: '小米 MiMo 大模型 API 密钥（主 LLM + TTS + Vision）', url_desc: '注册 → 控制台 → API Keys' },
       QQBOT_APP_ID: { label: 'QQ Bot App ID', desc: 'QQ 机器人应用 ID', url_desc: '创建机器人应用 → 获取 AppID' },

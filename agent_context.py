@@ -147,7 +147,7 @@ class AgentContext:
     """管理对话上下文，维护历史、系统提示、动态缓存与压缩等状态。"""
 
     # 历史压缩阈值：按模型动态计算（见 _get_dynamic_max_tokens），不再硬编码
-    FALLBACK_MAX_HISTORY_TOKENS = 60000  # router 不可用时兜底
+    FALLBACK_MAX_HISTORY_TOKENS = 60000  # 仅 router 不可用/容量未知时兜底（有效容量按 70% 严格计算）
     SYSTEM_PROMPT_RESERVE_RATIO = 0.30   # 预留 30% 给 system prompt + tools + 输出
     LARGE_CONTEXT_THRESHOLD = 524288     # ≥512K 视为大上下文，保留更多轮
     LARGE_CONTEXT_KEEP_RECENT = 10        # 大上下文保留 10 轮
@@ -548,7 +548,12 @@ class AgentContext:
 
         - mimo chat (128K): 阈值约 90K
         - chat_ultra (1M): 阈值约 730K
-        - router 不可用: 回退 FALLBACK_MAX_HISTORY_TOKENS (60000)
+        - 8K 小窗口模型: 阈值约 5734（小上下文必须按比例收紧，否则历史永不裁剪）
+        - router 不可用 / 容量未知（<=0 或异常）: 回退 FALLBACK_MAX_HISTORY_TOKENS (60000)
+
+        审计修复（2026-08-29 Fix2）：router 上报有效容量时不再与 60000 取 max。
+        原实现 `max(history_budget, 60000)` 会把 8K/32K 小窗口模型的阈值抬到 60K，
+        导致历史永不触发裁剪，反向压垮小上下文模型（8K 模型注入 60K 历史必然爆窗）。
         """
         if not self._router or not hasattr(self._router, "get_active_max_tokens"):
             return self.FALLBACK_MAX_HISTORY_TOKENS
@@ -556,9 +561,8 @@ class AgentContext:
             model_max = self._router.get_active_max_tokens()
             if model_max <= 0:
                 return self.FALLBACK_MAX_HISTORY_TOKENS
-            history_budget = int(model_max * (1 - self.SYSTEM_PROMPT_RESERVE_RATIO))
-            # 不低于兜底值，避免极端小窗口导致过度压缩
-            return max(history_budget, self.FALLBACK_MAX_HISTORY_TOKENS)
+            # 容量已知：严格按 70% 计算；仅容量未知（<=0/None/异常）时才用 60000 兜底
+            return int(model_max * (1 - self.SYSTEM_PROMPT_RESERVE_RATIO))
         except Exception as e:
             logger.debug("agent_context.dynamic_max_tokens_failed", error=str(e))
             return self.FALLBACK_MAX_HISTORY_TOKENS

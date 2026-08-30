@@ -314,39 +314,106 @@ class ClientLifecycleMixin:
             )
         return client
 
-    async def _rotate_credential_on_error(self, provider: str, classified: Any) -> None:
-        """当 ErrorClassifier 建议轮换凭证时，尝试获取新凭证并更新客户端。"""
+    async def _rotate_credential_on_error(self, provider: str, classified: Any) -> bool:
+        """当 ErrorClassifier 建议轮换凭证时，尝试获取新凭证并更新对应客户端。
+
+        返回 True 表示本轮确实装入了新凭证（对应客户端已被替换），供
+        _handle_route_exception 判断是否允许"认证轮换后单次重试"。
+
+        修复（2026-08-29 审计）：按 provider 归属替换客户端——
+        ``mimo`` → self._client，``agnes`` → self._agnes_client，其余自定义
+        provider → self._custom_clients[provider]（经 get_custom_client 读取，
+        ModelRouter 侧维护）。原实现把所有非 mimo 的替换一律写入
+        _agnes_client，导致 openrouter/siliconflow 等轮换时自身客户端不动、
+        Agnes 反被污染为自定义 endpoint/key。
+        """
         new_cred = await self._credential_pool.get_credential(provider)
         rotate_lock = self._get_credential_lock(provider)
         async with rotate_lock:
+            if provider == "mimo":
+                current_client = self._client
+            elif provider == "agnes":
+                current_client = self._agnes_client
+            else:
+                # 自定义 provider：客户端存于 _custom_clients。无已注册客户端时
+                # 优雅跳过、不代创建（与 _active_api_key 的防御一致）——正常情况
+                # 下无客户端就不会发起请求，也就不会进入错误驱动的轮换路径。
+                current_client = self.get_custom_client(provider)
+                if current_client is None:
+                    logger.warning("router.credential_rotate_skip_no_client",
+                                   provider=provider)
+                    return False
+            # 归因锚点：用当前实际承载流量的客户端所持 Key 做幂等比较
+            # （池返回同 Key 时不重复重建客户端）
             current_key = ""
-            if provider == "mimo" and self._client:
-                current_key = self._client.api_key or ""
-            elif provider == "agnes" and self._agnes_client:
-                current_key = self._agnes_client.api_key or ""
-            if new_cred and new_cred.api_key != current_key:
-                logger.info("router.credential_rotated",
-                            provider=provider,
-                            key_len=len(new_cred.api_key),
-                            key_hash=_mask_api_key(new_cred.api_key))
-                # 更新客户端使用新凭证
-                # agnes 复用共享 httpx client + connect=15s 配置（根因修复）；
-                # mimo 保持默认（不在本次 APIConnectionError 根因范围）
-                _new_base = new_cred.base_url or (MIMO_BASE_URL if provider == "mimo" else AGNES_BASE_URL)
-                if provider == "agnes":
-                    new_client = AsyncOpenAI(
-                        api_key=new_cred.api_key,
-                        base_url=_new_base,
-                        http_client=_get_agnes_http_client(),
-                        timeout=AGNES_HTTP_TIMEOUT,
-                        max_retries=0,
-                    )
-                else:
-                    new_client = AsyncOpenAI(
-                        api_key=new_cred.api_key,
-                        base_url=_new_base,
-                    )
-                if provider == "mimo":
-                    self._client = new_client
-                else:
-                    self._agnes_client = new_client
+            if current_client is not None:
+                current_key = str(getattr(current_client, "api_key", "") or "")
+            if not (new_cred and new_cred.api_key != current_key):
+                return False
+            logger.info("router.credential_rotated",
+                        provider=provider,
+                        key_len=len(new_cred.api_key),
+                        key_hash=_mask_api_key(new_cred.api_key))
+            # 更新客户端使用新凭证
+            # agnes 复用共享 httpx client + connect=15s 配置（根因修复）；
+            # mimo 保持默认（不在本次 APIConnectionError 根因范围）；
+            # 自定义 provider 按注册时的 format 重建（见 _rebuild_custom_client）
+            if provider == "agnes":
+                _new_base = new_cred.base_url or AGNES_BASE_URL
+                self._agnes_client = AsyncOpenAI(
+                    api_key=new_cred.api_key,
+                    base_url=_new_base,
+                    http_client=_get_agnes_http_client(),
+                    timeout=AGNES_HTTP_TIMEOUT,
+                    max_retries=0,
+                )
+            elif provider == "mimo":
+                self._client = AsyncOpenAI(
+                    api_key=new_cred.api_key,
+                    base_url=new_cred.base_url or MIMO_BASE_URL,
+                )
+            else:
+                new_client = self._rebuild_custom_client(
+                    provider, new_cred.api_key, new_cred.base_url, current_client)
+                if new_client is None:
+                    return False
+                self.set_custom_client(provider, new_client)
+            return True
+
+    @staticmethod
+    def _rebuild_custom_client(provider: str, api_key: str, base_url: str,
+                               current_client: Any) -> Any | None:
+        """按注册时的 format 重建自定义 provider 客户端（凭证轮换用）。
+
+        format 优先取 config_service 中该 provider 的注册记录——WebUI 注册的
+        anthropic/custom-mapping provider 客户端不是 AsyncOpenAI，必须用对应
+        适配器重建（core_runtime.custom_providers.build_client 是注册时的唯一
+        构建入口，与 register_into_router 保持同构）；查不到记录时回退
+        "openai"（凭证池批量注册的 provider 全部是 openai 格式，见
+        _register_credential_pool_providers）。base_url 缺失时回退当前客户端
+        的 base_url，保持 endpoint 不漂移。重建失败返回 None（跳过本次轮换，
+        不污染其他 provider 的客户端）。
+        """
+        try:
+            from core_runtime.custom_providers import build_client
+        except ImportError:
+            logger.warning("router.credential_rotate_custom_rebuild_unavailable",
+                           provider=provider)
+            return None
+        fmt = "openai"
+        try:
+            from core_runtime.config_service import get_config_service
+            record = get_config_service().get(f"models.providers.{provider}")
+            if record:
+                fmt = record.get("format", "openai") or "openai"
+        except (ImportError, AttributeError, KeyError, ValueError) as e:
+            logger.debug("router.credential_rotate_format_lookup_failed "
+                         "provider={} error={}", provider, str(e))
+        _base_url = str(base_url or "")
+        if not _base_url:
+            _base_url = str(getattr(current_client, "base_url", "") or "")
+        if not _base_url:
+            logger.warning("router.credential_rotate_skip_no_base_url",
+                           provider=provider)
+            return None
+        return build_client(fmt, _base_url, api_key)

@@ -20,6 +20,9 @@ from loguru import logger
 
 _ITERATIONS = 200000
 _FILE_NAME = "webui_recovery.json"
+# recover 端点无鉴权（仅靠每 IP 5 次/600s 锁缓解），答案过短可被枚举爆破后
+# 直接重置主人密码。最小长度由 web/routers/setup.py 同步 import 复用，防两处漂移
+MIN_ANSWER_LEN = 6
 
 
 def _get_path() -> Path:
@@ -60,8 +63,8 @@ def set_recovery(question: str, answer: str) -> None:
     answer = (answer or "").strip()
     if not (1 <= len(question) <= 200):
         raise ValueError("找回问题长度需在 1~200 个字符之间")
-    if len(answer) < 2:
-        raise ValueError("找回答案至少需要 2 个字符")
+    if len(answer) < MIN_ANSWER_LEN:
+        raise ValueError(f"找回答案至少需要 {MIN_ANSWER_LEN} 个字符")
 
     salt = secrets.token_bytes(16)
     data = {

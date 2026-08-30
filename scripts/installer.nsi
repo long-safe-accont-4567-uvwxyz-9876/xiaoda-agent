@@ -98,7 +98,12 @@ ReadRegStr $0 HKLM "Software\Microsoft\Windows\CurrentVersion\Uninstall\${PRODUC
 ${If} $0 != ""
   ; 检测到旧版 per-machine 安装，尝试静默卸载（不弹框，不强制 admin）
   ClearErrors
-  ExecWait '"$0" /S' ; /S 静默卸载（NSIS 默认 uninstaller 支持）
+  ; 引号说明（2026-08-30 修复）：UninstallString 由旧版安装器以带引号形式
+  ; 写入（'"$INSTDIR\uninstall.exe"'，同本脚本 -Post 段的写法），$0 读出的
+  ; 值本身已含引号。旧写法 ExecWait '"$0" /S' 会生成引号嵌套
+  ; （""C:\...\uninstall.exe"" /S），CreateProcess 解析失败 → 旧版静默
+  ; 卸不掉。$0 直接使用即可（路径含空格由其内嵌引号保护）。
+  ExecWait '$0 /S' ; /S 静默卸载（NSIS 默认 uninstaller 支持）
   ${If} ${Errors}
     ; 旧版卸载失败（需 admin 或卸载器异常）：不阻塞，继续 per-user 安装
     ClearErrors

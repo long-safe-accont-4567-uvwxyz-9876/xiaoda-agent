@@ -665,6 +665,29 @@ def _should_hide_console() -> bool:
         return False
 
 
+def _shutdown_shared_resources(server: Any, server_thread: Any) -> None:
+    """桌面窗口关闭后的兜底清理：通知 uvicorn 优雅停机并限时等待。
+
+    pywebview 主窗口关闭后 webview.start() 返回，此时 WebUI 服务器仍在
+    后台线程运行。uvicorn 优雅停机会触发 FastAPI lifespan shutdown
+    （web/server.py 的 _shutdown_lifespan），逐项关闭 WebSocket 管理器、
+    本地模型运行时、插件与数据库连接等共享资源——os._exit 会绕过
+    atexit/解释器清理，不先显式停机，这些资源只能靠 OS 兜底回收。
+    每步独立窄化吞错：清理失败不允许阻塞退出，更不允许抛错掩盖
+    "用户关闭窗口"这一正常退出路径。
+    """
+    try:
+        server.should_exit = True
+    except (OSError, RuntimeError, AttributeError) as exc:
+        logger.debug("agent.desktop.server_stop_signal_failed", exc_info=exc)
+    try:
+        # 限时等待优雅停机完成（lifespan shutdown 含数据库 close 等异步清理）；
+        # 超时则放弃等待——窗口已关，绝不能卡住退出路径（最后 os._exit 兜底）。
+        server_thread.join(timeout=10)
+    except (OSError, RuntimeError) as exc:
+        logger.debug("agent.desktop.server_join_failed", exc_info=exc)
+
+
 def _run_desktop(host: str, port: int) -> None:
     """桌面模式：pywebview 包装 WebUI，带启动动画"""
     # Windows: 隐藏控制台窗口（双击快捷方式时不弹黑窗）
@@ -693,8 +716,11 @@ def _run_desktop(host: str, port: int) -> None:
     app = _import_web_server_safe()
 
     # 3. 后台线程启动 uvicorn
+    # timeout_graceful_shutdown=5：给优雅停机设上限，防止个别客户端长连接
+    # 让 shutdown 无限等待（关窗后由 _shutdown_shared_resources 触发）。
     import uvicorn
-    server_config = uvicorn.Config(app, host=host, port=port, log_level="info", access_log=False)
+    server_config = uvicorn.Config(app, host=host, port=port, log_level="info", access_log=False,
+                                   timeout_graceful_shutdown=5)
     server = uvicorn.Server(server_config)
     server_thread = threading.Thread(target=server.run, daemon=True)
     server_thread.start()
@@ -747,7 +773,10 @@ def _run_desktop(host: str, port: int) -> None:
         storage_path=str(_webview_storage) if _webview_storage else None,
     )
 
-    # 窗口关闭后退出进程
+    # 窗口关闭后：先尽力关闭共享资源（uvicorn 优雅停机 → FastAPI lifespan
+    # shutdown 逐项关闭 WebSocket/本地模型/插件/数据库），再退出进程。
+    # 退出码必须为 0：看门狗视 0 为"用户正常关闭"不再重启——否则关窗即复活。
+    _shutdown_shared_resources(server, server_thread)
     os._exit(0)
 
 

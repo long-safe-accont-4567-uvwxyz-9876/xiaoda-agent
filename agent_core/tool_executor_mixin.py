@@ -49,6 +49,78 @@ _XML_TAG_RE = re.compile(
 # 显示名在进程内视为稳定，首次使用时构建并缓存
 _AGENT_PREFIXES: list[str] | None = None
 
+# ── 二次图片抓取防护（审计修复 2026-08-29） ─────────────────────
+# ToolResult 中 "图片URL:" 的二次抓取原本用裸 httpx 直连（follow_redirects=True），
+# 无私网过滤/重定向校验/大小上限/内容校验，主浏览工具的 SSRF 防护未覆盖此路径。
+# 现统一走 security/ssrf_guard 的解析+钉定（SecureAsyncTransport 请求期调用
+# resolve_and_pin），并加 10 MiB 流式上限与图片内容校验。
+_IMAGE_DL_MAX_BYTES = 10 * 1024 * 1024  # 响应体上限 10 MiB，超限失败
+_IMAGE_DL_TIMEOUT = 30.0
+
+
+def _bytes_look_like_image(body: bytes) -> bool:
+    """按文件头魔数识别常见图片格式（PNG/JPEG/GIF/WebP 至少一种命中即 True）。"""
+    if body.startswith((b"\x89PNG\r\n\x1a\n", b"\xff\xd8\xff", b"GIF87a", b"GIF89a")):
+        return True
+    # WebP：RIFF....WEBP（魔数在偏移 8）
+    return len(body) >= 12 and body[:4] == b"RIFF" and body[8:12] == b"WEBP"
+
+
+async def _download_image_url_guarded(url: str, img_dir: Path, idx: int) -> Path | None:
+    """经 SSRF 防护下载图片 URL 到本地，失败返回 None（不抛断主流程）。
+
+    - 复用 ssrf_guard 的 SecureAsyncTransport：请求期 resolve_and_pin 解析+钉定，
+      仅允许 http/https，任一解析结果命中私网/回环/链路本地即拒绝（含 DNS 失败）；
+    - follow_redirects=False：3xx 不跟随直接放弃（简单优先，防重定向绕过）；
+    - 流式读取，响应体超过 10 MiB 即失败；
+    - Content-Type image/* 或 PNG/JPEG/GIF/WebP 文件头魔数至少一种命中才落盘。
+    """
+    import httpx
+
+    from security.ssrf_guard import SecureAsyncTransport
+
+    # 请求期解析+钉定：白名单外私网/回环/链路本地在 handle_async_request 内即抛 ValueError
+    transport = SecureAsyncTransport(url)
+    content_type = ""
+    body = b""
+    try:
+        async with httpx.AsyncClient(
+            transport=transport, timeout=_IMAGE_DL_TIMEOUT, follow_redirects=False
+        ) as client:
+            async with client.stream("GET", url) as resp:
+                if resp.status_code >= 300:
+                    # 3xx 不跟随（含 4xx/5xx 一并不保存）
+                    logger.debug("media.image_url_status_rejected",
+                                 url=url, status=resp.status_code)
+                    return None
+                content_type = resp.headers.get("content-type", "")
+                chunks: list[bytes] = []
+                total = 0
+                async for chunk in resp.aiter_bytes():
+                    total += len(chunk)
+                    if total > _IMAGE_DL_MAX_BYTES:
+                        logger.debug("media.image_url_too_large",
+                                     url=url, limit=_IMAGE_DL_MAX_BYTES)
+                        return None
+                    chunks.append(chunk)
+                body = b"".join(chunks)
+    except ValueError as e:
+        # SSRF 校验拒绝（协议白名单外/危险主机名/私网/回环/链路本地/DNS 失败）
+        logger.debug("media.image_url_ssrf_rejected", url=url, reason=str(e))
+        return None
+    except httpx.HTTPError as e:
+        logger.debug("media.image_url_download_failed", url=url, error=str(e))
+        return None
+
+    # 内容校验：Content-Type image/* 或图片魔数至少一种命中，否则丢弃
+    if not (content_type.lower().startswith("image/") or _bytes_look_like_image(body)):
+        logger.debug("media.image_url_not_image", url=url, content_type=content_type)
+        return None
+
+    local_path = img_dir / f"agnes_dl_{int(time.time())}_{idx}.png"
+    local_path.write_bytes(body)
+    return local_path
+
 
 def _get_agent_prefixes() -> list[str]:
     global _AGENT_PREFIXES
@@ -231,16 +303,13 @@ class ToolExecutorMixin:
             for m in re.finditer(r'图片URL:\s*(\S+)', data_str):
                 try:
                     url = m.group(1).rstrip('`')
-                    # 下载 URL 图片到本地，以便通过 QQ 富媒体消息发送
+                    # 下载 URL 图片到本地，以便通过 QQ 富媒体消息发送。
+                    # 必须经 SSRF 防护（钉定+私网过滤+大小/内容校验），失败静默跳过不断主流程
                     try:
-                        import httpx
-                        async with httpx.AsyncClient(timeout=30, follow_redirects=True) as dl_client:
-                            resp = await dl_client.get(url)
-                            resp.raise_for_status()
-                            img_dir = FILE_DIR if FILE_DIR.exists() else Path("tts_cache")
-                            img_dir.mkdir(parents=True, exist_ok=True)
-                            local_path = img_dir / f"agnes_dl_{int(time.time())}_{len(image_paths)}.png"
-                            local_path.write_bytes(resp.content)
+                        img_dir = FILE_DIR if FILE_DIR.exists() else Path("tts_cache")
+                        img_dir.mkdir(parents=True, exist_ok=True)
+                        local_path = await _download_image_url_guarded(url, img_dir, len(image_paths))
+                        if local_path is not None:
                             image_paths.append(local_path)
                             logger.info("media.downloaded_image_url", url=url, local=str(local_path))
                     except Exception as dl_err:

@@ -12,6 +12,8 @@ import time
 
 from loguru import logger
 
+from db.db_local_ai import transaction_lock_for
+
 
 class ConversationLogMixin:
     async def insert_conversation_log(self, user_id: str, source: str,
@@ -114,14 +116,48 @@ class ConversationLogMixin:
                            user_id[:24] if user_id else "", str(e)[:200])
             return []
 
+    def _in_outer_write_tx(self) -> bool:
+        """当前任务是否处于外层 write_transaction 中（任务本地 ContextVar 检测）。
+
+        getattr 防御：ConversationLogMixin 由 DatabaseManager 组合，
+        正常路径 self._write_tx_active 必然存在；兼容测试中的最小实例
+        （仅注入 _conn 的裸对象）退化为"不在事务内"。
+        """
+        tx_active = getattr(self, "_write_tx_active", None)
+        return bool(tx_active is not None and tx_active.get())
+
     async def insert_audit_log(self, event_type: str, user_id: str = "", detail: str = "",
                                 auto_commit: bool = True) -> None:
-        await self._conn.execute(
-            """INSERT INTO audit_logs (timestamp, event_type, user_id, detail)
-               VALUES (?, ?, ?, ?)""",
-            (time.time(), event_type, user_id, detail),
+        """写入审计日志（事务所有权修复 2026-08-30）。
+
+        根因：此前在共享主连接 _conn 上裸 execute+commit。任务 A 在
+        write_transaction 中已写行未提交时，任务 B 的 insert_audit_log 直接
+        commit 会把 A 的半事务提前提交；A 随后回滚时"已被提交的行"残留，
+        产生半事务/脏数据。
+
+        语义选择——"共享事务"方案（与 MemoryDB 的 WriteTxGuard /
+        owned_write_section、lifecycle_sessions.set_cron_last_run 同一模式）：
+        1. 外层 write_transaction 持锁中（任务本地 _write_tx_active 感知）或
+           auto_commit=False：只 execute 不 commit，提交权归外层事务。必然
+           结果：业务回滚时嵌套的审计写入随之一并丢弃（审计跟随业务成败）。
+           刻意不选"独立连接提交"方案：嵌套调用若用独立连接 INSERT，会因
+           等待 WAL 写锁与外层事务互相等待而死锁。
+        2. 独立审计写（绝大多数调用点：webui 路由 / tool_executor /
+           bootstrap，均不在事务内）：在 transaction_lock_for(self._conn)
+           同一把连接级锁内 execute+commit。与 write_transaction 串行化后
+           既不会旁路提交他人半事务，审计自身也不被业务回滚连带丢弃。
+        """
+        sql = (
+            "INSERT INTO audit_logs (timestamp, event_type, user_id, detail) "
+            "VALUES (?, ?, ?, ?)"
         )
-        if auto_commit:
+        params = (time.time(), event_type, user_id, detail)
+        if not auto_commit or self._in_outer_write_tx():
+            # 共享事务语义：语句进入外层未提交事务，由外层统一 commit/rollback
+            await self._conn.execute(sql, params)
+            return
+        async with transaction_lock_for(self._conn):
+            await self._conn.execute(sql, params)
             await self._conn.commit()
 
 

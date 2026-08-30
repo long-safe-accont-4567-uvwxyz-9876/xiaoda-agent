@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+import sys
 import time
 from pathlib import Path
 from typing import Any
@@ -309,6 +310,32 @@ async def set_permission_mode(body: dict, request: Request) -> Any:
     return Envelope(data={"mode": mode})
 
 
+def _restart_command_list(argv: list[str], frozen: bool = False) -> list[str]:
+    """构造 /system/restart 的重启命令列表（Windows 延迟启动脚本用）。
+
+    - frozen（PyInstaller 打包）：[exe, *args] —— exe 自身即程序入口。
+      旧实现把 argv[0]（= exe 路径）又当第一个参数拼进去，生成
+      "exe exe --web ..."，argparse 无法识别该位置参数直接报错退出，
+      重启静默失败（frozen 下 sys.executable 与 argv[0] 同为 exe 路径）。
+    - 源码模式：[python, script, *args]。
+    - argv 只有程序名（无参数）时回退默认 Web 启动参数。
+    """
+    args = argv[1:] if len(argv) > 1 else ['--web', '--host', '0.0.0.0', '--port', str(DEFAULT_WEBUI_PORT)]
+    if frozen:
+        return [sys.executable, *args]
+    script = os.path.abspath(argv[0]) if argv and argv[0] else 'agent.py'
+    return [sys.executable, script, *args]
+
+
+def _format_restart_command(cmd: list[str]) -> str:
+    """命令列表 → 平台合适的命令行字符串（含空格路径必须加引号）。"""
+    if os.name == 'nt':
+        import subprocess
+        return subprocess.list2cmdline(cmd)
+    import shlex
+    return shlex.join(cmd)
+
+
 @router.post("/system/restart", response_model=Envelope[dict])
 async def restart_service(request: Request) -> Any:
     if request.headers.get("X-Confirm") != "yes":
@@ -326,16 +353,13 @@ async def restart_service(request: Request) -> Any:
         await asyncio.sleep(1.0)
         if is_windows:
             # Windows: 创建延迟启动脚本，等旧进程退出后再启动
-            import shlex
             import subprocess
             import tempfile
-            python = sys.executable
-            script = os.path.abspath(sys.argv[0]) if sys.argv and sys.argv[0] else 'agent.py'
-            args = sys.argv[1:] if len(sys.argv) > 1 else ['--web', '--host', '0.0.0.0', '--port', str(DEFAULT_WEBUI_PORT)]
+            cmd = _restart_command_list(list(sys.argv), frozen=bool(getattr(sys, 'frozen', False)))
             bat_path = ""
             with tempfile.NamedTemporaryFile(suffix='.bat', delete=False, mode='w') as bat:
-                safe_args = [shlex.quote(a) for a in args]
-                bat.write('@echo off\ntimeout /t 2 /nobreak >nul\n"{}" "{}" {}\ndel "%~f0"\n'.format(python, script, ' '.join(safe_args)))
+                bat.write('@echo off\ntimeout /t 2 /nobreak >nul\n{}\ndel "%~f0"\n'.format(
+                    _format_restart_command(cmd)))
                 bat_path = bat.name
             try:
                 subprocess.Popen(['cmd', '/c', bat_path], creationflags=subprocess.CREATE_NEW_PROCESS_GROUP)

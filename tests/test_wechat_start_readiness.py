@@ -28,8 +28,15 @@ from wechat_bot_adapter import WeChatBotAdapter
 # 公共替身
 # ---------------------------------------------------------------------------
 
+# 测试不建真实 AgentCore：start() 在 core=None 时会自建 AgentCore 并走
+# 真实初始化（依赖真实配置目录）。这里注入最小假核心（_initialized=True
+# 使 start() 跳过 init 阶段），仅支撑 readiness/生命周期断言语义。
+_CORE_STUB = SimpleNamespace(_initialized=True)
+
+
 def _make_adapter(**over):
-    kwargs = dict(db=object(), router=object(), api=None, user_openid="u", core=None)
+    kwargs = dict(db=object(), router=object(), api=None, user_openid="u",
+                  core=_CORE_STUB)
     kwargs.update(over)
     with __import__("unittest.mock", fromlist=["patch"]).patch.object(
         WeChatBotAdapter, "_load_cursor", return_value=""
@@ -155,8 +162,6 @@ async def test_router_start_success_mounts(monkeypatch, tmp_path):
 
     monkeypatch.setattr(wx, "load_credentials",
                         lambda: {"bot_token": "T1", "ilink_user_id": "u"})
-
-    mounted: list = []
 
     class _ReadyAdapter:
         is_connected = True

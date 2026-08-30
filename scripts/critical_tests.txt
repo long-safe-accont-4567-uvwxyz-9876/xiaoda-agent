@@ -35,6 +35,14 @@ tests/test_adapter_pipeline_contracts.py
 tests/test_qq_streaming.py
 tests/test_p1_6_c2c_stream_byte_resplit.py
 tests/test_transport_user_binding.py
+# ── 2026-08-30 审计修复（T1-T11）新增核心守卫：引导令牌 / 前端契约 / 凭证轮换
+#    / 微信死信持久化 / WS 认证——改坏即安全事故或丢消息 ──
+tests/test_audit_log_tx_semantics.py
+tests/test_frontend_audit_fixes.py
+tests/test_rotation_retry_after_auth.py
+tests/test_setup_bootstrap_token.py
+tests/test_wechat_dead_letter_persistence.py
+tests/test_ws_unauthorized_no_reconnect.py
 # ── 巨型文件止血棘轮（2026-08-25：qq_bot_adapter 基类沉淀后反涨 354 行，
 #    结构性拆分挡不住日常堆肥；四个热点只许拆小不许变大，见审计 §二）──
 tests/test_giant_file_ratchet.py

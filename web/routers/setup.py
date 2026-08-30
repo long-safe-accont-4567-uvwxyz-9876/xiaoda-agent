@@ -2,7 +2,10 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import hmac
+import ipaddress
 import os
+import secrets
 import shutil
 from pathlib import Path
 from typing import Any
@@ -11,7 +14,9 @@ from zoneinfo import ZoneInfo
 from fastapi import APIRouter, Depends, HTTPException, Request
 from loguru import logger
 
-from config import get_base_url_for_provider
+from config import CONFIG_DIR, get_base_url_for_provider
+from security.recovery_qa import MIN_ANSWER_LEN
+from utils.atomic_write import _restrict_file_permissions_windows, atomic_write
 from web.routers.auth import _get_client_ip, _is_private_ip, get_current_user
 from web.schemas import Envelope
 
@@ -83,6 +88,98 @@ def _require_local_source(request: Request) -> None:
         )
 
 
+# ── 首跑引导令牌（audit-fix-20260829）：防局域网内首跑设置接管 ──
+
+_SETUP_TOKEN_HEADER = "X-Setup-Token"
+_BOOTSTRAP_SECRET_FILE = "setup_bootstrap_secret"
+
+
+def _is_loopback_source(request: Request) -> bool:
+    """判断来源 IP 是否为回环（127.0.0.1/::1/localhost）。
+
+    独立于 _require_local_source：首跑免令牌仅限回环来源，私网非回环
+    必须携带引导令牌（见 _require_setup_token），两者不能混用。
+    """
+    client_ip = _get_client_ip(request)
+    if client_ip in ("127.0.0.1", "::1", "localhost"):
+        return True
+    try:
+        return ipaddress.ip_address(client_ip).is_loopback
+    except ValueError:
+        return False
+
+
+def _load_or_create_bootstrap_secret() -> str:
+    """读取引导令牌；不存在时生成 secrets.token_urlsafe(32) 并原子落盘（0600）。
+
+    为什么每次调用都读盘：用户可随时手改文件轮换令牌，内存缓存会让轮换失效。
+    读写失败时返回空串保持 fail-closed（比对必然失败 → 403），仅回环免令牌
+    路径不受影响。日志只记密钥文件路径与"已生成"事实，绝不打印密钥值。
+    """
+    path = CONFIG_DIR / _BOOTSTRAP_SECRET_FILE
+    try:
+        if path.exists():
+            secret = path.read_text(encoding="utf-8").strip()
+            if secret:
+                return secret
+        secret = secrets.token_urlsafe(32)
+        # atomic_write 保证崩溃不落半截文件；权限对齐凭证文件（0600），
+        # Windows 由 ACL 补偿（与 wechat_bot_adapter._save_cursor_sync 同款惯例）
+        atomic_write(path, secret, mode=0o600, encoding="utf-8")
+        _restrict_file_permissions_windows(path)
+        logger.info("setup.bootstrap_secret_generated path={}", str(path))
+        # 写后回读：并发首请求同时生成时，以实际落盘值为比对基准，避免竞态错配
+        persisted = path.read_text(encoding="utf-8").strip()
+        return persisted or secret
+    except OSError as exc:
+        logger.warning("setup.bootstrap_secret_unavailable error={}", str(exc))
+        return ""
+
+
+async def _extract_setup_token(request: Request) -> str:
+    """取客户端提供的令牌：优先 X-Setup-Token 头，其次 JSON body 的 setup_token 字段。
+
+    为什么由依赖读 body：该认证依赖被全部 _AUTH_DEPS 端点共享，在此统一
+    强制才能 fail-closed（GET 等无 body 参数的端点无法在端点内二次校验）。
+    Starlette 会缓存 request._body，此处读取与端点自身的 body: dict 参数
+    不冲突；空 body/非 JSON body（如 GET）抛 JSONDecodeError，按"无 body
+    令牌"处理而非报错。
+    """
+    header_token = request.headers.get(_SETUP_TOKEN_HEADER, "").strip()
+    if header_token:
+        return header_token
+    try:
+        body = await request.json()
+    except (OSError, ValueError):
+        return ""
+    if isinstance(body, dict):
+        token = body.get("setup_token")
+        if isinstance(token, str):
+            return token.strip()
+    return ""
+
+
+async def _require_setup_token(request: Request) -> None:
+    """首跑 + 私网非回环：必须携带引导令牌，否则 403（code=SETUP_TOKEN_REQUIRED）。
+
+    审计结论：此前首跑仅校验私网来源，局域网内任意主机可 POST /setup/keys
+    覆写必填 Key 并自选 webui_password/找回问答，再经 /auth/login 拿到 owner
+    token。强制令牌后，无密钥文件（0600）读权限的攻击者无法完成接管；
+    比对用 hmac.compare_digest 防时序侧信道。
+    """
+    provided = await _extract_setup_token(request)
+    expected = _load_or_create_bootstrap_secret()
+    if (
+        not provided
+        or not expected
+        or not hmac.compare_digest(provided.encode("utf-8"), expected.encode("utf-8"))
+    ):
+        raise HTTPException(403, detail={
+            "code": "SETUP_TOKEN_REQUIRED",
+            "message": "首次运行配置需要引导令牌（X-Setup-Token 头或 body 的 setup_token 字段）",
+        })
+
+
 async def _is_first_run_or_authenticated(request: Request) -> str:
     """认证依赖：首次运行（.env 不存在或任一必填 key 为空）时允许无认证访问；
     非首次运行时必须携带有效 Bearer Token。返回用户标识。
@@ -90,6 +187,11 @@ async def _is_first_run_or_authenticated(request: Request) -> str:
     安全策略：fail-closed。若 is_first_run() 因文件锁、导入错误、.env 解析
     异常等任何原因抛错，一律要求认证，避免攻击者通过制造异常绕过认证调用
     /setup/keys 等敏感端点覆写 .env。
+
+    首跑分层（audit-fix-20260829）：回环来源保留免令牌首跑体验；私网非
+    回环必须携带引导令牌（见 _require_setup_token）；公网来源仍由
+    _require_local_source 拒绝。挂在 _AUTH_DEPS 上的全部端点自动获得
+    同一语义。
     """
     try:
         from setup_wizard import is_first_run
@@ -108,6 +210,9 @@ async def _is_first_run_or_authenticated(request: Request) -> str:
         ) from None
     if first_run:
         _require_local_source(request)
+        if _is_loopback_source(request):
+            return "setup"
+        await _require_setup_token(request)
         return "setup"
     return await get_current_user(request)
 
@@ -406,10 +511,11 @@ def _validate_webui_password(body: dict, updates: dict) -> tuple[str, str, str]:
             "code": "RECOVERY_INVALID",
             "message": "找回问题长度需在 1~200 个字符之间",
         })
-    if len(recovery_answer) < 2:
+    # 最小长度复用 security/recovery_qa.MIN_ANSWER_LEN，防止两处校验漂移
+    if len(recovery_answer) < MIN_ANSWER_LEN:
         raise HTTPException(400, detail={
             "code": "RECOVERY_INVALID",
-            "message": "找回答案至少需要 2 个字符",
+            "message": f"找回答案至少需要 {MIN_ANSWER_LEN} 个字符",
         })
     updates["WEBUI_PASSWORD"] = webui_password
     return webui_password, recovery_question, recovery_answer

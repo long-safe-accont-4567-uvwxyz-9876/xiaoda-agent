@@ -65,9 +65,16 @@ export class WsClient {
   // connect() 会重置 _intentionalDisconnect/reconnectAttempts，导致
   // 重连失败时 onclose 误判为主动断开而放弃重试，且指数退避失效。
   private _open(token: string) {
-    this.ws = token ? new WebSocket(this.url, [token]) : new WebSocket(this.url)
+    const socket = token ? new WebSocket(this.url, [token]) : new WebSocket(this.url)
+    this.ws = socket
+    // 关键竞态防护（audit-fix-20260829）：所有处理器按 socket 实例身份守卫。
+    // 旧 socket 被替换/关闭后，其迟到的 close/error/open/message 一律不得
+    // 影响新连接——否则 reconnect() 后旧 onclose 会把新连接标为断开并再开
+    // 第三条、旧 onerror 甚至会直接关掉新 socket。
+    const stale = () => this.ws !== socket
 
-    this.ws.onopen = () => {
+    socket.onopen = () => {
+      if (stale()) return
       this.connected = true
       this.reconnectAttempts = 0
       this._reconnecting = false
@@ -75,7 +82,8 @@ export class WsClient {
       this.emit({ type: 'ws_connected' })
     }
 
-    this.ws.onmessage = (event) => {
+    socket.onmessage = (event) => {
+      if (stale()) return
       try {
         const data = JSON.parse(event.data) as WsEvent
         // Token 失效：服务端发送 UNAUTHORIZED 错误后关闭连接
@@ -95,7 +103,8 @@ export class WsClient {
       } catch { /* ignore */ }
     }
 
-    this.ws.onclose = (event) => {
+    socket.onclose = (event) => {
+      if (stale()) return
       this.connected = false
       this.stopHeartbeat()
       // 先更新重连状态，再发事件：onWsDisconnected 需读到 reconnecting 才能亮黄灯
@@ -117,9 +126,10 @@ export class WsClient {
       this.scheduleReconnect()
     }
 
-    this.ws.onerror = () => {
+    socket.onerror = () => {
+      if (stale()) return
       // onerror 后会自动触发 onclose，重连逻辑统一在 onclose 中处理
-      this.ws?.close()
+      socket.close()
     }
   }
 
@@ -128,9 +138,14 @@ export class WsClient {
     if (this.reconnectTimer) { clearTimeout(this.reconnectTimer); this.reconnectTimer = null }
     this._intentionalDisconnect = true
     this._reconnecting = false
+    const hadSocket = !!this.ws
     this.ws?.close()
     this.ws = null
     this.connected = false
+    // 曾连接过：补发 ws_disconnected。原先是旧的 onclose 异步补发，
+    // 身份守卫后旧 onclose 不再执行（其守卫使迟到事件失效），这里同步补发
+    // 保持既有语义：状态灯熄灭 + 前端清理 isProcessing。
+    if (hadSocket) this.emit({ type: 'ws_disconnected' })
   }
 
   private _handleUnauthorized() {

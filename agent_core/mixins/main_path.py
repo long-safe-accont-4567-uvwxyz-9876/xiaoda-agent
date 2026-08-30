@@ -253,27 +253,35 @@ class MainPathMixin:
         # 仅主人群聊消息（及非群聊场景）记入记忆
         _should_remember = is_master or source != "qq_group"
         if _should_remember:
-            if not ctx.handled_by_tool_call:
-                # 降级/错误回复既不入记忆库也不入对话历史，
-                # 否则 build_messages() 会让 LLM 在后续轮次看到系统内部状态，
-                # 导致 LLM 模仿降级语气或基于假历史编造上下文。
-                # 同时跳过 user 消息，避免留下未配对的 user 消息造成上下文断档。
-                if is_degraded_reply(reply):
-                    logger.info("agent.skip_degraded_reply_not_in_history", source=source, reply_preview=reply[:60])
-                else:
-                    await self.context.add_message("user", user_input)
-                    rc = self.router.pop_reasoning_content()
-                    # strip emotion tags before storing to memory
-                    _clean_for_memory = self.sticker_manager.strip_emotion_tag(reply)
-                    await self.context.add_message("assistant", _clean_for_memory, reasoning_content=rc)
-                    # L5 修复: 捕获本次回复使用的模型名，透传到 conversation_logs.model_used
-                    _model_used = self.router.get_current_chat_model().get("model_id", "")
-                    self._bg_task_manager.run_background_tasks(
-                        user_input, _clean_for_memory, user_id, source, emotion, tool_results,
-                        session_id=session_id, model_used=_model_used,
-                        request_context=getattr(ctx, "group_context_metadata", None),
-                        user_context_token=getattr(ctx, "user_context_token", None),
-                    )
+            # 降级/错误回复既不入记忆库也不入对话历史，
+            # 否则 build_messages() 会让 LLM 在后续轮次看到系统内部状态，
+            # 导致 LLM 模仿降级语气或基于假历史编造上下文。
+            # 同时跳过 user 消息，避免留下未配对的 user 消息造成上下文断档。
+            #
+            # 审计修复（2026-08-29 Fix1）：不再以 ctx.handled_by_tool_call 作为门控。
+            # 根因：verification loop 以 skip_summarize=True 调 tool_call_handler，
+            #       handler 在该分支提前返回、自身不写历史；而这里又因
+            #       handled_by_tool_call=True 跳过写入 → 带工具的主对话轮次
+            #       既不进 history/会话日志，也不跑记忆/学习/画像后台任务，
+            #       下一轮 LLM 上下文断档。工具轮次与无工具轮次使用完全相同的
+            #       调用形态（add_message user+assistant + run_background_tasks）。
+            # 群聊隐私分支（下方 elif → log_conversation_only）语义保持不变。
+            if is_degraded_reply(reply):
+                logger.info("agent.skip_degraded_reply_not_in_history", source=source, reply_preview=reply[:60])
+            else:
+                await self.context.add_message("user", user_input)
+                rc = self.router.pop_reasoning_content()
+                # strip emotion tags before storing to memory
+                _clean_for_memory = self.sticker_manager.strip_emotion_tag(reply)
+                await self.context.add_message("assistant", _clean_for_memory, reasoning_content=rc)
+                # L5 修复: 捕获本次回复使用的模型名，透传到 conversation_logs.model_used
+                _model_used = self.router.get_current_chat_model().get("model_id", "")
+                self._bg_task_manager.run_background_tasks(
+                    user_input, _clean_for_memory, user_id, source, emotion, tool_results,
+                    session_id=session_id, model_used=_model_used,
+                    request_context=getattr(ctx, "group_context_metadata", None),
+                    user_context_token=getattr(ctx, "user_context_token", None),
+                )
         elif not is_degraded_reply(reply):
             _model_used = self.router.get_current_chat_model().get("model_id", "")
             self._bg_task_manager.log_conversation_only(
@@ -769,8 +777,8 @@ class MainPathMixin:
             logger.info("pipeline.verification.done elapsed_ms={} reply_len={} tool_count={}",
                         int((time.time() - _verify_t0) * 1000),
                         len(reply) if reply else 0, len(tool_results) if tool_results else 0)
-            if tool_results:
-                ctx.handled_by_tool_call = True
+            # 审计 Fix7：ctx.handled_by_tool_call 的唯一写入点已移除——
+            # 全仓无任何读取方（Fix1 起主路径不再以该标志做门控），纯死状态。
             # 最终防线：如果 verification loop 返回空回复，触发 fallback
             if not reply or not reply.strip():
                 logger.warning("agent.empty_reply_guard", tool_count=len(tool_results))

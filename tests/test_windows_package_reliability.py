@@ -606,6 +606,93 @@ def test_linux_updater_validates_critical_files():
     assert "MISSING_FILES" in updater
 
 
+def test_linux_updater_clean_swap_clears_install_dir_before_copy():
+    """Linux 自动更新：干净替换语义——备份成功后先清空安装目录内容再拷贝
+    候选包；回滚同样先清后拷（2026-08-30 修复：覆盖式复制会残留新版已
+    移除的旧文件）。state 文件（.env/.auto_update）先摘出后放回。"""
+    updater = read_project_file("scripts/auto-update.sh")
+    # 备份必须先于清空（清空可回滚的前提）
+    backup_idx = updater.index("BACKUP_READY=true")
+    clear_idx = updater.index("-mindepth 1 -maxdepth 1 -exec rm -rf")
+    copy_idx = updater.index('cp -a "${CANDIDATE_DIR}/."')
+    assert backup_idx < clear_idx < copy_idx
+    # state 文件摘出/放回
+    assert "STATE_FILES" in updater
+    assert "STATE_STASH" in updater
+    # 回滚先清后拷：find 清空必须出现在回滚分支 cp -a 备份之前
+    rollback_cp_idx = updater.index('cp -a "${BACKUP_DIR}/." "${INSTALL_DIR}/"')
+    assert updater.index("-mindepth 1 -maxdepth 1 -exec rm -rf", clear_idx + 1) < rollback_cp_idx
+
+
+def test_linux_updater_kill_is_scoped_to_install_dir_and_user():
+    """Linux 自动更新：停进程只匹配本安装目录二进制与 agent.py 两类模式，
+    限当前用户（-u / id -un），排除自身 PID（2026-08-30 修复：原
+    pkill -f agent.py 杀不到 frozen 服务、误杀无关进程）。"""
+    updater = read_project_file("scripts/auto-update.sh")
+    assert "pkill -f \"agent.py\"" not in updater
+    assert 'pgrep -u "$UPDATE_USER"' in updater
+    assert '${INSTALL_DIR}/xiaoda-agent' in updater
+    assert "'agent\\.py'" in updater
+    assert 'SELF_PID' in updater
+    assert '[ "$_pid" = "$SELF_PID" ]' in updater
+
+
+def escape_ere_function_body() -> str:
+    lines = read_project_file("scripts/auto-update.sh").splitlines()
+    start = next(i for i, ln in enumerate(lines) if ln.startswith("escape_ere()"))
+    end = next(i for i, ln in enumerate(lines[start:], start) if ln == "}")
+    return "\n".join(lines[start:end + 1])
+
+
+def test_linux_updater_escapes_install_dir_in_pgrep_pattern():
+    """Linux 自动更新：INSTALL_DIR 拼进 pgrep -f 的 ERE 前必须经 escape_ere
+    转义正则元字符（2026-08-30 二次修复：安装目录含 +.()[]{} 等字符时，
+    未转义路径被当正则语法解析，导致漏杀或误杀）。"""
+    updater = read_project_file("scripts/auto-update.sh")
+    pgrep_line = next(
+        line for line in updater.splitlines()
+        if "pgrep" in line and "${INSTALL_DIR}" in line
+    )
+    assert "escape_ere" in pgrep_line
+    # -u 用户限定与 -- 自身 PID 过滤不得回退
+    assert '-u "$UPDATE_USER"' in pgrep_line
+    assert " -- " in pgrep_line
+
+
+def test_linux_updater_escape_ere_handles_regex_metachars():
+    """escape_ere 行为契约：ERE 元字符一律前置反斜杠，普通字符原样保留。"""
+    body = escape_ere_function_body()
+    proc = subprocess.run(
+        ["bash", "-c", f"{body}\nescape_ere '/opt/App (v1) + agents'"],
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    assert proc.stdout == "/opt/App \\(v1\\) \\+ agents"
+
+
+def test_windows_updater_clears_install_dir_before_copy():
+    """Windows 自动更新成功路径同样先清后拷（2026-08-30 修复：仅删两个
+    dist 目录会残留旧文件）；state 文件先摘出后放回，回滚路径不变。"""
+    updater = read_project_file("scripts/auto-update.ps1")
+    clear_idx = updater.index("Get-ChildItem -Path $installDir -Force | Remove-Item -Recurse -Force")
+    copy_idx = updater.index("Get-ChildItem -Path $updateSrc | Copy-Item -Recurse -Force")
+    stash_idx = updater.index("$stateStash")
+    assert stash_idx < clear_idx < copy_idx
+    # state 文件摘出后放回
+    assert "$stateFiles" in updater
+    # 回滚路径的先删后拷语义保持不变
+    assert "Remove-Item -Recurse -Force $installDir -ErrorAction SilentlyContinue" in updater
+
+
+def test_local_release_linux_naming_matches_ci_arm64_contract():
+    """本地构建的 Linux arm64 包名必须与 CI/更新器契约一致（linux-arm64，
+    而非 uname 原始输出 aarch64），否则自动更新永远匹配不到本地构建产物。"""
+    release_script = read_project_file("scripts/build-release.sh")
+    assert 'aarch64|arm64) arch="arm64"' in release_script
+    assert 'arch="aarch64"' not in release_script
+
+
 def test_linux_install_script_creates_all_data_dirs():
     """Linux 安装脚本：创建完整的数据目录（与 config.py 对齐）"""
     installer = read_project_file("scripts/install-linux.sh")
@@ -622,13 +709,47 @@ def test_linux_install_service_uses_start_script():
     """Linux systemd 服务应使用 start-linux.sh 而非直接调 python"""
     installer = read_project_file("scripts/install-linux.sh")
     assert "start-linux.sh" in installer
-    assert "ExecStart=$INSTALL_DIR/scripts/start-linux.sh" in installer
+    # ExecStart 路径必须加引号（安装目录可能含空格，2026-08-30 修复）
+    assert 'ExecStart="$INSTALL_DIR/scripts/start-linux.sh"' in installer
     # 不应直接用 python agent.py 作为 ExecStart（绕过更新检查和看门狗）
     assert "ExecStart=$INSTALL_DIR/.venv/bin/python" not in installer
     # systemd 不支持 ${VAR:-default} 扩展，应使用 ${WEBUI_PORT}
     assert "WEBUI_PORT:-8082" not in installer
     # 看门狗达到上限后 exit 0，systemd 需配置 RestartPreventExitStatus
     assert "RestartPreventExitStatus" in installer
+
+
+def test_linux_install_service_unit_paths_are_quoted():
+    """systemd unit 中含空格的路径一律加引号（2026-08-30 修复）。"""
+    installer = read_project_file("scripts/install-linux.sh")
+    assert 'WorkingDirectory="$INSTALL_DIR"' in installer
+    assert 'ExecStart="$INSTALL_DIR/scripts/start-linux.sh"' in installer
+    assert 'EnvironmentFile="$INSTALL_DIR/.env"' in installer
+
+
+def test_linux_install_resolves_install_dir_for_service_user():
+    """sudo 提权安装时默认 INSTALL_DIR 取自 root 的 $HOME，必须按服务用户
+    home 重算（与数据目录同一解析时机），否则 WorkingDirectory/ExecStart
+    指向 root 私有目录，服务无法启动（2026-08-30 修复）。"""
+    installer = read_project_file("scripts/install-linux.sh")
+    # 显式指定的 INSTALL_DIR 必须被尊重（默认值才重算）
+    assert "_INSTALL_DIR_EXPLICIT" in installer
+    assert 'INSTALL_DIR="$SERVICE_HOME/.xiaoda-agent"' in installer
+
+
+def test_linux_install_chowns_install_dir_to_service_user():
+    """安装目录必须归属服务用户：sudo 安装时目录属 root，服务用户读不了
+    frozen 可执行文件，自动更新器也无权写安装目录（2026-08-30 修复）。"""
+    installer = read_project_file("scripts/install-linux.sh")
+    assert 'chown -R "$SERVICE_USER:$SERVICE_GROUP" "$INSTALL_DIR"' in installer
+
+
+def test_linux_run_extraction_cleans_up_tmp_tarball():
+    """.run 自解压的临时 tar 包必须有 trap 清理（成功/失败/中断都要删），
+    修复 /tmp 泄漏（2026-08-30）。"""
+    installer = read_project_file("scripts/install-linux.sh")
+    assert "trap \"rm -f" in installer
+    assert "EXIT" in installer
 
 
 def test_linux_install_service_runs_as_non_root_user():
@@ -665,9 +786,10 @@ def test_linux_install_service_hardening_directives():
         "ProtectHome=read-only",
     ):
         assert directive in installer, f"unit 缺少加固指令: {directive}"
-    # 对数据目录的可写白名单（其余路径在 ProtectHome=read-only 下只读）
-    assert "ReadWritePaths=$DATA_DIR" in installer, \
-        "unit 应为 ~/.ai-agent 数据目录声明 ReadWritePaths"
+    # 对数据目录的可写白名单（其余路径在 ProtectHome=read-only 下只读）；
+    # 2026-08-30：ReadWritePaths 追加安装目录（引号包裹），否则自动更新器
+    # 写入 ~/.xiaoda-agent 被沙箱拒绝、`|| true` 吞掉后永远启动旧版
+    assert 'ReadWritePaths="$DATA_DIR" "$INSTALL_DIR"' in installer
 
 
 def test_dockerfile_injects_version():

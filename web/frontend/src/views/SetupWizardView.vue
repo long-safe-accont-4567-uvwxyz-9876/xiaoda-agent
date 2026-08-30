@@ -18,6 +18,10 @@ const saving = ref(false)
 const showOptional = ref(false)
 const error = ref('')
 const testingAll = ref(false)
+// 引导令牌（首跑 + 私网非回环来源）：后端 403 SETUP_TOKEN_REQUIRED 时展示
+// 输入框；仅存内存，保存成功后清空，绝不写入 localStorage
+const setupToken = ref('')
+const setupTokenRequired = ref(false)
 
 const testStatuses = reactive<Record<string, TestStatus>>({})
 const testMessages = reactive<Record<string, string>>({})
@@ -251,6 +255,12 @@ async function handleSave() {
     return
   }
 
+  // 引导令牌已要求但仍为空：不发起注定失败的请求
+  if (setupTokenRequired.value && !setupToken.value.trim()) {
+    error.value = t('setupWizard.setupTokenRequired')
+    return
+  }
+
   saving.value = true
   error.value = ''
   try {
@@ -266,7 +276,15 @@ async function handleSave() {
       extraBody.recovery_question = recoveryQuestion.value.trim()
       extraBody.recovery_answer = recoveryAnswer.value.trim()
     }
+    // 私网非回环首跑：后端要求引导令牌时随保存请求一起提交（body setup_token，
+    // 与 X-Setup-Token 头二选一，后端 auth 依赖 `_extract_setup_token` 兼容两者）
+    if (setupTokenRequired.value && setupToken.value.trim()) {
+      extraBody.setup_token = setupToken.value.trim()
+    }
     await api.saveSetupKeys(keysToSave, true, extraBody)
+    // 保存成功：清空内存引导令牌（不落 localStorage，避免令牌常驻可被读取）
+    setupToken.value = ''
+    setupTokenRequired.value = false
     const allRequired = requiredKeys.value.every(k =>
       k.configured || updates.value[k.key]
     )
@@ -296,6 +314,13 @@ async function handleSave() {
       router.replace(profileDone ? '/' : '/setup/profile')
     }
   } catch (e: any) {
+    // 引导令牌缺失（首跑 + 私网非回环来源）：展示"初始化令牌"输入框，
+    // 重试时把 setup_token 放进保存请求 body。错误信息不携带令牌值。
+    if (e?.code === 'SETUP_TOKEN_REQUIRED') {
+      setupTokenRequired.value = true
+      error.value = t('setupWizard.setupTokenRequired')
+      return
+    }
     // Check for KEY_TEST_FAILED error
     const msg = e.message || ''
     if (msg.includes('KEY_TEST_FAILED')) {
@@ -367,6 +392,19 @@ async function handleSave() {
               :placeholder="t('setupWizard.recoveryAnswerPlaceholder')"
             />
             <p class="password-hint">{{ t('setupWizard.recoveryHint') }}</p>
+          </div>
+
+          <!-- 初始化令牌（首跑 + 私网非回环来源，保存 403 SETUP_TOKEN_REQUIRED 后展示） -->
+          <div v-if="setupTokenRequired" class="password-section token-section">
+            <h3 class="password-section-title">── {{ t('setupWizard.setupTokenTitle') }} ──</h3>
+            <input
+              v-model="setupToken"
+              type="password"
+              class="dendro-input password-input"
+              :placeholder="t('setupWizard.setupTokenPlaceholder')"
+              autocomplete="off"
+            />
+            <p class="password-hint">{{ t('setupWizard.setupTokenHint') }}</p>
           </div>
 
           <div class="optional-toggle" @click="showOptional = !showOptional">

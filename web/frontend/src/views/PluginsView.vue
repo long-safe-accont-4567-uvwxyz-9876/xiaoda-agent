@@ -193,7 +193,7 @@ async function openConfig(pid: string, pname: string) {
 async function saveConfig() {
   configSaving.value = true
   try {
-    await put(`/plugins/${configPluginId.value}/config`, configValues.value)
+    await put(`/plugins/${configPluginId.value}/config`, { config: configValues.value })
     message.success('插件配置已保存')
     showConfigModal.value = false
     await load()

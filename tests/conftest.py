@@ -1,9 +1,37 @@
 """共享测试配置和 fixtures"""
 import os
 import sys
+import tempfile
 from pathlib import Path
 
 import pytest
+
+# ── 会话级环境重定向：必须在任何被测模块 import 之前完成 ─────────────
+# config_paths.py 的 DATA_DIR/LOG_DIR/PLUGINS_CONFIG_DIR 等路径常量全部在
+# 模块级（import 时）一次性计算，之后改 HOME/KIOXIA_DATA_DIR 等环境变量
+# 不再生效。因此重定向放在 conftest.py 顶层——pytest 在收集任何 test 模块
+# 之前就会 import 本文件（不存在更早注入的项目入口）。
+# 动机（审计阶段实测）：全量测试曾把数据写进仓库内——DATA_DIR 在
+# KIOXIA_DATA_DIR 显着失效（盘未挂载）时回退到仓库根 db/，产生新未跟踪
+# db/agent_work_records.json；PLUGINS_CONFIG_DIR 走 ~/.ai-agent/plugins，
+# 会改脏 tracked 的 config/plugins/trust_store.json。这里把 HOME（含
+# ~/.ai-agent 体系）与 XDG 全量引向会话级临时目录，从源头隔离所有
+# 依赖路径常量的写盘，也不触碰用户真实 ~/.ai-agent。
+# opt-out：XIAODA_TESTS_NO_REHOME=1 时跳过（仅调试/对照用，不推荐）。
+if os.environ.get("XIAODA_TESTS_NO_REHOME", "") != "1":
+    _SESSION_HOME = Path(tempfile.mkdtemp(prefix="xiaoda-tests-session-")).resolve()
+    os.environ["HOME"] = str(_SESSION_HOME)
+    os.environ["XDG_DATA_HOME"] = str(_SESSION_HOME / "xdg-data")
+    os.environ["XDG_CONFIG_HOME"] = str(_SESSION_HOME / "xdg-config")
+    # _resolve_data_path 要求 KIOXIA base 目录存在，否则会回退到仓库根
+    # db/（生产同款回退逻辑）；显式把 base 目录建出来，确保解析落点
+    # 全部在会话临时目录内（DATA_DIR → <session>/k-data/db 等）。
+    _KIOXIA_SESSION_BASE = _SESSION_HOME / "k-data"
+    _KIOXIA_SESSION_BASE.mkdir(parents=True, exist_ok=True)
+    os.environ["KIOXIA_DATA_DIR"] = str(_KIOXIA_SESSION_BASE)
+    if sys.platform == "win32":
+        # Windows 上 Path.home() 读取 USERPROFILE 而非 HOME。
+        os.environ["USERPROFILE"] = str(_SESSION_HOME)
 
 # skipif 约定（2026-08-26 平台审计）：reason 必须说明"为什么此环境不适用"。
 # 平台守卫写明目标平台，如 sys.platform != "win32" → "仅 Windows …"；
@@ -29,9 +57,48 @@ def _config_initialized():
     生产环境由真实入口调用 initialize_config()（agent.py/cli.py/web lifespan/
     qq 独立运行）；测试进程没有这些入口，在首个用例前统一触发一次，
     保持与旧行为（import 即建目录+workspace 迁移播种）一致的目录状态。
+    注意：配合顶层 HOME/KIOXIA_DATA_DIR 重定向，播种落在会话临时目录内，
+    不再触碰真实 ~/.ai-agent 与仓库根 db/。
     """
     from config_paths import initialize_config
     initialize_config()
+
+
+@pytest.fixture(scope="session", autouse=True)
+def _isolate_work_record(tmp_path_factory):
+    """agent_work_record 全局单例落盘隔离（防仓库 db/ 污染）。
+
+    AgentWorkRecord 已支持 persist_path 注入（core/agent_work_record.py），
+    但生产调用点（agent_dispatcher / sub_agent_manager）经 get_work_recorder()
+    单例写 DATA_DIR/agent_work_records.json。此处把单例重建为指向会话临时
+    文件（顶层 HOME/KIOXIA_DATA_DIR 重定向已让默认路径落会话内，这里是双保险，且
+    覆盖 XIAODA_TESTS_NO_REHOME=1 场景）。test_i7_work_record 的"同一
+    实例"单例语义不受影响（仍是同一实例，只是路径换了）。
+    """
+    import core.agent_work_record as _awr
+    orig = _awr._recorder
+    _awr._recorder = _awr.AgentWorkRecord(
+        persist_path=tmp_path_factory.mktemp("work_record") / "agent_work_records.json"
+    )
+    yield
+    _awr._recorder = orig
+
+
+@pytest.fixture(autouse=True)
+def _isolate_plugin_trust_store(tmp_path, monkeypatch):
+    """PluginManager trust_store 落盘隔离（防改脏 torn tracked 配置文件）。
+
+    _trust_store_file() 改为类方法后可直接 monkeypatch 重定向（原为
+    @staticmethod，无干净的替换点）。默认路径（config.PLUGINS_CONFIG_DIR）
+    在顶层重定向下已落会话目录；此处再按测试粒度指向 per-test 临时目录，
+    保证任意用例间 trust_store 互不读脏（并防御 NO_REHOME=1 场景）。
+    """
+    import plugins.manager as _pm
+    monkeypatch.setattr(
+        _pm.PluginManager,
+        "_trust_store_file",
+        classmethod(lambda cls: tmp_path / "trust_store.json"),
+    )
 
 
 @pytest.fixture(autouse=True)

@@ -1201,12 +1201,12 @@ class AIQQBot(ChannelAdapterBase, botpy.Client):
                 await self._send_group_media(message, reply, image_path, image_url)
             else:
                 await _budgeted_reply(message, reply)
-        except QQReplyBudgetExceeded:
-            logger.info("qq_bot.media_budget_exhausted")
-            return
         except (OSError, RuntimeError, ConnectionError, ValueError) as e:
-            logger.warning("qq_bot.media_send_failed", error=str(e))
-            # 最终兜底：尝试纯文本回复
+            # 2026-08-29 修复：群媒体被预算耗尽（QQReplyBudgetExceeded 亦为
+            # RuntimeError）或平台"被动回复超过限制"终止时，原实现视为发送完成，
+            # 纯文本兜底永不触发——图文双丢。现统一 media→text 降级；兜底自身
+            # 仍受群聊预算约束（发不出即放弃，不无限重试）。
+            logger.warning("qq_bot.media_send_failed_fallback_to_text", error=str(e))
             try:
                 await _budgeted_reply(message, reply)
             except QQReplyBudgetExceeded:
@@ -1241,7 +1241,9 @@ class AIQQBot(ChannelAdapterBase, botpy.Client):
                                  image_path: Path | None, image_url: str | None) -> None:
         """群媒体回复：上传 base64/URL 文件后 post_group_message。
 
-        被动回复超限时记录后跳过（无主动消息权限，不再降级）；其它异常上抛由调用方兜底。
+        预算耗尽与平台"被动回复超过限制"等失败一律上抛，由
+        _send_reply_with_media 统一降级纯文本兜底（2026-08-29 前：超额被吞、
+        调用方视为完成，图文双丢）。
         """
         group_openid = message.group_openid
         if image_path:
@@ -1253,22 +1255,14 @@ class AIQQBot(ChannelAdapterBase, botpy.Client):
             file_info = getattr(media, "file_info", "")
         if not file_info:
             raise RuntimeError("群媒体接口返回空file_info")
-        try:
-            # 被动回复（需要 msg_id）；无主动消息权限，超限直接失败
-            await _budgeted_await(
-                lambda msg_seq: self.api.post_group_message(
-                    group_openid=group_openid, msg_id=message.id,
-                    msg_type=7, content=reply,
-                    media={"file_info": file_info}, msg_seq=msg_seq,
-                ),
-            )
-        except (OSError, RuntimeError, ConnectionError) as e:
-            if "被动回复" in str(e) or "超过限制" in str(e):
-                # 被动回复超限，无主动消息权限，记录后跳过（不再降级为主动消息）
-                logger.warning("qq_bot.group_media_passive_limited_no_proactive",
-                               error=str(e))
-            else:
-                raise
+        # 被动回复（需要 msg_id）；无主动消息权限，超限异常上抛由调用方兜底
+        await _budgeted_await(
+            lambda msg_seq: self.api.post_group_message(
+                group_openid=group_openid, msg_id=message.id,
+                msg_type=7, content=reply,
+                media={"file_info": file_info}, msg_seq=msg_seq,
+            ),
+        )
 
     async def _upload_c2c_base64(self, openid: str, image_path: Path, file_type: int = 1) -> str:
         return await self._upload_base64(openid, image_path, file_type, group=False)

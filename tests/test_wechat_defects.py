@@ -4,6 +4,7 @@
 """
 import asyncio
 import json
+from types import SimpleNamespace
 
 from ilink_client import SessionExpiredError
 from wechat_bot_adapter import WeChatBotAdapter
@@ -12,8 +13,15 @@ from wechat_bot_adapter import WeChatBotAdapter
 # 公共 fake
 # ---------------------------------------------------------------------------
 
+# 测试不建真实 AgentCore：start() 仅在 core=None 时自建 AgentCore 并初始化
+# （依赖真实配置目录/DB）。统一注入最小假核心（_initialized=True → start()
+# 跳过 init 段），既有断言语义（readiness 字段、僵尸 bot 回滚）不受影响。
+_CORE_STUB = SimpleNamespace(_initialized=True)
+
+
 def _make_adapter(**over):
-    kwargs = dict(db=object(), router=object(), api=None, user_openid="u", core=None)
+    kwargs = dict(db=object(), router=object(), api=None, user_openid="u",
+                  core=_CORE_STUB)
     kwargs.update(over)
     return WeChatBotAdapter(**kwargs)
 
@@ -374,8 +382,9 @@ def test_start_no_credentials_does_not_leave_zombie_active_bot(monkeypatch):
 
     bot = _make_adapter()
     monkeypatch.setattr(bot, "_load_credentials", lambda: None)
-    # 避免 AgentCore 自建
-    monkeypatch.setattr(wba.WeChatBotAdapter, "_core", None, raising=False)
+    # _make_adapter 默认注入 _CORE_STUB（假核心），不会自建真实 AgentCore。
+    # 旧行 monkeypatch.setattr(wba.WeChatBotAdapter, "_core", None, raising=False)
+    # 只改类属性、被实例属性遮蔽，本就无效，已移除。
 
     asyncio.run(bot.start())
 

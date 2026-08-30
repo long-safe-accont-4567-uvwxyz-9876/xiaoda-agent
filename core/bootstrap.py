@@ -1306,15 +1306,13 @@ class AgentCoreBootstrapper:
             logger.warning("plugins.no_active_manager hint=web层lifespan未运行或降级模式")
             return
 
-        to_enable = list(plugin_mgr.plugins.keys())
-        for pid in to_enable:
-            try:
-                loaded = await plugin_mgr.load(pid)
-                if loaded:
-                    await plugin_mgr.enable(pid)
-                    logger.info("plugin.auto_enabled", id=pid)
-            except Exception as e:
-                logger.debug("plugin.auto_enable_failed", id=pid, error=str(e))
+        statuses = await plugin_mgr.load_and_enable_all()
+        for pid, enabled in statuses.items():
+            if enabled:
+                logger.info("plugin.auto_enabled", id=pid)
+            else:
+                logger.error("plugin.auto_enable_failed id={} error={}", pid,
+                             plugin_mgr.get_plugin(pid).error_message)
 
         # 刷新工具 schema 缓存，使插件注册的工具生效
         from tool_engine.tool_registry import invalidate_schema_cache

@@ -37,10 +37,23 @@ ROOT = Path(__file__).resolve().parents[1]
 #   qq_bot_adapter.py 2175→2176 —— ffmpeg/silk 转码与媒体上传文件读迁移到
 #     heavy-io 线程池（utils/thread_pools.py 双池隔离，解消息检索排队问题），
 #     import 行 +1；
+# 2026-08-29 上调记录（协议 b：必要增长，审计修复）：
+#   web/ws_hub.py 1160→1163 —— _handle_chat 分发处在设置 current_msg_id 的
+#     同一位置一并设置 current_conn_id（set/reset 各 +1 行），供工具事件
+#     定向发送给发起会话、堵住工具参数跨会话广播（安全修复，见
+#     .superpowers/sdd/audit-fix-20260829/task-2-brief.md 修复 4）；
+#   web/ws_hub.py 1163→1226 —— 审计修复 Task 3（凭证轮换驱逐旧 WebSocket）：
+#     ConnectionManager 登记连接认证 epoch（register 可选参数）+ unregister
+#     清理 + close_all_for_epoch（4001 关闭旧 epoch 连接）+ 握手解析 token
+#     epoch（_extract_token_epoch），见
+#     .superpowers/sdd/audit-fix-20260829/task-3-brief.md；
+#   web/routers/setup.py（赦免清单）1333→1439 —— 审计修复 Task 1（setup
+#     引导 token 鉴权 + recovery_qa 接线，同目录 task-1 改动），由 Task 2
+#     顺带同步基线使棘轮保持绿灯；
 BASELINES: dict[str, int] = {
     "qq_bot_adapter.py": 2176,
     "wechat_bot_adapter.py": 1591,
-    "web/ws_hub.py": 1160,
+    "web/ws_hub.py": 1226,
     "web/ws_terminal.py": 556,
     "prompt_builder/_prompt_scene.py": 783,
     "prompt_builder/_prompt_assembly.py": 661,
@@ -102,7 +115,8 @@ ALLOWLIST_BASELINES: dict[str, int] = {
     "memory/vector_store.py": 1732,
     "web/server.py": 1404,
     "agent_context.py": 1345,
-    "web/routers/setup.py": 1333,
+    # 2026-08-29 审计修复 Task 1（setup 引导 token 鉴权 + recovery_qa 接线）+112 行
+    "web/routers/setup.py": 1439,
     "db/legacy_migrations.py": 1289,
     "core/bootstrap.py": 1336,
     "utils/text_utils.py": 1151,
@@ -112,8 +126,15 @@ ALLOWLIST_BASELINES: dict[str, int] = {
     "tool_engine/mcp_client.py": 1090,
     "memory/retrieval/pipeline.py": 1084,
     "ilink_client.py": 1039,
-    "agent_core/sub_agent_manager.py": 1131,
-    "agent_core/sub_agent.py": 1036,
+    "agent_core/sub_agent_manager.py": 1141,
+    # 2026-08-29 审计修复 Task 4（agent_core 管线六项修复）：
+    #   sub_agent.py 1036→1161 —— 工具结果 EXTERNAL 消毒助手（Fix3）、
+    #     截断 JSON 修复真正生效（Fix4）、MCP 作用域过滤 helpers
+    #     (_mcp_tool_owner/_mcp_tool_in_scope, Fix5)、本轮工具结果记录
+    #     (_last_tool_results/pop_last_tool_results, Fix6 媒体提取配套)；
+    #   sub_agent_manager.py 1131→1141 —— 直接 dispatch 路径媒体提取接入
+    #     ProcessResult（Fix6）。
+    "agent_core/sub_agent.py": 1161,
     "tools/_builtin_manifest.py": 1001,
     "web/routers/insight.py": 937,
     "core/background_tasks.py": 1018,

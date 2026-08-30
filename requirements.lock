@@ -7,6 +7,9 @@
 # 注意（2026-08-24 如实修订）：本文件只固化「直接依赖」的精确版本，
 # 不是传递闭包哈希锁（非 --no-deps + --require-hashes 的完整供应链锁定）。
 # 间接依赖仍由 pip 按上界解析，构建不完全可复现；升级到哈希闭包锁为后续待办。
+#
+# 注意（2026-08-30 追加）：packaging 为插件容器化版本说明符解析引入的
+# 直接依赖（plugins/manager.py 顶层导入），钉 26.2（板端 .venv 实测）。
 
 # ── Web 服务 ──
 fastapi==0.136.3
@@ -52,6 +55,7 @@ rapidfuzz==3.14.5
 pyyaml==6.0.3
 cryptography==48.0.0
 certifi==2026.5.20
+packaging==26.2
 
 # ── 本地 AI 推理（onnxruntime + GenAI + 向量检索）──
 # 锁定精确版本：CI 解析到新版本时与 onnxruntime-genai 的 native lib ABI

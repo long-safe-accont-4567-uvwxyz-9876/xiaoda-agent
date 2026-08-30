@@ -166,7 +166,7 @@ class TestChildChunkDB:
 
     @pytest.fixture
     async def memory_db(self, tmp_path):
-        """创建临时内存数据库"""
+        """创建临时内存数据库（fixture 收尾关闭连接，防泄漏工作线程）"""
         import aiosqlite
 
         from db.db_memory import MemoryDB
@@ -174,12 +174,14 @@ class TestChildChunkDB:
         db_path = str(tmp_path / "test_child.db")
         conn = await aiosqlite.connect(db_path)
         conn.row_factory = aiosqlite.Row
+        try:
+            # 生产 DDL 建表（episodic_memories / memory_child_chunks / FTS / 索引）
+            await _create_production_memory_tables(conn)
 
-        # 生产 DDL 建表（episodic_memories / memory_child_chunks / FTS / 索引）
-        await _create_production_memory_tables(conn)
-
-        mdb = MemoryDB(conn)
-        return mdb, conn
+            mdb = MemoryDB(conn)
+            yield mdb, conn
+        finally:
+            await conn.close()
 
     @pytest.mark.asyncio
     async def test_insert_and_get_child(self, memory_db):
@@ -629,25 +631,26 @@ class TestBackwardCompatibility:
         db_path = str(tmp_path / "test_compat.db")
         conn = await aiosqlite.connect(db_path)
         conn.row_factory = aiosqlite.Row
+        try:
+            # 生产 DDL 建表（与 TestChildChunkDB 同一事实源）
+            await _create_production_memory_tables(conn)
 
-        # 生产 DDL 建表（与 TestChildChunkDB 同一事实源）
-        await _create_production_memory_tables(conn)
+            mdb = MemoryDB(conn)
 
-        mdb = MemoryDB(conn)
+            # 插入旧记忆（无子chunk）
+            await mdb.insert_episodic_memory(
+                summary="旧记忆：用户讨论了Python编程", importance=0.7)
 
-        # 插入旧记忆（无子chunk）
-        await mdb.insert_episodic_memory(
-            summary="旧记忆：用户讨论了Python编程", importance=0.7)
+            # 子chunk FTS检索应返回空（不崩溃）
+            results = await mdb.search_child_fts("Python", limit=10)
+            assert results == []
 
-        # 子chunk FTS检索应返回空（不崩溃）
-        results = await mdb.search_child_fts("Python", limit=10)
-        assert results == []
-
-        # 子chunk→父ID映射应返回空
-        parent_ids = await mdb.get_child_parent_ids([1, 2, 3])
-        assert parent_ids == []
-
-        await conn.close()
+            # 子chunk→父ID映射应返回空
+            parent_ids = await mdb.get_child_parent_ids([1, 2, 3])
+            assert parent_ids == []
+        finally:
+            # 统一在 finally 关闭，避免断言/异常路径泄漏 aiosqlite 连接
+            await conn.close()
 
 
 if __name__ == "__main__":

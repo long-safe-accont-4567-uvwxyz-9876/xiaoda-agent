@@ -48,6 +48,9 @@ rapidfuzz>=3.0.0
 pyyaml>=6.0
 cryptography>=43.0.0
 certifi>=2024.7.0
+# 插件容器化版本说明符解析（plugins/manager.py 顶层导入，无 try-except 保护，
+# 干净 wheel/Docker 基础镜像必须显式声明；勿挪进可选分组）
+packaging>=24.0
 
 # ── 向量检索: sqlite-vec 提供子chunk向量召回，缺失时降级为纯FTS ──
 sqlite-vec>=0.1.0

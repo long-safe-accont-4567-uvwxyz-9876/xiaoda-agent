@@ -34,6 +34,63 @@ def test_threshold_mimo_128k():
     assert 85000 <= threshold <= 95000, f"mimo 128K 阈值异常: {threshold}"
 
 
+def test_threshold_small_context_8k_no_floor():
+    """回归（审计 Fix2）：8K 小窗口模型阈值应严格按 70% 计算（≈5734），不被 60K 下限抬高。
+
+    旧实现 max(history_budget, 60000) 使 8K/32K 模型阈值恒为 60K，历史永不裁剪。
+    """
+    ctx = AgentContext(router=_MockRouter(max_tokens=8192))
+    threshold = ctx._get_dynamic_max_tokens()
+    # 8192 * 0.7 = 5734.4 → int → 5734
+    assert threshold == 5734, f"8K 模型阈值应≈5734，实际: {threshold}"
+
+
+def test_threshold_32k_no_floor():
+    """回归（审计 Fix2）：32K 模型阈值 22937（int(32768*0.7)），不与 60000 取 max。"""
+    ctx = AgentContext(router=_MockRouter(max_tokens=32768))
+    assert ctx._get_dynamic_max_tokens() == 22937
+
+
+def test_threshold_zero_capacity_falls_back():
+    """router 上报容量 <=0 时视为未知，回退 60000 兜底。"""
+    ctx = AgentContext(router=_MockRouter(max_tokens=0))
+    assert ctx._get_dynamic_max_tokens() == 60000
+    ctx_neg = AgentContext(router=_MockRouter(max_tokens=-5))
+    assert ctx_neg._get_dynamic_max_tokens() == 60000
+
+
+def test_threshold_router_exception_falls_back():
+    """router.get_active_max_tokens 抛异常时回退 60000 兜底。"""
+
+    class _BoomRouter:
+        def get_active_max_tokens(self) -> int:
+            raise RuntimeError("boom")
+
+    ctx = AgentContext(router=_BoomRouter())
+    assert ctx._get_dynamic_max_tokens() == 60000
+
+
+def test_small_context_history_trimmed_with_20k_tokens():
+    """回归（审计 Fix2）：8K 模型下 20K token 的历史必须被裁剪。
+
+    修复前阈值被 60K 下限抬高，20K 历史 ≤ 60K → 永不触发裁剪。
+    """
+    ctx = AgentContext(router=_MockRouter(max_tokens=8192))
+    # 中文按 1.5 系数估算：14000 字 ≈ 21000 tokens > 5734
+    big_message = "历史" * 7000
+    ctx.history.append({"role": "user", "content": big_message})
+    before = ctx._history_tokens()
+    assert before > 5734, f"测试数据未超过小上下文阈值: {before}"
+
+    asyncio.run(ctx.add_message("assistant", "新回复"))
+
+    # 单条超限消息无法语义压缩 → 走最终强制裁剪，移入压缩前暂存区
+    assert ctx._history_tokens() <= 5734, (
+        f"8K 模型下 20K 历史未被裁剪: {ctx._history_tokens()}"
+    )
+    assert len(ctx._pre_compressed_buffer) > 0, "被裁剪消息应进入 pre_compressed_buffer"
+
+
 def test_threshold_no_router_fallback():
     """router 为 None 时回退到 FALLBACK_MAX_HISTORY_TOKENS=60000。"""
     ctx = AgentContext(router=None)

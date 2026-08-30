@@ -10,6 +10,8 @@
 2. stop() 取消未完成消息任务时，先把它们标记为死信（记入 msg_id 去重表），
    保证重启重放的同一批消息被去重拦截，不会对用户造成重复回复。
 3. ack/status 兼容：is_connected/is_polling/_msg_tasks 语义不变。
+4. （2026-08-29 死信持久化）死信随游标文件落盘（{"cursor", "dead"}），
+   新世代实例启动时从文件恢复死信表——跨进程重启同样拦截重放消息。
 """
 from __future__ import annotations
 
@@ -67,7 +69,8 @@ async def test_cursor_not_advanced_until_batch_messages_complete(monkeypatch, tm
     """批次内消息未完成时不得推进/持久化游标；完成后才推进。"""
     bot = _make_adapter()
     monkeypatch.setattr(wba, "CREDENTIALS_PATH", tmp_path / "wechat_credentials.json")
-    monkeypatch.setattr(bot, "_client_owns_credentials", lambda: True)
+    (tmp_path / "wechat_credentials.json").write_text(
+        json.dumps({"bot_token": "T1"}), encoding="utf-8")
 
     client = _FakeClient([
         {"cursor": "CUR-2", "msgs": [_msg("m1"), _msg("m2")]},
@@ -175,16 +178,20 @@ async def test_crash_replay_reprocesses_incomplete_batch(monkeypatch, tmp_path):
         await asyncio.sleep(0.01)
         if client.cursors:
             break
-    # 崩溃：走 stop 路径（取消 poll 与消息任务）
+    # 崩溃：走 stop 路径（取消 poll 与消息任务），stop 内部会排空死信落盘。
     await asyncio.wait_for(bot.stop(), timeout=5)
     await asyncio.wait({poll_task}, timeout=5)
 
-    # 崩溃后磁盘上游标文件必须不存在（内存游标仍为 ""）→ 服务端会重放本批
-    assert not (tmp_path / "wechat_cursor.json").exists()
-    # 第一世代已把 mx 记为死信
-    dead_ids = set(bot._processed_msg_ids)
+    # 新契约（2026-08-29）：游标未推进（cursor 仍为 ""）→ 服务端会重放本批；
+    # 但死信表已随游标文件持久化，第二世代启动时从文件恢复、拦截重放消息。
+    cursor_file = tmp_path / "wechat_cursor.json"
+    assert cursor_file.exists(), "死信应随游标文件落盘"
+    on_disk = json.loads(cursor_file.read_text(encoding="utf-8"))
+    assert on_disk["cursor"] == "", "游标未推进语义保持不变"
+    assert "mx" in on_disk["dead"], "第一世代已把 mx 记为死信并落盘"
 
-    # 第二世代：新实例从空游标启动，服务端重放同一批消息
+    # 第二世代：新实例从空游标启动，服务端重放同一批消息；
+    # 死信表由 _load_cursor 从文件恢复（不再手动复制内存死信）。
     replayed: list[dict] = []
 
     async def _fast_process(msg):
@@ -195,11 +202,11 @@ async def test_crash_replay_reprocesses_incomplete_batch(monkeypatch, tmp_path):
         replayed.append(dict(msg))
         return None
 
-    bot2 = _make_adapter()
+    # 同目录（tmp_path）新建实例：CREDENTIALS_PATH 已指向 tmp，构造函数
+    # 真实读取游标文件并合并死信表——跨实例持久化恢复的正路。
+    bot2 = WeChatBotAdapter(db=object(), router=object(), api=None,
+                            user_openid="u", core=None)
     monkeypatch.setattr(bot2, "_process_message", _fast_process)
-    # 同进程"重启"语义：死信缓存随 adapter 重建丢失，但 stop 时已持久化死信；
-    # 这里模拟最保守场景——第二世代继承第一世代的去重缓存（同进程内重建）。
-    bot2._processed_msg_ids.update(dead_ids)
 
     client2 = _FakeClient([
         {"cursor": "CUR-NEXT", "msgs": [_msg("mx", "需要被处理的消息")]},

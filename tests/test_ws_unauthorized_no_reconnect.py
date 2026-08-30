@@ -90,7 +90,9 @@ async def test_no_token_without_subprotocol_closes_with_4001():
 def test_ws_onclose_4001_stops_reconnect_and_clears_token():
     """前端契约：onclose 对 4001 停止重连，并清 token 跳登录。"""
     ws_src = (ROOT / "web/frontend/src/api/ws.ts").read_text(encoding="utf-8")
-    onclose = _method_source(ws_src, "this.ws.onclose = (event) => {")
+    # T10 身份守卫重构后 handler 绑定在局部 socket 变量上（旧签名为
+    # this.ws.onclose），契约语义（4001 → 停止重连 + 清 token 跳登录）未变。
+    onclose = _method_source(ws_src, "socket.onclose = (event) => {")
     assert "event.code === 4001" in onclose
     # 4001 分支必须在 scheduleReconnect 之前（即走"不重连"分支）
     assert onclose.index("event.code === 4001") < onclose.index("scheduleReconnect()")

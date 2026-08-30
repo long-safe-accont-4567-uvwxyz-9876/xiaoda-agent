@@ -12,8 +12,6 @@ iLink 协议：微信官方 Bot API，域名 ilinkai.weixin.qq.com，HTTP/JSON�
 from __future__ import annotations
 
 import asyncio
-import json
-import os
 import threading
 import time
 import weakref
@@ -23,15 +21,6 @@ from typing import Any, Optional
 
 from loguru import logger
 
-from config_constants import env_flag
-
-try:
-    from utils.atomic_write import _restrict_file_permissions_windows, atomic_write
-except Exception:  # pragma: no cover
-    atomic_write = None  # type: ignore[assignment]
-    def _restrict_file_permissions_windows(path):  # type: ignore[no-redef]
-        return
-
 from channel_adapter_base import (
     ChannelAdapterBase,
     CoreProcessRequest,
@@ -40,7 +29,9 @@ from channel_adapter_base import (
     load_json_credentials,
     save_json_credentials,
 )
+from config_constants import env_flag
 from ilink_client import ILinkClient, ILinkRetError, SessionExpiredError
+from utils import wechat_cursor_state as cursor_state
 
 # ============================================================================
 # 常量定义
@@ -75,12 +66,13 @@ def save_credentials(bot_token: str, ilink_bot_id: str, ilink_user_id: str, base
     }
     # 写入新凭证意味着新会话开始，清除陈旧游标，避免服务端按旧游标
     # 重放上一会话的历史积压消息（串话/重复回复根因之一）。
-    save_json_credentials(
-        CREDENTIALS_PATH,
-        data,
-        cursor_path=CREDENTIALS_PATH.with_name("wechat_cursor.json"),
-        event="wechat_bot",
-    )
+    with cursor_state.WECHAT_CURSOR_STATE_LOCK:
+        save_json_credentials(
+            CREDENTIALS_PATH,
+            data,
+            cursor_path=CREDENTIALS_PATH.with_name("wechat_cursor.json"),
+            event="wechat_bot",
+        )
 
 
 def load_credentials() -> Optional[dict]:
@@ -98,13 +90,10 @@ def load_credentials() -> Optional[dict]:
 
 
 def clear_credentials() -> None:
-    """删除凭证文件
+    """删除凭证文件。"""
+    with cursor_state.WECHAT_CURSOR_STATE_LOCK:
+        clear_json_credentials(CREDENTIALS_PATH, event="wechat_bot")
 
-    模块级函数，供路由层直接调用，无需创建 WeChatBotAdapter 实例。
-    薄包装：实际删除逻辑复用 channel_adapter_base.clear_json_credentials，
-    行为与原实现逐字节等价。
-    """
-    clear_json_credentials(CREDENTIALS_PATH, event="wechat_bot")
 
 # iLink 默认服务端地址（登录后可能被 baseurl 覆盖）
 ILINK_DEFAULT_BASE_URL = "https://ilinkai.weixin.qq.com"
@@ -275,6 +264,9 @@ class WeChatBotAdapter(ChannelAdapterBase):
         #   异常终态死信标记使用（重放去重的唯一依据）。
         self._batch_gathers: set[asyncio.Future] = set()
         self._task_msg_ids: dict[asyncio.Task, str] = {}
+        self._dead_save_task: Optional[asyncio.Task] = None
+        self._dead_revision = 0
+        self._init_dedup_state()
 
         # 长轮询游标（首次为空字符串，后续传入上次返回的 get_updates_buf）
         # 持久化到凭证同目录：进程重启后恢复游标，避免服务端重放历史消息。
@@ -294,10 +286,6 @@ class WeChatBotAdapter(ChannelAdapterBase):
             max_size=self._CTX_MAX,
         )
         self._last_from_user_id: str = ""
-
-        # 消息去重缓存：msg_id → 时间戳，保留最近 1 小时（见 ChannelAdapterBase）。
-        # 仅做 msg_id 级去重（同一 msg_id 的精确重复才拦截），不做内容级去重。
-        self._init_dedup_state()
 
         # W3：per-user 串行锁——同一用户消息串行处理，不同用户并发（对齐 qq_bot_adapter）。
         # 防止同用户连发消息时并发调用 AgentCore 导致会话上下文竞争、回复乱序。
@@ -368,51 +356,50 @@ class WeChatBotAdapter(ChannelAdapterBase):
 
     def _load_cursor(self) -> str:
         try:
-            path = self._cursor_path()
-            if path.exists():
-                data = json.loads(path.read_text(encoding="utf-8"))
-                cursor = data.get("cursor", "") or ""
-                if cursor:
-                    logger.info("wechat_bot.cursor_loaded len={}", len(cursor))
-                    return cursor
-        except Exception as e:
+            cursor, dead = cursor_state.load_cursor_state(self._cursor_path(), self._MSG_ID_TTL)
+            self._processed_msg_ids.update(dead)
+            if cursor:
+                logger.info("wechat_bot.cursor_loaded len={}", len(cursor))
+            return cursor
+        except (OSError, ValueError, TypeError) as e:
             logger.warning("wechat_bot.cursor_load_failed error={}", str(e)[:120])
-        return ""
+            return ""
 
     def _save_cursor_sync(self) -> None:
-        if not self._cursor:
-            return
-        # R3-Major#1：写入前校验 token 归属——若凭证文件已被重新扫码更新为
-        # 新 token（旧 poller 正在退出/即将过期），不得把旧会话游标回写，
-        # 否则新会话会带上旧游标导致服务端重放历史消息（重复回复）。
-        if not self._client_owns_credentials():
-            logger.info(
-                "wechat_bot.cursor_save_skipped_token_changed cursor_len={}",
-                len(self._cursor),
-            )
-            return
-        try:
-            path = self._cursor_path()
-            content = json.dumps({"cursor": self._cursor}, ensure_ascii=False)
-            if atomic_write is not None:
-                # Minor#4（R3）：游标含会话状态信息，权限对齐凭证文件（0600），
-                # 避免 umask 默认权限（如 0644）导致同机其他用户可读。
-                atomic_write(path, content, mode=0o600, encoding="utf-8")
-            else:
-                # fallback: 固定 tmp 方式（atomic_write 不可用时）
-                tmp = path.with_suffix(".tmp")
-                tmp.write_text(content, encoding="utf-8")
-                os.chmod(tmp, 0o600)  # Unix: 限制为仅用户可读写
-                _restrict_file_permissions_windows(tmp)  # Windows: 用 ACL 补偿
-                tmp.replace(path)
-        except Exception as e:
-            logger.warning("wechat_bot.cursor_save_failed error={}", str(e)[:120])
+        self._write_state_sync(self._current_client_token())
+
+    def _current_client_token(self) -> str:
+        client = self._ilink_client
+        return str(getattr(client, "_bot_token", "") or "") if client is not None else ""
+
+    def _write_state_sync(self, expected_token: str) -> None:
+        if not cursor_state.write_cursor_state(
+            self._cursor_path(), CREDENTIALS_PATH, expected_token,
+            self._cursor, dict(self._processed_msg_ids),
+        ):
+            logger.info("wechat_bot.state_save_skipped_token_changed")
 
     async def _save_cursor_async(self) -> None:
-        """游标落盘下放线程池：atomic_write 内含 fsync，USB 盘可能卡数十秒，
-        同步执行会冻结事件循环（2026-08-25 实测 lag=36s，栈定位于
-        atomic_write→os.fsync）。轮询循环是异步上下文，直接 await 即可。"""
-        await asyncio.to_thread(self._save_cursor_sync)
+        """游标落盘下放线程池；失败不应终止 poller。"""
+        try:
+            await asyncio.to_thread(self._save_cursor_sync)
+        except OSError as e:
+            logger.warning("wechat_bot.cursor_save_failed error={}", str(e)[:120])
+
+    async def _save_dead_letters_async(self) -> None:
+        """持续落盘死信，直到覆盖事件循环侧的最新修订。"""
+        expected_token = self._current_client_token()
+        if not expected_token:
+            logger.info("wechat_bot.dead_save_skipped_no_client")
+            return
+        try:
+            while True:
+                revision = self._dead_revision
+                await asyncio.to_thread(self._write_state_sync, expected_token)
+                if revision == self._dead_revision:
+                    return
+        except OSError as e:
+            logger.warning("wechat_bot.dead_save_failed error={}", str(e)[:120])
 
 
     def _client_owns_credentials(self) -> bool:
@@ -671,6 +658,10 @@ class WeChatBotAdapter(ChannelAdapterBase):
                     str(e)[:200],
                 )
             self._msg_tasks.clear()
+
+        # iLinkClient 关闭后 token 归属无法校验；先排空死信落盘，保证重启可去重。
+        if self._dead_save_task is not None and not self._dead_save_task.done():
+            await asyncio.shield(self._dead_save_task)
 
         # 关闭 ILinkClient
         if self._ilink_client is not None:
@@ -1302,6 +1293,15 @@ class WeChatBotAdapter(ChannelAdapterBase):
             # 记死信：该消息未完成处理即被取消/失败，重放时按去重拦截
             self._processed_msg_ids.setdefault(msg_id, time.time())
             self._task_msg_ids.pop(task, None)
+            self._dead_revision += 1
+            # 调度一个写循环覆盖最新修订；同步收尾只保留内存状态。
+            if self._dead_save_task is None or self._dead_save_task.done():
+                try:
+                    self._dead_save_task = asyncio.create_task(
+                        self._save_dead_letters_async()
+                    )
+                except RuntimeError:
+                    pass
 
     def _mark_task_msg_dead(self, task: asyncio.Task) -> None:
         """:meth:`_mark_msg_dead_by_task` 的 stop() 别名（同步、不取回任务结果）。"""

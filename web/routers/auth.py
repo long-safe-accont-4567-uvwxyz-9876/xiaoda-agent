@@ -635,7 +635,11 @@ async def recover(req: RecoverRequest, request: Request, response: Response = No
     with _rate_limit_lock:
         _rate_limit.pop(client_ip, None)
 
-    _increment_token_epoch()  # 吊销全部 token
+    new_epoch = _increment_token_epoch()  # 吊销全部 token
+    # 凭证轮换驱逐：关闭所有以旧 epoch（严格小于新 epoch）认证的 WebSocket 连接
+    # —— 函数内延迟导入防循环 import（auth.py 被 ws_hub 导入）
+    from web.ws_hub import manager as _ws_manager
+    await _ws_manager.close_all_for_epoch(new_epoch)
     clear_media_cookie(response)
 
     await _audit_auth_event(request, "webui.password.recovered", "password reset via recovery question")
@@ -695,7 +699,11 @@ async def change_password(req: ChangePasswordRequest, user_id: str = Depends(get
         except ValueError as exc:
             raise HTTPException(400, str(exc)) from None
 
-    _increment_token_epoch()  # 吊销全部旧 token
+    new_epoch = _increment_token_epoch()  # 吊销全部旧 token
+    # 凭证轮换驱逐：关闭所有以旧 epoch（严格小于新 epoch）认证的 WebSocket 连接
+    # —— 函数内延迟导入防循环 import（auth.py 被 ws_hub 导入）
+    from web.ws_hub import manager as _ws_manager
+    await _ws_manager.close_all_for_epoch(new_epoch)
     new_token, expiry = _issue_token()
 
     # 旧 token 按滑动续期方式撤销（带宽限期），避免当前请求瞬间 401
@@ -735,7 +743,11 @@ async def logout(user_id: str = Depends(get_current_user), request: Request = No
 async def revoke_all(user_id: str = Depends(get_current_user),
                      response: Response = None) -> Any:
     """撤销所有 token（改密码后强制全量重新登录）。"""
-    _increment_token_epoch()
+    new_epoch = _increment_token_epoch()
+    # 凭证轮换驱逐：关闭所有以旧 epoch（严格小于新 epoch）认证的 WebSocket 连接
+    # —— 函数内延迟导入防循环 import（auth.py 被 ws_hub 导入）
+    from web.ws_hub import manager as _ws_manager
+    await _ws_manager.close_all_for_epoch(new_epoch)
     for token in list(_tokens.keys()):
         _revoke_token(token)
     _tokens.clear()
