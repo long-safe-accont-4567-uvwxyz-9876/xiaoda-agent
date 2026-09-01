@@ -37,10 +37,14 @@ class Reranker:
     RERANK_CACHE_MAXSIZE = 1000
 
     def __init__(self, api_key: str = "", base_url: str = "",
-                 model: str = "BAAI/bge-reranker-v2-m3",
-                 max_length: int = 8192, batch_size: int = 8) -> None:
+                 model: str = "", max_length: int = 8192, batch_size: int = 8) -> None:
+        # 默认值不硬编码：从 config 派生（env > provider_metadata.json > 空）
+        if not model or not base_url:
+            from config import RERANKER_BASE_URL, RERANKER_MODEL
+            model = model or RERANKER_MODEL
+            base_url = base_url or RERANKER_BASE_URL
         self._api_key = api_key
-        self._base_url = base_url or "https://api.siliconflow.cn/v1"
+        self._base_url = base_url
         self._model = model
         self._max_length = max_length
         self._batch_size = batch_size

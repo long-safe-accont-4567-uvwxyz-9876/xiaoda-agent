@@ -360,7 +360,9 @@ async def speech_to_text(file: UploadFile = File(...)) -> Any:
                 raise HTTPException(503, "ASR 不可用：未配置 SILICONFLOW_API_KEY 或 MIMO_API_KEY")
             from config import get_base_url_for_provider
             from config_providers import get_default_model_kind
-            asr_model = get_default_model_kind("mimo", "asr") or "mimo-v2.5-asr"
+            asr_model = get_default_model_kind("mimo", "asr")
+            if not asr_model:
+                raise HTTPException(503, "ASR 不可用：provider_metadata.json 未定义 mimo.default_asr_model")
             text = await asyncio.to_thread(
                 _asr_via_openai, mimo_key, get_base_url_for_provider("mimo"), asr_model, content,
             )
