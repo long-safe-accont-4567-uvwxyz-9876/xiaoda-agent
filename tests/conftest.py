@@ -19,6 +19,18 @@ import pytest
 # 依赖路径常量的写盘，也不触碰用户真实 ~/.ai-agent。
 # opt-out：XIAODA_TESTS_NO_REHOME=1 时跳过（仅调试/对照用，不推荐）。
 if os.environ.get("XIAODA_TESTS_NO_REHOME", "") != "1":
+    # 重定向前捕获"真实 HOME 下的 user site"：subprocess 类的用例
+    # （test_config_*_standalone_import_chain / test_lazy_tool_registration 等）
+    # 以 sys.executable 起干净子进程并继承改动后的 HOME——若无干预，子进程
+    # user site 一并漂移到临时目录，pip 装到 ~/.local 的 loguru 等项目依赖
+    # 会 import 失败（本机 5 个稳定环境失败即源于此）。这里把 user site
+    # 固化进 PYTHONPATH，子进程与主进程保持一致的包可见性（CI 无影响）。
+    import site as _site  # noqa:PLC0415 —— 须在任何项目模块 import 之前
+    _PRE_REHOME_USER_SITE = _site.getusersitepackages()  # site 启动时已缓存
+    _PRE_REHOME_PYTHONPATH = os.environ.get("PYTHONPATH", "")
+    os.environ["PYTHONPATH"] = os.pathsep.join(
+        [p for p in (_PRE_REHOME_USER_SITE, _PRE_REHOME_PYTHONPATH) if p])
+
     _SESSION_HOME = Path(tempfile.mkdtemp(prefix="xiaoda-tests-session-")).resolve()
     os.environ["HOME"] = str(_SESSION_HOME)
     os.environ["XDG_DATA_HOME"] = str(_SESSION_HOME / "xdg-data")
@@ -32,6 +44,15 @@ if os.environ.get("XIAODA_TESTS_NO_REHOME", "") != "1":
     if sys.platform == "win32":
         # Windows 上 Path.home() 读取 USERPROFILE 而非 HOME。
         os.environ["USERPROFILE"] = str(_SESSION_HOME)
+
+# ── 仓库根 .env 隔离（与 HOME/KIOXIA 重定向同理）──────────────────────
+# config_paths.py 模块级 load_dotenv(ENV_PATH, override=False) 会把本机
+# 仓库根 .env 的 DEFAULT_PROVIDER=agnes/QQBOT_APP_ID 等开发配置注入每个
+# import 到 config 链的进程——fallback 路由等"干净默认"用例在本机必挂
+# （CI 无 .env 全绿）。test_config 类子进程因继承 PYTHONPATH 不受影响。
+# 在首个项目模块 import 之前把 load_dotenv 置为 no-op 即可一劳永逸。
+import dotenv as _dotenv  # noqa: F401,PLC0415 —— 仅测试控制面；须在本文件首个项目模块 import 之前
+_dotenv.load_dotenv = lambda *args, **kwargs: False  # noqa: E731
 
 # skipif 约定（2026-08-26 平台审计）：reason 必须说明"为什么此环境不适用"。
 # 平台守卫写明目标平台，如 sys.platform != "win32" → "仅 Windows …"；

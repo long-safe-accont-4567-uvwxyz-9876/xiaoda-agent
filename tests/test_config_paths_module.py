@@ -13,6 +13,7 @@ KIOXIA 数据路径解析 / 目录常量 / 冻结模式资源复制 / 数据迁�
     4. 路径语义不变：DATA_DIR 遵循 KIOXIA_DATA_DIR 显式配置 + 挂载检测
 """
 import os
+import subprocess
 import sys
 from pathlib import Path
 
@@ -50,19 +51,38 @@ def test_config_reexports_same_objects(name):
 
 # ── 3. dotenv 副作用保持 ──────────────────────────────────────────
 
-def test_dotenv_loaded_on_config_import(monkeypatch):
-    """config 导入链上 dotenv(ENV_PATH) 已执行（.env 中已定义的变量进 os.environ）"""
+def test_dotenv_loaded_on_config_import():
+    """config 导入链上 dotenv(ENV_PATH) 仍被真实调用（.env 作为默认值兜底）。
+
+    conftest 为测试进程统一隔离仓库 .env（避免本机开发配置注入污染断言，
+    与 CI 无 .env 的行为对齐），因此不能在本进程内断言"键已进入 os.environ"。
+    这里用子进程验证真实链路：子进程不经 conftest，干净地 import config_paths
+    后，.env 中定义的键应进入其 os.environ（仅 import，无写盘副作用）。
+    """
     import config_paths
-    # 从 .env 文件读取一个键，验证导入后可见（用 ENV_PATH 解析而非硬编码键名）
     env_path = Path(config_paths.ENV_PATH)
-    env_text = env_path.read_text(encoding="utf-8", errors="ignore") \
-        if env_path.exists() else ""
+    if not env_path.exists():
+        pytest.skip(".env 不存在（CI 环境无 .env），本用例无意义")
+    env_text = env_path.read_text(encoding="utf-8", errors="ignore")
     defined_keys = [ln.split("=")[0].strip() for ln in env_text.splitlines()
                     if "=" in ln and not ln.strip().startswith("#") and ln.split("=")[0].strip()]
     if not defined_keys:
-        pytest.skip(".env 不存在或为空（CI 环境无 .env），本用例无意义")
-    for key in defined_keys[:5]:
-        assert key in os.environ, f".env 中的 {key} 应已进入 os.environ"
+        pytest.skip(".env 为空，本用例无意义")
+    probe = f"""
+import json, os, sys
+sys.path.insert(0, {str(Path(__file__).resolve().parent.parent)!r})
+import config_paths
+env_text = open({str(env_path)!r}, encoding="utf-8", errors="ignore").read()
+keys = [ln.split("=")[0].strip() for ln in env_text.splitlines()
+        if "=" in ln and not ln.strip().startswith("#") and ln.split("=")[0].strip()]
+missing = [k for k in keys[:5] if k not in os.environ]
+print(json.dumps(missing))
+"""
+    result = subprocess.run([sys.executable, "-c", probe],
+                            capture_output=True, text=True, timeout=60)
+    assert result.returncode == 0, f"子进程探针失败:\n{result.stderr}"
+    assert result.stdout.strip() == "[]", \
+        f".env 中的键 {result.stdout.strip()} 应进入子进程 os.environ（load_dotenv 链路失效）"
 
 
 # ── 4. 路径语义不变 ───────────────────────────────────────────────
