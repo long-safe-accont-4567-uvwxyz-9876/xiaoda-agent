@@ -1208,6 +1208,8 @@ def _make_status_callback(conn_id: str, msg_id: str):
 from web.ws_terminal import (  # noqa: F401, E402 —— 文件尾 re-export(拆分兼容层)
     _TERM_FLUSH_INTERVAL_S,
     _TERM_FLUSH_MAX_CHARS,
+    _TERM_BACKOFF_HIGH_BYTES,
+    _TERM_BACKOFF_LOW_BYTES,
     _cleanup_pty,
     _handle_terminal_input,
     _handle_terminal_kill,
@@ -1222,5 +1224,9 @@ from web.ws_terminal import (  # noqa: F401, E402 —— 文件尾 re-export(拆
     _setup_win_pipe_reader,
     _setup_win_pty_reader,
     _term_out_buf,
+    _term_flush_interval,
+    _next_flush_interval,
+    _TERM_FLUSH_MAX_INTERVAL_S,
+    _TERM_ADAPTIVE_ENABLED,
     _try_import_winpty,
 )

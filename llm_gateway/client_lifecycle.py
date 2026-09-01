@@ -42,6 +42,20 @@ def _ssrf_check(url: str) -> None:
         logger.debug("router.ssrf_check_skip url={} error={}", url, str(e))
 
 
+def _provider_cred_env(provider: str) -> tuple[str, str]:
+    """返回 provider 的 (api_key_env, base_url)，均从 provider_metadata.json 派生。
+
+    供懒恢复/refresh_client 读取当前凭据时使用，不在代码里硬编码
+    MIMO_API_KEY / AGNES_API_KEY / *_BASE_URL 等 env 名。
+    """
+    try:
+        from config_providers import get_provider_config
+        _cfg = get_provider_config(provider)
+        return _cfg.get("api_key_env", "") or "", _cfg.get("base_url", "") or ""
+    except (ImportError, OSError, ValueError):
+        return "", ""
+
+
 class ClientLifecycleMixin:
     """凭证轮换与客户端生命周期管理（ModelRouter 组合此 Mixin）。"""
 
@@ -100,13 +114,6 @@ class ClientLifecycleMixin:
             logger.debug("router.credential_pool_register_skip web module unavailable")
             return
         _BUILTIN_PROVIDERS = set(_get_builtin_providers())
-        _PROVIDER_FORMAT = {
-            "ollama": "openai",
-            "llama.cpp": "openai",
-            "siliconflow": "openai",
-            "openrouter": "openai",
-            "modelscope": "openai",
-        }
         pool = self._credential_pool
         for provider, creds in pool._pool.items():
             if provider in _BUILTIN_PROVIDERS:
@@ -116,7 +123,17 @@ class ClientLifecycleMixin:
             if not creds:
                 continue
             cred = creds[0]
-            fmt = _PROVIDER_FORMAT.get(provider, "openai")
+            # format 由 provider_metadata.json 的 protocol 派生（与 server.py
+            # _derive_known_env_providers 同一规则），不硬编码 provider→format 表
+            fmt = "anthropic"
+            try:
+                from config_providers import get_provider_catalog
+                from llm_gateway.contracts import ProviderProtocol
+                _definition = get_provider_catalog().get(provider)
+                if _definition.protocol is not ProviderProtocol.ANTHROPIC:
+                    fmt = "openai"
+            except (ImportError, KeyError, AttributeError, ValueError):
+                fmt = "openai"
             if cred.base_url and cred.api_key:
                 register_into_router(self, provider, fmt, cred.base_url, cred.api_key)
                 logger.info("router.credential_pool_registered provider={} format={}", provider, fmt)
@@ -148,11 +165,13 @@ class ClientLifecycleMixin:
         ModelRouter.__init__ 只在启动时读取一次环境变量创建客户端，
         后续通过 Setup 页面保存的新 Key 不会自动生效。此方法从当前
         os.environ 重新读取 Key 并重建客户端，使新配置立即生效。
+        key 名/base_url 均从 provider_metadata.json 派生，不硬编码。
         """
         old_mimo = self._client  # 旧 MiMo 客户端（独立 httpx，替换后 close 释放连接）
 
-        new_mimo_key = _resolve_provider_key("MIMO_API_KEY")
-        new_mimo_url = os.getenv("MIMO_BASE_URL", MIMO_BASE_URL)
+        _mimo_key_env, _mimo_url = _provider_cred_env("mimo")
+        new_mimo_key = _resolve_provider_key(_mimo_key_env)
+        new_mimo_url = _mimo_url or MIMO_BASE_URL
         if new_mimo_key:
             _ssrf_check(new_mimo_url)  # SSRF 防护：校验 base_url
             self._client = AsyncOpenAI(api_key=new_mimo_key, base_url=new_mimo_url)
@@ -162,8 +181,9 @@ class ClientLifecycleMixin:
         else:
             self._client = None
 
-        new_agnes_key = os.getenv("AGNES_API_KEY", "")
-        new_agnes_url = os.getenv("AGNES_BASE_URL", AGNES_BASE_URL)
+        _agnes_key_env, _agnes_url = _provider_cred_env("agnes")
+        new_agnes_key = os.getenv(_agnes_key_env, "")
+        new_agnes_url = _agnes_url or AGNES_BASE_URL
         if new_agnes_key:
             _ssrf_check(new_agnes_url)  # SSRF 防护：校验 base_url
             self._agnes_client = AsyncOpenAI(
@@ -258,8 +278,9 @@ class ClientLifecycleMixin:
                     if _custom_agnes is not None:
                         client = _custom_agnes
                     else:
-                        _agnes_key = os.getenv("AGNES_API_KEY", "")
-                        _agnes_url = os.getenv("AGNES_BASE_URL", AGNES_BASE_URL)
+                        _agnes_key_env, _agnes_url_cfg = _provider_cred_env("agnes")
+                        _agnes_key = os.getenv(_agnes_key_env, "")
+                        _agnes_url = _agnes_url_cfg or AGNES_BASE_URL
                         if _agnes_key:
                             try:
                                 _ssrf_check(_agnes_url)
@@ -276,7 +297,7 @@ class ClientLifecycleMixin:
                             except (ValueError, OSError) as ce:
                                 logger.warning("router.agnes_client_lazy_recover_failed",
                                                error=str(ce))
-            # N-2 修复收尾：内置 provider 集合从 provider_metadata.json 派生，不硬编码
+# N-2 修复收尾：内置 provider 集合从 provider_metadata.json 派生，不硬编码
             # （line 20 已 import _get_builtin_providers，line 686/1319 同款用法）
             elif provider not in _get_builtin_providers():
                 custom = self.get_custom_client(provider)
@@ -294,8 +315,9 @@ class ClientLifecycleMixin:
                 # provider == "mimo"
                 # P0：mimo client 懒恢复（防止 refresh_client 把它置 None 后 vision API 全挂）
                 if client is None:
-                    _mimo_key = _resolve_provider_key("MIMO_API_KEY")
-                    _mimo_url = os.getenv("MIMO_BASE_URL", MIMO_BASE_URL)
+                    _mimo_key_env, _mimo_url_cfg = _provider_cred_env("mimo")
+                    _mimo_key = _resolve_provider_key(_mimo_key_env)
+                    _mimo_url = _mimo_url_cfg or MIMO_BASE_URL
                     if _mimo_key:
                         try:
                             _ssrf_check(_mimo_url)

@@ -29,7 +29,11 @@ import os
 from loguru import logger
 
 from config_paths import DATA_DIR
-from config_providers import get_base_url_for_provider, get_default_model_for_provider
+from config_providers import (
+    get_base_url_for_provider,
+    get_default_model_for_provider,
+    get_default_model_kind,
+)
 from security import credential_vault
 from utils.common import safe_float as _safe_float
 from utils.common import safe_int as _safe_int
@@ -121,13 +125,14 @@ TRUST_FORWARDED_FOR = env_flag("TRUST_FORWARDED_FOR", False)
 # Agnes AI 配置（在 get_provider_config 之前定义，避免前向引用）
 AGNES_BASE_URL = get_base_url_for_provider("agnes")
 AGNES_TEXT_MODEL = get_default_model_for_provider("agnes")
-AGNES_IMAGE_MODEL = os.getenv("AGNES_IMAGE_MODEL", "agnes-image-2.1-flash")
-AGNES_VIDEO_MODEL = os.getenv("AGNES_VIDEO_MODEL", "agnes-video-v2.0")
+# 图像/视频模型名从 provider_metadata.json 派生（env 可覆盖，不硬编码）
+AGNES_IMAGE_MODEL = os.getenv("AGNES_IMAGE_MODEL") or get_default_model_kind("agnes", "image")
+AGNES_VIDEO_MODEL = os.getenv("AGNES_VIDEO_MODEL") or get_default_model_kind("agnes", "video")
 
 
 # ── ASR 语音识别配置 ──
 ASR_BASE_URL = os.getenv("ASR_BASE_URL", "https://api.siliconflow.cn/v1")
-ASR_MODEL = os.getenv("ASR_MODEL", "FunAudioLLM/SenseVoiceSmall")
+ASR_MODEL = os.getenv("ASR_MODEL") or get_default_model_kind("siliconflow", "asr")
 
 
 # ── 路由关键词常量 ──────────────────────────────────────────────
@@ -147,7 +152,7 @@ AGENT_TASK_MAP = {
 
 # ── RAG 优化配置（SiliconFlow 免费常驻） ──
 RERANKER_BASE_URL = os.getenv("RERANKER_BASE_URL", "https://api.siliconflow.cn/v1")
-RERANKER_MODEL = os.getenv("RERANKER_MODEL", "BAAI/bge-reranker-v2-m3")
+RERANKER_MODEL = os.getenv("RERANKER_MODEL") or get_default_model_kind("siliconflow", "reranker")
 RERANKER_ENABLED = env_flag("RERANKER_ENABLED", True)
 
 

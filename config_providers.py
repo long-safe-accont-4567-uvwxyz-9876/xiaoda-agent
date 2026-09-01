@@ -120,6 +120,71 @@ def get_default_model_for_provider(provider: str) -> str:
         return ""
 
 
+def get_default_model_kind(provider: str, kind: str) -> str:
+    """返回指定 provider 在特定业务域的默认模型 ID（image/video/asr/
+    reranker/embedding 等），从 provider_metadata.json 的 default_{kind}_model
+    字段派生，不在代码里硬编码模型名。
+
+    优先级：
+      1. 环境变量 {PROVIDER}_{KIND} 大写在先（如 AGNES_IMAGE_MODEL），
+         与 get_default_model_for_provider 的 env 优先规则一致
+      2. provider_metadata.json 中 providers.{provider}.default_{kind}_model
+      3. 空串（调用方负责兜底）
+
+    Args:
+        provider: provider 名称（如 "agnes", "siliconflow"）
+        kind: 形态名（"image" / "video" / "asr" / "reranker" / "embedding"）
+
+    Returns:
+        默认模型 ID 字符串，未知 provider / 字段缺失返回空串
+    """
+    provider_lower = provider.strip().lower()
+    env_key = f"{get_provider_env_prefix(provider_lower)}_{kind.upper()}_MODEL"
+    env_val = os.getenv(env_key, "").strip()
+    if env_val:
+        return env_val
+    meta = _load_provider_metadata_cached()
+    providers = meta.get("providers", {})
+    if not isinstance(providers, dict):
+        return ""
+    entry = providers.get(provider_lower)
+    if not isinstance(entry, dict):
+        return ""
+    value = entry.get(f"default_{kind}_model", "")
+    return str(value or "").strip()
+
+
+def get_provider_capability(provider: str, name: str, default: bool = False) -> bool:
+    """返回 provider 的布尔能力开关，从 provider_metadata.json 的
+    providers.{provider}.{name} 字段派生（名称与元数据 keep 一致，不做任何
+    硬编码 provider 名/模型名判定）。
+
+    现有能力字段（provider_metadata.json，缺省 false）：
+      supports_vision / supports_tools / supports_thinking / supports_streaming /
+      supports_json_mode / supports_model_discovery / supports_prompt_caching
+
+    Args:
+        provider: provider 名称（如 "agnes", "mimo"）
+        name: 能力字段名（如 "supports_thinking"）
+        default: 元数据缺失时的默认值（保持向后兼容）
+
+    Returns:
+        布尔能力值
+    """
+    provider_lower = provider.strip().lower()
+    meta = _load_provider_metadata_cached()
+    providers = meta.get("providers", {})
+    if not isinstance(providers, dict):
+        return default
+    entry = providers.get(provider_lower)
+    if not isinstance(entry, dict):
+        return default
+    value = entry.get(name)
+    if value is None:
+        return default
+    return bool(value)
+
+
 def get_provider_env_prefix(provider: str) -> str:
     """返回 provider id 对应的环境变量前缀（"llama.cpp" → "LLAMA_CPP"）。
 

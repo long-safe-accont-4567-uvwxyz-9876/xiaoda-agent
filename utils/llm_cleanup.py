@@ -280,12 +280,38 @@ def strip_system_leak(text: str, *, context: str = "") -> str:
 #   "【图片生成中 —— Agnes Image 2.1 Flash ⚡】"
 #   'Width Height: 560x792 | Seed: 93847 | Model: Default | Quality.default| Prompt: "..."'
 # 模型名用精确串删除（不误伤正常讨论）；状态行/元数据行要求完整特征序列才删。
-_IMAGE_GEN_MODEL_NAMES = (
-    "Agnes Image 2.1 Flash",
-    "Agnes Video V2.0",
-    "agnes-image-2.1-flash",
-    "agnes-video-v2.0",
-)
+# 模型名从 provider_metadata.json 的 default_image_model / default_video_model
+# 派生（含 ID 与展示名两种形态），不硬编码具体模型名。
+def _derive_image_gen_model_names() -> tuple[str, ...]:
+    """收集内置 provider 的图片/视频默认模型名（ID 形式 + 展示名形式）。"""
+    names: set[str] = set()
+    try:
+        from config_providers import get_default_model_kind
+    except ImportError:
+        return ()
+    try:
+        from config import get_provider_catalog
+
+        provider_ids = [
+            d.id for d in get_provider_catalog().list()
+            if getattr(d, "builtin", False)
+        ]
+    except Exception:
+        provider_ids = ("agnes",)
+    for provider_id in provider_ids:
+        for kind in ("image", "video"):
+            model_id = get_default_model_kind(provider_id, kind)
+            if not model_id:
+                continue
+            names.add(model_id)
+            # 展示名形态：agnes-image-2.1-flash -> Agnes Image 2.1 Flash
+            display = " ".join(token.capitalize() for token in model_id.split("-"))
+            if display != model_id:
+                names.add(display)
+    return tuple(sorted(names, key=len, reverse=True))
+
+
+_IMAGE_GEN_MODEL_NAMES: tuple[str, ...] = _derive_image_gen_model_names()
 # 伪造状态行：【图片生成中 ...】/【视频生成中 ...】（不锚定行首，容忍内联出现）
 _IMAGE_GEN_STATUS_LINE_RE = re.compile(r'【(?:图片|视频)生成中[^】]*】')
 # 伪造生图元数据片段：要求 Width/Size + Seed + Model + Prompt 完整序列才删

@@ -339,11 +339,12 @@ def _get_model_info(token: str = "") -> str:
 
     旧实现直接读本地 ROUTE_TABLE（.env 默认 mimo-v2.5），不反映 WebUI 切换后的
     模型。CLI 不再自建 AgentCore，改为远程读取 POST /models/chat-model 的当前值，
-    天然与 WebUI 共享同一份模型状态。
+    天然与 WebUI 共享同一份模型状态。无 token 时从 provider_metadata.json 派生
+    默认模型（不硬编码模型 ID）。
     """
     if token:
         return cli_client.get_chat_model_label(token)
-    return "mimo-v2.5"
+    return cli_client._local_default_model_label()
 
 
 def _typewriter(text: str, delay: float | None = None) -> None:

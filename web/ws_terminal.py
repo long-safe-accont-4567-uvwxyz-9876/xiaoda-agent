@@ -53,6 +53,34 @@ _term_out_buf: dict[str, dict] = {}
 _TERM_FLUSH_INTERVAL_S = 0.016
 _TERM_FLUSH_MAX_CHARS = 65536
 
+# 洪峰自适应退避（独立配置项 TERMINAL_FLUSH_ADAPTIVE，默认开启）：
+# 弱机/WebView2 上 16ms 合帧面对超大持续输出(git log、构建日志等)仍会以
+# ~60 帧/s 冲击前端渲染。改为按合帧窗字节量指数拉大合帧间隔（上限
+# _TERM_FLUSH_MAX_INTERVAL_S），流量回落后逐级复原——帧数骤降、零丢字节。
+# 纯渲染层策略，不设管理后台开关(误关即回归高帧率)，只留环境变量逃生舱：
+#   TERMINAL_FLUSH_ADAPTIVE=0  固定 16ms 合帧（旧行为）
+_TERM_FLUSH_MAX_INTERVAL_S = 0.25
+_TERM_BACKOFF_HIGH_BYTES = 64 * 1024   # 单合帧窗 ≥64KiB = 洪峰，间隔翻倍
+_TERM_BACKOFF_LOW_BYTES = 2 * 1024     # 单合帧窗 ≤2KiB = 回落，间隔减半
+_TERM_ADAPTIVE_ENABLED = os.getenv(
+    "TERMINAL_FLUSH_ADAPTIVE", "").strip().lower() not in {"0", "false", "no", "off"}
+# 每会话当前合帧间隔：term_sid -> float（会话清理时同步回收）
+_term_flush_interval: dict[str, float] = {}
+
+
+def _next_flush_interval(current_s: float, window_chars: int) -> float:
+    """按上一合帧窗输出字节数计算下一合帧间隔（纯函数）。
+
+    仅依赖字节量、不涉及时钟采样，避免计时抖动导致间隔乱跳。
+    关闭自适应时恒为固定 16ms（旧行为）。"""
+    if not _TERM_ADAPTIVE_ENABLED:
+        return _TERM_FLUSH_INTERVAL_S
+    if window_chars >= _TERM_BACKOFF_HIGH_BYTES:
+        return min(current_s * 2.0, _TERM_FLUSH_MAX_INTERVAL_S)
+    if window_chars <= _TERM_BACKOFF_LOW_BYTES:
+        return max(current_s / 2.0, _TERM_FLUSH_INTERVAL_S)
+    return current_s
+
 
 def _try_import_winpty():
     """ConPTY 可用性探测（仅 win32 有轮子）：返回 PtyProcess 类或 None。
@@ -272,6 +300,10 @@ def _queue_term_output(term_sid: str, conn_id: str, text: str) -> None:
         entry = _term_out_buf.pop(term_sid, None)
         if not entry or not entry["buf"]:
             return
+        # 合帧窗字节量 → 更新本会话下一帧间隔（洪峰翻倍/回落减半）
+        _term_flush_interval[term_sid] = _next_flush_interval(
+            _term_flush_interval.get(term_sid, _TERM_FLUSH_INTERVAL_S),
+            len(entry["buf"]))
         sid_ = entry["conn_id"]
         from core.background_tasks import _spawn
         _spawn(manager.send_to(sid_, {
@@ -291,7 +323,8 @@ def _queue_term_output(term_sid: str, conn_id: str, text: str) -> None:
         _flush()
         return
     if entry["timer"] is None and loop is not None:
-        entry["timer"] = loop.call_later(_TERM_FLUSH_INTERVAL_S, _flush)
+        entry["timer"] = loop.call_later(
+            _term_flush_interval.get(term_sid, _TERM_FLUSH_INTERVAL_S), _flush)
 
 
 def _setup_win_pty_reader(term_sid: str) -> None:
@@ -407,6 +440,7 @@ def _cleanup_pty(term_sid: str) -> None:
     terminal_exit 通知由收割完成回调发送。"""
     # 先冲刷残留输出再清缓冲，保证退出前的最后几行不丢
     entry = _term_out_buf.pop(term_sid, None)
+    _term_flush_interval.pop(term_sid, None)  # 会话回收，退避状态同步释放
     if entry and entry["buf"]:
         if entry.get("timer") is not None:
             entry["timer"].cancel()

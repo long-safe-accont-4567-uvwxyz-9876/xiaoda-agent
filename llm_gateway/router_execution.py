@@ -64,6 +64,7 @@ from model_router_config import (
     PROVIDER_MAX_TOKENS_CAP,
     translate_model_for_provider,
 )
+from config_providers import get_provider_capability as _get_provider_capability
 from utils.common import DEFAULT_MAX_TOKENS
 from utils.error_classifier import FailoverReason, RecoveryAction
 from utils.llm_cleanup import merge_continuation
@@ -715,12 +716,13 @@ class ExecutionMixin:
             kwargs["extra_headers"] = extra_headers
 
         # 支持 thinking 参数（通用）
-        # 关键修复：thinking 关闭时也要传递 enable_thinking: false，否则 agnes 模型使用默认行为
+        # 关键修复：thinking 关闭时也要传递 enable_thinking: false，否则
+        # 声明 uses_chat_template_thinking 的 provider（如 agnes）使用默认行为
         thinking_config = config.get("thinking")
         # P0 修复：thinking_debug 从 INFO 降为 DEBUG（每次 route 调用都触发，INFO 级别刷屏）
         logger.debug("router.thinking_debug provider={} thinking={}", provider, thinking_config)
-        if provider == "agnes":
-            # agnes 模型需要明确传递 enable_thinking 参数
+        if _get_provider_capability(provider, "uses_chat_template_thinking"):
+            # chat_template_kwargs.enable_thinking 形态的 provider 需要显式传 bool
             enabled = bool(thinking_config and thinking_config.get("type") == "enabled")
             kwargs["extra_body"] = {"chat_template_kwargs": {"enable_thinking": enabled}}
         elif thinking_config:

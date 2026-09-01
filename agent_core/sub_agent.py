@@ -57,6 +57,22 @@ except ImportError:
     _signal_stream = None
     _intervention_loop = None
 
+
+def _inherit_chat_thinking(provider: str) -> dict | None:
+    """子代理 provider 声明 inherit_chat_thinking 时，继承主 chat 路由的 thinking 配置。
+
+    开关由 provider_metadata.json 的 providers.{provider}.inherit_chat_thinking 表达，
+    不硬编码 provider 名。返回子代理 route_config 应携带的 thinking 配置（无则 None）。
+    """
+    try:
+        from config_providers import get_provider_capability
+        if not get_provider_capability(provider, "inherit_chat_thinking"):
+            return None
+    except (ImportError, OSError, ValueError):
+        return None
+    from model_router import ROUTE_TABLE
+    return ROUTE_TABLE.get("chat", {}).get("thinking")
+
 # 子代理禁止使用的工具列表（借鉴 Hermes delegate_tool.py）
 DELEGATE_BLOCKED_TOOLS = {
     "delegate_task",      # 禁止递归委托
@@ -553,11 +569,18 @@ class SubAgent:
 
     def _is_reasoning_model(self) -> bool:
         model = self.config.model.lower()
-        return any(kw in model for kw in [
+        if any(kw in model for kw in [
             "v4-flash", "v4-pro", "v3", "reasoner", "r1",
             "nex-n2", "nex-agi", "thinking", "o1", "o3", "o4",
-            "agnes",  # agnes 系列模型默认开启推理模式
-        ])
+        ]):
+            return True
+        # 系列默认推理模式由 provider_metadata.json 的 reasoning_by_default 表达
+        # （如 agnes 系列默认开启），不硬编码 provider/模型名
+        try:
+            from config_providers import get_provider_capability
+            return bool(get_provider_capability(self.config.provider, "reasoning_by_default"))
+        except (ImportError, OSError, ValueError):
+            return False
 
     def _build_dsml_tool_prompt(self, allowed_tools: set[str] | None = None) -> str:
         tools = self._filtered_tools()
@@ -709,10 +732,8 @@ class SubAgent:
                     "model": self.config.model,
                     "max_tokens": 6144 if tools else 3072,
                 }
-                if self.config.provider == "agnes":
-                    from model_router import ROUTE_TABLE
-                    chat_config = ROUTE_TABLE.get("chat", {})
-                    route_config["thinking"] = chat_config.get("thinking")
+                if (chat_thinking := _inherit_chat_thinking(self.config.provider)) is not None:
+                    route_config["thinking"] = chat_thinking
                 from config import get_temperature
                 response = await self._router.route_config(
                         config=route_config,
@@ -1005,10 +1026,8 @@ class SubAgent:
                 "model": self.config.model,
                 "max_tokens": 3072,
             }
-            if self.config.provider == "agnes":
-                from model_router import ROUTE_TABLE
-                chat_config = ROUTE_TABLE.get("chat", {})
-                route_config["thinking"] = chat_config.get("thinking")
+            if (chat_thinking := _inherit_chat_thinking(self.config.provider)) is not None:
+                route_config["thinking"] = chat_thinking
             from config import get_temperature
             response = await self._router.route_config(
                     config=route_config,

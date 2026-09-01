@@ -14,6 +14,8 @@ from web._provider_keys import (
     _mask,
     load_provider_key,
 )
+# 内置 provider / 默认 provider 全部由 provider_metadata.json 派生，不硬编码
+from config_providers import get_builtin_providers, get_default_provider
 from web.routers.auth import get_current_user
 from web.schemas import Envelope
 
@@ -91,7 +93,7 @@ async def create_provider(body: dict, request: Request) -> Any:
     base_url = (body.get("base_url") or "").strip()
     if not pid or not pid.replace("-", "_").isidentifier():
         raise HTTPException(400, "id 必须是合法标识符（字母/数字/-/_）")
-    if pid in ("mimo",):
+    if pid in get_builtin_providers():
         raise HTTPException(400, "不能覆盖内置 provider")
     if fmt not in ("openai", "anthropic"):
         raise HTTPException(400, "format 必须是 openai 或 anthropic")
@@ -126,7 +128,7 @@ async def create_provider(body: dict, request: Request) -> Any:
 @router.put("/models/providers/{pid}", response_model=Envelope[dict])
 async def update_provider(pid: str, body: dict, request: Request) -> Any:
     record = _cfg(request).get(f"models.providers.{pid}")
-    if pid in ("mimo",) or not record:
+    if pid in get_builtin_providers() or not record:
         raise HTTPException(404 if not record else 400,
                             "内置 provider 不可修改" if record else f"provider {pid} 不存在")
     # base_url 变更时同样做 SSRF 校验（无通用 localhost 豁免，Item 3）
@@ -215,8 +217,8 @@ async def reorder_providers(body: dict, request: Request) -> Any:
         raise HTTPException(400, "order 必须是字符串数组")
     cfg = _cfg(request)
     custom = cfg.get("models.providers", {}) or {}
-    # 忽略 mimo（内置 provider 不可重排序）
-    filtered = [pid for pid in order_list if pid != "mimo"]
+    # 内置 provider（metadata builtin:true）不可重排序
+    filtered = [pid for pid in order_list if pid not in get_builtin_providers()]
     # 仅更新列表中且实际存在的 provider；不在列表中的 provider 保留原 order 值
     for idx, pid in enumerate(filtered):
         if pid in custom:
@@ -240,7 +242,7 @@ async def list_routes(request: Request) -> Any:
     for task, c in ROUTE_TABLE.items():
         routes[task] = {
             "model": c.get("model", ""),
-            "provider": c.get("client", "mimo"),
+            "provider": c.get("client", get_default_provider()),
             "max_tokens": c.get("max_tokens", 1500),
             "thinking": bool(c.get("thinking") and c["thinking"].get("type") == "enabled"),
             "timeout": _router_of(request).TASK_TIMEOUTS.get(task),
@@ -266,7 +268,7 @@ async def update_route(task: str, body: dict, request: Request) -> Any:
             raise HTTPException(409, f"provider {provider} 当前不可用于路由")
         if validation == "model":
             raise HTTPException(409, f"模型 {model_id} 不属于 provider {provider}")
-    elif provider and provider not in ("mimo",) \
+    elif provider and provider not in get_builtin_providers() \
             and not cfg.get(f"models.providers.{provider}"):
         raise HTTPException(400, f"provider {provider} 不存在")
 
@@ -277,7 +279,7 @@ async def update_route(task: str, body: dict, request: Request) -> Any:
     # CodeRabbit#5 + m8 修复：走 registry.get_task_ref 而非直接读 ROUTE_TABLE[task]，
     # 保证 replace_table 后语义一致（虽然 replace_table 已保持对象身份，仍统一入口）。
     model_id = effective_model_id
-    final_provider = provider or current_entry.get("client", "mimo")
+    final_provider = provider or current_entry.get("client", get_default_provider())
 
     # CodeRabbit Nit: int 转换加 try/except 返回 400 而非让 ValueError 变成 500
     try:
@@ -336,7 +338,7 @@ async def update_route(task: str, body: dict, request: Request) -> Any:
     await _broadcast_changed()
     final_entry = registry.get_task_ref(task) or {}
     return Envelope(data={"task": task, "model": final_entry["model"],
-                          "provider": final_entry.get("client", "mimo")})
+                          "provider": final_entry.get("client", get_default_provider())})
 
 
 @router.get("/models/chat-model", response_model=Envelope[dict])
@@ -352,7 +354,7 @@ async def get_chat_model(request: Request) -> Any:
     from model_router import ROUTE_TABLE
     chat_route = ROUTE_TABLE.get("chat", {})
     return Envelope(data={
-        "provider": chat_route.get("client", "mimo"),
+        "provider": chat_route.get("client", get_default_provider()),
         "model_id": chat_route.get("model", ""),
     })
 

@@ -47,10 +47,8 @@ async def _apply_model_overrides(core: Any, provider_service: Any | None = None)
 
 
 # 本地 URL 型 provider：无 Key 接口，由 *_BASE_URL 环境变量显式驱动注册
-# （是否"URL 驱动"是本模块的注册策略，非 catalog 字段）
-_URL_KEYED_LOCAL_PROVIDERS = frozenset({"ollama", "llama.cpp"})
-
-# 展示/注册顺序（本模块的排序策略；字段值一律以 catalog 为单一事实源）
+# 展示顺序（本模块的排序策略；字段值一律以 catalog 为单一事实源）。
+# 不含/含哪些 provider 由 catalog 派生（auth.required=false 即本地 URL 型），详见 _derive_known_env_providers
 _ENV_PROVIDER_ORDER = ("siliconflow", "openrouter", "modelscope", "agnes", "ollama", "llama.cpp")
 
 
@@ -74,7 +72,7 @@ def _derive_known_env_providers(env_values: Any) -> list[dict[str, Any]]:
             continue
         aliases = definition.auth.environment_aliases
         env_prefix = get_provider_env_prefix(pid)
-        if pid in _URL_KEYED_LOCAL_PROVIDERS:
+        if not definition.auth.required:
             env_key = f"{env_prefix}_BASE_URL"
         else:
             try:
@@ -94,7 +92,7 @@ def _derive_known_env_providers(env_values: Any) -> list[dict[str, Any]]:
             "format": "anthropic" if definition.protocol is ProviderProtocol.ANTHROPIC else "openai",
             "default_url": default_url,
             "label": get_provider_label(pid),
-            "url_keyed": pid in _URL_KEYED_LOCAL_PROVIDERS,
+            "url_keyed": not definition.auth.required,
         })
     return derived
 
@@ -286,8 +284,8 @@ def _restore_chat_model(cfg: Any, core: Any) -> None:
         )
         try:
             import config as _config_mod
-            from config import get_default_model_for_provider
-            fallback_provider = _config_mod.DEFAULT_PROVIDER or "mimo"
+            from config import get_default_model_for_provider, get_default_provider
+            fallback_provider = _config_mod.DEFAULT_PROVIDER or get_default_provider()
             fallback_model = get_default_model_for_provider(fallback_provider)
             if not fallback_model:
                 # 极端兜底：直接用 ROUTE_TABLE 当前值（不修改）
@@ -685,7 +683,8 @@ async def lifespan(app: FastAPI) -> AsyncIterator[Any]:
             "请执行: pip install 'starlette>=0.40.0' 后重启。"
         ) from None
 
-    # 降级模式：直接读 .env 文件检查 MIMO_API_KEY
+    # 降级模式：直接读 .env 检查 provider 凭证（key 名由 provider_metadata.json
+    # 的 environment_aliases 派生，不硬编码具体 provider）
     # 根因：原判定只看 MIMO_API_KEY，缺少该 key 时跳过 _start_services，
     # 从而 _apply_model_overrides 也不执行 —— 已保存的 Agnes / OpenRouter /
     # SiliconFlow / 自定义 provider 凭证全部失效。这里先无条件执行
@@ -973,7 +972,11 @@ async def _init_lifespan_resources(app: FastAPI) -> tuple[Any, bool]:
 
 
 def _resolve_env_api_key() -> str:
-    """读取 .env 中的 MIMO_API_KEY 用于判断降级模式, 不存在时兜底创建空 .env"""
+    """读取 .env 中任一 provider 的 API key 用于判断降级模式。
+
+    key 名不硬编码，由 provider_metadata.json 的 environment_aliases 派生；
+    .env 不存在时兜底创建空 .env。
+    """
     import os as _os
     from pathlib import Path as _Path
     try:
@@ -981,6 +984,16 @@ def _resolve_env_api_key() -> str:
         _env_path = str(ENV_PATH)
     except ImportError:
         _env_path = str(_Path.home() / ".ai-agent" / ".env")
+    try:
+        from config_providers import get_provider_catalog
+        _key_names = {
+            _alias
+            for _p in get_provider_catalog().list()
+            for _alias in _p.auth.environment_aliases
+        }
+    except (ImportError, OSError, ValueError, TypeError):
+        logger.warning("webui.env_key_names_derivation_failed", exc_info=True)
+        _key_names = set()
     # 确保 .env 文件存在（首次启动时 agent.py 已创建，这里做兜底）
     if not _os.path.exists(_env_path):
         try:
@@ -997,15 +1010,16 @@ def _resolve_env_api_key() -> str:
                 logger.info("webui.env_created_empty")
         except (OSError, PermissionError) as _e:
             logger.warning("webui.env_create_failed error={}", str(_e))
-    _mimo = ""
+    _found = ""
     if _os.path.exists(_env_path):
         with open(_env_path, encoding="utf-8", errors="ignore") as _f:
             for _line in _f:
                 _s = _line.strip()
-                if _s.startswith("MIMO_API_KEY="):
-                    _mimo = _s.split("=", 1)[1].strip().strip("'\"")
+                _key, _sep, _val = _s.partition("=")
+                if _sep and _key.strip() in _key_names:
+                    _found = _val.strip().strip("'\"")
                     break
-    return _mimo
+    return _found
 
 
 def _has_any_provider_credential() -> bool:
@@ -1017,43 +1031,49 @@ def _has_any_provider_credential() -> bool:
     不执行 —— 自定义 provider 不注册、路由覆盖不应用、models.chat_model 不恢复。
     任一来源有凭证即视为可用，避免误判降级。
     """
-    # 1. MiMo：复用现有 .env 解析逻辑，与原 lifespan 旧判定保持一致
+    # 1. 任一 provider 的 .env key（key 名由 provider_metadata.json 派生，
+    #    覆盖 mimo/agnes/deepseek 等全部内置 provider）
     if _resolve_env_api_key().strip():
         return True
 
-    # 2. Agnes：从 .env 读取（_apply_model_overrides 实际注册时也走 .env，
-    #    保持判定源与生效源一致，避免"判定为可用但实际未注册"的错配）
-    try:
-        from setup_wizard import _load_env_values
-        if _load_env_values().get("AGNES_API_KEY", "").strip():
-            return True
-    except (ImportError, OSError, ValueError):
-        logger.debug("server.agnes_key_check_failed", exc_info=True)
-
-    # 3. 自定义 provider：复用 config_service 已加载的 providers 配置 +
+    # 2. 自定义 provider：复用 config_service 已加载的 providers 配置 +
     #    load_provider_key 读取凭证文件，不新写 JSON 解析
     try:
         from web._provider_keys import load_provider_key
         from web.config_service import get_config_service
+        from config_providers import get_provider_catalog
         cfg = get_config_service()
+        catalog = get_provider_catalog()
         for pid in (cfg.get("models.providers", {}) or {}):
-            if pid in ("ollama", "llama.cpp"):
-                # 本地无 key 接口不需要 API key，由下方第 4 步检查 base_url
+            try:
+                _def = catalog.get(pid)
+            except KeyError:
+                _def = None
+            if _def is not None and not _def.auth.required:
+                # 本地无 key 接口（auth.required=false）不需要 API key，
+                # 由下方第 3 步检查 base_url
                 continue
             if load_provider_key(pid).strip():
                 return True
     except (ImportError, OSError, ValueError) as e:
         logger.warning("webui.custom_provider_credential_check_failed error={}", str(e))
 
-    # 4. 本地无 key 接口（Ollama / llama.cpp）：不需要 API key，仅看 .env 是否显式配置 base_url
-    #    （与 _apply_model_overrides 的注册条件一致，本地-only 部署不误入降级模式）
+    # 3. 本地无 key 接口（auth.required=false，如 Ollama / llama.cpp）：
+    #    不需要 API key，仅看 .env 是否显式配置 base_url
+    #    （env 名走 get_provider_env_prefix 前缀约定，与 get_provider_config 一致；
+    #     判定条件与 _apply_model_overrides 的注册条件一致，本地-only 部署不误入降级模式）
     try:
         from setup_wizard import _load_env_values
+        from config_providers import get_provider_catalog, get_provider_env_prefix
         _env = _load_env_values()
-        if _env.get("OLLAMA_BASE_URL", "").strip() or _env.get("LLAMA_CPP_BASE_URL", "").strip():
-            return True
+        for _p in get_provider_catalog().list():
+            if _p.auth.required:
+                continue
+            _url_env = f"{get_provider_env_prefix(_p.id)}_BASE_URL"
+            if _env.get(_url_env, "").strip():
+                return True
     except (ImportError, OSError, ValueError):
-        logger.debug("server.local_provider_url_check_failed", exc_info=True)
+        logger.debug("webui.local_provider_url_check_failed", exc_info=True)
 
     return False
 

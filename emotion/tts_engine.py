@@ -20,12 +20,14 @@ except Exception:
     logger.exception(".emotion.tts_engine.unexpected")
     atomic_write = None  # type: ignore[assignment]
 from config import get_agent_display_name, get_base_url_for_provider
+from config_providers import get_default_model_kind
 
 from .emotion_enum import TTS_STYLE_MAP, is_unified, resolve_emotion
 
 MIMO_API_KEY = os.getenv("MIMO_API_KEY", "")
 MIMO_BASE_URL = get_base_url_for_provider("mimo")
-MIMO_TTS_MODEL = os.getenv("MIMO_TTS_MODEL", "mimo-v2.5-tts-voiceclone")
+# 默认 TTS 模型从 provider_metadata.json 的 default_tts_model 派生（不硬编码模型名）
+MIMO_TTS_MODEL = os.getenv("MIMO_TTS_MODEL", "") or get_default_model_kind("mimo", "tts")
 
 
 # 全局 TTS 引擎单例（由 bootstrap 初始化时设置，供工具层访问）

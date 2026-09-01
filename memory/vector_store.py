@@ -234,11 +234,27 @@ def _default_local_model_dir() -> str:
     return str(p) if p.exists() else ""
 
 
+_EMBED_MODEL_DEFAULT_CACHE: str | None = None
+
+
+def _default_embed_model() -> str:
+    """远程 embedding 默认模型，从 provider_metadata.json 的
+    default_embedding_model 字段派生（不硬编码模型名）。"""
+    global _EMBED_MODEL_DEFAULT_CACHE
+    if _EMBED_MODEL_DEFAULT_CACHE is None:
+        try:
+            from config_providers import get_default_model_kind
+            _EMBED_MODEL_DEFAULT_CACHE = get_default_model_kind("siliconflow", "embedding")
+        except (ImportError, OSError, ValueError):
+            _EMBED_MODEL_DEFAULT_CACHE = ""
+    return _EMBED_MODEL_DEFAULT_CACHE
+
+
 class VectorStore:
     """基于 SQLite-vec 的向量存储，支持嵌入、写入、删除和相似度搜索。"""
 
     def __init__(self, db_path: str | Path, embed_api_key: str = "",
-                 embed_base_url: str = "", embed_model: str = "BAAI/bge-m3",
+                 embed_base_url: str = "", embed_model: str = "",
                  dimensions: int = 0, embed_mode: str = "",
                  local_model_dir: str = "", local_query_prefix: str = "",
                  embedding_service: LocalEmbeddingService | None = None) -> None:
@@ -248,11 +264,13 @@ class VectorStore:
                     或 EMBED_API_KEY；启动时 key 缺失且本地模型可用则自动降级 local，
                     两者皆无则明确告警"检索不可用"）；
                     "local" 走香橙派本地 onnxruntime 推理（BGE-small-zh-v1.5）。
+        embed_model 为空时从 provider_metadata.json 的 default_embedding_model 派生
+        （远程默认 BAAI/bge-m3，不硬编码在代码里）。
         """
         self._db_path = str(db_path)
         self._embed_api_key = embed_api_key
         self._embed_base_url = embed_base_url
-        self._embed_model = embed_model
+        self._embed_model = embed_model or _default_embed_model()
         self._dimensions = dimensions
         self._dimensions_explicit = dimensions > 0
         self._embed_mode = embed_mode or os.getenv("EMBED_MODE", "remote")
@@ -661,7 +679,7 @@ class VectorStore:
             if mode == "remote":
                 api_key = self._embed_api_key or os.getenv("SILICONFLOW_API_KEY", "")
                 base_url = self._embed_base_url or "https://api.siliconflow.cn/v1"
-                model = self._embed_model or "BAAI/bge-m3"
+                model = self._embed_model or _default_embed_model()
                 cmd.extend(["--model", model, "--base-url", base_url, "--api-key", api_key])
 
             logger.info("vector_store.auto_rebuild_running cmd={}", " ".join(cmd[:2]))

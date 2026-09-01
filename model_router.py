@@ -97,8 +97,39 @@ ROUTE_TABLE = {
 # 已废弃的 mimo-pro/mimo-flash/mimo-mini 预设已被移除——模型切换统一走动态
 # provider/模型（对齐 WebUI 模型选择 button），不再支持预设字符串切换。
 MODEL_PREFERENCES = {
-    "mimo": {"label": "MiMo 模式", "desc": "使用小米 MiMo-V2.5 模型"},
+    "mimo": {"label": "MiMo 模式"},
 }
+
+# provider 能力开关（supports_thinking / supports_prompt_caching）统一从
+# provider_metadata.json 派生，不硬编码 provider 名判定
+def _provider_flags(provider: str) -> tuple[bool, bool]:
+    try:
+        from config_providers import get_provider_capability
+        supports_thinking = get_provider_capability(provider, "supports_thinking", default=True)
+        supports_prompt_caching = get_provider_capability(
+            provider, "supports_prompt_caching", default=False)
+        return supports_thinking, supports_prompt_caching
+    except (ImportError, OSError, ValueError):
+        return True, False
+
+
+def _derive_custom_provider_default_models() -> dict[str, str]:
+    """自 provider_metadata.json 派生自定义 provider 的默认模型（无硬编码）。
+
+    fallback 值来源：providers.{id}.default_model 字段；仅在 provider 存根
+    （registry 记录）未显式配置 default_model 时使用。
+    """
+    try:
+        from config_providers import get_default_model_for_provider, get_provider_catalog
+        catalog = get_provider_catalog()
+        return {
+            p.id: get_default_model_for_provider(p.id)
+            for p in catalog.list()
+            if not p.builtin and get_default_model_for_provider(p.id)
+        }
+    except (ImportError, OSError, ValueError):
+        return {}
+
 
 # P0 修复（2026-08-05 用户要求"10秒内响应"）：超时不重试，直接降级。
 # 根因：agnes APITimeoutError 被错误分类为 connection_error（APITimeoutError 是
@@ -337,8 +368,10 @@ class ModelRouter(ExecutionMixin, CostTrackingMixin, ClientLifecycleMixin, Fallb
                        "emotion_analysis", "tool_result_wrap",
                        "memory_encoding")
 
-        # agnes 不支持 thinking，切换到 agnes 时所有 task 禁用 thinking
-        _thinking_for_agnes = {"type": "disabled"}
+        # provider 不支持 thinking（由 provider_metadata.json 的 supports_thinking
+        # 字段表达）时，所有 task 禁用 thinking
+        _thinking_for_no_think_provider = {"type": "disabled"}
+        _provider_thinking, _ = _provider_flags(provider)
 
         # Step 4: 暂存快照 + 逐个原子更新（任一失败回滚所有已提交 task）
         _updated_tasks: list[str] = []
@@ -348,7 +381,10 @@ class ModelRouter(ExecutionMixin, CostTrackingMixin, ClientLifecycleMixin, Fallb
                 continue
             old_entry = self._registry.get_task(_task) or {}
             _snapshots[_task] = old_entry
-            _thinking = _thinking_for_agnes if provider == "agnes" else old_entry.get("thinking")
+            _thinking = (
+                _thinking_for_no_think_provider if not _provider_thinking
+                else old_entry.get("thinking")
+            )
             try:
                 self._registry.update_route(
                     _task,
@@ -445,16 +481,12 @@ class ModelRouter(ExecutionMixin, CostTrackingMixin, ClientLifecycleMixin, Fallb
         task_type = self.resolve_task_type("chat")
         return self.get_max_tokens_for_task(task_type)
 
-    # 已知自定义 provider 的默认模型映射
+    # 已知自定义 provider 的默认模型映射（从 provider_metadata.json 派生，无硬编码）
     # 注意：这些是 fallback 值，当 provider 的 default_model 为空时使用
     # 建议通过 /models/health-check 端点定期验证这些模型ID是否仍然可用
-    _CUSTOM_PROVIDER_DEFAULT_MODELS: ClassVar[dict[str, str]] = {
-        "ollama": "qwen2.5:latest",
-        "llama.cpp": "",
-        "siliconflow": "THUDM/GLM-4-9B-0414",
-        "openrouter": "openrouter/free",
-        "modelscope": "Qwen/Qwen3-8B",
-    }
+    _CUSTOM_PROVIDER_DEFAULT_MODELS: ClassVar[dict[str, str]] = (
+        _derive_custom_provider_default_models()
+    )
 
     def _get_custom_provider_default_model(self, provider: str) -> str:
         """获取自定义 provider 的默认模型 ID。"""
@@ -734,15 +766,18 @@ class ModelRouter(ExecutionMixin, CostTrackingMixin, ClientLifecycleMixin, Fallb
         )
 
     def _apply_prompt_caching(self, provider: str, messages: list[dict]) -> list[dict]:
-        """应用 Prompt Caching（仅 Anthropic 兼容接口）。
+        """应用 Prompt Caching（仅声明 supports_prompt_caching 的 provider）。
 
         P0 修复（2026-08-07 人格漂移根因）：apply_cache_control 会把 system
         content 转为 Anthropic 格式 list（[{"type":"text","text":...,"cache_control":...}]）。
         OpenAI 兼容接口（agnes/openrouter/siliconflow 等）的 content 必须是字符串，
         收到 list 格式会导致服务端忽略该 system 消息 → LLM 退回出厂默认人格
-        （agnese 自称 "Agnes, by Sapiens AI"）。仅 mimo（Anthropic 兼容）可用。
+        （agnese 自称 "Agnes, by Sapiens AI"）。仅声明 supports_prompt_caching
+        的 provider（当前为 mimo，Anthropic 兼容）可用；能力由
+        provider_metadata.json 的 supports_prompt_caching 字段表达，不硬编码。
         """
-        if provider != "mimo":
+        _, supports_prompt_caching = _provider_flags(provider)
+        if not supports_prompt_caching:
             return messages
         return apply_cache_control(messages)
 

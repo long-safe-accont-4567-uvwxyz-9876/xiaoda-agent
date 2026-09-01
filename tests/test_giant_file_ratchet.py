@@ -50,11 +50,29 @@ ROOT = Path(__file__).resolve().parents[1]
 #   web/routers/setup.py（赦免清单）1333→1439 —— 审计修复 Task 1（setup
 #     引导 token 鉴权 + recovery_qa 接线，同目录 task-1 改动），由 Task 2
 #     顺带同步基线使棘轮保持绿灯；
+# 2026-09-01 上调记录（协议 b：必要增长，"所有模型不许硬编码"重构）：
+#   模型/能力数据收敛到 config（provider_metadata.json / model_capabilities.json）
+#   后，凭证池 reset、fallback 派生、thinking 分派等逻辑原地改造成元数据驱动，
+#   属必要的本体增长。各文件变化：
+#   memory/vector_store.py 1732→1750 —— 重建触发细分 + 本地地址重建遥测补齐；
+#   web/server.py 1404→1424 —— STT/ASR 路由与模型能力发现接线；
+#   web/routers/setup.py 1439→1443 —— 凭证池从 catalog 派生 KEY 映射；
+#   llm_gateway/router_execution.py 1099→1101 —— thinking 分派改 metadata 标志；
+#   agent_core/sub_agent.py 1161→1177 —— thinking 继承链改从路由表读取；
+#   cli.py 908→909 —— 模型选择走动态 provider/模型。
+# 2026-09-01 上调记录（协议 b：必要增长，终端洪峰自适应退避）：
+#   web/ws_terminal.py 556→590 —— 输出合帧洪峰自适应退避（按窗字节量指数
+#     拉大间隔至 0.25s，回落减半恢复；TERMINAL_FLUSH_ADAPTIVE=0 逃生舱、
+#     纯函数 + 每会话间隔状态 + 清理回收，见 tests/test_terminal_flush_backoff.py）；
+#   web/ws_hub.py 1226→1232 —— 门面 re-export 新退避符号（拆分兼容层）；
+#   web/frontend/src/views/ChatView.vue 962→988 —— 聊天列表离屏惰性渲染：
+#     可视带外行降级转义纯文本 + 行级 content-visibility/contain-intrinsic-size
+#     （新组合式 useRenderedBand 零依赖，composables/useRenderedBand.ts）。
 BASELINES: dict[str, int] = {
     "qq_bot_adapter.py": 2176,
     "wechat_bot_adapter.py": 1591,
-    "web/ws_hub.py": 1226,
-    "web/ws_terminal.py": 556,
+    "web/ws_hub.py": 1232,
+    "web/ws_terminal.py": 590,
     "prompt_builder/_prompt_scene.py": 783,
     "prompt_builder/_prompt_assembly.py": 661,
 }
@@ -62,7 +80,7 @@ BASELINES: dict[str, int] = {
 WEB_TEST_BASELINES: dict[str, int] = {
     "web/frontend/src/i18n/zh.ts": 1562,
     "web/frontend/src/i18n/en.ts": 1561,
-    "web/frontend/src/views/ChatView.vue": 962,
+    "web/frontend/src/views/ChatView.vue": 988,
     "web/frontend/src/views/RetrievalView.vue": 915,
     "tests/test_local_ai_device_registry.py": 2260,
     "tests/test_provider_onboarding.py": 1715,
@@ -112,17 +130,17 @@ def _line_count(rel: str) -> int:
 #       WAL 守护任务接入(a833ca4d/457dd118)；zh/en i18n 1536→1562/1535→1561
 #       —— GSAP 编排批次文案扩充(b1e5db3b 等)；
 ALLOWLIST_BASELINES: dict[str, int] = {
-    "memory/vector_store.py": 1732,
-    "web/server.py": 1404,
+    "memory/vector_store.py": 1750,
+    "web/server.py": 1424,
     "agent_context.py": 1345,
     # 2026-08-29 审计修复 Task 1（setup 引导 token 鉴权 + recovery_qa 接线）+112 行
-    "web/routers/setup.py": 1439,
+    "web/routers/setup.py": 1443,
     "db/legacy_migrations.py": 1289,
     "core/bootstrap.py": 1336,
     "utils/text_utils.py": 1151,
     "memory/_memory_encoder.py": 1134,
     "db/db_memory_reconciliation.py": 1102,
-    "llm_gateway/router_execution.py": 1099,
+    "llm_gateway/router_execution.py": 1101,
     "tool_engine/mcp_client.py": 1090,
     "memory/retrieval/pipeline.py": 1084,
     "ilink_client.py": 1039,
@@ -134,13 +152,13 @@ ALLOWLIST_BASELINES: dict[str, int] = {
     #     (_last_tool_results/pop_last_tool_results, Fix6 媒体提取配套)；
     #   sub_agent_manager.py 1131→1141 —— 直接 dispatch 路径媒体提取接入
     #     ProcessResult（Fix6）。
-    "agent_core/sub_agent.py": 1161,
+    "agent_core/sub_agent.py": 1177,
     "tools/_builtin_manifest.py": 1001,
     "web/routers/insight.py": 937,
     "core/background_tasks.py": 1018,
     "web/agent_registry.py": 912,
     "web/routers/local_deploy.py": 919,
-    "cli.py": 908,
+    "cli.py": 909,
 }
 
 def test_hotspot_files_do_not_grow():

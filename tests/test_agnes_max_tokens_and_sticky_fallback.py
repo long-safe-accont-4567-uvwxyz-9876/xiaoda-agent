@@ -80,13 +80,14 @@ def test_build_route_kwargs_mimo_keeps_large_max_tokens():
 
 
 def test_restore_chat_model_fallback_preserves_route_table(monkeypatch):
-    """_restore_chat_model fallback 分支：当 provider 未注册时回退到 mimo（内存）。
+    """_restore_chat_model fallback 分支：当 provider 未注册时回退到默认 provider（内存）。
 
     新代码（P0 sticky fallback 修复后）不再调用 set_chat_model，而是直接修改
     ROUTE_TABLE 和 _current_chat_model。当 provider 是未注册的自定义 provider 时，
-    try 块抛 LLMError，进入 fallback：将 ROUTE_TABLE 和 _current_chat_model 都改为 mimo。
+    try 块抛 LLMError，进入 fallback：将 ROUTE_TABLE 和 _current_chat_model 都改为
+    默认 provider（由 provider_metadata.json 派生，不硬编码）。
 
-    关键修复（sticky fallback 根因）：fallback 路径不调用 cfg.set 持久化 mimo
+    关键修复（sticky fallback 根因）：fallback 路径不调用 cfg.set 持久化默认选择
     （由 test_restore_chat_model_fallback_does_not_persist_mimo 验证），
     这样用户下次重启时仍能从 config 中恢复原选择。
     """
@@ -127,16 +128,23 @@ def test_restore_chat_model_fallback_preserves_route_table(monkeypatch):
 
     server_mod._restore_chat_model(_FakeCfg(), fake_core)
 
-    # 关键断言 1：fallback 后 ROUTE_TABLE chat 改为 mimo（让 route() 可用）
-    assert test_route["chat"]["client"] == "mimo", (
-        f"fallback 后 ROUTE_TABLE client 应改为 mimo（保证 route() 可用），实际 {test_route['chat']['client']}"
+    # 关键断言 1：fallback 后 ROUTE_TABLE chat 改为默认 provider（让 route() 可用）。
+    # 默认 provider 由 provider_metadata.json 派生（不硬编码 provider 名）
+    import config as _config_mod
+    from config import get_default_model_for_provider
+    from config_providers import get_default_provider
+    expected_provider = _config_mod.DEFAULT_PROVIDER or get_default_provider()
+    expected_model = get_default_model_for_provider(expected_provider)
+    assert test_route["chat"]["client"] == expected_provider, (
+        f"fallback 后 ROUTE_TABLE client 应为默认 provider {expected_provider}，"
+        f"实际 {test_route['chat']['client']}"
     )
-    assert test_route["chat"]["model"] == _mr_module.MIMO_MODEL, (
-        f"fallback 后 ROUTE_TABLE model 应改为 MIMO_MODEL，实际 {test_route['chat']['model']}"
+    assert test_route["chat"]["model"] == expected_model, (
+        f"fallback 后 ROUTE_TABLE model 应为默认模型，实际 {test_route['chat']['model']}"
     )
-    # 关键断言 2：_current_chat_model 也改为 mimo（内存中反映当前激活模型）
+    # 关键断言 2：_current_chat_model 也改为默认 provider（内存中反映当前激活模型）
     assert fake_core.router._current_chat_model == {
-        "provider": "mimo", "model_id": _mr_module.MIMO_MODEL
+        "provider": expected_provider, "model_id": expected_model
     }
 
 

@@ -28,13 +28,48 @@ _NON_CHAT_KEYWORDS = (
     "whisper", "parakeet", "bge", "kolor", "voice",
 )
 
-# 不支持 /models 端点的 provider，用内置已知模型列表作为降级
-# Agnes AI 没有 /v1/models 列表端点，只有一个文本模型
-BUILTIN_FALLBACK_MODELS = {
-    "agnes": [
-        {"id": "agnes-2.0-flash", "display_name": "Agnes Flash 2.0", "free": True, "tool_calling": True, "vision": False},
-    ],
-}
+# 不支持 /models 端点的 provider，用内置模型列表作为降级。
+# 名单不由代码硬编码：provider_metadata.json 缺 supports_model_discovery
+# 即视为无发现端点（如 agnes），降级条目由 default_model 派生。
+def _derive_builtin_fallback_models() -> dict[str, list[dict]]:
+    """从 provider_metadata.json 派生「无 /models 端点」provider 的降级模型表。
+
+    只对未声明 supports_model_discovery 的 provider 生成条目；模型 id/展示名/
+    免费/工具/视觉能力全部来自元数据与 get_capabilities，不硬编码模型名。
+    """
+    from config_providers import get_provider_capability, get_default_model_for_provider
+    from web.model_capabilities import get_capabilities
+
+    try:
+        from config import get_provider_catalog
+        catalog = get_provider_catalog()
+    except (ImportError, OSError, ValueError, KeyError):
+        return {}
+    fallback: dict[str, list[dict]] = {}
+    for definition in catalog.list():
+        pid = definition.id
+        if get_provider_capability(pid, "supports_model_discovery", default=False):
+            continue
+        model_id = get_default_model_for_provider(pid)
+        if not model_id:
+            continue
+        caps = get_capabilities(model_id)
+        display_name = (
+            definition.metadata.get("default_model_display_name")
+            or caps.display_name
+            or model_id
+        )
+        fallback[pid] = [{
+            "id": model_id,
+            "display_name": display_name,
+            "free": get_provider_capability(pid, "free_tier", default=False),
+            "tool_calling": caps.tool_calling,
+            "vision": caps.vision,
+        }]
+    return fallback
+
+
+BUILTIN_FALLBACK_MODELS = _derive_builtin_fallback_models()
 
 
 async def _fetch_openai_compatible_models(
@@ -150,10 +185,8 @@ async def _determine_free(provider_id: str, model_id: str, item: dict) -> bool:
 
     - OpenRouter: API 返回 pricing 字段，prompt==0 && completion==0 为免费
     - SiliconFlow: 抓取官网定价页面，inputPrice==0 && outputPrice==0 为免费
-    - Ollama: 本地部署，永远免费
-    - Agnes: 免费平台
-    - ModelScope: 推理 API 有免费额度
-    - 其他 provider: 默认付费
+    - 本地部署 / 免费额度平台（Ollama / llama.cpp / Agnes / ModelScope）:
+      provider_metadata.json 的 free_tier 字段表达（缺省付费）
     """
     # OpenRouter 有完整的 pricing 字段
     if provider_id == "openrouter":
@@ -173,20 +206,10 @@ async def _determine_free(provider_id: str, model_id: str, item: dict) -> bool:
         # 定价数据获取失败时，无法确认 → 付费
         return False
 
-    # Ollama / llama.cpp 本地部署，永远免费
-    if provider_id in ("ollama", "llama.cpp"):
-        return True
-
-    # Agnes 免费平台
-    if provider_id == "agnes":
-        return True
-
-    # ModelScope 推理 API 有免费额度
-    if provider_id == "modelscope":
-        return True
-
-    # DeepSeek / MiMo / 其他 → 付费
-    return False
+    # Ollama / llama.cpp 本地部署、Agnes 免费平台、ModelScope 免费额度等
+    # 免费策略统一由 provider_metadata.json 的 free_tier 字段表达（缺省付费）
+    from config_providers import get_provider_capability
+    return get_provider_capability(provider_id, "free_tier", default=False)
 
 
 # ── SiliconFlow 定价抓取（缓存 6 小时）──────────────────────────

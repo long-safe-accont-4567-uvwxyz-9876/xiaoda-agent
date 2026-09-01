@@ -697,18 +697,25 @@ async def _reload_env_and_cache(updates: Any, ENV_PATH: Any) -> None:
 def _reset_credential_pool(updates: Any) -> None:
     """重置凭证池中所有 DEAD 凭证，并替换为新 Key。"""
     try:
-        from config_providers import get_provider_env_prefix
+        from config import get_provider_catalog
+        from config_providers import get_base_url_for_provider, get_provider_env_prefix
         from utils.credential_pool import Credential, get_credential_pool
 
         pool = get_credential_pool()
+        catalog = get_provider_catalog()
         # base_url 单一来源：provider catalog（agnes 特例：池内凭证不带 base_url，
         # 默认端点由 agnes_transport 自管，故保留空串——与原实现一致）
+        # 参与同步的 provider 集合同样从 catalog 派生：auth 必填（required）且
+        # 首环境别名恰为 {PREFIX}_API_KEY 的 provider 自动纳入，不再硬编码名单。
         _PROVIDER_KEY_MAP = {
             **{
-                f"{get_provider_env_prefix(pid)}_API_KEY": (
-                    pid, get_base_url_for_provider(pid).rstrip("/")
+                f"{get_provider_env_prefix(d.id)}_API_KEY": (
+                    d.id, get_base_url_for_provider(d.id).rstrip("/")
                 )
-                for pid in ("mimo", "siliconflow", "openrouter", "deepseek")
+                for d in catalog.list()
+                if d.auth.required
+                and d.auth.environment_aliases
+                and d.auth.environment_aliases[0] == f"{get_provider_env_prefix(d.id)}_API_KEY"
             },
             "AGNES_API_KEY": ("agnes", ""),
         }
@@ -720,9 +727,6 @@ def _reset_credential_pool(updates: Any) -> None:
             pool.replace_provider(provider, Credential(
                 api_key=new_key, provider=provider, base_url=base_url,
             ))
-        from config import get_provider_catalog
-
-        catalog = get_provider_catalog()
         modelscope_credential = catalog.resolve_environment_alias("modelscope", updates)
         if modelscope_credential:
             pool.replace_provider("modelscope", Credential(
@@ -858,7 +862,6 @@ _SETUP_PROVIDER_ORDER = (
     "mimo", "siliconflow", "deepseek", "openrouter",
     "modelscope", "agnes", "ollama", "llama.cpp",
 )
-_URL_KEYED_LOCAL_PROVIDERS = frozenset({"ollama", "llama.cpp"})
 
 
 def _derive_known_providers() -> dict[str, dict[str, Any]]:
@@ -881,7 +884,8 @@ def _derive_known_providers() -> dict[str, dict[str, Any]]:
             continue
         aliases = definition.auth.environment_aliases
         env_prefix = get_provider_env_prefix(pid)
-        if pid in _URL_KEYED_LOCAL_PROVIDERS:
+        if not definition.auth.required:
+            # 本地无 key 接口（auth.required=false）走 *_BASE_URL
             env_key = f"{env_prefix}_BASE_URL"
         else:
             env_key = next(

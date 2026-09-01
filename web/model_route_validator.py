@@ -22,10 +22,30 @@ _KNOWN_PREFIX_FIXES: dict[str, str] = {
 
 
 # 内置 provider 的默认模型（不在 BUILTIN_CAPABILITIES 中，但已知有效）
-_BUILTIN_PROVIDER_DEFAULTS: dict[str, set[str]] = {
-    "agnes": {"agnes-2.0-flash"},
-    "mimo": {"mimo-v2.5", "mimo-v2.5-pro"},
-}
+# 从 provider_metadata.json（catalog 单一事实来源）派生，不再硬编码模型名。
+def _build_builtin_provider_defaults() -> dict[str, set[str]]:
+    """收集各内置 provider 的 default_model / default_pro_model 为已知有效集合。"""
+    try:
+        from config import get_provider_catalog
+
+        catalog = get_provider_catalog()
+    except Exception:
+        return {}
+    defaults: dict[str, set[str]] = {}
+    for definition in catalog.list():
+        if not getattr(definition, "builtin", False):
+            continue
+        known: set[str] = set()
+        for field in ("default_model", "default_pro_model"):
+            value = getattr(definition, field, "") or ""
+            if value:
+                known.add(value)
+        if known:
+            defaults[definition.id] = known
+    return defaults
+
+
+_BUILTIN_PROVIDER_DEFAULTS: dict[str, set[str]] = _build_builtin_provider_defaults()
 
 
 def validate_model_route(model_id: str, provider: str, provider_service=None) -> str | None:

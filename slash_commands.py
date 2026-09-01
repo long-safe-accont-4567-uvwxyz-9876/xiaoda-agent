@@ -91,6 +91,16 @@ def get_argument_completions(command: str, partial: str = "") -> list[str]:
     return [o for o in opts if o.startswith(partial)]
 
 
+def _first_model_example(info: dict) -> str:
+    """从模型发现结果取第一个可用 provider/model 作为用法示例（不硬编码模型名）。"""
+    for group in info.get("providers") or []:
+        for model in group.get("models") or []:
+            model_id = model.get("id") or ""
+            if model_id and group.get("provider"):
+                return f"{group['provider']}/{model_id}"
+    return ""
+
+
 def list_commands() -> list[dict]:
     """供 Web UI 斜杠命令自动补全使用。"""
     return [
@@ -261,7 +271,10 @@ class SlashCommandHandler:
             provider = provider.strip()
             model_id = model_id.strip()
             if not provider or not model_id:
-                return "用法: /model <provider>/<模型>\n例如: /model agnes/agnes-2.0-flash"
+                # 示例模型从发现缓存动态取第一个可用项，不硬编码模型名
+                example = _first_model_example(info)
+                usage = "用法: /model <provider>/<模型>"
+                return f"{usage}\n例如: /model {example}" if example else usage
             try:
                 self._router.set_chat_model(provider, model_id)
             except Exception as e:

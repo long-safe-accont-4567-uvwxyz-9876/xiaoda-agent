@@ -20,11 +20,13 @@ import web.ws_hub as hub
 @pytest.fixture
 def clean_buffers():
     hub._term_out_buf.clear()
+    hub._term_flush_interval.clear()  # 自适应退避状态同源清理，防跨测试污染
     yield
     for entry in hub._term_out_buf.values():
         if entry.get("timer") is not None:
             entry["timer"].cancel()
     hub._term_out_buf.clear()
+    hub._term_flush_interval.clear()
 
 
 @pytest.fixture

@@ -272,15 +272,26 @@ def get_chat_model_label(token: str, host: str | None = None,
         data = _http_get_json("/api/v1/models/chat-model", token, host, port)
         d = data.get("data") or {}
     except (ValueError, KeyError, ImportError):
-        return "mimo-v2.5"
+        return _local_default_model_label()
     except Exception:
         logger.exception(".cli_client.get_chat_model_label_unexpected")
-        return "mimo-v2.5"
+        return _local_default_model_label()
     provider = d.get("provider", "") or ""
     model_id = d.get("model_id", "") or ""
-    if provider and provider != "mimo":
-        return f"{provider}/{model_id}"
-    return model_id or "mimo-v2.5"
+    if provider:
+        return f"{provider}/{model_id}" if model_id else provider
+    return model_id or _local_default_model_label()
+
+
+def _local_default_model_label() -> str:
+    """无主进程时的本地 fallback：从 provider_metadata.json 派生默认模型，不硬编码。"""
+    try:
+        from config import get_default_provider, get_default_model_for_provider
+        provider = get_default_provider()
+        model = get_default_model_for_provider(provider)
+        return f"{provider}/{model}" if model else provider
+    except Exception:
+        return ""
 
 
 def discover_models(token: str, host: str | None = None, port: int | None = None,

@@ -115,13 +115,23 @@ def _resolve_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="重建向量库为远程 API Embedding（1024 维）")
     parser.add_argument("--db", default=None, help="主数据库 agent.db 路径")
     parser.add_argument("--vec-db", default=None, help="向量库路径（默认 <db 同名>_vec.db）")
-    parser.add_argument("--model", default="BAAI/bge-m3", help="API embedding 模型名")
+    parser.add_argument("--model", default="", help="API embedding 模型名（默认从 provider_metadata 派生）")
     parser.add_argument("--base-url", default="https://api.siliconflow.cn/v1", help="OpenAI 兼容 base_url")
     parser.add_argument("--api-key", default="", help="API Key（默认 env EMBED_API_KEY / SILICONFLOW_API_KEY）")
     parser.add_argument("--batch", type=int, default=16, help="每批文本条数")
     parser.add_argument("--concurrency", type=int, default=8, help="并发批次数")
     parser.add_argument("--dry-run", action="store_true", help="只统计不重建")
     args = parser.parse_args()
+
+    # 模型名缺省时从 provider_metadata.json 派生（不硬编码）
+    if not args.model:
+        try:
+            from config_providers import get_default_model_kind
+            args.model = get_default_model_kind("siliconflow", "embedding")
+        except (ImportError, OSError, ValueError):  # noqa: BLE001
+            args.model = ""
+    if not args.model:
+        parser.error("无法确定 embedding 模型名：请用 --model 显式指定")
 
     try:
         from config import DATA_DIR

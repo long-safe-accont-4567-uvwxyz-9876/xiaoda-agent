@@ -2,7 +2,11 @@
 
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass
+from pathlib import Path
+
+from loguru import logger
 
 
 @dataclass
@@ -18,436 +22,58 @@ class ModelCapabilities:
 
 
 # ---------------------------------------------------------------------------
-# Built-in capability table – covers common free models
+# Built-in capability table – loaded from config/model_capabilities.json
+# 数据文件是单一事实来源；解析失败时降级为空表，未知模型走 infer_from_name 启发式。
 # ---------------------------------------------------------------------------
 
-BUILTIN_CAPABILITIES: dict[str, ModelCapabilities] = {
-    # ---- SiliconFlow models ----
-    "THUDM/GLM-Z1-9B-0414": ModelCapabilities(
-        model_id="THUDM/GLM-Z1-9B-0414",
-        tool_calling=True,
-        vision=False,
-        provider="siliconflow",
-        display_name="GLM-Z1-9B-0414",
-        free=True,
-    ),
-    "Qwen/Qwen2.5-7B-Instruct": ModelCapabilities(
-        model_id="Qwen/Qwen2.5-7B-Instruct",
-        tool_calling=True,
-        vision=False,
-        provider="siliconflow",
-        display_name="Qwen2.5-7B-Instruct",
-        free=True,
-    ),
-    "Qwen/Qwen2.5-14B-Instruct": ModelCapabilities(
-        model_id="Qwen/Qwen2.5-14B-Instruct",
-        tool_calling=True,
-        vision=False,
-        provider="siliconflow",
-        display_name="Qwen2.5-14B-Instruct",
-        free=True,
-    ),
-    "Qwen/Qwen2.5-32B-Instruct": ModelCapabilities(
-        model_id="Qwen/Qwen2.5-32B-Instruct",
-        tool_calling=True,
-        vision=False,
-        provider="siliconflow",
-        display_name="Qwen2.5-32B-Instruct",
-        free=True,
-    ),
-    "Qwen/Qwen2.5-72B-Instruct": ModelCapabilities(
-        model_id="Qwen/Qwen2.5-72B-Instruct",
-        tool_calling=True,
-        vision=False,
-        provider="siliconflow",
-        display_name="Qwen2.5-72B-Instruct",
-        free=True,
-    ),
-    "Qwen/Qwen2.5-Coder-32B-Instruct": ModelCapabilities(
-        model_id="Qwen/Qwen2.5-Coder-32B-Instruct",
-        tool_calling=True,
-        vision=False,
-        provider="siliconflow",
-        display_name="Qwen2.5-Coder-32B-Instruct",
-        free=True,
-    ),
-    "Qwen/Qwen2.5-VL-7B-Instruct": ModelCapabilities(
-        model_id="Qwen/Qwen2.5-VL-7B-Instruct",
-        tool_calling=True,
-        vision=True,
-        provider="siliconflow",
-        display_name="Qwen2.5-VL-7B-Instruct",
-        free=True,
-    ),
-    "Qwen/Qwen2.5-VL-32B-Instruct": ModelCapabilities(
-        model_id="Qwen/Qwen2.5-VL-32B-Instruct",
-        tool_calling=True,
-        vision=True,
-        provider="siliconflow",
-        display_name="Qwen2.5-VL-32B-Instruct",
-        free=True,
-    ),
-    "Qwen/Qwen2.5-VL-72B-Instruct": ModelCapabilities(
-        model_id="Qwen/Qwen2.5-VL-72B-Instruct",
-        tool_calling=True,
-        vision=True,
-        provider="siliconflow",
-        display_name="Qwen2.5-VL-72B-Instruct",
-        free=True,
-    ),
-    "Qwen/Qwen3-8B": ModelCapabilities(
-        model_id="Qwen/Qwen3-8B",
-        tool_calling=True,
-        vision=False,
-        provider="siliconflow",
-        display_name="Qwen3-8B",
-        free=True,
-    ),
-    "Qwen/Qwen3-14B": ModelCapabilities(
-        model_id="Qwen/Qwen3-14B",
-        tool_calling=True,
-        vision=False,
-        provider="siliconflow",
-        display_name="Qwen3-14B",
-        free=True,
-    ),
-    "Qwen/Qwen3-32B": ModelCapabilities(
-        model_id="Qwen/Qwen3-32B",
-        tool_calling=True,
-        vision=False,
-        provider="siliconflow",
-        display_name="Qwen3-32B",
-        free=True,
-    ),
-    "Qwen/Qwen3-235B-A22B": ModelCapabilities(
-        model_id="Qwen/Qwen3-235B-A22B",
-        tool_calling=True,
-        vision=False,
-        provider="siliconflow",
-        display_name="Qwen3-235B-A22B",
-        free=True,
-    ),
-    "Qwen/Qwen3-Coder-30B-A3B-Instruct": ModelCapabilities(
-        model_id="Qwen/Qwen3-Coder-30B-A3B-Instruct",
-        tool_calling=True,
-        vision=False,
-        provider="siliconflow",
-        display_name="Qwen3-Coder-30B-A3B-Instruct",
-        free=True,
-    ),
-    "deepseek-ai/DeepSeek-V3": ModelCapabilities(
-        model_id="deepseek-ai/DeepSeek-V3",
-        tool_calling=True,
-        vision=False,
-        provider="siliconflow",
-        display_name="DeepSeek-V3",
-        free=True,
-    ),
-    "deepseek-ai/DeepSeek-R1": ModelCapabilities(
-        model_id="deepseek-ai/DeepSeek-R1",
-        tool_calling=True,
-        vision=False,
-        provider="siliconflow",
-        display_name="DeepSeek-R1",
-        free=True,
-    ),
-    "deepseek-ai/DeepSeek-R1-Distill-Qwen-7B": ModelCapabilities(
-        model_id="deepseek-ai/DeepSeek-R1-Distill-Qwen-7B",
-        tool_calling=True,
-        vision=False,
-        provider="siliconflow",
-        display_name="DeepSeek-R1-Distill-Qwen-7B",
-        free=True,
-    ),
-    "deepseek-ai/DeepSeek-R1-Distill-Qwen-14B": ModelCapabilities(
-        model_id="deepseek-ai/DeepSeek-R1-Distill-Qwen-14B",
-        tool_calling=True,
-        vision=False,
-        provider="siliconflow",
-        display_name="DeepSeek-R1-Distill-Qwen-14B",
-        free=True,
-    ),
-    "deepseek-ai/DeepSeek-R1-Distill-Qwen-32B": ModelCapabilities(
-        model_id="deepseek-ai/DeepSeek-R1-Distill-Qwen-32B",
-        tool_calling=True,
-        vision=False,
-        provider="siliconflow",
-        display_name="DeepSeek-R1-Distill-Qwen-32B",
-        free=True,
-    ),
-    "deepseek-ai/DeepSeek-VL2": ModelCapabilities(
-        model_id="deepseek-ai/DeepSeek-VL2",
-        tool_calling=False,
-        vision=True,
-        provider="siliconflow",
-        display_name="DeepSeek-VL2",
-        free=True,
-    ),
-    "THUDM/glm-4-9b-chat": ModelCapabilities(
-        model_id="THUDM/glm-4-9b-chat",
-        tool_calling=True,
-        vision=False,
-        provider="siliconflow",
-        display_name="glm-4-9b-chat",
-        free=True,
-    ),
-    "meta-llama/Meta-Llama-3.1-8B-Instruct": ModelCapabilities(
-        model_id="meta-llama/Meta-Llama-3.1-8B-Instruct",
-        tool_calling=True,
-        vision=False,
-        provider="siliconflow",
-        display_name="Meta-Llama-3.1-8B-Instruct",
-        free=True,
-    ),
-    # ---- SiliconFlow 新模型 (2025-2026) ----
-    "deepseek-ai/DeepSeek-V4-Pro": ModelCapabilities(
-        model_id="deepseek-ai/DeepSeek-V4-Pro",
-        tool_calling=False, vision=False,
-        provider="siliconflow", display_name="DeepSeek-V4-Pro", free=True,
-    ),
-    "deepseek-ai/DeepSeek-V4-Flash": ModelCapabilities(
-        model_id="deepseek-ai/DeepSeek-V4-Flash",
-        tool_calling=False, vision=False,
-        provider="siliconflow", display_name="DeepSeek-V4-Flash", free=True,
-    ),
-    "Pro/moonshotai/Kimi-K2.6": ModelCapabilities(
-        model_id="Pro/moonshotai/Kimi-K2.6",
-        tool_calling=True, vision=False,
-        provider="siliconflow", display_name="Kimi-K2.6", free=True,
-    ),
-    "Pro/zai-org/GLM-5.1": ModelCapabilities(
-        model_id="Pro/zai-org/GLM-5.1",
-        tool_calling=True, vision=False,
-        provider="siliconflow", display_name="GLM-5.1", free=True,
-    ),
-    "nex-agi/Nex-N2-Pro": ModelCapabilities(
-        model_id="nex-agi/Nex-N2-Pro",
-        tool_calling=True, vision=True,
-        provider="siliconflow", display_name="Nex-N2-Pro", free=True,
-    ),
-    "MiniMaxAI/MiniMax-M2.5": ModelCapabilities(
-        model_id="MiniMaxAI/MiniMax-M2.5",
-        tool_calling=True, vision=False,
-        provider="siliconflow", display_name="MiniMax-M2.5", free=True,
-    ),
-    "Pro/MiniMaxAI/MiniMax-M2.5": ModelCapabilities(
-        model_id="Pro/MiniMaxAI/MiniMax-M2.5",
-        tool_calling=True, vision=False,
-        provider="siliconflow", display_name="MiniMax-M2.5 (Pro)", free=True,
-    ),
-    "deepseek-ai/DeepSeek-V3.2": ModelCapabilities(
-        model_id="deepseek-ai/DeepSeek-V3.2",
-        tool_calling=True, vision=False,
-        provider="siliconflow", display_name="DeepSeek-V3.2", free=True,
-    ),
-    "Pro/deepseek-ai/DeepSeek-V3.2": ModelCapabilities(
-        model_id="Pro/deepseek-ai/DeepSeek-V3.2",
-        tool_calling=True, vision=False,
-        provider="siliconflow", display_name="DeepSeek-V3.2 (Pro)", free=True,
-    ),
-    "deepseek-ai/DeepSeek-V3.1-Terminus": ModelCapabilities(
-        model_id="deepseek-ai/DeepSeek-V3.1-Terminus",
-        tool_calling=True, vision=False,
-        provider="siliconflow", display_name="DeepSeek-V3.1-Terminus", free=True,
-    ),
-    "Pro/deepseek-ai/DeepSeek-V3.1-Terminus": ModelCapabilities(
-        model_id="Pro/deepseek-ai/DeepSeek-V3.1-Terminus",
-        tool_calling=True, vision=False,
-        provider="siliconflow", display_name="DeepSeek-V3.1-Terminus (Pro)", free=True,
-    ),
-    "Qwen/Qwen3.6-35B-A3B": ModelCapabilities(
-        model_id="Qwen/Qwen3.6-35B-A3B",
-        tool_calling=True, vision=False,
-        provider="siliconflow", display_name="Qwen3.6-35B-A3B", free=True,
-    ),
-    "Qwen/Qwen3.6-27B": ModelCapabilities(
-        model_id="Qwen/Qwen3.6-27B",
-        tool_calling=True, vision=False,
-        provider="siliconflow", display_name="Qwen3.6-27B", free=True,
-    ),
-    "Qwen/Qwen3.5-397B-A17B": ModelCapabilities(
-        model_id="Qwen/Qwen3.5-397B-A17B",
-        tool_calling=True, vision=False,
-        provider="siliconflow", display_name="Qwen3.5-397B-A17B", free=True,
-    ),
-    "Qwen/Qwen3.5-122B-A10B": ModelCapabilities(
-        model_id="Qwen/Qwen3.5-122B-A10B",
-        tool_calling=True, vision=False,
-        provider="siliconflow", display_name="Qwen3.5-122B-A10B", free=True,
-    ),
-    "Qwen/Qwen3.5-35B-A3B": ModelCapabilities(
-        model_id="Qwen/Qwen3.5-35B-A3B",
-        tool_calling=True, vision=False,
-        provider="siliconflow", display_name="Qwen3.5-35B-A3B", free=True,
-    ),
-    "Qwen/Qwen3.5-27B": ModelCapabilities(
-        model_id="Qwen/Qwen3.5-27B",
-        tool_calling=True, vision=False,
-        provider="siliconflow", display_name="Qwen3.5-27B", free=True,
-    ),
-    "Qwen/Qwen3.5-9B": ModelCapabilities(
-        model_id="Qwen/Qwen3.5-9B",
-        tool_calling=True, vision=False,
-        provider="siliconflow", display_name="Qwen3.5-9B", free=True,
-    ),
-    "Qwen/Qwen3.5-4B": ModelCapabilities(
-        model_id="Qwen/Qwen3.5-4B",
-        tool_calling=True, vision=False,
-        provider="siliconflow", display_name="Qwen3.5-4B", free=True,
-    ),
-    "PaddlePaddle/PaddleOCR-VL-1.5": ModelCapabilities(
-        model_id="PaddlePaddle/PaddleOCR-VL-1.5",
-        tool_calling=False, vision=True,
-        provider="siliconflow", display_name="PaddleOCR-VL-1.5", free=True,
-    ),
-    "Pro/deepseek-ai/DeepSeek-R1": ModelCapabilities(
-        model_id="Pro/deepseek-ai/DeepSeek-R1",
-        tool_calling=True, vision=False,
-        provider="siliconflow", display_name="DeepSeek-R1 (Pro)", free=True,
-    ),
-    "Pro/deepseek-ai/DeepSeek-V3": ModelCapabilities(
-        model_id="Pro/deepseek-ai/DeepSeek-V3",
-        tool_calling=True, vision=False,
-        provider="siliconflow", display_name="DeepSeek-V3 (Pro)", free=True,
-    ),
-    "stepfun-ai/Step-3.5-Flash": ModelCapabilities(
-        model_id="stepfun-ai/Step-3.5-Flash",
-        tool_calling=True, vision=False,
-        provider="siliconflow", display_name="Step-3.5-Flash", free=True,
-    ),
-    "Qwen/Qwen3-VL-32B-Thinking": ModelCapabilities(
-        model_id="Qwen/Qwen3-VL-32B-Thinking",
-        tool_calling=False, vision=True,
-        provider="siliconflow", display_name="Qwen3-VL-32B-Thinking", free=True,
-    ),
-    "Qwen/Qwen3-VL-8B-Thinking": ModelCapabilities(
-        model_id="Qwen/Qwen3-VL-8B-Thinking",
-        tool_calling=False, vision=True,
-        provider="siliconflow", display_name="Qwen3-VL-8B-Thinking", free=True,
-    ),
-    "Qwen/Qwen3-VL-30B-A3B-Thinking": ModelCapabilities(
-        model_id="Qwen/Qwen3-VL-30B-A3B-Thinking",
-        tool_calling=False, vision=True,
-        provider="siliconflow", display_name="Qwen3-VL-30B-A3B-Thinking", free=True,
-    ),
-    "Qwen/Qwen3-Omni-30B-A3B-Instruct": ModelCapabilities(
-        model_id="Qwen/Qwen3-Omni-30B-A3B-Instruct",
-        tool_calling=True, vision=False,
-        provider="siliconflow", display_name="Qwen3-Omni-30B-A3B-Instruct", free=True,
-    ),
-    "Qwen/Qwen3-Omni-30B-A3B-Thinking": ModelCapabilities(
-        model_id="Qwen/Qwen3-Omni-30B-A3B-Thinking",
-        tool_calling=False, vision=False,
-        provider="siliconflow", display_name="Qwen3-Omni-30B-A3B-Thinking", free=True,
-    ),
-    "Qwen/Qwen3-Omni-30B-A3B-Captioner": ModelCapabilities(
-        model_id="Qwen/Qwen3-Omni-30B-A3B-Captioner",
-        tool_calling=False, vision=False,
-        provider="siliconflow", display_name="Qwen3-Omni-30B-A3B-Captioner", free=True,
-    ),
-    "deepseek-ai/DeepSeek-OCR": ModelCapabilities(
-        model_id="deepseek-ai/DeepSeek-OCR",
-        tool_calling=False, vision=True,
-        provider="siliconflow", display_name="DeepSeek-OCR", free=True,
-    ),
-    "inclusionAI/Ling-flash-2.0": ModelCapabilities(
-        model_id="inclusionAI/Ling-flash-2.0",
-        tool_calling=True, vision=False,
-        provider="siliconflow", display_name="Ling-flash-2.0", free=True,
-    ),
-    "inclusionAI/Ling-mini-2.0": ModelCapabilities(
-        model_id="inclusionAI/Ling-mini-2.0",
-        tool_calling=True, vision=False,
-        provider="siliconflow", display_name="Ling-mini-2.0", free=True,
-    ),
-    "tencent/Hunyuan-MT-7B": ModelCapabilities(
-        model_id="tencent/Hunyuan-MT-7B",
-        tool_calling=False, vision=False,
-        provider="siliconflow", display_name="Hunyuan-MT-7B", free=True,
-    ),
-    # ---- OpenRouter models ----
-    "meta-llama/llama-4-maverick:free": ModelCapabilities(
-        model_id="meta-llama/llama-4-maverick:free",
-        tool_calling=True,
-        vision=True,
-        provider="openrouter",
-        display_name="llama-4-maverick:free",
-        free=True,
-    ),
-    "meta-llama/llama-4-scout:free": ModelCapabilities(
-        model_id="meta-llama/llama-4-scout:free",
-        tool_calling=True,
-        vision=True,
-        provider="openrouter",
-        display_name="llama-4-scout:free",
-        free=True,
-    ),
-    "qwen/qwen3-235b-a22b:free": ModelCapabilities(
-        model_id="qwen/qwen3-235b-a22b:free",
-        tool_calling=True,
-        vision=False,
-        provider="openrouter",
-        display_name="qwen3-235b-a22b:free",
-        free=True,
-    ),
-    "deepseek/deepseek-r1:free": ModelCapabilities(
-        model_id="deepseek/deepseek-r1:free",
-        tool_calling=True,
-        vision=False,
-        provider="openrouter",
-        display_name="deepseek-r1:free",
-        free=True,
-    ),
-    "deepseek/deepseek-chat:free": ModelCapabilities(
-        model_id="deepseek/deepseek-chat:free",
-        tool_calling=True,
-        vision=False,
-        provider="openrouter",
-        display_name="deepseek-chat:free",
-        free=True,
-    ),
-    "google/gemma-3-27b-it:free": ModelCapabilities(
-        model_id="google/gemma-3-27b-it:free",
-        tool_calling=True,
-        vision=True,
-        provider="openrouter",
-        display_name="gemma-3-27b-it:free",
-        free=True,
-    ),
-    "nvidia/nemotron-3-super-120b-a12b:free": ModelCapabilities(
-        model_id="nvidia/nemotron-3-super-120b-a12b:free",
-        tool_calling=True,
-        vision=False,
-        provider="openrouter",
-        display_name="nemotron-3-super-120b-a12b:free",
-        free=True,
-    ),
-    "openai/gpt-oss-120b:free": ModelCapabilities(
-        model_id="openai/gpt-oss-120b:free",
-        tool_calling=True,
-        vision=False,
-        provider="openrouter",
-        display_name="gpt-oss-120b:free",
-        free=True,
-    ),
-    # ---- MiMo models ----
-    "mimo-v2.5": ModelCapabilities(
-        model_id="mimo-v2.5",
-        tool_calling=True,
-        vision=True,
-        provider="mimo",
-        display_name="mimo-v2.5",
-        free=False,
-    ),
-    "mimo-v2.5-pro": ModelCapabilities(
-        model_id="mimo-v2.5-pro",
-        tool_calling=True,
-        vision=False,
-        provider="mimo",
-        display_name="mimo-v2.5-pro",
-        free=False,
-    ),
-}
+_MODEL_CAPABILITIES_FILENAME = "model_capabilities.json"
+
+
+def _candidate_paths() -> list[Path]:
+    """按优先级返回数据文件候选路径：用户配置目录在前，打包/源码目录兜底。"""
+    paths: list[Path] = []
+    try:
+        from config_paths import get_config_dir
+
+        paths.append(get_config_dir() / _MODEL_CAPABILITIES_FILENAME)
+    except Exception:
+        pass  # 配置目录解析失败不阻塞，继续尝试打包目录
+    paths.append(Path(__file__).resolve().parent.parent / "config" / _MODEL_CAPABILITIES_FILENAME)
+    return paths
+
+
+def _load_builtin_capabilities() -> dict[str, ModelCapabilities]:
+    """从 model_capabilities.json 加载内建模型能力表（优先用户配置，其次内置文件）。"""
+    import json
+
+    last_error: Exception | None = None
+    for path in _candidate_paths():
+        try:
+            raw = json.loads(path.read_text(encoding="utf-8"))
+            table = raw.get("capabilities")
+            if not isinstance(table, dict):
+                raise ValueError("capabilities 字段缺失或不是对象")
+            loaded: dict[str, ModelCapabilities] = {}
+            for key, entry in table.items():
+                if isinstance(entry, dict):
+                    loaded[key] = ModelCapabilities(**entry)
+            logger.info(
+                "model_capabilities.loaded source={} count={}",
+                str(path), len(loaded),
+            )
+            return loaded
+        except (OSError, ValueError, TypeError) as e:
+            last_error = e
+            continue
+    if last_error is not None:
+        logger.warning(
+            "model_capabilities.unavailable error={} using_empty_table",
+            str(last_error),
+        )
+    return {}
+
+
+BUILTIN_CAPABILITIES: dict[str, ModelCapabilities] = _load_builtin_capabilities()
 
 
 def infer_from_name(model_id: str) -> ModelCapabilities:

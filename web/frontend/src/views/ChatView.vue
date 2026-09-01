@@ -9,6 +9,7 @@ import { api, exportSessionDownload } from '../api'
 import { getWsClient } from '../api/ws'
 import { renderMarkdown } from '../utils/markdown'
 import { replaceAgentNames } from '../utils/agentNames'
+import { useRenderedBand, escapeHtmlText } from '../composables/useRenderedBand'
 import ToolCallCard from '../components/chat/ToolCallCard.vue'
 import ChatTerminal from '../components/chat/ChatTerminal.vue'
 import SlashPalette from '../components/chat/SlashPalette.vue'
@@ -117,6 +118,24 @@ watch(() => chat.messages.length, () => {
   const isStreaming = chat.messages.some(m => m.streaming)
   el.scrollTo({ top: el.scrollHeight, behavior: isStreaming ? 'auto' : 'smooth' })
 }, { flush: 'post' })  // post：等 DOM 更新后再读取 scrollHeight 并滚动
+
+// 离屏惰性渲染（零依赖）：只给可视带 ± 1.2 屏内的行渲染 markdown，
+// 带外行降级为转义纯文本并跳过 layout/paint（content-visibility）。
+// 流式内容不断追高时以 250ms 兜底重测；行数/会话切换后均强制重测几何。
+const { rendered: renderedBand, refresh: refreshBand } = useRenderedBand(
+  messagesEl,
+  computed(() => chat.messages.length),
+  {
+    resampleMs: 250,
+    resampleActive: () => chat.messages.some(m => m.streaming),
+  },
+)
+function inBand(index: number): boolean {
+  const set = renderedBand.value
+  return !set || set.has(index)  // null = 尚未测量 → 全量渲染兜底（不闪空）
+}
+watch(() => chat.messages.length, () => refreshBand(true), { flush: 'post' })
+watch(() => chat.sessionId, () => { nextTick(() => refreshBand(true)) })
 
 // 问候到达 → 蒲公英雨
 watch(() => chat.greetingPing, () => {
@@ -320,7 +339,7 @@ const emotionColors: Record<string, string> = {
       </div>
 
       <transition-group name="msg-fade">
-      <div v-for="msg in chat.messages" :key="msg.id" class="message-row" :class="msg.role">
+      <div v-for="(msg, index) in chat.messages" :key="msg.id" class="message-row" :class="msg.role">
         <div class="message-bubble glass-panel" :class="[msg.role, msg.streaming ? 'streaming' : '']">
           <div v-if="msg.role === 'assistant' && msg.emotion" class="emotion-dot"
                :style="{ background: emotionColors[msg.emotion] || '#9ca3af' }"
@@ -332,7 +351,8 @@ const emotionColors: Record<string, string> = {
 
           <div v-if="msg.role === 'assistant' && msg.streaming" class="message-content md-body streaming-text">{{ replaceAgentNames(msg.content) }}</div>
           <div v-else-if="msg.role === 'assistant'" class="message-content md-body"
-               v-html="renderMarkdown(replaceAgentNames(msg.content))"></div>
+               :class="{ 'band-off': !inBand(index) }"
+               v-html="inBand(index) ? renderMarkdown(replaceAgentNames(msg.content)) : escapeHtmlText(replaceAgentNames(msg.content))"></div>
           <div v-else class="message-content plain">
             {{ msg.content }}
             <img v-if="msg.imageUrl" :src="msg.imageUrl" class="user-upload-img"
@@ -560,6 +580,10 @@ const emotionColors: Record<string, string> = {
   max-width: min(85%, 900px);
   min-width: 0;
   animation: slideUp 0.3s var(--ease-smooth);
+  /* 离屏惰性渲染：行在可视带外时跳过 layout/paint（浏览器原生）；
+     contain-intrinsic-size 用记忆高度占位，防滚动条跳动与行高塌缩 */
+  content-visibility: auto;
+  contain-intrinsic-size: auto 240px;
 }
 .message-row.user { align-self: flex-end; justify-content: flex-end; }
 .message-row.assistant { align-self: flex-start; }
@@ -619,6 +643,8 @@ const emotionColors: Record<string, string> = {
   min-width: 0;
   max-width: 100%;
 }
+/* 带外行：纯文本展示（保留换行/空白），markdown 样式待进入可视带后再套 */
+.message-content.band-off { white-space: pre-wrap; }
 .message-content.plain { white-space: pre-wrap; }
 .message-content.streaming-text { white-space: pre-wrap; }
 .user-upload-img {

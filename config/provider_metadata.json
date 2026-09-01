@@ -16,7 +16,9 @@
     "agnes": {
       "protocol": "openai_compatible",
       "label": "Agnes AI",
-      "environment_aliases": ["AGNES_API_KEY"],
+      "environment_aliases": [
+        "AGNES_API_KEY"
+      ],
       "base_url_default": "https://apihub.agnes-ai.cn/v1",
       "max_tokens_cap": 65535,
       "default_model": "agnes-2.0-flash",
@@ -24,12 +26,22 @@
       "doc_note": "agnes-2.0-flash 官方 max_tokens 上限 65536（2026-07 官方文档确认；超过返回 500 InternalServerError 'max_tokens exceeds the limit of 65536'）。配置取 65535（=上限-1）作为安全裁剪阈值，避免边界值因 SDK/服务端差异偶发 500。",
       "supports_vision": false,
       "supports_tools": true,
-      "builtin": true
+      "builtin": true,
+      "default_image_model": "agnes-image-2.1-flash",
+      "default_video_model": "agnes-video-v2.0",
+      "supports_thinking": false,
+      "uses_chat_template_thinking": true,
+      "inherit_chat_thinking": true,
+      "reasoning_by_default": true,
+      "free_tier": true,
+      "default_model_display_name": "Agnes Flash 2.0"
     },
     "mimo": {
       "protocol": "openai_compatible",
       "label": "小米 MiMo",
-      "environment_aliases": ["MIMO_API_KEY"],
+      "environment_aliases": [
+        "MIMO_API_KEY"
+      ],
       "base_url_default": "https://api.xiaomimimo.com/v1",
       "max_tokens_cap": 131072,
       "default_model": "mimo-v2.5",
@@ -38,60 +50,83 @@
       "doc_note": "mimo-v2.5 官方 max_tokens 上限 131072；当前仅 mimo-v2.5 支持图片理解（Base64 编码传入）。default_pro_model 为思考增强变体 mimo-v2.5-pro。",
       "supports_vision": true,
       "supports_tools": true,
-      "builtin": true
+      "builtin": true,
+      "supports_prompt_caching": true,
+      "supports_model_discovery": true,
+      "default_asr_model": "mimo-v2.5-asr",
+      "default_tts_model": "mimo-v2.5-tts-voiceclone"
     },
     "deepseek": {
       "protocol": "openai_compatible",
       "label": "DeepSeek",
-      "environment_aliases": ["DEEPSEEK_API_KEY"],
+      "environment_aliases": [
+        "DEEPSEEK_API_KEY"
+      ],
       "base_url_default": "https://api.deepseek.com/v1",
       "max_tokens_cap": 8192,
       "default_model": "deepseek-chat",
       "doc_url": "https://platform.deepseek.com/",
       "doc_note": "deepseek-chat 官方 max_output_tokens 上限 8192（2026-07 官方文档）",
       "supports_vision": false,
-      "supports_tools": true
+      "supports_tools": true,
+      "supports_model_discovery": true
     },
     "siliconflow": {
       "protocol": "openai_compatible",
       "label": "SiliconFlow 硅基流动",
-      "environment_aliases": ["SILICONFLOW_API_KEY"],
+      "environment_aliases": [
+        "SILICONFLOW_API_KEY"
+      ],
       "base_url_default": "https://api.siliconflow.cn/v1",
       "max_tokens_cap": null,
       "default_model": "deepseek-ai/DeepSeek-V3-0324",
       "doc_url": "https://siliconflow.cn/",
       "doc_note": "硅基流动聚合平台，max_tokens 上限视具体模型而定，默认不裁剪",
       "supports_vision": false,
-      "supports_tools": true
+      "supports_tools": true,
+      "default_asr_model": "FunAudioLLM/SenseVoiceSmall",
+      "default_reranker_model": "BAAI/bge-reranker-v2-m3",
+      "default_embedding_model": "BAAI/bge-m3",
+      "supports_model_discovery": true
     },
     "openrouter": {
       "protocol": "openai_compatible",
       "label": "OpenRouter",
-      "environment_aliases": ["OPENROUTER_API_KEY"],
+      "environment_aliases": [
+        "OPENROUTER_API_KEY"
+      ],
       "base_url_default": "https://openrouter.ai/api/v1",
       "max_tokens_cap": null,
-      "default_model": "",
+      "default_model": "openrouter/free",
       "doc_url": "https://openrouter.ai/docs",
       "doc_note": "OpenRouter 聚合平台，max_tokens 上限视具体模型而定，默认不裁剪",
       "supports_vision": false,
-      "supports_tools": true
+      "supports_tools": true,
+      "supports_model_discovery": true
     },
     "modelscope": {
       "protocol": "openai_compatible",
       "label": "ModelScope 魔搭",
-      "environment_aliases": ["MODELSCOPE_ACCESS_TOKEN", "MODELSCOPE_API_KEY"],
+      "environment_aliases": [
+        "MODELSCOPE_ACCESS_TOKEN",
+        "MODELSCOPE_API_KEY"
+      ],
       "base_url_default": "https://api-inference.modelscope.cn/v1/",
       "max_tokens_cap": null,
-      "default_model": "",
+      "default_model": "Qwen/Qwen3-8B",
       "doc_url": "https://modelscope.cn/",
       "doc_note": "魔搭社区聚合平台，max_tokens 上限视具体模型而定，默认不裁剪",
       "supports_vision": false,
-      "supports_tools": true
+      "supports_tools": true,
+      "supports_model_discovery": true,
+      "free_tier": true
     },
     "ollama": {
       "protocol": "ollama",
       "label": "Ollama 本地大模型",
-      "environment_aliases": ["OLLAMA_API_KEY"],
+      "environment_aliases": [
+        "OLLAMA_API_KEY"
+      ],
       "base_url_default": "",
       "max_tokens_cap": null,
       "default_model": "qwen2.5:latest",
@@ -103,25 +138,46 @@
       "doc_url": "https://ollama.com/",
       "doc_note": "Ollama 本地部署，无固定上限（视本地模型而定）。模型名映射机制：路由把工作流/云模型名翻译为本地模型名后再真实转发给本地 Ollama（OLLAMA_BASE_URL，如 http://localhost:11434/v1），避免 model not found。default_model 是云模型名（含 / 的 org/model 名）回退到的本地模型。仅当 OLLAMA_BASE_URL 环境变量显式配置时才启用，不默认注册",
       "supports_vision": false,
-      "supports_tools": true
+      "supports_tools": true,
+      "auth": {
+        "required": false
+      },
+      "supports_model_discovery": true,
+      "free_tier": true
     },
     "llama.cpp": {
       "protocol": "openai_compatible",
       "label": "llama.cpp 本地接口",
-      "environment_aliases": ["LLAMA_CPP_API_KEY"],
+      "environment_aliases": [
+        "LLAMA_CPP_API_KEY"
+      ],
       "base_url_default": "",
       "max_tokens_cap": null,
       "default_model": "",
       "doc_url": "https://github.com/ggml-org/llama.cpp",
       "doc_note": "本地 llama.cpp server（OpenAI 兼容接口，无需 API Key）。仅当 LLAMA_CPP_BASE_URL 环境变量显式配置时才启用，不默认注册；有配置就用，没有就不启用。",
       "supports_vision": false,
-      "supports_tools": true
+      "supports_tools": true,
+      "auth": {
+        "required": false
+      },
+      "supports_model_discovery": true,
+      "free_tier": true
     }
   },
   "_cross_provider_fallback": {
     "_comment": "主 provider 故障时的跨 provider 兜底映射（替代 model_router.py 中硬编码的 _CROSS_PROVIDER_MAP）",
-    "agnes": {"fallback_provider": "mimo", "fallback_model": "mimo-v2.5"},
-    "mimo": {"fallback_provider": "agnes", "fallback_model": "agnes-2.0-flash"},
-    "ollama": {"fallback_provider": "mimo", "fallback_model": "mimo-v2.5"}
+    "agnes": {
+      "fallback_provider": "mimo",
+      "fallback_model": "mimo-v2.5"
+    },
+    "mimo": {
+      "fallback_provider": "agnes",
+      "fallback_model": "agnes-2.0-flash"
+    },
+    "ollama": {
+      "fallback_provider": "mimo",
+      "fallback_model": "mimo-v2.5"
+    }
   }
 }
