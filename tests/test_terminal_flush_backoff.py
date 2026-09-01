@@ -1,6 +1,6 @@
 # tests/test_terminal_flush_backoff.py — 终端输出合帧洪峰自适应退避
 """背景：16ms 固定合帧在弱机/WebView2 上面对超大持续输出(git log、构建
-日志等)仍会以 ~60 帧/s 冲击前端渲染。新增按合帧窗字节量指数拉大间隔的
+日志等)仍会以 ~60 帧/s 冲击前端渲染。新增按合帧窗字符量指数拉大间隔的
 自适应退避（上限 0.25s，回落逐级复原），独立配置项 TERMINAL_FLUSH_ADAPTIVE
 默认开启，置 0 关回固定 16ms。本文件覆盖纯函数判定 + 与 _queue_term_output
 实际接线的状态迁移。"""
@@ -58,7 +58,7 @@ def test_flood_window_doubles_until_cap():
     cur = hub._TERM_FLUSH_INTERVAL_S
     steps = []
     for _ in range(5):
-        cur = hub._next_flush_interval(cur, hub._TERM_BACKOFF_HIGH_BYTES)
+        cur = hub._next_flush_interval(cur, hub._TERM_BACKOFF_HIGH_CHARS)
         steps.append(cur)
     assert steps == [0.032, 0.064, 0.128, hub._TERM_FLUSH_MAX_INTERVAL_S,
                      hub._TERM_FLUSH_MAX_INTERVAL_S]
@@ -69,7 +69,7 @@ def test_idle_window_halves_until_floor():
     cur = hub._TERM_FLUSH_MAX_INTERVAL_S
     steps = []
     for _ in range(8):
-        cur = hub._next_flush_interval(cur, hub._TERM_BACKOFF_LOW_BYTES)
+        cur = hub._next_flush_interval(cur, hub._TERM_BACKOFF_LOW_CHARS)
         steps.append(cur)
     assert steps == [0.125, 0.0625, 0.03125, 0.016,
                      0.016, 0.016, 0.016, 0.016]

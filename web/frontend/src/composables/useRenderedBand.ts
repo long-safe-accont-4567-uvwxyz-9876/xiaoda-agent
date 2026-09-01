@@ -88,6 +88,9 @@ export function useRenderedBand(
   let dirty = true
   let rafId = 0
   let resampleId: ReturnType<typeof setInterval> | null = null
+  let retryTimer: ReturnType<typeof setTimeout> | null = null
+  let retryCount = 0
+  const MAX_MEASURE_RETRIES = 3
 
   /** 几何重测：行数与消息数一致才采用，否则保持旧几何（保守全量） */
   function measure(): boolean {
@@ -120,8 +123,21 @@ export function useRenderedBand(
       return
     }
     if (dirty) {
-      if (!measure()) return  // 几何瞬态不可用：保持现状，下次刷新再试
+      if (!measure()) {
+        // 行数瞬态不符（transition-group 过渡执行中/删除动画残留）：
+        // dirty 不落定会导致带外行恢复不了渲染——200ms 后重试，最多
+        // 3 次（覆盖 ~0.6s 过渡动画窗口）；滚动/内容变化会继续触发。
+        if (retryCount < MAX_MEASURE_RETRIES && retryTimer === null) {
+          retryCount++
+          retryTimer = setTimeout(() => {
+            retryTimer = null
+            refresh(true)
+          }, 200)
+        }
+        return
+      }
       dirty = false
+      retryCount = 0
     }
     const vpHeight = el.clientHeight
     const [first, last] = computeBandRange(tops, heights, el.scrollTop, vpHeight, vpHeight * margin)
@@ -138,10 +154,14 @@ export function useRenderedBand(
     rafId = requestAnimationFrame(apply)
   }
 
+  const onScroll = () => refresh(true)  // 滚动必须重测：新入带行从纯文本切 markdown 会变高，旧几何失效
+
   const onResize = () => refresh(true)
 
   onMounted(() => {
     refresh(true)
+    const el = containerRef.value
+    if (el) el.addEventListener('scroll', onScroll, { passive: true })
     window.addEventListener('resize', onResize)
     if (resampleMs > 0) {
       resampleId = setInterval(() => {
@@ -152,6 +172,9 @@ export function useRenderedBand(
 
   onBeforeUnmount(() => {
     if (rafId) cancelAnimationFrame(rafId)
+    if (retryTimer !== null) clearTimeout(retryTimer)
+    const el = containerRef.value
+    el?.removeEventListener('scroll', onScroll)
     window.removeEventListener('resize', onResize)
     if (resampleId !== null) clearInterval(resampleId)
   })

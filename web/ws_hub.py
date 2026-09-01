@@ -1208,8 +1208,8 @@ def _make_status_callback(conn_id: str, msg_id: str):
 from web.ws_terminal import (  # noqa: F401, E402 —— 文件尾 re-export(拆分兼容层)
     _TERM_FLUSH_INTERVAL_S,
     _TERM_FLUSH_MAX_CHARS,
-    _TERM_BACKOFF_HIGH_BYTES,
-    _TERM_BACKOFF_LOW_BYTES,
+    _TERM_BACKOFF_HIGH_CHARS,
+    _TERM_BACKOFF_LOW_CHARS,
     _cleanup_pty,
     _handle_terminal_input,
     _handle_terminal_kill,

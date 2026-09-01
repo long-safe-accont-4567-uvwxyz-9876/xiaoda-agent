@@ -71,10 +71,14 @@ def test_dotenv_loaded_on_config_import():
     probe = f"""
 import json, os, sys
 sys.path.insert(0, {str(Path(__file__).resolve().parent.parent)!r})
-import config_paths
 env_text = open({str(env_path)!r}, encoding="utf-8", errors="ignore").read()
 keys = [ln.split("=")[0].strip() for ln in env_text.splitlines()
         if "=" in ln and not ln.strip().startswith("#") and ln.split("=")[0].strip()]
+# 先清掉同名键再 import：防止宿主环境（CI/开发机）恰好已导出同名变量，
+# 造成"键本来就在"的假阳性——必须由 load_dotenv 真实补回才算链路有效。
+for k in keys[:5]:
+    os.environ.pop(k, None)
+import config_paths
 missing = [k for k in keys[:5] if k not in os.environ]
 print(json.dumps(missing))
 """
