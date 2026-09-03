@@ -604,6 +604,63 @@ async def test_http_transport_closes_only_owned_client(monkeypatch, module_name,
 
 
 @pytest.mark.asyncio
+async def test_openai_transport_closes_owned_async_openai_and_httpx_client():
+    from openai import AsyncOpenAI
+
+    http_client = httpx.AsyncClient(
+        transport=httpx.MockTransport(lambda request: httpx.Response(200, request=request)),
+    )
+    client = AsyncOpenAI(
+        api_key="test-key",
+        base_url="https://provider.example.test/v1",
+        http_client=http_client,
+    )
+    transport = OpenAICompatibleTransport(client)
+
+    await transport.aclose()
+
+    assert client.is_closed() is True
+    assert http_client.is_closed is True
+
+
+@pytest.mark.asyncio
+async def test_openai_transport_does_not_close_borrowed_client():
+    class CloseableOpenAIClient(OpenAIClient):
+        def __init__(self) -> None:
+            super().__init__()
+            self.closed = False
+
+        async def close(self) -> None:
+            self.closed = True
+
+    client = CloseableOpenAIClient()
+    transport = OpenAICompatibleTransport(client, owns_client=False)
+
+    await transport.aclose()
+
+    assert client.closed is False
+
+
+@pytest.mark.asyncio
+async def test_openai_transport_aclose_is_idempotent():
+    class CloseableOpenAIClient(OpenAIClient):
+        def __init__(self) -> None:
+            super().__init__()
+            self.close_calls = 0
+
+        async def close(self) -> None:
+            self.close_calls += 1
+
+    client = CloseableOpenAIClient()
+    transport = OpenAICompatibleTransport(client)
+
+    await transport.aclose()
+    await transport.aclose()
+
+    assert client.close_calls == 1
+
+
+@pytest.mark.asyncio
 async def test_anthropic_compat_stream_closes_transport_when_consumer_stops(monkeypatch):
     from web.custom_providers import AnthropicCompatClient
 

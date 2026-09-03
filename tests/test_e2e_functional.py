@@ -7,6 +7,7 @@ import asyncio
 import os
 import re
 import tempfile
+import uuid
 from dataclasses import fields
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -540,6 +541,27 @@ class TestDatabaseSession:
                 assert active["id"] == session_id
                 assert active["status"] == "active"
                 assert active["ended_at"] > 0, "ended_at 应被设置为当前时间"
+            finally:
+                await db.close()
+
+    @pytest.mark.asyncio
+    async def test_create_session_ids_are_unique_within_same_second(self):
+        from db.database import DatabaseManager
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            db = DatabaseManager(db_path=os.path.join(tmpdir, "test.db"))
+            await db.init()
+            try:
+                with patch("db.lifecycle_sessions.time.time", return_value=1_800_000_000.0):
+                    session_ids = await asyncio.gather(*(
+                        db.create_session(user_openid=f"user-{index}")
+                        for index in range(32)
+                    ))
+
+                assert len(set(session_ids)) == len(session_ids)
+                for session_id in session_ids:
+                    assert session_id.startswith("SES-")
+                    assert uuid.UUID(hex=session_id.removeprefix("SES-"))
             finally:
                 await db.close()
 

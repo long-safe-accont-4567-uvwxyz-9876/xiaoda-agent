@@ -358,7 +358,8 @@ class MessageProcessorMixin(StreamingMixin, ChatTargetMixin, VisionMixin, Person
         # 此处必须原样保留，不能拼入 member_openid，否则同一群会按成员裂成多个
         # 隐私域，且检索侧无法从复合字符串可靠还原群边界。
 
-        # portrait/notebook 仍是全局单主人表，个人资源必须严格 owner-only。
+        # Personal persisted resources are scoped by principal + agent. Group
+        # guests never reach this branch because load_user_resources is false.
         identity = getattr(ctx, "identity", None)
         principal = getattr(ctx, "principal", None)
         is_owner = (
@@ -421,7 +422,11 @@ class MessageProcessorMixin(StreamingMixin, ChatTargetMixin, VisionMixin, Person
             if not claimed:
                 return token
             try:
-                resource_load = self._load_user_context_resources(token)
+                resource_load = (
+                    self._load_user_context_resources(token, scope=scope)
+                    if scope is not None
+                    else self._load_user_context_resources(token)
+                )
                 resources_loaded = (
                     await resource_load
                     if asyncio.iscoroutine(resource_load)
@@ -456,12 +461,18 @@ class MessageProcessorMixin(StreamingMixin, ChatTargetMixin, VisionMixin, Person
                 raise
         return token
 
-    async def _load_user_context_resources(self, token: Any) -> bool:
-        """为一个明确 owner activation 加载全局单主人资源。"""
+    async def _load_user_context_resources(
+        self, token: Any, *, scope: Any | None = None
+    ) -> bool:
+        """为一个明确 owner activation 加载同 user/agent scope 的资源。"""
         portrait_manager = getattr(self, "portrait_manager", None)
         if portrait_manager is not None:
             try:
-                portrait = await portrait_manager.get_current_portrait()
+                portrait = (
+                    await portrait_manager.get_current_portrait(scope=scope)
+                    if scope is not None
+                    else None
+                )
                 content = portrait.get("content") if portrait else None
                 if content:
                     committed = await self.context.commit_user_context(

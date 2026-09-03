@@ -93,7 +93,6 @@ def test_restore_chat_model_fallback_preserves_route_table(monkeypatch):
     """
     # 在导入 server 前注入 fake model_router 模块
     import model_router as _mr_module
-    original_route_table = _mr_module.ROUTE_TABLE
 
     # 临时修改 ROUTE_TABLE 模拟用户选择未注册的 custom provider
     test_route = {

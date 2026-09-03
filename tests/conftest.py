@@ -52,6 +52,7 @@ if os.environ.get("XIAODA_TESTS_NO_REHOME", "") != "1":
 # （CI 无 .env 全绿）。test_config 类子进程因继承 PYTHONPATH 不受影响。
 # 在首个项目模块 import 之前把 load_dotenv 置为 no-op 即可一劳永逸。
 import dotenv as _dotenv  # noqa: F401,PLC0415 —— 仅测试控制面；须在本文件首个项目模块 import 之前
+
 _dotenv.load_dotenv = lambda *args, **kwargs: False  # noqa: E731
 
 # skipif 约定（2026-08-26 平台审计）：reason 必须说明"为什么此环境不适用"。

@@ -103,11 +103,18 @@ export const useChatStore = defineStore('chat', () => {
       if (entry.sentAt < cutoff) msgSessionMap.delete(id)
     }
   }
-  function clearProcessing() {
+  function clearProcessing(expectedMsgId?: string) {
+    if (expectedMsgId !== undefined && expectedMsgId !== pendingMsgId.value) return
     isProcessing.value = false
     currentStage.value = ''
     statusText.value = ''
     pendingMsgId.value = ''
+  }
+  function switchSession(nextSessionId: string) {
+    if (nextSessionId === sessionId.value) return
+    const previousPendingMsgId = pendingMsgId.value
+    sessionId.value = nextSessionId
+    if (previousPendingMsgId) clearProcessing(previousPendingMsgId)
   }
 
   const pendingTimers: ReturnType<typeof setTimeout>[] = []
@@ -251,7 +258,7 @@ export const useChatStore = defineStore('chat', () => {
     // 顺手收尾清理，避免状态卡死在"处理中"。
     if (!inCurrentSession(msgId)) {
       console.debug('[chat] 丢弃旧会话迟到终态事件', msgId)
-      if (msgId === pendingMsgId.value) clearProcessing()
+      if (msgId === pendingMsgId.value) clearProcessing(msgId)
       return
     }
     let msg = messages.value.find(m => m.id === `a-${msgId}`)
@@ -269,10 +276,7 @@ export const useChatStore = defineStore('chat', () => {
     msg.agent = e.agent as string
     msg.streaming = false
     if (msg.emotion) lastEmotion.value = msg.emotion
-    isProcessing.value = false
-    currentStage.value = ''
-    statusText.value = ''
-    pendingMsgId.value = ''
+    clearProcessing(msgId)
     // 终态消息的会话映射已无用处，就地移除防映射增长
     msgSessionMap.delete(msgId)
   }
@@ -295,11 +299,12 @@ export const useChatStore = defineStore('chat', () => {
     // 过滤——旧会话迟到的错误不得写入新会话 UI，也不得误清新会话在途状态。
     if (msgId && !inCurrentSession(msgId)) {
       console.debug('[chat] 丢弃旧会话迟到错误事件', msgId)
+      clearProcessing(msgId)
+      msgSessionMap.delete(msgId)
       return
     }
-    isProcessing.value = false
-    currentStage.value = ''
-    pendingMsgId.value = ''
+    clearProcessing(msgId || undefined)
+    if (msgId) msgSessionMap.delete(msgId)
     pushMessage(messages, {
       id: `err-${Date.now()}`,
       role: 'system',
@@ -424,10 +429,11 @@ export const useChatStore = defineStore('chat', () => {
   }
 
   async function newSession() {
-    loadSessionGeneration++
+    const generation = ++loadSessionGeneration
     pruneMsgSessions()
     const data = await api.createSession()
-    sessionId.value = data.session_id
+    if (generation !== loadSessionGeneration) return
+    switchSession(data.session_id)
     ws.send({ type: 'set_session', session_id: data.session_id })
     messages.value = []
     clearMarkdownCache()
@@ -460,7 +466,7 @@ export const useChatStore = defineStore('chat', () => {
   async function loadSession(sid: string) {
     const generation = ++loadSessionGeneration
     pruneMsgSessions()
-    sessionId.value = sid
+    switchSession(sid)
     ws.send({ type: 'set_session', session_id: sid })
     const history = await api.getMessages(sid)
     if (generation !== loadSessionGeneration || sessionId.value !== sid) return

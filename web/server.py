@@ -1039,9 +1039,9 @@ def _has_any_provider_credential() -> bool:
     # 2. 自定义 provider：复用 config_service 已加载的 providers 配置 +
     #    load_provider_key 读取凭证文件，不新写 JSON 解析
     try:
+        from config_providers import get_provider_catalog
         from web._provider_keys import load_provider_key
         from web.config_service import get_config_service
-        from config_providers import get_provider_catalog
         cfg = get_config_service()
         catalog = get_provider_catalog()
         for pid in (cfg.get("models.providers", {}) or {}):
@@ -1063,8 +1063,8 @@ def _has_any_provider_credential() -> bool:
     #    （env 名走 get_provider_env_prefix 前缀约定，与 get_provider_config 一致；
     #     判定条件与 _apply_model_overrides 的注册条件一致，本地-only 部署不误入降级模式）
     try:
-        from setup_wizard import _load_env_values
         from config_providers import get_provider_catalog, get_provider_env_prefix
+        from setup_wizard import _load_env_values
         _env = _load_env_values()
         for _p in get_provider_catalog().list():
             if _p.auth.required:

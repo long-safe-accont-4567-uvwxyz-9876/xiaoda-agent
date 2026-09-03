@@ -1,6 +1,6 @@
 # ── Web 服务 ──
 fastapi>=0.115.0
-starlette>=0.40.0
+starlette>=1.3.1
 uvicorn[standard]>=0.32.0
 websockets>=13.0
 python-multipart>=0.0.12
@@ -8,10 +8,12 @@ structlog>=24.0.0
 
 # ── HTTP 客户端 ──
 httpx[http2]>=0.27.0
+# 显式安全下界：不能只依赖 httpx[http2] 的传递解析，避免回落到受影响版本。
+h2>=4.4.1
 requests>=2.31.0
 
 # ── 图像处理 ──
-Pillow>=10.4.0
+Pillow>=12.3.0
 qrcode>=7.4.0
 
 # ── 数值计算 ──
@@ -46,7 +48,7 @@ pydantic>=2.13.4
 jieba>=0.42.1
 rapidfuzz>=3.0.0
 pyyaml>=6.0
-cryptography>=43.0.0
+cryptography>=50.0.1
 certifi>=2024.7.0
 # 插件容器化版本说明符解析（plugins/manager.py 顶层导入，无 try-except 保护，
 # 干净 wheel/Docker 基础镜像必须显式声明；勿挪进可选分组）

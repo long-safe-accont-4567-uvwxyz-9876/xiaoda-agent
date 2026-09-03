@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 from contextlib import asynccontextmanager
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
@@ -11,7 +12,11 @@ from agent_core.mixins.streaming import StreamingMixin
 from agent_core.mixins.verification import VerificationMixin
 from llm_gateway import router_execution as router_execution_module
 from llm_gateway.router_execution import ExecutionMixin
-from llm_gateway.stream_protocol import ModelStreamEvent, StreamTurnResult
+from llm_gateway.stream_protocol import (
+    ModelStreamEvent,
+    StreamTurnResult,
+    StructuredStreamProtocolError,
+)
 from llm_gateway.transports.base import ToolCall
 from tool_engine.tool_call_handler import ToolCallHandler
 from tool_engine.tool_registry import ToolResult
@@ -47,7 +52,7 @@ def _chunk(
 
 
 class _Stream:
-    def __init__(self, chunks: list[SimpleNamespace], error: Exception | None = None) -> None:
+    def __init__(self, chunks: list[SimpleNamespace], error: BaseException | None = None) -> None:
         self._chunks = iter(chunks)
         self._error = error
         self._raised = False
@@ -159,6 +164,7 @@ async def test_legacy_chat_stream_records_usage_and_success_exactly_once(monkeyp
     router = _StructuredRouter([_Stream([
         _chunk(content="第一段"),
         _chunk(content="第二段"),
+        _chunk(finish_reason="stop"),
         SimpleNamespace(choices=[], usage=usage),  # usage 终止 chunk
     ])])
     metrics_mock = MagicMock()
@@ -179,6 +185,119 @@ async def test_legacy_chat_stream_records_usage_and_success_exactly_once(monkeyp
     assert len(success_incs) == 1
     # duration 观测同样仅一次
     assert metrics_mock.observe.call_count == 1
+
+
+@pytest.mark.asyncio
+async def test_legacy_stream_eof_without_finish_reason_rejects_punctuated_fragment(
+    monkeypatch,
+) -> None:
+    """句末标点不能替代 provider 的显式流终止信号。"""
+    stream = _Stream([_chunk(content="这段残片看似完整。")])
+    router = _StructuredRouter([stream])
+    metrics_mock = MagicMock()
+    monkeypatch.setattr(router_execution_module, "metrics", metrics_mock)
+    parts: list[str] = []
+
+    with pytest.raises(StructuredStreamProtocolError) as caught:
+        async for part in router.chat_stream(
+            [{"role": "user", "content": "你好"}],
+        ):
+            parts.append(part)
+
+    assert caught.value.code == "stream_incomplete"
+    assert parts == ["这段残片看似完整。"]
+    assert stream.closed is True
+    assert router._record_stream_usage.await_count == 0
+    assert router._try_fallback_chain.await_count == 0
+    metrics_mock.inc.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_legacy_stream_eof_without_output_uses_existing_fallback(
+    monkeypatch,
+) -> None:
+    router = _StructuredRouter([_Stream([
+        SimpleNamespace(choices=[], usage=None),
+    ])])
+    router._try_fallback_chain.return_value = "fallback answer."
+    metrics_mock = MagicMock()
+    monkeypatch.setattr(router_execution_module, "metrics", metrics_mock)
+
+    parts = [part async for part in router.chat_stream(
+        [{"role": "user", "content": "hello"}],
+    )]
+
+    assert parts == ["fallback answer."]
+    protocol_error = router._handle_route_exception.await_args.args[0]
+    assert isinstance(protocol_error, StructuredStreamProtocolError)
+    assert protocol_error.code == "stream_incomplete"
+    fallback_error = router._try_fallback_chain.await_args.args[0]
+    assert fallback_error is protocol_error
+    assert not any(
+        call.args and call.args[0] == "model_route.chat.success"
+        for call in metrics_mock.inc.call_args_list
+    )
+
+
+@pytest.mark.asyncio
+async def test_structured_text_stream_eof_without_finish_reason_is_incomplete(
+    monkeypatch,
+) -> None:
+    stream = _Stream([_chunk(content="结构化残片也像完整句子。")])
+    router = _StructuredRouter([stream])
+    metrics_mock = MagicMock()
+    monkeypatch.setattr(router_execution_module, "metrics", metrics_mock)
+    events: list[ModelStreamEvent] = []
+
+    with pytest.raises(StructuredStreamProtocolError) as caught:
+        async for event in router.chat_stream_events(
+            [{"role": "user", "content": "hello"}],
+        ):
+            events.append(event)
+
+    assert caught.value.code == "stream_incomplete"
+    assert [event.kind for event in events] == ["text_delta"]
+    assert stream.closed is True
+    assert router._record_stream_usage.await_count == 0
+    assert router._try_fallback_chain.await_count == 0
+    metrics_mock.inc.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_structured_tool_stream_without_finish_reason_uses_protocol_inference() -> None:
+    router = _StructuredRouter([_Stream([
+        _chunk(tool_calls=[_tool_delta(
+            index=0, call_id="call_1", name="weather", arguments="{}",
+        )]),
+    ])])
+
+    events = [event async for event in router.chat_stream_events(
+        [{"role": "user", "content": "weather"}],
+        tools=[{"type": "function", "function": {"name": "weather"}}],
+    )]
+
+    assert events[-1].kind == "turn_end"
+    assert events[-1].finish_reason == "tool_calls"
+    assert events[-1].tool_calls[0].name == "weather"
+
+
+@pytest.mark.asyncio
+async def test_legacy_stream_does_not_swallow_cancelled_error(monkeypatch) -> None:
+    stream = _Stream([], asyncio.CancelledError())
+    router = _StructuredRouter([stream])
+    metrics_mock = MagicMock()
+    monkeypatch.setattr(router_execution_module, "metrics", metrics_mock)
+
+    with pytest.raises(asyncio.CancelledError):
+        async for _part in router.chat_stream(
+            [{"role": "user", "content": "hello"}],
+        ):
+            pass
+
+    assert stream.closed is True
+    router._handle_route_exception.assert_not_awaited()
+    router._try_fallback_chain.assert_not_awaited()
+    metrics_mock.inc.assert_not_called()
 
 
 @pytest.mark.asyncio

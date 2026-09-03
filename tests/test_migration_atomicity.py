@@ -9,10 +9,13 @@
 """
 from __future__ import annotations
 
+import asyncio
+
 import aiosqlite
 import pytest
 
 from db.database import DatabaseManager
+from db.db_memory import MemoryDB
 
 
 async def _make_legacy_v16_greeting_db(tmp_path):
@@ -187,3 +190,102 @@ async def test_retry_after_failed_migration_succeeds_clean(tmp_path):
         assert [r["tag"] for r in rows] == ["attempt2"]
     finally:
         await manager.close()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("migration_kind", ["workflow", "source_column"])
+async def test_migration_helpers_do_not_release_savepoint_on_failure(
+    tmp_path, migration_kind
+):
+    """迁移 helper 不得自行 commit，否则后续故障无法回滚其 DDL。"""
+    db_path = tmp_path / f"helper-{migration_kind}.db"
+    manager = DatabaseManager(db_path)
+    manager._conn = await aiosqlite.connect(str(db_path))
+    manager._conn.row_factory = aiosqlite.Row
+    try:
+        await manager._setup_migration_state()
+        if migration_kind == "workflow":
+            migration = manager._migrate_v27
+            probe_name = "wf_definition"
+        else:
+            await manager._conn.execute(
+                "CREATE TABLE episodic_memories (id INTEGER PRIMARY KEY)"
+            )
+            await manager._conn.commit()
+            manager.memory = MemoryDB(manager._conn)
+            migration = manager._migrate_v4
+            probe_name = "source"
+
+        async def broken_migration():
+            await migration()
+            raise RuntimeError("fault-after-helper")
+
+        with pytest.raises(RuntimeError, match="fault-after-helper"):
+            await manager._apply_migration(9001, migration_kind, broken_migration)
+
+        if migration_kind == "workflow":
+            objects = await manager._conn.execute_fetchall(
+                "SELECT name FROM sqlite_master WHERE type='table' AND name=?",
+                (probe_name,),
+            )
+            assert objects == []
+        else:
+            columns = await manager._conn.execute_fetchall(
+                "PRAGMA table_info(episodic_memories)"
+            )
+            assert probe_name not in {row[1] for row in columns}
+    finally:
+        await manager.close()
+
+
+@pytest.mark.asyncio
+async def test_cross_manager_migrations_lock_database_and_reread_version(tmp_path):
+    """同一路径的两个管理器只能有一个执行待应用迁移体。"""
+    db_path = tmp_path / "concurrent-migration.db"
+    managers = [DatabaseManager(db_path), DatabaseManager(db_path)]
+    for manager in managers:
+        manager._conn = await aiosqlite.connect(str(db_path))
+        manager._conn.row_factory = aiosqlite.Row
+        await manager._conn.execute("PRAGMA busy_timeout=1000")
+
+    entered = asyncio.Event()
+    release = asyncio.Event()
+    calls = 0
+
+    async def controlled_migration():
+        nonlocal calls
+        calls += 1
+        entered.set()
+        await release.wait()
+        await managers[0]._conn.execute(
+            "CREATE TABLE IF NOT EXISTS migration_probe (id INTEGER PRIMARY KEY)"
+        )
+
+    for manager in managers:
+        manager._migration_entries = lambda: [
+            (1, "concurrency probe", controlled_migration)
+        ]
+
+    first_task = asyncio.create_task(managers[0]._run_migrations())
+    await entered.wait()
+    second_task = asyncio.create_task(managers[1]._run_migrations())
+    try:
+        await asyncio.sleep(0.05)
+        assert calls == 1, "数据库迁移锁后重读版本，第二个管理器不得重复执行迁移体"
+    finally:
+        release.set()
+        results = await asyncio.gather(
+            first_task, second_task, return_exceptions=True
+        )
+        for manager in reversed(managers):
+            await manager.close()
+
+    assert results == [None, None]
+    verify = await aiosqlite.connect(str(db_path))
+    try:
+        rows = await verify.execute_fetchall(
+            "SELECT version FROM schema_version ORDER BY version"
+        )
+        assert rows == [(1,)]
+    finally:
+        await verify.close()

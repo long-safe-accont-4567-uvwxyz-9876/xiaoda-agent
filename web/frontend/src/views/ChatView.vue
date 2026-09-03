@@ -119,9 +119,8 @@ watch(() => chat.messages.length, () => {
   el.scrollTo({ top: el.scrollHeight, behavior: isStreaming ? 'auto' : 'smooth' })
 }, { flush: 'post' })  // post：等 DOM 更新后再读取 scrollHeight 并滚动
 
-// 离屏惰性渲染（零依赖）：只给可视带 ± 1.2 屏内的行渲染 markdown，
-// 带外行降级为转义纯文本并跳过 layout/paint（content-visibility）。
-// 流式内容不断追高时以 250ms 兜底重测；行数/会话切换后均强制重测几何。
+// Render markdown only near the viewport; off-band rows keep cheap escaped text.
+// Streaming content is periodically remeasured, and list changes invalidate geometry.
 const { rendered: renderedBand, refresh: refreshBand } = useRenderedBand(
   messagesEl,
   computed(() => chat.messages.length),
@@ -132,7 +131,7 @@ const { rendered: renderedBand, refresh: refreshBand } = useRenderedBand(
 )
 function inBand(index: number): boolean {
   const set = renderedBand.value
-  return !set || set.has(index)  // null = 尚未测量 → 全量渲染兜底（不闪空）
+  return !set || set.has(index)  // Render everything until the first measurement completes.
 }
 watch(() => chat.messages.length, () => refreshBand(true), { flush: 'post' })
 watch(() => chat.sessionId, () => { nextTick(() => refreshBand(true)) })
@@ -580,8 +579,7 @@ const emotionColors: Record<string, string> = {
   max-width: min(85%, 900px);
   min-width: 0;
   animation: slideUp 0.3s var(--ease-smooth);
-  /* 离屏惰性渲染：行在可视带外时跳过 layout/paint（浏览器原生）；
-     contain-intrinsic-size 用记忆高度占位，防滚动条跳动与行高塌缩 */
+  /* Let the browser skip off-screen layout while preserving the measured row height. */
   content-visibility: auto;
   contain-intrinsic-size: auto 240px;
 }
@@ -643,7 +641,7 @@ const emotionColors: Record<string, string> = {
   min-width: 0;
   max-width: 100%;
 }
-/* 带外行：纯文本展示（保留换行/空白），markdown 样式待进入可视带后再套 */
+/* Off-band rows preserve whitespace until markdown rendering becomes visible. */
 .message-content.band-off { white-space: pre-wrap; }
 .message-content.plain { white-space: pre-wrap; }
 .message-content.streaming-text { white-space: pre-wrap; }

@@ -286,7 +286,7 @@ def get_chat_model_label(token: str, host: str | None = None,
 def _local_default_model_label() -> str:
     """无主进程时的本地 fallback：从 provider_metadata.json 派生默认模型，不硬编码。"""
     try:
-        from config import get_default_provider, get_default_model_for_provider
+        from config import get_default_model_for_provider, get_default_provider
         provider = get_default_provider()
         model = get_default_model_for_provider(provider)
         return f"{provider}/{model}" if model else provider

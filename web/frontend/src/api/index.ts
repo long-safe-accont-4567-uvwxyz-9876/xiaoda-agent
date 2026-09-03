@@ -303,28 +303,64 @@ export async function getSetupVersion(): Promise<{ version: string }> {
   return get('/setup/version')
 }
 
+function safeMarkdownDownloadName(contentDisposition: string | null, sessionId: string): string {
+  const candidates: string[] = []
+  if (contentDisposition) {
+    const encoded = contentDisposition.match(/(?:^|;)\s*filename\*\s*=\s*UTF-8''([^;]+)/i)?.[1]
+    if (encoded) {
+      try {
+        candidates.push(decodeURIComponent(encoded.trim().replace(/^"|"$/g, '')))
+      } catch { /* malformed RFC 5987 value; try the plain filename fallback */ }
+    }
+    const plain = contentDisposition.match(/(?:^|;)\s*filename\s*=\s*(?:"([^"]*)"|([^;]*))/i)
+    if (plain) candidates.push((plain[1] ?? plain[2]).trim())
+  }
+  candidates.push(`${sessionId}.md`, 'session-export.md')
+  return candidates.find(filename => {
+    if (filename.length > 200 || filename !== filename.trim()) return false
+    if (!/^[^./\\][^/\\\u0000-\u001f\u007f<>:"|?*]*\.md$/iu.test(filename)) return false
+    if (filename.includes('..')) return false
+    return !/^(?:con|prn|aux|nul|com[1-9]|lpt[1-9])\.md$/i.test(filename)
+  })!
+}
+
 /** 通过 POST + Authorization header 安全下载会话导出 */
 export async function exportSessionDownload(sessionId: string): Promise<void> {
   const token = localStorage.getItem('token')
-  const res = await fetch(`${BASE}/sessions/${sessionId}/export`, {
+  const res = await fetch(`${BASE}/sessions/${encodeURIComponent(sessionId)}/export`, {
     method: 'POST',
     headers: {
       ...(token ? { Authorization: `Bearer ${token}` } : {}),
     },
   })
+  if (res.status === 401) {
+    handleUnauthorized()
+    throw new Error(t('login.tokenExpired'))
+  }
+  consumeAuthRenewal(res)
   if (!res.ok) {
     const body = await res.json().catch(() => ({}))
     throw new Error(body?.error?.message || `导出失败 (HTTP ${res.status})`)
   }
+  const contentType = res.headers.get('Content-Type') || ''
+  if (!/^text\/markdown(?:;|$)/i.test(contentType.trim())) {
+    throw new Error(`导出失败 (Content-Type ${contentType || 'missing'})`)
+  }
+  const filename = safeMarkdownDownloadName(
+    res.headers.get('Content-Disposition'), sessionId,
+  )
   const blob = await res.blob()
   const url = URL.createObjectURL(blob)
   const a = document.createElement('a')
   a.href = url
-  a.download = `session-${sessionId}.json`
+  a.download = filename
   document.body.appendChild(a)
-  a.click()
-  document.body.removeChild(a)
-  URL.revokeObjectURL(url)
+  try {
+    a.click()
+  } finally {
+    document.body.removeChild(a)
+    URL.revokeObjectURL(url)
+  }
 }
 
 // ── 记忆管理 ──

@@ -182,7 +182,9 @@ class DDLMixin:
                 version INTEGER DEFAULT 1,
                 source_ids TEXT DEFAULT '',
                 change_log TEXT DEFAULT '',
-                created_at REAL NOT NULL
+                created_at REAL NOT NULL,
+                user_id TEXT NOT NULL DEFAULT '',
+                agent_id TEXT NOT NULL DEFAULT ''
             )
         """)
 
@@ -197,9 +199,21 @@ class DDLMixin:
                 due_date REAL DEFAULT 0,
                 status TEXT DEFAULT 'active',
                 created_at REAL NOT NULL,
-                updated_at REAL NOT NULL
+                updated_at REAL NOT NULL,
+                user_id TEXT NOT NULL DEFAULT '',
+                agent_id TEXT NOT NULL DEFAULT ''
             )
         """)
+        # Additive compatibility for databases already at the latest legacy
+        # schema version. Empty defaults deliberately leave old rows unowned.
+        await self._ensure_columns("user_portrait", {
+            "user_id": "user_id TEXT NOT NULL DEFAULT ''",
+            "agent_id": "agent_id TEXT NOT NULL DEFAULT ''",
+        })
+        await self._ensure_columns("notebook_entries", {
+            "user_id": "user_id TEXT NOT NULL DEFAULT ''",
+            "agent_id": "agent_id TEXT NOT NULL DEFAULT ''",
+        })
 
         # proactive_messages
         await self._conn.execute("""
@@ -295,7 +309,9 @@ class DDLMixin:
         await self._conn.execute("""CREATE INDEX IF NOT EXISTS idx_mem_ts ON episodic_memories(timestamp)""")
         await self._conn.execute("""CREATE INDEX IF NOT EXISTS idx_mem_importance ON episodic_memories(importance)""")
         await self._conn.execute("""CREATE INDEX IF NOT EXISTS idx_portrait_created ON user_portrait(created_at)""")
+        await self._conn.execute("""CREATE INDEX IF NOT EXISTS idx_portrait_scope_version ON user_portrait(user_id, agent_id, version DESC, id DESC)""")
         await self._conn.execute("""CREATE INDEX IF NOT EXISTS idx_notebook_kind ON notebook_entries(kind)""")
+        await self._conn.execute("""CREATE INDEX IF NOT EXISTS idx_notebook_scope_status ON notebook_entries(user_id, agent_id, status, updated_at DESC)""")
         await self._conn.execute("""CREATE INDEX IF NOT EXISTS idx_notebook_status ON notebook_entries(status)""")
         await self._conn.execute("""CREATE INDEX IF NOT EXISTS idx_notebook_due ON notebook_entries(due_date)""")
         await self._conn.execute("""CREATE INDEX IF NOT EXISTS idx_proactive_user ON proactive_messages(user_id)""")

@@ -44,7 +44,6 @@ def _candidate_paths() -> list[Path]:
 
 def _load_builtin_capabilities() -> dict[str, ModelCapabilities]:
     """从 model_capabilities.json 加载内建模型能力表（优先用户配置，其次内置文件）。"""
-    import json
 
     last_error: Exception | None = None
     for path in _candidate_paths():

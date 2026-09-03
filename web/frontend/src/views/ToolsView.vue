@@ -270,7 +270,7 @@ async function installSkillFromMarket(item: any) {
 async function uninstallSkillFromMarket(item: any) {
   uninstallingSkill.value[item.id] = true
   try {
-    await post('/market/skills/uninstall', { item_id: item.id })
+    await post('/market/skills/uninstall', { item_id: item.id }, true)
     message.success(tf('toolsView.skillUninstalled', item.name))
     await loadSkillMarket()
     await loadSkills()

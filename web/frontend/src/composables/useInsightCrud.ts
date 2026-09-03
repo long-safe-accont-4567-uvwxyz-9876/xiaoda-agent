@@ -3,7 +3,7 @@
  * 从 InsightView 原样迁移（2026-08-23 大文件拆分专项）；
  * 校验提示/成功文案/刷新回调时序保持不变。
  */
-import { computed, ref } from 'vue'
+import { computed, provide, ref, type InjectionKey, type Ref } from 'vue'
 import { useMessage } from 'naive-ui'
 import {
   createMemory, updateMemory,
@@ -24,6 +24,8 @@ export interface InsightCrudReloaders {
   knowledge: () => Promise<void> | void
 }
 
+export const insightCrudSubmittingKey: InjectionKey<Readonly<Ref<boolean>>> = Symbol('insightCrudSubmitting')
+
 export function useInsightCrud(reloaders: InsightCrudReloaders) {
   const message = useMessage()
 
@@ -31,6 +33,8 @@ export function useInsightCrud(reloaders: InsightCrudReloaders) {
   const modalType = ref<CrudType | null>(null)
   const editingId = ref<number | string | null>(null)
   const formSeed = ref<Record<string, any>>({})
+  const crudSubmitting = ref(false)
+  provide(insightCrudSubmittingKey, crudSubmitting)
 
   const editing = computed(() => !!editingId.value)
 
@@ -108,6 +112,8 @@ export function useInsightCrud(reloaders: InsightCrudReloaders) {
   }
 
   async function handleModalOk(form: Record<string, any>) {
+    if (crudSubmitting.value) return
+    crudSubmitting.value = true
     try {
       if (modalType.value === 'memory') {
         if (!form.summary) { message.warning(t('insightView.inputMemorySummary')); return }
@@ -162,6 +168,8 @@ export function useInsightCrud(reloaders: InsightCrudReloaders) {
       message.success(editingId.value ? t('insightView.updated') : t('insightView.created'))
     } catch (e: any) {
       message.error(e.message)
+    } finally {
+      crudSubmitting.value = false
     }
   }
 

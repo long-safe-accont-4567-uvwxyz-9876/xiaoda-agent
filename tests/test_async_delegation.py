@@ -12,6 +12,7 @@ import asyncio
 import sys
 import types
 from pathlib import Path
+from unittest.mock import MagicMock
 
 import pytest
 
@@ -31,6 +32,26 @@ def _job(channel: str = "web", task_id: str = "t1", **kw) -> BackgroundDelegatio
     )
     base.update(kw)
     return BackgroundDelegation(**base)
+
+
+def _request_context(*, user_id: str, session_id: str, channel: str = "web"):
+    from agent_core._shared import RequestContext
+
+    return RequestContext(user_id=user_id, session_id=session_id, channel=channel)
+
+
+def _capture_registered_tools(monkeypatch, core):
+    from core.bootstrap import AgentCoreBootstrapper
+    from tool_engine import tool_registry
+
+    tools = {}
+
+    def capture(**definition):
+        tools[definition["name"]] = definition["func"]
+
+    monkeypatch.setattr(tool_registry, "register_tool_direct", capture)
+    AgentCoreBootstrapper(core)._register_delegate_tool()
+    return tools
 
 
 class _FakeCore:
@@ -116,6 +137,141 @@ def test_find_running_filters():
     assert ad.find_running(agent="xiaoli") is j1
     assert ad.find_running(agent="xiaoli", task_id_prefix="bg-xiaoke") is None
     assert ad.find_running(agent="xiaolang") is None
+
+
+async def test_concurrent_request_contexts_isolate_snapshot_and_find_running():
+    from agent_core._shared import _current_request_ctx
+
+    alice = _job(
+        task_id="bg-xiaoli-alice",
+        user_id="alice",
+        session_id="session-a",
+    )
+    bob = _job(
+        task_id="bg-xiaoli-bob",
+        user_id="bob",
+        session_id="session-b",
+    )
+    ad.register(alice)
+    ad.register(bob)
+
+    ready = 0
+    both_ready = asyncio.Event()
+
+    async def inspect(ctx, own_job, foreign_job):
+        nonlocal ready
+        token = _current_request_ctx.set(ctx)
+        try:
+            ready += 1
+            if ready == 2:
+                both_ready.set()
+            await both_ready.wait()
+            await asyncio.sleep(0)
+            visible = ad.snapshot()
+            return (
+                [item["task_id"] for item in visible],
+                ad.find_running(task_id_prefix=own_job.task_id),
+                ad.find_running(task_id_prefix=foreign_job.task_id),
+            )
+        finally:
+            _current_request_ctx.reset(token)
+
+    alice_view, bob_view = await asyncio.gather(
+        inspect(
+            _request_context(user_id="alice", session_id="session-a"),
+            alice,
+            bob,
+        ),
+        inspect(
+            _request_context(user_id="bob", session_id="session-b"),
+            bob,
+            alice,
+        ),
+    )
+
+    assert alice_view == ([alice.task_id], alice, None)
+    assert bob_view == ([bob.task_id], bob, None)
+
+
+def test_registry_ownership_requires_user_session_and_channel():
+    from agent_core._shared import _current_request_ctx
+
+    owner = _request_context(user_id="alice", session_id="session-a", channel="web")
+    jobs = [
+        _job(task_id="owned", user_id="alice", session_id="session-a", channel="web"),
+        _job(task_id="wrong-user", user_id="bob", session_id="session-a", channel="web"),
+        _job(task_id="wrong-session", user_id="alice", session_id="session-b", channel="web"),
+        _job(task_id="wrong-channel", user_id="alice", session_id="session-a", channel="qq"),
+    ]
+    for job in jobs:
+        ad.register(job)
+
+    token = _current_request_ctx.set(owner)
+    try:
+        assert [item["task_id"] for item in ad.snapshot()] == ["owned"]
+        assert ad.find_running(task_id_prefix="owned") is jobs[0]
+        for foreign in jobs[1:]:
+            assert ad.find_running(task_id_prefix=foreign.task_id) is None
+    finally:
+        _current_request_ctx.reset(token)
+
+
+async def test_control_tool_rejects_foreign_full_task_id(monkeypatch):
+    from agent_core._shared import _current_request_ctx
+
+    core = types.SimpleNamespace(
+        _agent_route_configs={},
+        sticker_manager=types.SimpleNamespace(available=False),
+    )
+    control = _capture_registered_tools(monkeypatch, core)["sub_agent_control"]
+
+    class TaskHandle:
+        def __init__(self):
+            self.cancelled = False
+
+        def done(self):
+            return False
+
+        def cancel(self):
+            self.cancelled = True
+
+    own = _job(
+        task_id="bg-xiaoli-own-full-id",
+        user_id="alice",
+        session_id="session-a",
+    )
+    foreign = _job(
+        task_id="bg-xiaoli-foreign-full-id",
+        user_id="bob",
+        session_id="session-b",
+    )
+    own.asyncio_task = TaskHandle()
+    foreign.asyncio_task = TaskHandle()
+    ad.register(own)
+    ad.register(foreign)
+
+    token = _current_request_ctx.set(
+        _request_context(user_id="alice", session_id="session-a")
+    )
+    try:
+        status = await control("status")
+        interject = await control(
+            "interject", target=foreign.task_id, message="泄露给另一个会话"
+        )
+        abort_foreign = await control("abort", target=foreign.task_id)
+        own_interject = await control(
+            "interject", target=own.task_id, message="只给自己的补充"
+        )
+        abort_own = await control("abort", target=own.task_id)
+    finally:
+        _current_request_ctx.reset(token)
+
+    assert own.task_id in status.data
+    assert foreign.task_id not in status.data
+    assert not interject.success and foreign.interjections == []
+    assert not abort_foreign.success and not foreign.asyncio_task.cancelled
+    assert own_interject.success and own.interjections == ["只给自己的补充"]
+    assert abort_own.success and own.asyncio_task.cancelled
 
 
 # ── 转述投递：普通消息语义（无专用帧） ───────────────────────────
@@ -310,6 +466,152 @@ async def test_runner_error_composes_failure(monkeypatch):
     await M.run_background_delegation(mgr, job)
 
     assert bucket == [(True, "执行出错了：provider 500")]
+
+
+async def test_delegate_background_saves_handle_aborts_and_reclaims(monkeypatch):
+    from agent_core._shared import _current_request_ctx
+    from core.background_tasks import BackgroundTaskManager
+
+    started = asyncio.Event()
+    stopped = asyncio.Event()
+
+    async def run_background_delegation(job):
+        started.set()
+        try:
+            await asyncio.Event().wait()
+        except asyncio.CancelledError:
+            ad.mark_cancelled(job.task_id)
+            stopped.set()
+
+    manager = BackgroundTaskManager(MagicMock(), MagicMock())
+    core = types.SimpleNamespace(
+        _agent_route_configs={
+            "xiaoli": {"display_name": "小莉", "route_description": "测试"}
+        },
+        _bg_task_manager=manager,
+        delegate_to_agent=None,
+        run_background_delegation=run_background_delegation,
+        sticker_manager=types.SimpleNamespace(available=False),
+    )
+    tools = _capture_registered_tools(monkeypatch, core)
+    delegate = tools["delegate_task"]
+    control = tools["sub_agent_control"]
+    ctx = _request_context(user_id="alice", session_id="session-a")
+
+    token = _current_request_ctx.set(ctx)
+    try:
+        result = await delegate("xiaoli", "保持运行", background=True)
+        await started.wait()
+        job = ad.snapshot()[0]
+        registered = ad.get(job["task_id"])
+
+        assert result.success
+        assert registered is not None
+        assert registered.asyncio_task in manager.get_owned_tasks()
+
+        aborted = await control("abort", target=registered.task_id)
+        assert aborted.success
+        await stopped.wait()
+        await asyncio.sleep(0)
+    finally:
+        _current_request_ctx.reset(token)
+        await manager.cancel_background_tasks()
+
+    assert registered.status == "cancelled"
+    assert registered.asyncio_task.done()
+    assert registered.asyncio_task not in manager.get_owned_tasks()
+
+
+async def test_delegate_runner_crash_uses_existing_fallback_delivery(monkeypatch):
+    from agent_core._shared import _current_request_ctx
+    from core.background_tasks import BackgroundTaskManager
+
+    delivered = asyncio.Event()
+    calls = []
+
+    async def crash(job):
+        raise RuntimeError("runner exploded")
+
+    async def fake_deliver_text(job, text, *, failed=False):
+        calls.append((job, text, failed))
+        delivered.set()
+        return True
+
+    monkeypatch.setattr(ad, "deliver_text", fake_deliver_text)
+    manager = BackgroundTaskManager(MagicMock(), MagicMock())
+    core = types.SimpleNamespace(
+        _agent_route_configs={
+            "xiaoli": {"display_name": "小莉", "route_description": "测试"}
+        },
+        _bg_task_manager=manager,
+        delegate_to_agent=None,
+        run_background_delegation=crash,
+        sticker_manager=types.SimpleNamespace(available=False),
+    )
+    delegate = _capture_registered_tools(monkeypatch, core)["delegate_task"]
+    token = _current_request_ctx.set(
+        _request_context(user_id="alice", session_id="session-a")
+    )
+    try:
+        result = await delegate("xiaoli", "触发崩溃", background=True)
+        await asyncio.wait_for(delivered.wait(), timeout=1)
+        await asyncio.sleep(0)
+    finally:
+        _current_request_ctx.reset(token)
+        await manager.cancel_background_tasks()
+
+    job, text, failed = calls[0]
+    assert result.success
+    assert job.status == "failed"
+    assert "runner exploded" in text
+    assert failed is True
+    assert job.asyncio_task.done()
+    assert job.asyncio_task not in manager.get_owned_tasks()
+
+
+async def test_manager_shutdown_cancels_and_reclaims_delegation(monkeypatch):
+    from agent_core._shared import _current_request_ctx
+    from core.background_tasks import BackgroundTaskManager
+
+    started = asyncio.Event()
+    cancelled = asyncio.Event()
+
+    async def run_background_delegation(job):
+        started.set()
+        try:
+            await asyncio.Event().wait()
+        except asyncio.CancelledError:
+            ad.mark_cancelled(job.task_id)
+            cancelled.set()
+
+    manager = BackgroundTaskManager(MagicMock(), MagicMock())
+    core = types.SimpleNamespace(
+        _agent_route_configs={
+            "xiaoli": {"display_name": "小莉", "route_description": "测试"}
+        },
+        _bg_task_manager=manager,
+        delegate_to_agent=None,
+        run_background_delegation=run_background_delegation,
+        sticker_manager=types.SimpleNamespace(available=False),
+    )
+    delegate = _capture_registered_tools(monkeypatch, core)["delegate_task"]
+    token = _current_request_ctx.set(
+        _request_context(user_id="alice", session_id="session-a")
+    )
+    try:
+        await delegate("xiaoli", "等待停机", background=True)
+        await started.wait()
+        job = ad.get(ad.snapshot()[0]["task_id"])
+        await manager.cancel_background_tasks()
+        await cancelled.wait()
+    finally:
+        _current_request_ctx.reset(token)
+        await manager.cancel_background_tasks()
+
+    assert job is not None
+    assert job.status == "cancelled"
+    assert job.asyncio_task.done()
+    assert manager.get_owned_tasks() == set()
 
 
 # ── 插话队列消费纯函数 ────────────────────────────────────────

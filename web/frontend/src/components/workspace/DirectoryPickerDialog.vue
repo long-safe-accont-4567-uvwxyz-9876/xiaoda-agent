@@ -20,27 +20,44 @@ const parentPath = ref<string | null>(null)
 const dirs = ref<string[]>([])
 const manualInput = ref('')
 const loading = ref(false)
+let browseGeneration = 0
 
 async function browse(path: string) {
+  if (loading.value || !props.show) return
+  const generation = ++browseGeneration
   loading.value = true
   try {
     const data = await ws.browse(path)
+    if (generation !== browseGeneration || !props.show) return
     currentPath.value = data.current
     parentPath.value = data.parent
     dirs.value = data.dirs || []
     manualInput.value = data.current
   } catch (e: any) {
+    if (generation !== browseGeneration || !props.show) return
     message.error(e.message || '浏览目录失败')
   } finally {
-    loading.value = false
+    if (generation === browseGeneration) loading.value = false
   }
 }
 
 watch(() => props.show, (v) => {
-  if (v && !currentPath.value) browse('')
+  if (!v) {
+    browseGeneration += 1
+    loading.value = false
+    return
+  }
+  if (!currentPath.value) browse('')
 })
 
+function closeDialog() {
+  browseGeneration += 1
+  loading.value = false
+  emit('cancel')
+}
+
 function selectDir() {
+  if (loading.value) return
   const p = manualInput.value.trim() || currentPath.value
   if (!p) { message.warning('请输入或选择目录'); return }
   emit('select', p)
@@ -53,7 +70,7 @@ function enterDir(d: string) {
 </script>
 
 <template>
-  <NModal :show="show" @update:show="(v: boolean) => !v && emit('cancel')" preset="card"
+  <NModal :show="show" @update:show="(v: boolean) => !v && closeDialog()" preset="card"
     title="选择工作目录" style="max-width: 560px">
     <div style="margin-bottom: 8px">
       <NInput v-model:value="manualInput" placeholder="手动输入绝对路径" :disabled="loading" />
@@ -61,20 +78,30 @@ function enterDir(d: string) {
     <div v-if="currentPath" style="margin-bottom: 8px; color: var(--moon-dim); font-size: 13px">
       当前：{{ currentPath }}
     </div>
-    <div style="max-height: 320px; overflow-y: auto; border: 1px solid var(--line); border-radius: 4px; background: rgba(7, 18, 13, 0.45)">
-      <div v-if="parentPath" class="dir-item" @click="browse(parentPath!)"><SumeruIcon name="folder" :size="14" variant="duo" tone="view" interactive /> ..（上级）</div>
-      <div v-for="d in dirs" :key="d" class="dir-item" @click="enterDir(d)"><SumeruIcon name="folder" :size="14" variant="duo" tone="view" interactive /> {{ d }}</div>
+    <div :aria-busy="loading" style="max-height: 320px; overflow-y: auto; border: 1px solid var(--line); border-radius: 4px; background: rgba(7, 18, 13, 0.45)">
+      <button v-if="parentPath" type="button" class="dir-item" :disabled="loading" @click="browse(parentPath!)"><SumeruIcon name="folder" :size="14" variant="duo" tone="view" interactive /> ..（上级）</button>
+      <button v-for="d in dirs" :key="d" type="button" class="dir-item" :disabled="loading" @click="enterDir(d)"><SumeruIcon name="folder" :size="14" variant="duo" tone="view" interactive /> {{ d }}</button>
       <div v-if="!dirs.length && currentPath && !loading" style="padding: 12px; color: var(--moon-faint)">无子目录</div>
       <div v-if="loading" style="padding: 12px; color: var(--moon-faint)">加载中...</div>
     </div>
     <template #footer>
-      <NButton @click="emit('cancel')">取消</NButton>
-      <NButton type="primary" @click="selectDir">选择此目录</NButton>
+      <NButton @click="closeDialog">取消</NButton>
+      <NButton type="primary" :disabled="loading" @click="selectDir">选择此目录</NButton>
     </template>
   </NModal>
 </template>
 
 <style scoped>
-.dir-item { padding: 6px 12px; cursor: pointer; color: var(--moon-soft); }
-.dir-item:hover { background: rgba(145, 232, 102, 0.08); }
+.dir-item {
+  width: 100%;
+  padding: 6px 12px;
+  border: 0;
+  background: transparent;
+  color: var(--moon-soft);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.dir-item:hover:not(:disabled) { background: rgba(145, 232, 102, 0.08); }
+.dir-item:disabled { cursor: not-allowed; opacity: 0.5; }
 </style>

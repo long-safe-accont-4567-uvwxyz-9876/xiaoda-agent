@@ -37,7 +37,7 @@ def _derive_builtin_fallback_models() -> dict[str, list[dict]]:
     只对未声明 supports_model_discovery 的 provider 生成条目；模型 id/展示名/
     免费/工具/视觉能力全部来自元数据与 get_capabilities，不硬编码模型名。
     """
-    from config_providers import get_provider_capability, get_default_model_for_provider
+    from config_providers import get_default_model_for_provider, get_provider_capability
     from web.model_capabilities import get_capabilities
 
     try:

@@ -1,6 +1,5 @@
-from typing import Any
-
 import asyncio
+from typing import Any
 
 import aiosqlite
 from loguru import logger

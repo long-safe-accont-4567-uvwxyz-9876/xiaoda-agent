@@ -8,11 +8,15 @@
 import asyncio
 import sys
 from pathlib import Path
+from types import SimpleNamespace
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-ROOT = Path(__file__).parent.parent
-sys.path.insert(0, str(ROOT))
+sys.path.insert(0, str(Path(__file__).parent.parent))
+
+from agent_core.sub_agent_manager import SubAgentManagerMixin
+from agent_core.subagents import SubAgentInvocationResult
 
 
 class FakeSubAgentManager:
@@ -142,6 +146,44 @@ async def test_retry_fallback_all_fail(manager):
     manager.dispatch_results = {"xiaoke": "", "xiaolang": "x"}
     result = await manager._retry_fallback(["xiaoke", "xiaolang"], "test")
     assert "未能完成" in result
+
+
+@pytest.mark.asyncio
+async def test_retry_fallback_uses_status_not_long_error_display_text():
+    manager = SubAgentManagerMixin.__new__(SubAgentManagerMixin)
+    manager.context = SimpleNamespace(current_address_term="爸爸")
+    manager._build_sub_agent_context = MagicMock(return_value="structured context")
+    manager.delegate_to_agent = AsyncMock(return_value="错误：" + "x" * 500)
+
+    agent = SimpleNamespace(
+        config=SimpleNamespace(
+            allowed_paths=[], forbidden_paths=[], permission_mode="default",
+        ),
+        _filtered_tool_names=lambda: set(),
+    )
+    first_failure = SubAgentInvocationResult(
+        target="xiaoke",
+        status="failed",
+        error_code="SUB_AGENT_EXECUTION_FAILED",
+        error_message="错误：" + "x" * 500,
+    )
+    second_success = SubAgentInvocationResult.completed(
+        target="xiaolang", final_report="第二代理完成",
+    )
+    manager.dispatcher = MagicMock()
+    manager.dispatcher.get_agent.return_value = agent
+    manager.dispatcher.dispatch_invocation = AsyncMock(
+        side_effect=[first_failure, second_success],
+    )
+
+    result = await manager._retry_fallback(["xiaoke", "xiaolang"], "test")
+
+    assert result == "第二代理完成"
+    assert manager.dispatcher.dispatch_invocation.await_count == 2
+    assert [
+        call.args[0].target
+        for call in manager.dispatcher.dispatch_invocation.await_args_list
+    ] == ["xiaoke", "xiaolang"]
 
 
 # ============================================================

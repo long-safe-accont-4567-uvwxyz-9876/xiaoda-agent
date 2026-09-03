@@ -1,4 +1,4 @@
-"""POST /setup/keys 首跑引导令牌（bootstrap token）集成测试。
+"""Setup 向导首跑引导令牌（bootstrap token）集成测试。
 
 audit-fix-20260829 Task 1：首跑 + 私网非回环必须携带一次性引导令牌
 （X-Setup-Token 头或 body 的 setup_token 字段），回环保留免令牌首跑体验。
@@ -15,6 +15,7 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 import security.recovery_qa as rqa
+from web.routers import auth as auth_router_mod
 from web.routers import setup as setup_router_mod
 
 _LOOPBACK = "127.0.0.1"
@@ -25,10 +26,12 @@ _PUBLIC_HOST = "8.8.8.8"
 @pytest.fixture
 def client_factory(tmp_path, monkeypatch):
     """隔离首跑判定与令牌密钥文件到 tmp_path，并打桩 save_keys 的重型副作用。"""
+    import config as config_mod
     import setup_wizard as sw
 
     monkeypatch.setattr(sw, "ENV_PATH", str(tmp_path / ".env"))
     monkeypatch.setattr(sw, "ENV_EXAMPLE_PATH", str(tmp_path / "nonexistent.env.example"))
+    monkeypatch.setattr(config_mod, "WORKSPACE_DIR", tmp_path / "workspace")
     monkeypatch.setattr(rqa, "_get_path", lambda: tmp_path / "webui_recovery.json")
     # setup.py 模块级绑定的 CONFIG_DIR 重定向到 tmp_path（引导令牌密钥落这里）
     monkeypatch.setattr(setup_router_mod, "CONFIG_DIR", tmp_path)
@@ -65,6 +68,16 @@ def _body(keys: dict | None = None, **extra) -> dict:
 
 def _read_secret(tmp_path) -> str:
     return (tmp_path / "setup_bootstrap_secret").read_text(encoding="utf-8").strip()
+
+
+def _mark_keys_configured(monkeypatch) -> None:
+    import setup_wizard as sw
+
+    monkeypatch.setattr(sw, "is_first_run", lambda: False)
+
+
+def _profile_body() -> dict:
+    return {"address_term": "爸爸", "name": "测试用户"}
 
 
 # ── 回环：保留免令牌首跑体验 ──
@@ -128,6 +141,111 @@ def test_public_source_still_403(client_factory):
     client = client_factory(_PUBLIC_HOST)
     r = client.post("/setup/keys", json=_body())
     assert r.status_code == 403, r.text
+
+
+# ── 密钥已配置、资料未完成：沿用首跑来源与令牌规则 ──
+
+@pytest.mark.parametrize("method", ["get", "post"])
+def test_incomplete_profile_private_nonloopback_without_token_403(
+    client_factory, monkeypatch, tmp_path, method,
+):
+    _mark_keys_configured(monkeypatch)
+    client = client_factory(_LAN_HOST)
+
+    if method == "get":
+        r = client.get("/setup/user-profile")
+    else:
+        r = client.post("/setup/user-profile", json=_profile_body())
+
+    assert r.status_code == 403, r.text
+    assert r.json()["detail"]["code"] == "SETUP_TOKEN_REQUIRED"
+    assert _read_secret(tmp_path)
+    assert not (tmp_path / "workspace" / "USER.md").exists()
+
+
+@pytest.mark.parametrize("method", ["get", "post"])
+def test_incomplete_profile_private_nonloopback_wrong_header_token_403(
+    client_factory, monkeypatch, method,
+):
+    _mark_keys_configured(monkeypatch)
+    client = client_factory(_LAN_HOST)
+    headers = {"X-Setup-Token": "wrong-token"}
+
+    if method == "get":
+        r = client.get("/setup/user-profile", headers=headers)
+    else:
+        r = client.post("/setup/user-profile", json=_profile_body(), headers=headers)
+
+    assert r.status_code == 403, r.text
+    assert r.json()["detail"]["code"] == "SETUP_TOKEN_REQUIRED"
+
+
+@pytest.mark.parametrize("method", ["get", "post"])
+def test_incomplete_profile_private_nonloopback_valid_header_token_ok(
+    client_factory, monkeypatch, tmp_path, method,
+):
+    _mark_keys_configured(monkeypatch)
+    client = client_factory(_LAN_HOST)
+    denied = client.get("/setup/user-profile")
+    assert denied.status_code == 403, denied.text
+    headers = {"X-Setup-Token": _read_secret(tmp_path)}
+
+    if method == "get":
+        r = client.get("/setup/user-profile", headers=headers)
+    else:
+        r = client.post("/setup/user-profile", json=_profile_body(), headers=headers)
+
+    assert r.status_code == 200, r.text
+    assert r.json()["ok"] is True
+
+
+@pytest.mark.parametrize("method", ["get", "post"])
+def test_incomplete_profile_loopback_still_allows_no_token(
+    client_factory, monkeypatch, tmp_path, method,
+):
+    _mark_keys_configured(monkeypatch)
+    client = client_factory(_LOOPBACK)
+
+    if method == "get":
+        r = client.get("/setup/user-profile")
+    else:
+        r = client.post("/setup/user-profile", json=_profile_body())
+
+    assert r.status_code == 200, r.text
+    assert not (tmp_path / "setup_bootstrap_secret").exists()
+
+
+@pytest.mark.parametrize("method", ["get", "post"])
+def test_completed_profile_requires_normal_bearer_auth(
+    client_factory, monkeypatch, tmp_path, method,
+):
+    _mark_keys_configured(monkeypatch)
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    (workspace / "USER.md").write_text(
+        "## 用户信息\n\n- 称呼：爸爸\n- 姓名：测试用户\n",
+        encoding="utf-8",
+    )
+    client = client_factory(_LAN_HOST)
+    bootstrap_headers = {"X-Setup-Token": "bootstrap-token-is-not-bearer"}
+
+    if method == "get":
+        bootstrap_only = client.get("/setup/user-profile", headers=bootstrap_headers)
+    else:
+        bootstrap_only = client.post(
+            "/setup/user-profile", json=_profile_body(), headers=bootstrap_headers,
+        )
+    assert bootstrap_only.status_code == 401, bootstrap_only.text
+
+    bearer, _ = auth_router_mod._issue_token()
+    bearer_headers = {"Authorization": f"Bearer {bearer}"}
+    if method == "get":
+        authenticated = client.get("/setup/user-profile", headers=bearer_headers)
+    else:
+        authenticated = client.post(
+            "/setup/user-profile", json=_profile_body(), headers=bearer_headers,
+        )
+    assert authenticated.status_code == 200, authenticated.text
 
 
 # ── 找回答案强度：最小 6 字符（常量与 recovery_qa 同源防漂移） ──

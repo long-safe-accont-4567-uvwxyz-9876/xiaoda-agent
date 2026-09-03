@@ -4,11 +4,12 @@
  * 表单初值经 seed prop 注入（useInsightCrud 构造），确定时 emit ok(form 快照)；
  * 校验与 API 调用留在视图层编排（原 handleModalOk 行为不变）。
  */
-import { reactive, watch } from 'vue'
+import { inject, reactive, ref, watch } from 'vue'
 import {
   NButton, NForm, NFormItem, NInput, NModal, NSelect, NSlider, NSpace,
 } from 'naive-ui'
 import { t } from '../../i18n'
+import { insightCrudSubmittingKey } from '../../composables/useInsightCrud'
 import type { CrudType } from './types'
 
 const props = defineProps<{
@@ -25,6 +26,7 @@ const emit = defineEmits<{
 }>()
 
 const formModel = reactive<Record<string, any>>({})
+const submitting = inject(insightCrudSubmittingKey, ref(false))
 
 // 打开时用 seed 克隆重建表单（原 openAdd/openEdit 清空+回填逻辑等价）
 watch(() => props.show, (v) => {
@@ -123,8 +125,8 @@ function onOk() {
     </n-form>
     <template #footer>
       <n-space justify="end">
-        <n-button @click="emit('update:show', false)">{{ t('cancel') }}</n-button>
-        <n-button type="primary" @click="onOk">{{ t('ok') }}</n-button>
+        <n-button :disabled="submitting" @click="emit('update:show', false)">{{ t('cancel') }}</n-button>
+        <n-button type="primary" :loading="submitting" :disabled="submitting" @click="onOk">{{ t('ok') }}</n-button>
       </n-space>
     </template>
   </n-modal>

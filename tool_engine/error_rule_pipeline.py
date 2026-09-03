@@ -213,27 +213,6 @@ class ErrorRulePipeline:
             return None
         return cutoff
 
-    @staticmethod
-    def _render_extract_prompt(tool_name: str, args: str, error: str) -> str:
-        """渲染错误规则提取提示词：production override 优先，缺省回退内置模板。"""
-        try:
-            from core_runtime.prompt_profile_repository import try_resolve
-
-            override = try_resolve("error_rule.extract", {
-                "tool_name": tool_name, "args": args, "error": error,
-            })
-        except Exception:
-            override = None
-        if override is not None:
-            return override[1]
-        # 防御性加固：tool_name/args/error 可能含 {} 字符（如工具参数为 Python 代码）
-        return (
-            EXTRACT_PROMPT
-            .replace("{tool_name}", tool_name)
-            .replace("{args}", args)
-            .replace("{error}", error)
-        )
-
     async def _call_extract_llm(self, tool_name: str, args: dict, error: str, now: float) -> Any:
         """调用 LLM 提取规则文本。返回结果字符串或 None。"""
         args_str = json.dumps(args, ensure_ascii=False)[:500]

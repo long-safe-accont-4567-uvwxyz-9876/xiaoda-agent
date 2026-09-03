@@ -52,7 +52,8 @@ def _make_token(expiry: float) -> str:
     epoch = auth._load_token_epoch()
     payload = f"{expiry}.{nonce}.{epoch}"
     sig = hmac.new(auth._SECRET.encode(), payload.encode(), hashlib.sha256).hexdigest()
-    return base64.urlsafe_b64encode(f"{payload}.{sig}".encode()).decode()
+    # 与 _issue_token 同款契约：base64url 无 padding（" = " 不出现在 token 中）
+    return base64.urlsafe_b64encode(f"{payload}.{sig}".encode()).decode().rstrip("=")
 
 
 def test_revoke_with_grace_allows_access_within_window(monkeypatch, tmp_path):

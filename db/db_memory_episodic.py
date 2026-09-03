@@ -23,7 +23,6 @@ class EpisodicMixin:
             await self._conn.execute(
                 "ALTER TABLE episodic_memories ADD COLUMN source TEXT DEFAULT 'user'"
             )
-            await self._conn.commit()
         except Exception as e:
             # 列已存在时忽略
             logger.debug("db_memory.migrate_add_source_column skipped: {}", e)

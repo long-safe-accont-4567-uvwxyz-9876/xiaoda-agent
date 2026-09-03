@@ -144,6 +144,85 @@ async def test_concurrent_auto_commit_writes_never_commit_foreign_half_txn(tmp_p
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("operation", ["commit", "rollback"])
+async def test_public_transaction_control_waits_for_current_owner(tmp_path, operation):
+    """公共 commit/rollback 不能越过连接锁操作其他任务持有的事务。"""
+    manager = DatabaseManager(tmp_path / f"public-{operation}.db")
+    await manager.init()
+    writer_entered = asyncio.Event()
+    release_writer = asyncio.Event()
+
+    async def owner():
+        async with manager.write_transaction():
+            await manager._conn.execute(
+                "INSERT INTO episodic_memories (timestamp, summary, session_id) "
+                "VALUES (1, 'owned-row', 'user')"
+            )
+            writer_entered.set()
+            await release_writer.wait()
+
+    owner_task = asyncio.create_task(owner())
+    await writer_entered.wait()
+    control_task = asyncio.create_task(getattr(manager, operation)())
+    try:
+        await asyncio.sleep(0.02)
+        assert not control_task.done(), (
+            f"并发 {operation} 必须等待当前事务所有者释放连接锁"
+        )
+    finally:
+        release_writer.set()
+        await asyncio.gather(owner_task, control_task)
+        await manager.close()
+
+
+@pytest.mark.asyncio
+async def test_emotion_auto_commit_write_waits_for_current_owner(tmp_path):
+    """情绪/FSRS mixin 的 auto_commit 写不能提前提交外层半事务。"""
+    manager = DatabaseManager(tmp_path / "emotion-owner.db")
+    await manager.init()
+    writer_entered = asyncio.Event()
+    release_writer = asyncio.Event()
+
+    async def owner():
+        with pytest.raises(RuntimeError, match="rollback-on-purpose"):
+            async with manager.write_transaction():
+                await manager._conn.execute(
+                    "INSERT INTO episodic_memories (timestamp, summary, session_id) "
+                    "VALUES (1, 'must-rollback', 'user')"
+                )
+                writer_entered.set()
+                await release_writer.wait()
+                raise RuntimeError("rollback-on-purpose")
+
+    owner_task = asyncio.create_task(owner())
+    await writer_entered.wait()
+    note_task = asyncio.create_task(
+        manager.memory.insert_recall_note(
+            window_start=1,
+            window_end=2,
+            summary="serialized-note",
+            memory_count=1,
+        )
+    )
+    try:
+        await asyncio.sleep(0.02)
+        assert not note_task.done(), "auto_commit 写必须等待外层事务释放连接锁"
+    finally:
+        release_writer.set()
+        await asyncio.gather(owner_task, note_task)
+
+    leaked = await manager.fetch_one(
+        "SELECT id FROM episodic_memories WHERE summary='must-rollback'"
+    )
+    note = await manager.fetch_one(
+        "SELECT id FROM memory_recall_notes WHERE summary='serialized-note'"
+    )
+    assert leaked is None
+    assert note is not None
+    await manager.close()
+
+
+@pytest.mark.asyncio
 async def test_memorydb_insert_serializes_with_write_transaction(tmp_path):
     """高频写点迁移回归：MemoryDB auto_commit 插入与 write_transaction
     共享连接级锁——长事务回滚期间并发插入不得把半事务提前提交。

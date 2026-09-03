@@ -13,6 +13,7 @@ Agnes → 自定义 provider 的多级降级链，含 timeout 跳链 / 禁止跨
 """
 from __future__ import annotations
 
+import openai as _openai_mod
 from loguru import logger
 
 from config import DEFAULT_PROVIDER as _CFG_DEFAULT_PROVIDER
@@ -129,9 +130,13 @@ class FallbackChainMixin:
                     fallback_tools, tool_choice, timeout, user_openid, session_id,
                     extra_headers=extra_headers,
                 )
-            except (RuntimeError, OSError, KeyError, ValueError, LLMError) as fb_err:
+            except (RuntimeError, OSError, KeyError, ValueError, LLMError,
+                    _openai_mod.APIError) as fb_err:
+                classified = self._error_classifier.classify(fb_err)
                 logger.error("router.fallback_failed",
                              fallback_task=fallback_type,
+                             reason=classified.reason.value,
+                             action=classified.action.value,
                              error=f"{type(fb_err).__name__}: {fb_err}")
 
         # 2. 尝试 Agnes 作为最终降级
@@ -154,8 +159,13 @@ class FallbackChainMixin:
                         agnes_tools, tool_choice, timeout, user_openid, session_id,
                         extra_headers=extra_headers,
                     )
-            except (RuntimeError, OSError, KeyError, ValueError, LLMError) as agnes_err:
-                logger.error("router.agnes_fallback_failed", error=str(agnes_err))
+            except (RuntimeError, OSError, KeyError, ValueError, LLMError,
+                    _openai_mod.APIError) as agnes_err:
+                classified = self._error_classifier.classify(agnes_err)
+                logger.error("router.agnes_fallback_failed",
+                             reason=classified.reason.value,
+                             action=classified.action.value,
+                             error=f"{type(agnes_err).__name__}: {agnes_err}")
 
         # 3. 尝试已注册的自定义 provider（SiliconFlow/OpenRouter/ModelScope 等）
         # 用户硬约束：禁止跨 provider 切换。仅当原 provider 本就是该自定义 provider 时才执行。
@@ -182,12 +192,13 @@ class FallbackChainMixin:
                         user_openid, session_id,
                         extra_headers=extra_headers,
                     )
-                except (RuntimeError, OSError, KeyError, ValueError, LLMError) as cp_err:
-                    # CR-Major-2 修复：补 LLMError 捕获。
-                    # _route_with_retry 内部 _select_client_for_provider 在 client 未初始化时
-                    # 抛 LLMError（继承 AppException，不属于 RuntimeError/OSError/ValueError），
-                    # 原捕获集合漏掉它 → 自定义 provider fallback 链提前终止，异常逃逸到 route()。
+                except (RuntimeError, OSError, KeyError, ValueError, LLMError,
+                        _openai_mod.APIError) as cp_err:
+                    classified = self._error_classifier.classify(cp_err)
                     logger.error("router.custom_provider_fallback_failed",
-                                 provider=cp_name, error=str(cp_err))
+                                 provider=cp_name,
+                                 reason=classified.reason.value,
+                                 action=classified.action.value,
+                                 error=f"{type(cp_err).__name__}: {cp_err}")
                     continue
         return None

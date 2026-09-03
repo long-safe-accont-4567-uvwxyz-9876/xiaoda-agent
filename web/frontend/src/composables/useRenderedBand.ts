@@ -6,9 +6,9 @@
 //   2. 带外行由调用方降级为纯文本（escapeHtmlText），DOM 常驻但成本极低；
 //   3. 调用方给行加 content-visibility + contain-intrinsic-size，离屏行
 //      连 layout/paint 由浏览器原生跳过。
-// 几何采集（getBoundingClientRect）只在脏标记时发生（滚动/内容变化/重采样），
-// 带宽用缓存的 top/height 数组 O(n) 每帧计算；结果以 Set 透出，与上次
-// 相同则跳过赋值（滚动高频下避免整列表无谓重渲染）。
+// 几何采集（getBoundingClientRect）只在内容/尺寸标脏或显式重采样时发生；
+// 滚动帧仅用缓存的 top/height 数组 O(n) 计算可视带。结果以 Set 透出，
+// 与上次相同则跳过赋值（滚动高频下避免整列表无谓重渲染）。
 import { onBeforeUnmount, onMounted, shallowRef, type Ref, type ShallowRef } from 'vue'
 
 export interface RenderedBandOptions {
@@ -52,7 +52,7 @@ export function computeBandRange(
   let last = -1
   for (let i = 0; i < tops.length; i++) {
     const rowTop = tops[i]
-    const rowBottom = i + 1 < tops.length ? tops[i + 1] : tops[i] + heights[i]
+    const rowBottom = rowTop + heights[i]
     if (rowTop <= bottomLimit && rowBottom >= topLimit) {
       if (i < first) first = i
       if (i > last) last = i
@@ -89,6 +89,8 @@ export function useRenderedBand(
   let rafId = 0
   let resampleId: ReturnType<typeof setInterval> | null = null
   let retryTimer: ReturnType<typeof setTimeout> | null = null
+  let rowResizeObserver: ResizeObserver | null = null
+  const observedRows = new Set<Element>()
   let retryCount = 0
   const MAX_MEASURE_RETRIES = 3
 
@@ -103,11 +105,20 @@ export function useRenderedBand(
     const n = rows.length
     const newTops = new Array<number>(n)
     const newHeights = new Array<number>(n)
+    const currentRows = new Set<Element>()
     for (let i = 0; i < n; i++) {
-      const rect = rows[i].getBoundingClientRect()
+      const row = rows[i]
+      const rect = row.getBoundingClientRect()
       newTops[i] = rect.top - elRect.top + scrollTop
       newHeights[i] = rect.height
+      currentRows.add(row)
+      if (rowResizeObserver && !observedRows.has(row)) rowResizeObserver.observe(rows[i])
     }
+    for (const row of observedRows) {
+      if (!currentRows.has(row)) rowResizeObserver?.unobserve(row)
+    }
+    observedRows.clear()
+    for (const row of currentRows) observedRows.add(row)
     tops = newTops
     heights = newHeights
     return true
@@ -154,14 +165,18 @@ export function useRenderedBand(
     rafId = requestAnimationFrame(apply)
   }
 
-  const onScroll = () => refresh(true)  // 滚动必须重测：新入带行从纯文本切 markdown 会变高，旧几何失效
+  const onScroll = () => refresh()
 
   const onResize = () => refresh(true)
 
   onMounted(() => {
+    rowResizeObserver = new ResizeObserver(() => refresh(true))
     refresh(true)
     const el = containerRef.value
-    if (el) el.addEventListener('scroll', onScroll, { passive: true })
+    if (el) {
+      rowResizeObserver.observe(el)
+      el.addEventListener('scroll', onScroll, { passive: true })
+    }
     window.addEventListener('resize', onResize)
     if (resampleMs > 0) {
       resampleId = setInterval(() => {
@@ -173,6 +188,9 @@ export function useRenderedBand(
   onBeforeUnmount(() => {
     if (rafId) cancelAnimationFrame(rafId)
     if (retryTimer !== null) clearTimeout(retryTimer)
+    rowResizeObserver?.disconnect()
+    rowResizeObserver = null
+    observedRows.clear()
     const el = containerRef.value
     el?.removeEventListener('scroll', onScroll)
     window.removeEventListener('resize', onResize)

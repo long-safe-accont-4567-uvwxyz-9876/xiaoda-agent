@@ -17,7 +17,11 @@ from loguru import logger
 from emotion.emotion_simple import detect_emotion
 from web.routers.auth import get_current_user
 from web.schemas import ChatRequest, Envelope, MessageItem, SessionInfo, SlashCommand
-from web.upload_utils import read_upload_limited
+from web.upload_utils import (
+    read_upload_limited,
+    validate_document_content,
+    validate_image_content,
+)
 
 router = APIRouter(tags=["chat"], dependencies=[Depends(get_current_user)])
 
@@ -272,6 +276,7 @@ async def upload_image(file: UploadFile = File(...)) -> Any:
     ext = Path(file.filename or "image.png").suffix.lower() or ".png"
     if ext not in _ALLOWED_IMAGE_EXTS:
         raise HTTPException(400, f"不支持的图片格式，仅允许 {', '.join(sorted(_ALLOWED_IMAGE_EXTS))}")
+    validate_image_content(content, ext)
     filename = f"{uuid.uuid4().hex[:12]}{ext}"
     dest = UPLOAD_DIR / filename
     dest.write_bytes(content)
@@ -292,6 +297,7 @@ async def upload_doc(file: UploadFile = File(...)) -> Any:
     ext = Path(file.filename or "doc.pdf").suffix.lower() or ".pdf"
     if ext not in _ALLOWED_DOC_EXTS:
         raise HTTPException(400, f"不支持的文档格式，仅允许 {', '.join(sorted(_ALLOWED_DOC_EXTS))}")
+    validate_document_content(content, ext)
     filename = f"{uuid.uuid4().hex[:12]}{ext}"
     dest = UPLOAD_DIR / filename
     dest.write_bytes(content)
@@ -318,6 +324,7 @@ def _asr_via_openai(api_key: str, base_url: str, model: str, audio_content: byte
             transcript = client.audio.transcriptions.create(model=model, file=audio_file)
         return transcript.text if hasattr(transcript, "text") else str(transcript)
     finally:
+        client.close()
         if tmp_path and os.path.exists(tmp_path):
             try:
                 os.unlink(tmp_path)

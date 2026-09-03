@@ -7,11 +7,25 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
+import ast
 import asyncio
+import inspect
 import unittest
 from unittest.mock import AsyncMock, MagicMock
 
 from tool_engine.error_rule_pipeline import ErrorRulePipeline
+
+
+def test_pipeline_class_has_no_duplicate_definitions():
+    """Class methods must not be silently replaced by a later definition."""
+
+    class_node = ast.parse(inspect.getsource(ErrorRulePipeline)).body[0]
+    names = [
+        node.name
+        for node in class_node.body
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef))
+    ]
+    assert len(names) == len(set(names))
 
 
 def _make_mock_db(fetchone_return=None, fetchall_return=None, lastrowid=42):

@@ -124,13 +124,31 @@ def note_progress(job: BackgroundDelegation, text: str) -> None:
     job.last_progress = (text or "")[:80]
 
 
+def _belongs_to_request(job: BackgroundDelegation, request_context: Any) -> bool:
+    """按请求的用户、会话和通道三元组判断任务所有权。"""
+    return (
+        job.user_id == (getattr(request_context, "user_id", "") or "")
+        and job.session_id == (getattr(request_context, "session_id", "") or "")
+        and job.channel == (getattr(request_context, "channel", "") or "")
+    )
+
+
+def _current_request_context() -> Any | None:
+    """延迟读取请求上下文，避免模块导入阶段形成循环依赖。"""
+    from agent_core._shared import _current_request_ctx
+
+    return _current_request_ctx.get()
+
+
 def find_running(agent: str | None = None,
                  task_id_prefix: str | None = None,
                  display_name: str | None = None) -> BackgroundDelegation | None:
-    """取最近一条运行中的任务（可按 agent 名/编号前缀/显示名过滤）。"""
+    """取当前请求所有的最近运行中任务，可按名称或编号前缀过滤。"""
+    request_context = _current_request_context()
     candidates = [
         j for j in _JOBS.values()
         if j.status == "running"
+        and (request_context is None or _belongs_to_request(j, request_context))
         and (agent is None or j.agent == agent.lower())
         and (task_id_prefix is None or j.task_id.startswith(task_id_prefix))
         and (display_name is None or j.display_name.lower() == display_name.lower())
@@ -139,9 +157,11 @@ def find_running(agent: str | None = None,
 
 
 def snapshot(status: str | None = None) -> list[dict]:
+    request_context = _current_request_context()
     jobs = [
         j.to_snapshot() for j in _JOBS.values()
-        if status is None or j.status == status
+        if (request_context is None or _belongs_to_request(j, request_context))
+        and (status is None or j.status == status)
     ]
     return sorted(jobs, key=lambda x: x["started_at"], reverse=True)
 

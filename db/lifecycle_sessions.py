@@ -7,13 +7,13 @@ self._write_tx_active / self.insert_audit_log（MRO 保证）。
 from __future__ import annotations
 
 import time
+import uuid
 
 
 class LifecycleSessionMixin:
     async def create_session(self, user_openid: str = "", auto_commit: bool = True) -> str:
         now = time.time()
-        date_str = time.strftime("%Y%m%d", time.localtime(now))
-        session_id = f"SES-{date_str}-{int(now % 100000):05d}"
+        session_id = f"SES-{uuid.uuid4().hex}"
         await self._conn.execute(
             """INSERT INTO sessions
                (id, user_openid, started_at, ended_at, status)

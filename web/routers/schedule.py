@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import json
 import re
+import sqlite3
 import time
 from typing import Any
 
@@ -145,7 +146,7 @@ async def create_greeting(body: dict, request: Request) -> Any:
     # 兼容旧库: 若 greeting_schedules 表无 user_id 列 (尚未迁移 v20),
     # INSERT 会报错, 此时降级为不传 user_id (由 column DEFAULT 处理).
     try:
-        await core.db.execute(
+        inserted_id = await core.db.execute(
             "INSERT INTO greeting_schedules"
             "(type, time, window_start, window_end, count_per_day, days, "
             " prompt_hint, channels, enabled, next_fire_times, created_at, user_id) "
@@ -153,10 +154,11 @@ async def create_greeting(body: dict, request: Request) -> Any:
             (rec["type"], rec["time"], rec["window_start"], rec["window_end"],
              rec["count_per_day"], rec["days"], rec["prompt_hint"],
              rec["channels"], rec["enabled"], time.time(), "webui"))
-    except (OSError, ValueError, RuntimeError) as _e:
-        # 旧库无 user_id 列, 降级为原 INSERT
-        logger.debug("schedule.create_greeting_fallback_no_user_id error={}", str(_e))
-        await core.db.execute(
+    except sqlite3.OperationalError as error:
+        if "user_id" not in str(error).lower():
+            raise
+        logger.info("schedule.create_greeting_legacy_schema_without_user_id")
+        inserted_id = await core.db.execute(
             "INSERT INTO greeting_schedules"
             "(type, time, window_start, window_end, count_per_day, days, "
             " prompt_hint, channels, enabled, next_fire_times, created_at) "
@@ -164,10 +166,8 @@ async def create_greeting(body: dict, request: Request) -> Any:
             (rec["type"], rec["time"], rec["window_start"], rec["window_end"],
              rec["count_per_day"], rec["days"], rec["prompt_hint"],
              rec["channels"], rec["enabled"], time.time()))
-    except Exception:
-        logger.exception("schedule.create_greeting.unexpected_error")
     row = await core.db.fetch_one(
-        "SELECT * FROM greeting_schedules ORDER BY id DESC LIMIT 1")
+        "SELECT * FROM greeting_schedules WHERE id=?", (inserted_id,))
     await _audit(request, "greeting.create", json.dumps(body, ensure_ascii=False))
     return Envelope(data=row or {})
 

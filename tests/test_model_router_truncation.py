@@ -203,6 +203,7 @@ async def test_fallback_max_tokens_passthrough():
     router.TASK_TIMEOUTS = {"chat": 30}
     router._check_cache_health = lambda: None
     router._last_cache_warning = 0.0
+    router._error_classifier = MagicMock()
 
     # mock registry：原 task（chat）与 fallback task（chat_agnes）都是 agnes provider，
     # 即同 provider 内的 task 降级（不算跨 provider 切换），应被允许执行。

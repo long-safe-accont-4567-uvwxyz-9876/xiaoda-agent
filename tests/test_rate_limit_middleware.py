@@ -6,7 +6,7 @@
     3. localhost 白名单放行
     4. 写操作端点限制更严
     5. 429 响应包含 Retry-After header
-    6. 不同用户独立计数 (隔离)
+    6. 客户端 X-User-ID 不能创建独立分桶
 """
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
@@ -117,16 +117,13 @@ def test_retry_after_header():
     assert r.json()["retry_after"] == retry_after
 
 
-# ── 6. 不同用户独立计数 (隔离) ──
+# ── 6. 客户端 X-User-ID 不可信 ──
 
-def test_per_user_isolation():
+
+def test_x_user_id_rotation_does_not_bypass_user_limit():
     app = _make_app(user_limit=2)
     client = TestClient(app)
-    # alice 用完自己的 2 次配额
+    # 单用户部署使用固定主体 + IP；客户端轮换 header 仍命中同一桶。
     assert client.get("/api/v1/ping", headers={"X-User-ID": "alice"}).status_code == 200
-    assert client.get("/api/v1/ping", headers={"X-User-ID": "alice"}).status_code == 200
-    # alice 第 3 次超限
-    assert client.get("/api/v1/ping", headers={"X-User-ID": "alice"}).status_code == 429
-    # bob 独立计数, 不受 alice 影响, 仍可正常请求
     assert client.get("/api/v1/ping", headers={"X-User-ID": "bob"}).status_code == 200
-    assert client.get("/api/v1/ping", headers={"X-User-ID": "bob"}).status_code == 200
+    assert client.get("/api/v1/ping", headers={"X-User-ID": "charlie"}).status_code == 429

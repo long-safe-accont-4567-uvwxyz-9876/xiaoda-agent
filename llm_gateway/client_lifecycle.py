@@ -21,8 +21,10 @@ from openai import AsyncOpenAI
 
 from config import AGNES_BASE_URL
 from config import get_builtin_providers as _get_builtin_providers
+from config_providers import get_provider_catalog, get_provider_config
 from core.app_exception import LLMError
 from core.error_codes import ErrorCodeEnum
+from llm_gateway.contracts import ProviderProtocol
 from model_router_config import (
     MIMO_BASE_URL,
     _resolve_provider_key,
@@ -33,13 +35,14 @@ from utils.common import mask_api_key as _mask_api_key
 
 
 def _ssrf_check(url: str) -> None:
-    """SSRF 防护：5步法校验 base_url 安全性（best-effort，本地 provider 如 Ollama 校验失败仅告警不阻塞）"""
+    """Reject provider endpoints that fail the shared SSRF policy."""
     try:
         ok, reason = _ssrf_validate_url(url)
-        if not ok:
-            logger.warning("router.ssrf_blocked url={} reason={}", url, reason)
-    except (ValueError, OSError) as e:
-        logger.debug("router.ssrf_check_skip url={} error={}", url, str(e))
+    except (ValueError, OSError) as error:
+        raise ValueError(f"provider endpoint validation failed: {error}") from error
+    if not ok:
+        logger.warning("router.ssrf_blocked url={} reason={}", url, reason)
+        raise ValueError(f"provider endpoint blocked by SSRF policy: {reason}")
 
 
 def _provider_cred_env(provider: str) -> tuple[str, str]:
@@ -49,7 +52,6 @@ def _provider_cred_env(provider: str) -> tuple[str, str]:
     MIMO_API_KEY / AGNES_API_KEY / *_BASE_URL 等 env 名。
     """
     try:
-        from config_providers import get_provider_config
         _cfg = get_provider_config(provider)
         return _cfg.get("api_key_env", "") or "", _cfg.get("base_url", "") or ""
     except (ImportError, OSError, ValueError):
@@ -85,23 +87,6 @@ class ClientLifecycleMixin:
         except (AttributeError, KeyError, TypeError):  # 归因失败不允许影响主流程
             return ""
 
-    def _active_api_key(self, provider: str) -> str:
-        """当前实际承载流量的客户端所持有的 API Key。
-
-        凭证池归因锚点：出错/成功上报时用 Key 精确匹配池内凭证，
-        替代"最近使用"启发式（多凭证并发在途时会误伤健康凭证）。
-        """
-        try:
-            if provider == "agnes":
-                client = self._agnes_client
-            elif provider == "mimo":
-                client = self._client
-            else:
-                client = self.get_custom_client(provider)
-            return str(getattr(client, "api_key", "") or "")
-        except (AttributeError, TypeError):
-            return ""
-
     def _register_credential_pool_providers(self) -> None:
         """从凭证池主动注册非 mimo/agnes 的 Provider 到 _custom_clients。
 
@@ -127,8 +112,6 @@ class ClientLifecycleMixin:
             # _derive_known_env_providers 同一规则），不硬编码 provider→format 表
             fmt = "anthropic"
             try:
-                from config_providers import get_provider_catalog
-                from llm_gateway.contracts import ProviderProtocol
                 _definition = get_provider_catalog().get(provider)
                 if _definition.protocol is not ProviderProtocol.ANTHROPIC:
                     fmt = "openai"

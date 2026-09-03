@@ -129,7 +129,7 @@ async function installFromMarket(item: any) {
 async function uninstallFromMarket(item: any) {
   uninstallingMarket.value[item.id] = true
   try {
-    await post('/market/plugins/uninstall', { item_id: item.id })
+    await post('/market/plugins/uninstall', { item_id: item.id }, true)
     message.success(tf('pluginsView.uninstalled', item.name))
     await loadMarket()
     await load()

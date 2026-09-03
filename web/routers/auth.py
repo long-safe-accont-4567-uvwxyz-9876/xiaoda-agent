@@ -2,12 +2,14 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import binascii
 import contextlib
 import hashlib
 import hmac
 import ipaddress
 import json
 import os
+import re
 import secrets
 import time
 from collections import OrderedDict
@@ -18,8 +20,7 @@ from typing import Any
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from loguru import logger
 
-# VULN-28：XFF 信任判定统一从 rate_limit 导入（规则单源，避免两处漂移）
-from web.middleware.rate_limit import _peer_is_trusted_proxy, _trust_forwarded_for
+from web.proxy_headers import resolve_client_ip
 from web.schemas import ChangePasswordRequest, Envelope, LoginRequest, LoginResponse, RecoverRequest
 
 try:
@@ -160,22 +161,42 @@ def _increment_token_epoch() -> int:
         return _token_epoch
 
 
-def _extract_expiry(token: str) -> float:
-    """从 token 中提取过期时间。"""
+_BASE64URL_STRICT = re.compile(r"^[A-Za-z0-9_-]+$")
+
+
+def _strict_b64decode(token: str) -> bytes | None:
+    """严格解码无填充 base64url：非法字符/多余 padding/非零未用尾位 → None。
+
+    base64.urlsafe_b64decode(validate=False) 会静默丢弃 '!' 等非法字符并容忍
+    多余 '='，导致同一 token 的多种文本表示都能通过鉴权；此函数要求规范
+    表示——解码出的字节重新编码（零填充）后必须与原 token 逐字符一致。
+    """
+    if not _BASE64URL_STRICT.fullmatch(token):
+        return None
     try:
-        decoded = base64.urlsafe_b64decode((token + "=" * (-len(token) % 4)).encode()).decode()
-        parts = decoded.rsplit(".", 3)
+        padded = token + "=" * (-len(token) % 4)
+        decoded = base64.urlsafe_b64decode(padded.encode())
+    except (binascii.Error, ValueError):
+        return None
+    if base64.urlsafe_b64encode(decoded).decode().rstrip("=") != token:
+        return None
+    return decoded
+
+
+def _extract_expiry(token: str) -> float:
+    """从 token 中提取过期时间；非规范 token 返回 0.0（视为无效）。"""
+    try:
+        decoded = _strict_b64decode(token)
+        if decoded is None:
+            return 0.0
+        text = decoded.decode()
+        parts = text.rsplit(".", 3)
         if len(parts) == 4:
             return float(parts[0])
-        legacy_parts = decoded.rsplit(".", 2)
+        legacy_parts = text.rsplit(".", 2)
         return float(legacy_parts[0]) if len(legacy_parts) == 3 else 0.0
     except (ValueError, IndexError, TypeError) as exc:
         logger.debug("auth.extract_expiry_failed: {}", exc, exc_info=True)
-        return 0.0
-
-
-    except Exception:
-        logger.exception("auth._extract_expiry.unexpected_error")
         return 0.0
 
 
@@ -298,8 +319,10 @@ def _issue_token() -> tuple[str, float]:
 def _validate_token(token: str) -> bool:
     """Validate token via HMAC signature + revocation check."""
     try:
-        decoded = base64.urlsafe_b64decode((token + "=" * (-len(token) % 4)).encode()).decode()
-        parts = decoded.rsplit(".", 3)
+        decoded = _strict_b64decode(token)
+        if decoded is None:
+            return False
+        parts = decoded.decode().rsplit(".", 3)
         if len(parts) != 4:
             return False
         expiry_str, nonce, epoch_str, sig = parts
@@ -386,33 +409,15 @@ def _get_client_ip(request: Request) -> str:
     """提取客户端真实 IP。
 
     默认使用 TCP 对端 ``request.client.host``。若部署在可信反代后且
-    ``TRUST_FORWARDED_FOR`` 启用，则解析 ``X-Forwarded-For`` 头:
-    取最右侧非可信代理 IP (覆盖多层反代场景, 跳过末尾的内网代理 IP).
-    修复 P1：原代码用 request.client.host，反代后所有请求对端均为 127.0.0.1，
-    导致无密码模式对公网开放、限流白名单失效。
+    ``TRUST_FORWARDED_FOR`` 启用，则从右向左跳过显式配置的可信代理，
+    返回第一个非可信 IP。
 
     VULN-28：仅当 socket 对端是可信代理（回环/显式可信网段）时才解析 XFF ——
     攻击者直连时自己控制 XFF 头，无条件信任即可伪造来源 IP，绕过 per-IP 的
     登录失败锁定（5 次锁 600s）。
     """
     peer = request.client.host if request.client else "unknown"
-    if _trust_forwarded_for() and _peer_is_trusted_proxy(peer):
-        xff = request.headers.get("X-Forwarded-For", "") or request.headers.get("x-forwarded-for", "")
-        if xff:
-            # X-Forwarded-For: client, proxy1, proxy2
-            # 取最右侧非内网/非可信代理的 IP, 避免攻击者伪造 XFF 前缀
-            candidates = [ip.strip() for ip in xff.split(",") if ip.strip()]
-            for ip in reversed(candidates):
-                try:
-                    addr = ipaddress.ip_address(ip)
-                    if not (addr.is_private or addr.is_loopback):
-                        return ip
-                except ValueError:
-                    continue
-            # 全部都是内网 (如纯内网部署), 取最左侧 (原始客户端)
-            if candidates:
-                return candidates[0]
-    return peer
+    return resolve_client_ip(peer, request.headers.get("X-Forwarded-For", ""))
 
 
 async def get_current_user(request: Request) -> str:

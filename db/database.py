@@ -143,21 +143,25 @@ class DatabaseManager(LegacyMigrationMixin, DDLMixin, ConversationLogMixin, Life
 
     async def _init_readonly_conn(self) -> None:
         """初始化独立只读连接（供 restore_from_db 使用）；失败回退主连接，不阻断启动。"""
+        candidate = None
         try:
-            self._readonly_conn = await aiosqlite.connect(
-                self._db_ro_uri(), uri=True)
-            self._readonly_conn.row_factory = aiosqlite.Row
-            await self._readonly_conn.execute("PRAGMA query_only=1")
-            await self._readonly_conn.execute("PRAGMA busy_timeout=2000")
+            candidate = await aiosqlite.connect(self._db_ro_uri(), uri=True)
+            candidate.row_factory = aiosqlite.Row
+            await candidate.execute("PRAGMA query_only=1")
+            await candidate.execute("PRAGMA busy_timeout=2000")
             # schema 探针：曾观测只读连接偶发报 no such column（WAL 旧快照/
             # 启动时序边缘态）。带病只读连接会让 restore 反复走异常兜底，
             # 这里启动即验证核心列，失败则弃用并回退主连接。
-            await self._readonly_conn.execute(
+            await candidate.execute(
                 "SELECT timestamp FROM conversation_logs LIMIT 1")
+            self._readonly_conn = candidate
             logger.info("database.readonly_conn_ready")
         except Exception as e:
             # 只读连接初始化失败不阻塞启动，restore 回退到主连接(保留原行为)
             logger.warning("database.readonly_conn_init_failed", error=str(e))
+            await self._close_if_present(
+                candidate, "database.readonly_conn_init_close_error"
+            )
             self._readonly_conn = None
 
     async def init(self) -> None:
@@ -296,7 +300,11 @@ class DatabaseManager(LegacyMigrationMixin, DDLMixin, ConversationLogMixin, Life
     async def commit(self) -> None:
         if self._conn:
             try:
-                await self._conn.commit()
+                if self._write_tx_active.get():
+                    await self._conn.commit()
+                else:
+                    async with transaction_lock_for(self._conn):
+                        await self._conn.commit()
             except (OSError, RuntimeError) as e:
                 logger.warning("database.commit_failed: {}", e)
 
@@ -328,7 +336,11 @@ class DatabaseManager(LegacyMigrationMixin, DDLMixin, ConversationLogMixin, Life
         """
         if self._conn:
             try:
-                await self._conn.rollback()
+                if self._write_tx_active.get():
+                    await self._conn.rollback()
+                else:
+                    async with transaction_lock_for(self._conn):
+                        await self._conn.rollback()
             except (OSError, RuntimeError) as e:
                 logger.warning("database.rollback_failed: {}", e)
 

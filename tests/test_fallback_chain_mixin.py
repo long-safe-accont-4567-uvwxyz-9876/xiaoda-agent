@@ -5,12 +5,17 @@
 FallbackChainMixin，方法体逐字节搬移。Phase 0 已为此铺路
 （公开别名 fallback_chat + message_processor 走公开入口）。
 """
+import asyncio
 import sys
 from pathlib import Path
+from types import SimpleNamespace
+from unittest.mock import AsyncMock
+
+import httpx
+import openai
+import pytest
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
-
-import pytest
 
 import model_router
 from llm_gateway.fallback_chain import FallbackChainMixin
@@ -88,3 +93,78 @@ async def test_timeout_error_skips_chain():
         ValueError("read timeout"), "chat", [], 0.7, False,
         None, None, 30, "u", "s", None)
     assert result is None
+
+
+class _RecordingClassifier:
+    def __init__(self):
+        self.errors: list[Exception] = []
+
+    def classify(self, error):
+        self.errors.append(error)
+        reason = "rate_limit" if isinstance(error, openai.APIError) else "unknown"
+        return SimpleNamespace(
+            reason=SimpleNamespace(value=reason),
+            action=SimpleNamespace(value="backoff_retry"),
+            is_retryable=True,
+            backoff_seconds=0.0,
+        )
+
+
+class _SameProviderFallbackRouter(FallbackChainMixin):
+    def __init__(self, side_effect):
+        self._error_classifier = _RecordingClassifier()
+        self._registry = SimpleNamespace(
+            get_task=lambda _task: {"client": "custom"},
+            snapshot_task=lambda _task: {
+                "client": "custom", "model": "fallback-model", "max_tokens": 1000,
+            },
+        )
+        self._route_with_retry = AsyncMock(side_effect=side_effect)
+
+    @staticmethod
+    def _is_client_configured(_provider):
+        return True
+
+    @staticmethod
+    def _filter_tools_for_model(tools, _model):
+        return tools
+
+    @staticmethod
+    def list_custom_clients():
+        return [("custom", object())]
+
+    @staticmethod
+    def _get_custom_provider_default_model(_provider):
+        return "custom-model"
+
+
+@pytest.mark.asyncio
+async def test_openai_api_error_continues_to_later_fallback_target():
+    api_error = openai.APIError(
+        "SDK request failed",
+        request=httpx.Request("POST", "https://example.test/v1/chat/completions"),
+        body=None,
+    )
+    router = _SameProviderFallbackRouter([api_error, "recovered by later target"])
+
+    result = await router._try_fallback_chain(
+        ValueError("primary failed"), "chat", [], 0.7, False,
+        None, None, 30, "u", "s", None,
+    )
+
+    assert result == "recovered by later target"
+    assert router._route_with_retry.await_count == 2
+    assert api_error in router._error_classifier.errors
+
+
+@pytest.mark.asyncio
+async def test_cancelled_fallback_call_propagates():
+    router = _SameProviderFallbackRouter(asyncio.CancelledError())
+
+    with pytest.raises(asyncio.CancelledError):
+        await router._try_fallback_chain(
+            ValueError("primary failed"), "chat", [], 0.7, False,
+            None, None, 30, "u", "s", None,
+        )
+
+    assert router._route_with_retry.await_count == 1

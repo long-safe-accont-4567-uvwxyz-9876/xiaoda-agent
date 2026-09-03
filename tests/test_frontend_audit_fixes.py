@@ -14,6 +14,9 @@
 """
 from __future__ import annotations
 
+import subprocess
+import sys
+import textwrap
 from pathlib import Path
 
 ROOT = Path(__file__).parents[1]
@@ -35,6 +38,36 @@ def method_source(source_text: str, signature: str) -> str:
             if depth == 0:
                 return source_text[start:index + 1]
     raise ValueError(f"Unclosed method body: {signature}")
+
+
+def _esbuild_bin(frontend: Path) -> str:
+    if sys.platform == "win32":
+        return str(frontend / "node_modules/.bin/esbuild.cmd")
+    return str(frontend / "node_modules/.bin/esbuild")
+
+
+def run_frontend_node(tmp_path: Path, name: str, script: str) -> None:
+    frontend = ROOT / "web/frontend"
+    entry = tmp_path / f"{name}.ts"
+    bundle = tmp_path / f"{name}.mjs"
+    (tmp_path / "node_modules").symlink_to(
+        frontend / "node_modules", target_is_directory=True,
+    )
+    entry.write_text(textwrap.dedent(script), encoding="utf-8")
+    subprocess.run(
+        [
+            _esbuild_bin(frontend), str(entry), "--bundle", "--platform=node",
+            "--format=esm", f"--outfile={bundle}",
+        ],
+        cwd=frontend,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    result = subprocess.run(
+        ["node", str(bundle)], cwd=frontend, capture_output=True, text=True,
+    )
+    assert result.returncode == 0, result.stderr
 
 
 # ── ① 登出：先通知后端吊销 bearer，本地清理照旧 ──────────────────────
@@ -141,13 +174,173 @@ def test_chat_stream_events_filtered_by_origin_session():
         assert "return" in handler[handler.index("inCurrentSession(msgId)"):]
     # 丢弃的终态帧若是当前 pending，需顺手收尾避免 isProcessing 卡死
     final = method_source(chat, "onFinal = (e: WsEvent)")
-    assert "clearProcessing()" in final
+    assert "clearProcessing(msgId)" in final
     # 终态消息完成即移除映射条目
     assert "msgSessionMap.delete(msgId)" in final
     # 映射随会话加载/新建修剪，防无界增长
     session_fns = method_source(chat, "async function newSession()") \
         + method_source(chat, "async function loadSession(sid: string) {")
     assert session_fns.count("pruneMsgSessions()") == 2
+
+
+def test_chat_terminal_cleanup_is_pending_message_scoped():
+    chat = source("web/frontend/src/stores/chat.ts")
+    clear = method_source(chat, "function clearProcessing(expectedMsgId?: string)")
+    assert "expectedMsgId !== pendingMsgId.value" in clear
+
+    error = method_source(chat, "onError = (e: WsEvent)")
+    stale_branch = error[error.index("!inCurrentSession(msgId)"):]
+    assert "clearProcessing(msgId)" in stale_branch
+
+    final = method_source(chat, "onFinal = (e: WsEvent)")
+    assert final.count("clearProcessing(msgId)") >= 2
+
+    for signature in (
+        "async function newSession()",
+        "async function loadSession(sid: string) {",
+    ):
+        switch = method_source(chat, signature)
+        assert "switchSession(" in switch
+
+
+def test_chat_pending_cleanup_across_session_switches_at_runtime(tmp_path):
+    run_frontend_node(
+        tmp_path,
+        "chat-session-pending",
+        f"""
+        globalThis.localStorage = {{
+          getItem: () => null, setItem: () => {{}}, removeItem: () => {{}},
+        }}
+        globalThis.location = {{ protocol: 'http:', host: 'localhost', hash: '' }}
+
+        const {{ createPinia, setActivePinia }} = await import('pinia')
+        const {{ api }} = await import({str(ROOT / 'web/frontend/src/api/index.ts')!r})
+        const {{ getWsClient }} = await import({str(ROOT / 'web/frontend/src/api/ws.ts')!r})
+        const {{ useChatStore }} = await import({str(ROOT / 'web/frontend/src/stores/chat.ts')!r})
+
+        Object.assign(api, {{
+          getMessages: async () => [],
+          createSession: async () => ({{ session_id: 'created-session' }}),
+        }})
+        const ws = getWsClient()
+        ws.connected = true
+        ws.send = () => true
+        setActivePinia(createPinia())
+        const chat = useChatStore()
+        const emit = event => ws.emit(event)
+        const request = text => ({{ text, search: false, think: false, attachments: [] }})
+
+        await chat.loadSession('old-session')
+        const first = chat.sendMessage(request('first'))
+        if (!first.ok || !chat.isProcessing) throw new Error('首条请求未进入 pending')
+
+        // 模拟任一外部会话同步路径：旧请求的 error 必须解锁自己。
+        chat.sessionId = 'other-session'
+        emit({{ type: 'error', msg_id: first.msgId, code: 'ABORTED', message: 'aborted' }})
+        if (chat.isProcessing) throw new Error('旧会话 ABORTED 未清理匹配 pending')
+
+        const second = chat.sendMessage(request('second'))
+        if (!second.ok) throw new Error('旧 error 清理后输入仍被锁定')
+        await chat.loadSession('new-session')
+        if (chat.isProcessing) throw new Error('loadSession 未释放旧 pending')
+
+        const third = chat.sendMessage(request('third'))
+        if (!third.ok || !chat.isProcessing) throw new Error('新会话无法发送请求')
+        const beforeErrors = chat.messages.length
+        emit({{ type: 'error', msg_id: second.msgId, code: 'CHAT_ERROR', message: 'late' }})
+        if (!chat.isProcessing) throw new Error('旧请求 error 误清新会话 pending')
+        if (chat.messages.length !== beforeErrors) throw new Error('旧请求 error 写入新会话')
+
+        await chat.newSession()
+        if (chat.isProcessing) throw new Error('newSession 未释放旧 pending')
+        chat.cleanup()
+        """,
+    )
+
+
+def test_export_download_uses_shared_auth_and_safe_markdown_filename():
+    api = source("web/frontend/src/api/index.ts")
+    export = method_source(api, "export async function exportSessionDownload")
+    assert "res.status === 401" in export
+    assert "handleUnauthorized()" in export
+    assert "consumeAuthRenewal(res)" in export
+    assert "Content-Disposition" in export
+    assert "safeMarkdownDownloadName" in export
+    assert ".json`" not in export
+
+
+def test_export_download_auth_and_filename_at_runtime(tmp_path):
+    run_frontend_node(
+        tmp_path,
+        "export-session-download",
+        f"""
+        const values = new Map([['token', 'old-token']])
+        globalThis.localStorage = {{
+          getItem: key => values.get(key) ?? null,
+          setItem: (key, value) => values.set(key, String(value)),
+          removeItem: key => values.delete(key),
+        }}
+        globalThis.location = {{ protocol: 'http:', host: 'localhost', hash: '' }}
+        const renewals = []
+        globalThis.CustomEvent = class {{
+          constructor(type, init) {{ this.type = type; this.detail = init?.detail }}
+        }}
+        globalThis.window = {{ dispatchEvent: event => renewals.push(event) }}
+
+        const downloads = []
+        const anchor = {{
+          href: '', download: '', click() {{ downloads.push(this.download) }},
+        }}
+        globalThis.document = {{
+          createElement: tag => tag === 'a' ? anchor : {{}},
+          body: {{ appendChild: () => {{}}, removeChild: () => {{}} }},
+        }}
+        URL.createObjectURL = () => 'blob:test'
+        URL.revokeObjectURL = () => {{}}
+
+        const responses = []
+        globalThis.fetch = async () => responses.shift()
+        const {{ exportSessionDownload }} = await import({str(ROOT / 'web/frontend/src/api/index.ts')!r})
+
+        responses.push(new Response('# transcript', {{
+          status: 200,
+          headers: {{
+            'Content-Type': 'text/markdown; charset=utf-8',
+            'Content-Disposition': 'attachment; filename="conversation.md"',
+            'X-New-Token': 'renewed-token',
+            'X-New-Token-Expiry': '12345',
+          }},
+        }}))
+        await exportSessionDownload('safe-session')
+        if (downloads.at(-1) !== 'conversation.md') throw new Error('未采用安全的后端 Markdown 文件名')
+        if (values.get('token') !== 'renewed-token' || values.get('expires_at') !== '12345') {{
+          throw new Error('导出响应未消费滑动续签')
+        }}
+        if (renewals.at(-1)?.type !== 'xiaoda-auth-renewed') throw new Error('导出续签未通知运行时')
+
+        responses.push(new Response('# transcript', {{
+          status: 200,
+          headers: {{
+            'Content-Type': 'text/markdown; charset=utf-8',
+            'Content-Disposition': 'attachment; filename="../../escape.json"',
+          }},
+        }}))
+        await exportSessionDownload('safe-session')
+        if (downloads.at(-1) !== 'safe-session.md') throw new Error('不安全文件名未回退为安全 .md 名称')
+
+        values.set('token', 'expired-token')
+        responses.push(new Response('{{}}', {{ status: 401 }}))
+        let rejected = false
+        try {{
+          await exportSessionDownload('safe-session')
+        }} catch {{
+          rejected = true
+        }}
+        if (!rejected) throw new Error('401 导出未拒绝')
+        if (values.has('token') || location.hash !== '#/login') throw new Error('401 未走统一登录清理路径')
+        if (downloads.length !== 2) throw new Error('401 响应触发了下载')
+        """,
+    )
 
 
 # ── ⑤ KeyAccordion：头部为 button + aria，键盘可达 ────────────────────

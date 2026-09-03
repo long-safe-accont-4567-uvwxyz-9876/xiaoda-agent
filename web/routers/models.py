@@ -8,14 +8,15 @@ from typing import Any
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from loguru import logger
 
+# 内置 provider / 默认 provider 全部由 provider_metadata.json 派生，不硬编码
+from config_providers import get_builtin_providers, get_default_provider
+
 # 缓存与凭证读写抽到独立模块, 避免与 web.routers.model_discovery / model_router 互相导入
 from web._discovery_cache import invalidate_discovery_cache
 from web._provider_keys import (
     _mask,
     load_provider_key,
 )
-# 内置 provider / 默认 provider 全部由 provider_metadata.json 派生，不硬编码
-from config_providers import get_builtin_providers, get_default_provider
 from web.routers.auth import get_current_user
 from web.schemas import Envelope
 

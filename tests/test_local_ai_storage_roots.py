@@ -242,7 +242,8 @@ def authed_client(app) -> TestClient:
     epoch = "0"
     payload = f"{expiry}.{nonce}.{epoch}"
     sig = hmac.new(secret.encode(), payload.encode(), hashlib.sha256).hexdigest()
-    token = base64.urlsafe_b64encode(f"{payload}.{sig}".encode()).decode()
+    # 与 _issue_token 同款契约：base64url 无 padding（" " 不出现在 token 中）
+    token = base64.urlsafe_b64encode(f"{payload}.{sig}".encode()).decode().rstrip("=")
 
     auth_module._SECRET = secret  # noqa: SLF001
     auth_module._token_epoch = 0  # noqa: SLF001

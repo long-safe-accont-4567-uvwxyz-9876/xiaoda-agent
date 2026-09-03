@@ -46,6 +46,19 @@ def test_mixin_does_not_import_model_router():
     assert "model_router" not in getattr(mod, "__dict__", {})
 
 
+def test_active_api_key_tolerates_custom_client_lookup_failure():
+    """Credential attribution must not replace the original provider failure."""
+
+    class FakeRouter(ClientLifecycleMixin):
+        _client = None
+        _agnes_client = None
+
+        def get_custom_client(self, _provider):
+            raise KeyError("provider registry unavailable")
+
+    assert FakeRouter()._active_api_key("custom") == ""
+
+
 def test_credential_lock_per_provider_isolated():
     """同一 provider 复用锁，不同 provider 隔离（搬移后行为不变）"""
 

@@ -264,7 +264,12 @@ async function loadMcpMarket() {
 async function installFromMcp(item: any) {
   installingMcp.value[item.name] = true
   try {
-    const result = await post('/market/mcp/install', item)
+    await post('/market/mcp/install', {
+      item_id: item.id,
+      download_url: item.download_url,
+      version: item.version,
+      sha256: item.sha256,
+    })
     message.success(tf('mcpView.installSuccess', item.name))
   } catch (e: any) {
     message.error(tf('mcpView.installFailed', e.message))
@@ -276,7 +281,7 @@ async function installFromMcp(item: any) {
 async function uninstallFromMcp(item: any) {
   uninstallingMcp.value[item.name] = true
   try {
-    await post('/market/mcp/uninstall', { name: item.name })
+    await post('/market/mcp/uninstall', { item_id: item.id }, true)
     message.success(tf('mcpView.uninstalled', item.name))
   } catch (e: any) {
     message.error(tf('mcpView.uninstallFailed', e.message))
@@ -439,11 +444,15 @@ function onMcpTabChange(tab: string) {
               <div class="card-footer">
                 <span class="card-downloads">{{ item.use_count ?? 0 }} {{ t('mcpView.uses') }}</span>
                 <div class="card-actions">
-                  <n-button size="small" type="error" secondary
-                    :loading="uninstallingMcp[item.name]"
-                    @click="uninstallFromMcp(item)">
-                    {{ t('uninstall') }}
-                  </n-button>
+                  <n-popconfirm @positive-click="uninstallFromMcp(item)">
+                    <template #trigger>
+                      <n-button size="small" type="error" secondary
+                        :loading="uninstallingMcp[item.name]">
+                        {{ t('uninstall') }}
+                      </n-button>
+                    </template>
+                    {{ t('mcpView.confirmUninstall') }}
+                  </n-popconfirm>
                   <n-button size="small" type="success" secondary
                     :loading="installingMcp[item.name]"
                     @click="installFromMcp(item)">

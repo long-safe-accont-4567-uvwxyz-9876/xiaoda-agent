@@ -6,7 +6,11 @@ from typing import Any
 
 from loguru import logger
 
-from db.db_memory_utils import _scope_where, _sql_placeholders
+from db.db_memory_utils import (
+    _scope_where,
+    _sql_placeholders,
+    owned_write_section,
+)
 
 
 class EmotionRecallMixin:
@@ -116,17 +120,18 @@ class EmotionRecallMixin:
             title/tags: 可选的标题和标签（便于检索）
         """
         try:
-            cursor = await self._conn.execute(
-                """INSERT INTO memory_recall_notes
-                   (created_at, window_start, window_end, min_importance,
-                    source_memory_ids, memory_count, title, summary, tags)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-                (time.time(), window_start, window_end, min_importance,
-                 source_memory_ids, memory_count, title, summary, tags),
-            )
-            note_id = cursor.lastrowid
-            if auto_commit:
-                await self._conn.commit()
+            async with owned_write_section(self, auto_commit) as do_commit:
+                cursor = await self._conn.execute(
+                    """INSERT INTO memory_recall_notes
+                       (created_at, window_start, window_end, min_importance,
+                        source_memory_ids, memory_count, title, summary, tags)
+                       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                    (time.time(), window_start, window_end, min_importance,
+                     source_memory_ids, memory_count, title, summary, tags),
+                )
+                note_id = cursor.lastrowid
+                if do_commit:
+                    await self._conn.commit()
             return note_id or 0
         except Exception as e:
             logger.warning("db_memory.insert_recall_note_failed", error=str(e))
@@ -166,15 +171,16 @@ class EmotionRecallMixin:
                                  last_review: float,
                                  reinforcement_count: int,
                                  auto_commit: bool = True) -> None:
-        await self._conn.execute(
-            """UPDATE episodic_memories
-               SET difficulty=?, stability=?, phase=?, last_review=?,
-                   reinforcement_count=?
-               WHERE id=?""",
-            (difficulty, stability, phase, last_review, reinforcement_count, memory_id),
-        )
-        if auto_commit:
-            await self._conn.commit()
+        async with owned_write_section(self, auto_commit) as do_commit:
+            await self._conn.execute(
+                """UPDATE episodic_memories
+                   SET difficulty=?, stability=?, phase=?, last_review=?,
+                       reinforcement_count=?
+                   WHERE id=?""",
+                (difficulty, stability, phase, last_review, reinforcement_count, memory_id),
+            )
+            if do_commit:
+                await self._conn.commit()
 
     async def batch_update_fsrs_state(self, rows: list[tuple[float, float, str,
                                                           float, int, int]],
@@ -186,15 +192,16 @@ class EmotionRecallMixin:
         """
         if not rows:
             return
-        await self._conn.executemany(
-            """UPDATE episodic_memories
-               SET difficulty=?, stability=?, phase=?, last_review=?,
-                   reinforcement_count=?
-               WHERE id=?""",
-            rows,
-        )
-        if auto_commit:
-            await self._conn.commit()
+        async with owned_write_section(self, auto_commit) as do_commit:
+            await self._conn.executemany(
+                """UPDATE episodic_memories
+                   SET difficulty=?, stability=?, phase=?, last_review=?,
+                       reinforcement_count=?
+                   WHERE id=?""",
+                rows,
+            )
+            if do_commit:
+                await self._conn.commit()
 
     async def get_memories_since(self, since_ts: float,
                                   limit: int = 200) -> list[dict]:

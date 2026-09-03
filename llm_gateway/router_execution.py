@@ -49,11 +49,13 @@ import openai as _openai_mod  # 用于 openai.APIError 异常捕获
 from loguru import logger
 
 from config import DEFAULT_PROVIDER as _CFG_DEFAULT_PROVIDER
+from config_providers import get_provider_capability as _get_provider_capability
 from core.app_exception import LLMError
 from core.error_codes import ErrorCodeEnum
 from llm_gateway.router_metrics import _reasoning_content_var
 from llm_gateway.stream_protocol import (
     ModelStreamEvent,
+    StructuredStreamProtocolError,
     ToolCallAccumulator,
     ToolCallDelta,
     normalize_finish_reason,
@@ -64,7 +66,6 @@ from model_router_config import (
     PROVIDER_MAX_TOKENS_CAP,
     translate_model_for_provider,
 )
-from config_providers import get_provider_capability as _get_provider_capability
 from utils.common import DEFAULT_MAX_TOKENS
 from utils.error_classifier import FailoverReason, RecoveryAction
 from utils.llm_cleanup import merge_continuation
@@ -210,7 +211,12 @@ class ExecutionMixin:
                     retry_state=_retry_state)
                 if not should_retry:
                     break
-
+            except BaseException:
+                if stream is not None:
+                    with contextlib.suppress(AttributeError, OSError):
+                        await stream.close()
+                    stream = None
+                raise
 
         # CR-Major-1 修复：重试耗尽后调用 fallback 链，而非直接 raise。
         metrics.inc(f"model_route.{task_type}.failure")
@@ -547,26 +553,27 @@ class ExecutionMixin:
                                _chunk_count: int, user_openid: str, session_id: str,
                                mt: int, _start: float) -> None:
         """流结束后的后处理：finish_reason 检查 + ContextVar + usage 记录 + metrics。"""
-        # P0 修复：流结束后检测是否收到 finish_reason
-        # 如果未收到，说明 provider 可能中途关闭连接（死流），content 可能被截断
         if not _stream_finish_reason:
             logger.warning("llm.stream_no_finish_reason",
                            model=model, task=task_type,
                            provider=provider, chunk_count=_chunk_count,
-                           hint="provider 可能中途关闭连接，content 可能被截断")
+                           hint="provider 流在结束前未发送 finish_reason")
+            raise StructuredStreamProtocolError(
+                "stream_incomplete",
+                f"stream from {provider}/{model} ended without finish_reason",
+            )
         # P0 修复：流结束后写入 ContextVar，供 verification loop 检测截断
-        if _stream_finish_reason:
-            try:
-                from agent_core._shared import _stream_finish_reason_var
-                _stream_finish_reason_var.set(_stream_finish_reason)
-            except (ImportError, AttributeError):
-                logger.debug("router.stream_finish_reason_var_set_failed", exc_info=True)
-            # 截断诊断日志：finish_reason="length" 时记录 mt 和内容长度
-            if _stream_finish_reason == "length":
-                logger.warning("llm.stream_truncated_by_max_tokens",
-                               model=model, task=task_type,
-                               max_tokens=mt, provider=provider,
-                               finish_reason=_stream_finish_reason)
+        try:
+            from agent_core._shared import _stream_finish_reason_var
+            _stream_finish_reason_var.set(_stream_finish_reason)
+        except (ImportError, AttributeError):
+            logger.debug("router.stream_finish_reason_var_set_failed", exc_info=True)
+        # 截断诊断日志：finish_reason="length" 时记录 mt 和内容长度
+        if _stream_finish_reason == "length":
+            logger.warning("llm.stream_truncated_by_max_tokens",
+                           model=model, task=task_type,
+                           max_tokens=mt, provider=provider,
+                           finish_reason=_stream_finish_reason)
         # CR-Major-1：流式 usage 记录费用（include_usage=True 时 _stream_usage 非空）
         if _stream_usage is not None:
             try:

@@ -48,10 +48,7 @@ class WorkflowV2Service:
     # --- definitions -------------------------------------------------------
 
     async def _definition_row(self, wf_id: str):
-        cur = await self.repo.conn.execute(
-            "SELECT * FROM wf_definition WHERE workflow_id=?", (wf_id,)
-        )
-        return await cur.fetchone()
+        return await self.repo.get_definition(wf_id)
 
     async def get_definition(self, wf_id: str) -> dict | None:
         row = await self._definition_row(wf_id)
@@ -78,40 +75,18 @@ class WorkflowV2Service:
         success, or ``None`` when the etag moved / the definition is gone —
         the route maps that to 409 ETAG_CONFLICT.
         """
-        sets: list[str] = []
-        params: list = []
-        if "name" in body:
-            sets.append("name=?")
-            params.append(body["name"])
-        if "description" in body:
-            sets.append("description=?")
-            params.append(body["description"])
-        sets.append("etag=?")
-        params.append(f"etag-{uuid.uuid4().hex[:12]}")
-        sets.append("updated_at=?")
-        params.append(time.time())
-        params.append(wf_id)
-        params.append(etag)
-        cur = await self.repo.conn.execute(
-            f"UPDATE wf_definition SET {', '.join(sets)} WHERE workflow_id=? AND etag=?",
-            params,
+        new_etag = f"etag-{uuid.uuid4().hex[:12]}"
+        committed = await self.repo.patch_definition(
+            wf_id, body, expected_etag=etag, new_etag=new_etag,
         )
-        if cur.rowcount != 1:
+        if not committed:
             return None  # etag moved (or definition deleted) — no blind overwrite
-        await self.repo.conn.commit()
         return await self.get_definition(wf_id)
 
     # --- runs ----------------------------------------------------------------
 
     async def _find_run_by_idempotency(self, wf_id: str, idempotency_key: str) -> WorkflowRun | None:
-        cur = await self.repo.conn.execute(
-            "SELECT run_id FROM wf_run WHERE workflow_id=? AND idempotency_key=?",
-            (wf_id, idempotency_key),
-        )
-        row = await cur.fetchone()
-        if row is None:
-            return None
-        return await self.repo.get_run(row["run_id"])
+        return await self.repo.find_run_by_idempotency(wf_id, idempotency_key)
 
     async def create_or_get_run(self, wf_id: str, input_: dict, idempotency_key: str) -> dict | None:
         """Idempotent: same (workflow_id, idempotency_key) always returns the same run.
@@ -170,18 +145,11 @@ class WorkflowV2Service:
 
     async def request_cancel(self, run_id: str) -> dict:
         """Idempotent cancel request. Raises KeyError when the run does not exist."""
-        run = await self.repo.get_run(run_id)
+        run, accepted = await self.repo.request_run_cancel(run_id)
         if run is None:
             raise KeyError(run_id)
-        if run.status in _TERMINAL_STATUSES:
+        if not accepted:
             return {"cancel_requested": False, "status": run.status.value}
-        now = time.time()
-        if run.cancel_requested_at is None:
-            await self.repo.conn.execute(
-                "UPDATE wf_run SET cancel_requested_at=?, updated_at=? WHERE run_id=?",
-                (now, now, run_id),
-            )
-            await self.repo.conn.commit()
         return {"cancel_requested": True, "status": run.status.value}
 
     # ── 转正：v1 JSON 桥接 + WebUI 视图（2026-08-22 决策"转正"） ────────────
@@ -260,11 +228,7 @@ class WorkflowV2Service:
         return await self._publish_v1_revision(wf_id)
 
     async def _revision_exists(self, wf_id: str, revision_id: str) -> bool:
-        cur = await self.repo.conn.execute(
-            "SELECT 1 FROM wf_revision WHERE revision_id=? AND workflow_id=?",
-            (revision_id, wf_id),
-        )
-        return (await cur.fetchone()) is not None
+        return await self.repo.revision_exists(wf_id, revision_id)
 
     async def revision_exists(self, wf_id: str, revision_id: str) -> bool:
         """revision 是否属于该 workflow（回滚路由做 404/409 区分）。"""
@@ -278,14 +242,11 @@ class WorkflowV2Service:
         """
         if not await self._revision_exists(wf_id, revision_id):
             return None
-        cur = await self.repo.conn.execute(
-            "UPDATE wf_definition SET current_revision_id=?, etag=?, updated_at=? "
-            "WHERE workflow_id=? AND etag=?",
-            (revision_id, f"etag-{uuid.uuid4().hex[:12]}", time.time(), wf_id, etag),
+        committed = await self.repo.set_current_revision_cas(
+            wf_id, revision_id, expected_etag=etag,
         )
-        if cur.rowcount != 1:
+        if not committed:
             return None  # 定义被他人改过（etag 移动）——回滚不盲覆盖
-        await self.repo.conn.commit()
         return await self.get_definition(wf_id)
 
     async def list_runs(self, workflow_id: str) -> list[dict]:

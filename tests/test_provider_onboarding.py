@@ -290,6 +290,39 @@ async def test_optional_auth_provider_can_be_tested_without_credentials():
 
 
 @pytest.mark.asyncio
+async def test_openai_provider_test_finally_closes_created_client(monkeypatch):
+    class Models:
+        async def list(self):
+            return SimpleNamespace(data=[SimpleNamespace(id="remote-model")])
+
+    class Client:
+        def __init__(self) -> None:
+            self.models = Models()
+            self.closed = False
+
+        async def close(self) -> None:
+            self.closed = True
+
+    client = Client()
+    monkeypatch.setattr("openai.AsyncOpenAI", lambda **kwargs: client)
+    monkeypatch.setattr(
+        "llm_gateway.provider_service.build_secure_async_client",
+        lambda base_url: object(),
+    )
+    provider_service = ProviderService(
+        MemoryConfig(),
+        builtin_catalog(),
+        FakeRuntimeRouter(_custom_clients={}),
+        credential_store=MemoryCredentials(),
+    )
+
+    report = await provider_service.test(draft(), {"api_key": "secret"})
+
+    assert report.available is True
+    assert client.closed is True
+
+
+@pytest.mark.asyncio
 async def test_failed_provider_update_preserves_runtime_disk_and_credential(service):
     provider_service, config, credentials, runtime = service
     await provider_service.create(draft(), {"api_key": "old-key"})

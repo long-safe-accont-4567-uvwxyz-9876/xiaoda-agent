@@ -20,7 +20,7 @@ import os
 from pathlib import Path
 from typing import Any
 
-from fastapi import APIRouter, Depends, Query, Request
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from loguru import logger
 
 from channel_adapter_base import upsert_env_file_line
@@ -428,6 +428,8 @@ async def start_bot(request: Request) -> Any:
 @router.post("/wechat/stop", response_model=Envelope[dict])
 async def stop_bot(request: Request) -> Any:
     """停止微信消息轮询并清除凭证文件。"""
+    if request.headers.get("X-Confirm") != "yes":
+        raise HTTPException(400, "缺少 X-Confirm: yes 确认头")
     async with _get_lifecycle_lock():
         bot = getattr(request.app.state, "wechat_bot", None)
         success = True

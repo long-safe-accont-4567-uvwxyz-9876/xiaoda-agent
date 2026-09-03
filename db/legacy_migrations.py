@@ -6,6 +6,8 @@
 """
 from __future__ import annotations
 
+import asyncio
+import sqlite3
 import sys
 import time
 from typing import Any, ClassVar
@@ -13,6 +15,7 @@ from typing import Any, ClassVar
 from loguru import logger
 
 from . import db_workflow
+from .db_local_ai import transaction_lock_for
 
 
 # ── 迁移体系导航 ─────────────────────────────────────────────
@@ -199,140 +202,148 @@ class LegacyMigrationMixin:
         ]
 
     async def _run_migrations(self) -> None:
-        """按 version 顺序执行所有数据库迁移。每个迁移独立事务，失败时 fail-fast 阻止启动。"""
+        """按 version 顺序迁移；每次在 SQLite 写锁内重读版本并原子应用。"""
         await self._setup_migration_state()
         await self._recover_dirty_state()
         current = await self._current_schema_version()
         current = await self._check_migration_integrity(current)
         for version, desc, migrate_fn in self._migration_entries():
             if current < version:
-                await self._apply_migration(version, desc, migrate_fn)
-        await self._conn.commit()
+                applied = await self._apply_migration(version, desc, migrate_fn)
+                if applied:
+                    current = version
 
-    async def _apply_migration(self, version: int, description: str, migrate_fn: Any) -> None:
-        """执行单个迁移：标记 dirty → SAVEPOINT 包住 migrate_fn+版本记录 → commit → 清除 dirty。
+    async def _apply_migration(
+        self, version: int, description: str, migrate_fn: Any
+    ) -> bool:
+        """在文件级写锁内原子应用一个迁移，并持久化失败状态。
 
-        失败时先 ROLLBACK TO SAVEPOINT（部分 DDL/DML 不落盘），再独立事务记 dirty；
-        下次启动自动重试（dirty自动修复机制）。含 SQLITE_BUSY 重试（Windows杀软锁文件常见）。
-        注意：迁移函数内部禁止 executescript()（会隐式提交、释放 savepoint），
-        新迁移一律逐条 execute。
+        ``BEGIN IMMEDIATE`` 串行化同一数据库文件上的多个 DatabaseManager；
+        获锁后重读 schema_version，避免两个启动者都按旧快照重复迁移。dirty 标记
+        位于 SAVEPOINT 外，迁移体、版本记录与清除 dirty 位于 SAVEPOINT 内，因而
+        失败时可回滚部分 DDL/DML，再在同一外层事务提交失败状态。
         """
-        # 确保 migration_state 表存在（防御 vfat 上 executescript 静默失败）
+        # 防御：migration_state 缺失即补建（vfat 上 DDL 静默失败曾致脏标记
+        # 落空；直连 _apply_migration 的路径也不依赖先跑 _setup_migration_state）
         try:
             await self._conn.execute("SELECT 1 FROM migration_state LIMIT 1")
-        except (ImportError, OSError, RuntimeError, ValueError):
-            await self._conn.execute("""
-                CREATE TABLE IF NOT EXISTS migration_state (
-                    id INTEGER PRIMARY KEY CHECK (id = 1),
-                    dirty INTEGER NOT NULL DEFAULT 0,
-                    last_version INTEGER NOT NULL DEFAULT 0,
-                    last_error TEXT NOT NULL DEFAULT ''
-                )
-            """)
-            await self._conn.execute("""
-                INSERT OR IGNORE INTO migration_state (id, dirty, last_version, last_error)
-                VALUES (1, 0, 0, '')
-            """)
+        except sqlite3.OperationalError:
+            await self._conn.execute(
+                "CREATE TABLE IF NOT EXISTS migration_state ("
+                "id INTEGER PRIMARY KEY CHECK (id = 1),"
+                "dirty INTEGER NOT NULL DEFAULT 0,"
+                "last_version INTEGER NOT NULL DEFAULT 0,"
+                "last_error TEXT NOT NULL DEFAULT '')"
+            )
+            await self._conn.execute(
+                "INSERT OR IGNORE INTO migration_state (id, dirty, last_version, last_error) "
+                "VALUES (1, 0, 0, '')"
+            )
+            # 关闭默认隔离级别下的隐式事务，避免与接下来的 BEGIN IMMEDIATE 冲突
             await self._conn.commit()
-
-        except Exception:
-            logger.exception(".db.legacy_migrations._apply_migration_unexpected")
-            await self._conn.execute("""
-                CREATE TABLE IF NOT EXISTS migration_state (
-                    id INTEGER PRIMARY KEY CHECK (id = 1),
-                    dirty INTEGER NOT NULL DEFAULT 0,
-                    last_version INTEGER NOT NULL DEFAULT 0,
-                    last_error TEXT NOT NULL DEFAULT ''
-                )
-            """)
-            await self._conn.execute("""
-                INSERT OR IGNORE INTO migration_state (id, dirty, last_version, last_error)
-                VALUES (1, 0, 0, '')
-            """)
-            await self._conn.commit()
-
-        # 标记 dirty（独立事务，确保迁移失败后 dirty 状态持久化）
-        await self._conn.execute(
-            "UPDATE migration_state SET dirty = 1, last_version = ?, last_error = '' WHERE id = 1",
-            (version,),
-        )
-        await self._conn.commit()
-
         _max_retries = 3
-        for attempt in range(1, _max_retries + 1):
-            # 原子性（2026-08-24 审查修复）：每个迁移体包在 SAVEPOINT 内，
-            # 失败先回滚到 savepoint 再独立事务记 dirty——否则失败路径的
-            # dirty commit 会把迁移已执行的部分 DDL/DML 一并提交，重试面对
-            # 半迁移状态（v31 故障注入已复现错误分类）。
-            # 前提：迁移函数内部不得使用 executescript()（隐式提交会释放
-            # savepoint）；现有迁移已全部改为逐条 execute。
-            sp_name = f"migration_v{version}_a{attempt}"
-            await self._conn.execute(f"SAVEPOINT {sp_name}")
-            try:
-                await migrate_fn()
-                await self._conn.execute(
-                    "INSERT INTO schema_version (version, applied_at) VALUES (?, ?)",
-                    (version, time.time()),
-                )
-                await self._conn.commit()  # RELEASE 前提交，兼容迁移内部 commit
-                logger.info("database.migration_v{}", version, desc=description)
-                # 迁移成功：清除 dirty
-                await self._conn.execute(
-                    "UPDATE migration_state SET dirty = 0, last_version = ?, last_error = '' WHERE id = 1",
-                    (version,),
-                )
-                await self._conn.commit()
-                return  # 成功，退出重试循环
-            except Exception as e:
-                err_msg = str(e)
-                is_busy = "locked" in err_msg.lower() or "busy" in err_msg.lower()
-                # 迁移内部 commit 会释放 savepoint（no such savepoint），
-                # 此时部分写入已被提交、无法回滚——记录告警供运维排查；
-                # 未被释放时正常回滚到 savepoint。
+        async with transaction_lock_for(self._conn):
+            for attempt in range(1, _max_retries + 1):
+                transaction_started = False
+                savepoint_active = False
+                sp_name = f"migration_v{version}_a{attempt}"
                 try:
+                    await self._conn.execute("BEGIN IMMEDIATE")
+                    transaction_started = True
+                    current = await self._current_schema_version()
+                    if current >= version:
+                        await self._conn.rollback()
+                        return False
+
                     await self._conn.execute(
-                        f"ROLLBACK TO SAVEPOINT {sp_name}")
-                    await self._conn.execute(
-                        f"RELEASE SAVEPOINT {sp_name}")
-                except (OSError, RuntimeError, ValueError) as rb_err:
-                    if "no such savepoint" in str(rb_err).lower():
-                        logger.warning(
-                            "database.migration_partial_commit_not_recoverable "
-                            "v={} hint=迁移函数内部 commit 释放了 savepoint",
-                            version)
-                    else:
-                        logger.warning(
-                            "database.migration_rollback_error v={}", version,
-                            exc_info=True)
-                if is_busy and attempt < _max_retries:
-                    # SQLITE_BUSY: Windows杀软/Defender锁文件，等一会重试
-                    import asyncio
-                    wait = attempt * 2
-                    logger.warning(
-                        f"database.migration_v{version}_busy_retry",
-                        attempt=attempt, wait_sec=wait, error=err_msg[:100]
+                        "UPDATE migration_state SET dirty = 1, last_version = ?, "
+                        "last_error = '' WHERE id = 1",
+                        (version,),
                     )
-                    await asyncio.sleep(wait)
-                    continue
-                # 非BUSY或重试耗尽：回滚已完成，独立事务记录 dirty
-                try:
+                    await self._conn.execute(f"SAVEPOINT {sp_name}")
+                    savepoint_active = True
+                    await migrate_fn()
                     await self._conn.execute(
-                        "UPDATE migration_state SET dirty = 1, last_version = ?, last_error = ? WHERE id = 1",
-                        (version, err_msg[:500]),
+                        "INSERT INTO schema_version (version, applied_at) VALUES (?, ?)",
+                        (version, time.time()),
                     )
+                    await self._conn.execute(
+                        "UPDATE migration_state SET dirty = 0, last_version = ?, "
+                        "last_error = '' WHERE id = 1",
+                        (version,),
+                    )
+                    await self._conn.execute(f"RELEASE SAVEPOINT {sp_name}")
+                    savepoint_active = False
                     await self._conn.commit()
-                except (OSError, RuntimeError):
-                    logger.warning("database.migration_dirty_record_error", exc_info=True)
-                logger.error(
-                    f"❌ 数据库迁移 v{version} 失败: {err_msg}\n"
-                    f"已标记 dirty 状态，下次启动将自动重试。\n"
-                    f"如持续失败可手动修复：\n"
-                    f"  1. python -m db.repair_migration --mark-clean\n"
-                    f"  2. python -m db.repair_migration --rollback {version}\n"
-                )
-                raise RuntimeError(
-                    f"数据库迁移 v{version} 失败，已标记 dirty，初始化已中止: {err_msg}"
-                ) from e
+                    logger.info("database.migration_v{}", version, desc=description)
+                    return True
+                except asyncio.CancelledError:
+                    if transaction_started:
+                        await asyncio.shield(self._conn.rollback())
+                    raise
+                except Exception as e:
+                    err_msg = str(e)
+                    is_busy = (
+                        "locked" in err_msg.lower() or "busy" in err_msg.lower()
+                    )
+                    rollback_to_savepoint = False
+                    if savepoint_active:
+                        try:
+                            await self._conn.execute(
+                                f"ROLLBACK TO SAVEPOINT {sp_name}"
+                            )
+                            await self._conn.execute(
+                                f"RELEASE SAVEPOINT {sp_name}"
+                            )
+                            rollback_to_savepoint = True
+                        except (sqlite3.Error, OSError, RuntimeError, ValueError):
+                            logger.warning(
+                                "database.migration_rollback_error v={}",
+                                version,
+                                exc_info=True,
+                            )
+
+                    if is_busy and attempt < _max_retries:
+                        if transaction_started:
+                            await self._conn.rollback()
+                        wait = attempt * 2
+                        logger.warning(
+                            f"database.migration_v{version}_busy_retry",
+                            attempt=attempt,
+                            wait_sec=wait,
+                            error=err_msg[:100],
+                        )
+                        await asyncio.sleep(wait)
+                        continue
+
+                    try:
+                        if not rollback_to_savepoint:
+                            if transaction_started:
+                                await self._conn.rollback()
+                            await self._conn.execute("BEGIN IMMEDIATE")
+                        await self._conn.execute(
+                            "UPDATE migration_state SET dirty = 1, last_version = ?, "
+                            "last_error = ? WHERE id = 1",
+                            (version, err_msg[:500]),
+                        )
+                        await self._conn.commit()
+                    except (sqlite3.Error, OSError, RuntimeError):
+                        logger.warning(
+                            "database.migration_dirty_record_error", exc_info=True
+                        )
+                        await self._conn.rollback()
+                    logger.error(
+                        f"❌ 数据库迁移 v{version} 失败: {err_msg}\n"
+                        f"已标记 dirty 状态，下次启动将自动重试。\n"
+                        f"如持续失败可手动修复：\n"
+                        f"  1. python -m db.repair_migration --mark-clean\n"
+                        f"  2. python -m db.repair_migration --rollback {version}\n"
+                    )
+                    raise RuntimeError(
+                        f"数据库迁移 v{version} 失败，已标记 dirty，初始化已中止: "
+                        f"{err_msg}"
+                    ) from e
+        raise RuntimeError(f"数据库迁移 v{version} 重试耗尽")
 
     async def _migrate_v1(self) -> None:
         """v1: knowledge_relations 新增时间字段（valid_from/valid_to/confidence）。"""
@@ -1177,15 +1188,15 @@ class LegacyMigrationMixin:
 
     async def _migrate_v27(self) -> None:
         # workflow_v2 表（CREATE TABLE IF NOT EXISTS，幂等）
-        await db_workflow.create_schema(self._conn)
+        await db_workflow.create_schema(self._conn, auto_commit=False)
 
     async def _migrate_v28(self) -> None:
         # wf_config KV 表（M3 灰度开关：workflow_v2.enabled / pilot_wf_ids）
-        await db_workflow.create_schema(self._conn)
+        await db_workflow.create_schema(self._conn, auto_commit=False)
 
     async def _migrate_v29(self) -> None:
         # wf_review 审批单表（M4 REVIEW 高级节点：待批/已批/已拒 + 决策记录）
-        await db_workflow.create_schema(self._conn)
+        await db_workflow.create_schema(self._conn, auto_commit=False)
 
     async def _migrate_v30(self) -> None:
         """v30: 清除 v0.6 认知架构遗留的四张死表。

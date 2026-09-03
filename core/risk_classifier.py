@@ -1,6 +1,7 @@
 """执行纪律层 — 危险分级 L0-L4 + 证据门禁 + 改完验证"""
 import logging
 import re
+from contextvars import ContextVar, Token
 from enum import IntEnum
 from typing import ClassVar
 
@@ -109,23 +110,41 @@ class RiskClassifier:
 
 
 class EvidenceGate:
-    """证据门禁 — 追踪已读取的文件路径"""
+    """证据门禁 — 按异步上下文追踪已读取的文件路径"""
 
     def __init__(self) -> None:
-        self._read_targets: set[str] = set()
+        self._read_targets: ContextVar[set[str] | None] = ContextVar(
+            f"evidence_gate_read_targets_{id(self)}", default=None
+        )
+
+    def bind_request(self) -> Token:
+        """为当前请求绑定独立的读取记录，并返回恢复 token。"""
+        return self._read_targets.set(set())
+
+    def reset_request(self, token: Token) -> None:
+        """恢复调用 bind_request 前的异步上下文状态。"""
+        self._read_targets.reset(token)
+
+    def _current_targets(self) -> set[str]:
+        targets = self._read_targets.get()
+        if targets is None:
+            targets = set()
+            self._read_targets.set(targets)
+        return targets
 
     def mark_read(self, file_path: str) -> None:
         """标记文件已读取"""
         if file_path:
-            self._read_targets.add(str(file_path))
+            self._current_targets().add(str(file_path))
 
     def has_read(self, file_path: str) -> bool:
         """检查是否已读取目标文件"""
-        return str(file_path) in self._read_targets
+        targets = self._read_targets.get()
+        return targets is not None and str(file_path) in targets
 
     def clear(self) -> None:
-        """清空追踪记录"""
-        self._read_targets.clear()
+        """仅清空当前异步上下文的追踪记录"""
+        self._read_targets.set(set())
 
 
 class PostValidator:

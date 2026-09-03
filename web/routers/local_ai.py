@@ -552,16 +552,50 @@ async def remove_model(model_id: str, request: Request) -> Response:
             status_code=409,
             detail=f"模型 {model_id} 仍有 {len(active_downloads)} 个未完成的下载任务",
         )
+    if not getattr(installed, "removable", True):
+        raise HTTPException(status_code=409, detail=f"内置模型 {model_id} 不允许删除")
+    directory = Path(installed.directory)
+    tombstone: Path | None = None
+    if directory.exists():
+        resolved = directory.resolve()
+        if not directory.is_dir() or resolved == resolved.parent or not directory.name.strip():
+            raise HTTPException(status_code=409, detail=f"模型目录不安全，拒绝删除: {directory}")
+        tombstone = directory.with_name(f".{directory.name}.delete-{uuid4().hex}")
+        try:
+            await asyncio.to_thread(directory.rename, tombstone)
+        except OSError as error:
+            logger.error("local_ai.model_directory_stage_failed model={} path={} error={}",
+                         model_id, str(directory), str(error))
+            raise HTTPException(status_code=500, detail="模型文件无法进入安全删除阶段，注册记录已保留") from None
     try:
         await services.models.remove(model_id)
     except ValueError as error:
+        if tombstone is not None and tombstone.exists():
+            await asyncio.to_thread(tombstone.rename, directory)
         raise HTTPException(status_code=409, detail=str(error)) from error
-    directory = Path(installed.directory)
-    if directory.is_dir() and directory.exists():
-        # 仅清理受管模型目录：绝对路径、非文件系统根、且目录名非空
-        resolved = directory.resolve()
-        if resolved != resolved.parent and directory.name.strip():
-            shutil.rmtree(directory, ignore_errors=True)
+    except Exception:
+        if tombstone is not None and tombstone.exists():
+            await asyncio.to_thread(tombstone.rename, directory)
+        raise
+    if tombstone is not None:
+        try:
+            await asyncio.to_thread(shutil.rmtree, tombstone)
+        except OSError as error:
+            rollback_error: Exception | None = None
+            try:
+                await asyncio.to_thread(tombstone.rename, directory)
+                await services.models.register(installed)
+            except Exception as exc:
+                rollback_error = exc
+            if rollback_error is not None:
+                logger.exception(
+                    "local_ai.model_remove_rollback_failed model={} path={} cleanup_error={} rollback_error={}",
+                    model_id, str(directory), str(error), str(rollback_error),
+                )
+                raise HTTPException(status_code=500, detail="模型删除失败且自动回滚不完整，请检查服务端日志") from None
+            logger.error("local_ai.model_directory_remove_failed model={} path={} error={}",
+                         model_id, str(directory), str(error))
+            raise HTTPException(status_code=500, detail="模型文件删除失败，注册记录和目录已恢复") from None
     return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 

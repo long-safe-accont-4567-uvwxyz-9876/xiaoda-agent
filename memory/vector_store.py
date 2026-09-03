@@ -69,6 +69,7 @@ except ImportError:  # pragma: no cover
 import httpx as _httpx_embed
 
 from config_constants import env_flag
+from config_providers import get_default_model_kind
 from utils.http_pool import get_shared_client as _get_embed_shared_client
 from utils.metrics import metrics
 from utils.thread_pools import to_thread_heavy, to_thread_hot
@@ -243,7 +244,6 @@ def _default_embed_model() -> str:
     global _EMBED_MODEL_DEFAULT_CACHE
     if _EMBED_MODEL_DEFAULT_CACHE is None:
         try:
-            from config_providers import get_default_model_kind
             _EMBED_MODEL_DEFAULT_CACHE = get_default_model_kind("siliconflow", "embedding")
         except (ImportError, OSError, ValueError):
             _EMBED_MODEL_DEFAULT_CACHE = ""

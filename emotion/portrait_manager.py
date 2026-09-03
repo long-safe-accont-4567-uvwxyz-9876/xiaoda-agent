@@ -122,7 +122,7 @@ class PortraitManager:
         self.memory = memory
         self.notebook = notebook
         self._router = router
-        self._dirty = True
+        self._clean_scopes: set[tuple[str, str]] = set()
         self._free = FreeModelBackend()
         self._free.set_router(router)
 
@@ -130,21 +130,57 @@ class PortraitManager:
         """热更新后端：local=走本地模型；api/auto=走硅基流动免费模型。"""
         self._free.set_backend(backend, local_model)
 
-    def mark_dirty(self) -> None:
-        self._dirty = True
-        logger.debug("portrait.marked_dirty")
+    @staticmethod
+    def _resolve_scope(scope: Any | None) -> Any | None:
+        if scope is None:
+            try:
+                from memory.scope import current_scope
 
-    async def get_current_portrait(self) -> dict | None:
-        return await self.memory.get_latest_portrait()
+                scope = current_scope()
+            except RuntimeError:
+                return None
+        if not getattr(scope, "user_id", "") or not getattr(scope, "agent_id", ""):
+            return None
+        return scope
 
-    async def consolidate(self, force: bool = False,
-                          address_term: str = "爸爸") -> str | None:
-        """整合近期记忆与笔记，调用 LLM 生成用户画像并写入 DB。"""
-        if not force and not self._dirty:
+    @staticmethod
+    def _scope_key(scope: Any) -> tuple[str, str]:
+        return scope.user_id, scope.agent_id
+
+    def mark_dirty(self, *, scope: Any | None = None) -> None:
+        scope = self._resolve_scope(scope)
+        if scope is None:
+            logger.warning("portrait.mark_dirty_without_scope")
+            return
+        self._clean_scopes.discard(self._scope_key(scope))
+        logger.debug(
+            "portrait.marked_dirty", user_id=scope.user_id, agent_id=scope.agent_id
+        )
+
+    async def get_current_portrait(self, *, scope: Any | None = None) -> dict | None:
+        scope = self._resolve_scope(scope)
+        if scope is None:
+            return None
+        return await self.memory.get_latest_portrait(scope=scope)
+
+    async def consolidate(
+        self,
+        force: bool = False,
+        address_term: str = "爸爸",
+        *,
+        scope: Any | None = None,
+    ) -> str | None:
+        """整合当前 user/agent scope 的素材并写入同一 scope。"""
+        scope = self._resolve_scope(scope)
+        if scope is None:
+            logger.warning("portrait.consolidate_without_scope")
+            return None
+        scope_key = self._scope_key(scope)
+        if not force and scope_key in self._clean_scopes:
             logger.debug("portrait.clean_skipped")
             return None
 
-        materials = await self._gather_portrait_materials(address_term)
+        materials = await self._gather_portrait_materials(address_term, scope=scope)
         if materials is None:
             return None
         memories, notes, old_section, version = materials
@@ -185,17 +221,28 @@ class PortraitManager:
             return None
 
         source_ids = ",".join(str(m.get("id", "")) for m in memories[:15])
-        return await self._persist_portrait(portrait_text, version, source_ids, changes)
+        return await self._persist_portrait(
+            portrait_text, version, source_ids, changes, scope=scope
+        )
 
-    async def _gather_portrait_materials(self, address_term: str) -> Any:
-        """收集画像素材：近期记忆、笔记、旧画像。无素材时返回 None。"""
+    async def _gather_portrait_materials(
+        self, address_term: str, *, scope: Any
+    ) -> Any:
+        """收集当前 user/agent scope 的画像素材。无素材时返回 None。"""
         try:
-            memories = await self.memory.get_episodic_recent(limit=50)
+            memories = await self.memory.get_portrait_memories(
+                scope=scope, limit=50
+            )
         except Exception as e:
             logger.warning("portrait.memories_failed", error=str(e))
             memories = []
         try:
-            notes = await self.notebook.get_notebook_notes(limit=10)
+            notes = await self._db.fetch_all(
+                "SELECT * FROM notebook_entries "
+                "WHERE status='active' AND user_id=? AND agent_id=? "
+                "ORDER BY updated_at DESC LIMIT ?",
+                (scope.user_id, scope.agent_id, 10),
+            )
         except Exception as e:
             logger.warning("portrait.notes_failed", error=str(e))
             notes = []
@@ -203,7 +250,7 @@ class PortraitManager:
             logger.info("portrait.no_material")
             return None
 
-        old = await self.memory.get_latest_portrait()
+        old = await self.memory.get_latest_portrait(scope=scope)
         old_section = ""
         version = 1
         if old and old.get("content"):
@@ -236,9 +283,16 @@ class PortraitManager:
             address_term=address_term,
         )
 
-    async def _persist_portrait(self, portrait_text: str, version: int,
-                                source_ids: str, changes: str) -> str | None:
-        """写入画像到 DB，带锁竞争重试。成功返回 portrait_text，失败返回 None。"""
+    async def _persist_portrait(
+        self,
+        portrait_text: str,
+        version: int,
+        source_ids: str,
+        changes: str,
+        *,
+        scope: Any,
+    ) -> str | None:
+        """写入当前 scope 的画像，带锁竞争重试。"""
         for attempt in range(3):
             try:
                 await self.memory.insert_portrait(
@@ -246,6 +300,7 @@ class PortraitManager:
                     version=version,
                     source_ids=source_ids,
                     change_log=changes,
+                    scope=scope,
                 )
                 logger.info(
                     "portrait.consolidated",
@@ -253,7 +308,7 @@ class PortraitManager:
                     length=len(portrait_text),
                     changes=changes[:80] if changes else "",
                 )
-                self._dirty = False
+                self._clean_scopes.add(self._scope_key(scope))
                 return portrait_text
             except Exception as e:
                 if "locked" in str(e).lower() and attempt < 2:
@@ -264,14 +319,19 @@ class PortraitManager:
                 return None
         return None
 
-    async def ensure_exists(self, address_term: str = "爸爸") -> str | None:
-        existing = await self.memory.get_latest_portrait()
+    async def ensure_exists(
+        self, address_term: str = "爸爸", *, scope: Any | None = None
+    ) -> str | None:
+        scope = self._resolve_scope(scope)
+        if scope is None:
+            return None
+        existing = await self.memory.get_latest_portrait(scope=scope)
         if existing:
             return None
 
-        count = await self.memory.get_episodic_count()
+        count = await self.memory.get_portrait_memory_count(scope=scope)
         if count < 5:
             return None
 
         logger.info("portrait.cold_start", episodic_count=count)
-        return await self.consolidate(address_term=address_term)
+        return await self.consolidate(address_term=address_term, scope=scope)

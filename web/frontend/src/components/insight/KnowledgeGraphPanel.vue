@@ -17,6 +17,7 @@ import { TooltipComponent } from 'echarts/components'
 import { CanvasRenderer } from 'echarts/renderers'
 import SumeruIcon from '../fx/SumeruIcon.vue'
 import Tilt3D from '../fx/Tilt3D.vue'
+import { escapeHtmlText } from '../../composables/useRenderedBand'
 import { t } from '../../i18n'
 import type { EntityItem, KgEdge2D, KgNode2D, RelationItem } from './types'
 
@@ -131,12 +132,18 @@ async function render() {
     knowledgeChart.setOption({
       tooltip: {
         triggerOn: 'click',
+        renderMode: 'html',
         formatter: (p: any) => {
           if (p.dataType === 'node') {
-            return `<b>${p.data.name}</b><br/>${t('insightView.typeName')} ${p.data.value || ''}`
+            const name = escapeHtmlText(String(p.data.name ?? ''))
+            const kind = escapeHtmlText(String(p.data.kind ?? p.data.value ?? ''))
+            return `<b>${name}</b><br/>${t('insightView.typeName')} ${kind}`
           }
           if (p.dataType === 'edge') {
-            return `${p.data.source} → <b>${p.data.relation}</b> → ${p.data.target}`
+            const source = escapeHtmlText(String(p.data.source ?? ''))
+            const relation = escapeHtmlText(String(p.data.relation ?? ''))
+            const target = escapeHtmlText(String(p.data.target ?? ''))
+            return `${source} → <b>${relation}</b> → ${target}`
           }
           return ''
         },

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import inspect
 from typing import Any, AsyncIterator
 
 from loguru import logger
@@ -28,9 +29,12 @@ class OpenAICompatibleTransport(ProviderTransport):
         capabilities: ProviderCapabilities | None = None,
         default_model: str = "",
         base_url: str = "",
+        owns_client: bool = True,
     ) -> None:
         super().__init__(capabilities=capabilities, default_model=default_model)
         self._client = client
+        self._owns_client = owns_client
+        self._closed = False
         self._base_url = base_url
 
     def _validate(self) -> None:
@@ -112,3 +116,17 @@ class OpenAICompatibleTransport(ProviderTransport):
                 return CapabilityReport(True, self.capabilities, models=await super().discover_models())
             logger.exception("transport.openai.health_check_unexpected")
             return CapabilityReport(False, self.capabilities, error="health check failed")
+
+    async def aclose(self) -> None:
+        if self._closed or not self._owns_client:
+            return
+        close = getattr(self._client, "close", None)
+        if close is None:
+            close = getattr(self._client, "aclose", None)
+        if close is None:
+            self._closed = True
+            return
+        result = close()
+        if inspect.isawaitable(result):
+            await result
+        self._closed = True

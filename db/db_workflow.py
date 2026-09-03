@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import aiosqlite
 
+from db.db_local_ai import transaction_lock_for
+
 DDL = [
     """CREATE TABLE IF NOT EXISTS wf_definition (
         workflow_id TEXT PRIMARY KEY,
@@ -87,7 +89,43 @@ DDL = [
 ]
 
 
-async def create_schema(conn: aiosqlite.Connection) -> None:
-    for stmt in DDL:
-        await conn.execute(stmt)
+async def create_schema(
+    conn: aiosqlite.Connection, *, auto_commit: bool = True
+) -> None:
+    if not auto_commit:
+        for stmt in DDL:
+            await conn.execute(stmt)
+        return
+    async with transaction_lock_for(conn):
+        for stmt in DDL:
+            await conn.execute(stmt)
+        await conn.commit()
+
+
+async def migrate_review_attempt_uniqueness(conn: aiosqlite.Connection) -> None:
+    """Enforce ONE live review per (run, node, attempt) and keep history.
+
+    Existing duplicates are preserved as ``superseded`` history: only the
+    EARLIEST row of each group stays actionable (它代表首次提交的审批单),
+    newer duplicates are marked superseded. The partial unique index then
+    blocks new writes without touching superseded rows. ``rowid`` breaks
+    created_at ties deterministically so the index creation never fails.
+    """
+    await conn.execute(
+        "UPDATE wf_review SET status='superseded' "
+        "WHERE status NOT IN ('superseded') "
+        "AND (created_at, rowid) > ("
+        "  SELECT created_at, rowid FROM wf_review AS keeper"
+        "  WHERE keeper.run_id = wf_review.run_id"
+        "    AND keeper.node_id = wf_review.node_id"
+        "    AND keeper.attempt = wf_review.attempt"
+        "    AND keeper.status NOT IN ('superseded')"
+        "  ORDER BY keeper.created_at ASC, keeper.rowid ASC LIMIT 1"
+        ")"
+    )
+    await conn.execute(
+        "CREATE UNIQUE INDEX IF NOT EXISTS ux_wf_review_attempt "
+        "ON wf_review(run_id, node_id, attempt) "
+        "WHERE status <> 'superseded'"
+    )
     await conn.commit()

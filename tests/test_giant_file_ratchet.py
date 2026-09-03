@@ -68,6 +68,19 @@ ROOT = Path(__file__).resolve().parents[1]
 #   web/frontend/src/views/ChatView.vue 962→988 —— 聊天列表离屏惰性渲染：
 #     可视带外行降级转义纯文本 + 行级 content-visibility/contain-intrinsic-size
 #     （新组合式 useRenderedBand 零依赖，composables/useRenderedBand.ts）。
+# 2026-09-03 上调记录（协议 b：必要增长，全方位体检修复批次）：
+#   tests/test_provider_onboarding.py 1715→1748 —— 测试补覆盖传输层 aclose
+#     （provider transports 关闭语义：stdio/sse/http + OpenAI 兼容收口）；
+#   web/routers/setup.py 1443→1444 —— 引导访问规则收口为
+#     _authorize_setup_access（回环免令牌、LAN 必须 bootstrap token）+1；
+#   db/legacy_migrations.py 1289→1300 —— 迁移前补建 migration_state 防御
+#     （vfat DDL 静默失败回归防护，直连 _apply_migration 迁移路径）；
+#   llm_gateway/router_execution.py 1101→1108 —— 流式 EOF 无 finish_reason
+#     （stream_incomplete：不记成功指标，归口 StructuredStreamProtocolError）；
+#   tool_engine/mcp_client.py 1090→1116 —— connect 被取消时 _stop_after_cancel
+#     兜底清理（shield 循环扛反复 CancelledError）；
+#   agent_core/sub_agent_manager.py 1141→1173 —— 重试降级改走统一
+#     SubAgentInvocation 调度器（工具/路径白名单收口 + 取消传播）。
 BASELINES: dict[str, int] = {
     "qq_bot_adapter.py": 2176,
     "wechat_bot_adapter.py": 1591,
@@ -83,7 +96,8 @@ WEB_TEST_BASELINES: dict[str, int] = {
     "web/frontend/src/views/ChatView.vue": 988,
     "web/frontend/src/views/RetrievalView.vue": 915,
     "tests/test_local_ai_device_registry.py": 2260,
-    "tests/test_provider_onboarding.py": 1715,
+    # 2026-09-03 上调（协议 b）：传输层 aclose 测试收口 +33（见 BASELINES 记录）
+    "tests/test_provider_onboarding.py": 1748,
 }
 
 
@@ -134,17 +148,23 @@ ALLOWLIST_BASELINES: dict[str, int] = {
     "web/server.py": 1424,
     "agent_context.py": 1345,
     # 2026-08-29 审计修复 Task 1（setup 引导 token 鉴权 + recovery_qa 接线）+112 行
-    "web/routers/setup.py": 1443,
-    "db/legacy_migrations.py": 1289,
+    # 2026-09-03 上调（协议 b）：setup 引导 token 鉴权接线 +1（见 BASELINES 记录）
+    "web/routers/setup.py": 1444,
+    # 2026-09-03 上调（协议 b）：迁移前补建 migration_state 防御（vfat DDL
+    # 静默失败回归防护，直连 _apply_migration 迁移路径）1289→1300
+    "db/legacy_migrations.py": 1300,
     "core/bootstrap.py": 1336,
     "utils/text_utils.py": 1151,
     "memory/_memory_encoder.py": 1134,
     "db/db_memory_reconciliation.py": 1102,
-    "llm_gateway/router_execution.py": 1101,
-    "tool_engine/mcp_client.py": 1090,
+    # 2026-09-03 上调（协议 b）：流式 EOF stream_incomplete 收口 +7
+    "llm_gateway/router_execution.py": 1108,
+    # 2026-09-03 上调（协议 b）：connect 取消时 _stop_after_cancel 清理 +26
+    "tool_engine/mcp_client.py": 1116,
     "memory/retrieval/pipeline.py": 1084,
     "ilink_client.py": 1039,
-    "agent_core/sub_agent_manager.py": 1141,
+    # 2026-09-03 上调（协议 b）：重试降级走 SubAgentInvocation 调度器 +32
+    "agent_core/sub_agent_manager.py": 1173,
     # 2026-08-29 审计修复 Task 4（agent_core 管线六项修复）：
     #   sub_agent.py 1036→1161 —— 工具结果 EXTERNAL 消毒助手（Fix3）、
     #     截断 JSON 修复真正生效（Fix4）、MCP 作用域过滤 helpers

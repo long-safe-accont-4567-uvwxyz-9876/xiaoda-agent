@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, computed, nextTick, watch, onMounted, onBeforeUnmount } from 'vue'
+import { ref, computed, nextTick, watch } from 'vue'
 import SumeruIcon from '../../components/fx/SumeruIcon.vue'
 import { useMessage } from 'naive-ui'
 import { getWsClient } from '../../api/ws'
@@ -170,22 +170,13 @@ async function onDrop(e: DragEvent) {
   if (file) await uploadFile(file)
 }
 
-// 粘贴
+// Only the focused chat textarea consumes image paste events.
 async function onPaste(e: ClipboardEvent) {
   const hit = firstImageItemFile(e.clipboardData?.items ?? null)
   if (!hit.found) return
   e.preventDefault()
   if (hit.file) await uploadFile(hit.file)
 }
-
-onMounted(() => {
-  // 监听粘贴
-  document.addEventListener('paste', onPaste as any)
-})
-
-onBeforeUnmount(() => {
-  document.removeEventListener('paste', onPaste as any)
-})
 
 // 外部 modelValue 变化时自动增高
 watch(() => props.modelValue, () => {
@@ -229,6 +220,7 @@ watch(() => props.modelValue, () => {
       :aria-activedescendant="comboboxActiveOption"
       @input="onInput"
       @keydown="handleKeydown"
+      @paste="onPaste"
     ></textarea>
 
     <!-- 底部功能按钮行 -->

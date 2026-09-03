@@ -225,6 +225,8 @@ async def install_plugin(req: InstallRequest, request: Request) -> Any:
 @router.post("/plugins/uninstall", response_model=Envelope[dict])
 async def uninstall_plugin(req: UninstallRequest, request: Request) -> Any:
     """一键卸载 MCP 工具"""
+    if request.headers.get("X-Confirm") != "yes":
+        raise HTTPException(400, "缺少 X-Confirm: yes 确认头")
     installer = _get_installer(request)
     try:
         result = await installer.uninstall(req.item_id, "plugin")
@@ -311,6 +313,8 @@ async def install_skill(req: InstallRequest, request: Request) -> Any:
 @router.post("/skills/uninstall", response_model=Envelope[dict])
 async def uninstall_skill(req: UninstallRequest, request: Request) -> Any:
     """一键卸载技能"""
+    if request.headers.get("X-Confirm") != "yes":
+        raise HTTPException(400, "缺少 X-Confirm: yes 确认头")
     installer = _get_installer(request)
     try:
         result = await installer.uninstall(req.item_id, "skill")
@@ -397,6 +401,8 @@ async def install_mcp(req: InstallRequest, request: Request) -> Any:
 @router.post("/mcp/uninstall", response_model=Envelope[dict])
 async def uninstall_mcp(req: UninstallRequest, request: Request) -> Any:
     """一键卸载 MCP 工具"""
+    if request.headers.get("X-Confirm") != "yes":
+        raise HTTPException(400, "缺少 X-Confirm: yes 确认头")
     installer = _get_installer(request)
     try:
         result = await installer.uninstall(req.item_id, "mcp")

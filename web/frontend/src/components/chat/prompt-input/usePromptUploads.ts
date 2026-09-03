@@ -21,15 +21,36 @@ export function usePromptUploads(statusKey: Ref<string>) {
   const imagePreviewUrl = ref('')
   const uploadState = ref<'idle' | 'uploading' | 'error'>('idle')
   const showLightbox = ref(false)
+  let uploadGeneration = 0
+  let imagePreviewGeneration: number | null = null
 
   const hasAttachment = computed(() => uploadedImage.value !== null || uploadedDoc.value !== null)
 
+  function clearImagePreview() {
+    if (imagePreviewUrl.value) URL.revokeObjectURL(imagePreviewUrl.value)
+    imagePreviewUrl.value = ''
+    imagePreviewGeneration = null
+  }
+
+  function invalidateUpload() {
+    uploadGeneration += 1
+    if (imagePreviewGeneration !== null) clearImagePreview()
+    if (uploadState.value === 'uploading') uploadState.value = 'idle'
+  }
+
+  function nextUploadGeneration() {
+    invalidateUpload()
+    return uploadGeneration
+  }
+
   async function uploadFile(file: File) {
+    const generation = nextUploadGeneration()
     // P0 修复（Task 1.9）：一键包含所有文件 — 自动检测类型并路由
     // 图片 → vision API（uploadImage），文档 → document_reader 工具（uploadDoc）
     // 用户要求"不要添加组件，一键包含所有文件"
     const cls = classifyUpload(file)
     if (!cls) {
+      if (generation !== uploadGeneration) return
       uploadState.value = 'error'
       statusKey.value = 'promptInput.unsupportedFile'
       return
@@ -38,19 +59,23 @@ export function usePromptUploads(statusKey: Ref<string>) {
     statusKey.value = ''
     try {
       if (cls.kind === 'image') {
-        if (imagePreviewUrl.value) URL.revokeObjectURL(imagePreviewUrl.value)
+        clearImagePreview()
         imagePreviewUrl.value = URL.createObjectURL(file)
+        imagePreviewGeneration = generation
         const result = await api.uploadImage(file)
+        if (generation !== uploadGeneration) return
         uploadedImage.value = result
+        imagePreviewGeneration = null
       } else {
         // 文档上传：不走 vision API，返回路径供 document_reader 工具使用
         const result = await api.uploadDoc(file)
+        if (generation !== uploadGeneration) return
         uploadedDoc.value = result
       }
       uploadState.value = 'idle'
     } catch {
-      if (imagePreviewUrl.value) URL.revokeObjectURL(imagePreviewUrl.value)
-      imagePreviewUrl.value = ''
+      if (generation !== uploadGeneration) return
+      if (imagePreviewGeneration === generation) clearImagePreview()
       uploadedImage.value = null
       uploadedDoc.value = null
       uploadState.value = 'error'
@@ -59,13 +84,14 @@ export function usePromptUploads(statusKey: Ref<string>) {
   }
 
   function removeImage() {
-    if (imagePreviewUrl.value) URL.revokeObjectURL(imagePreviewUrl.value)
+    invalidateUpload()
+    clearImagePreview()
     uploadedImage.value = null
-    imagePreviewUrl.value = ''
   }
 
   // P0 新增（Task 1.9）：文档附件移除 — 与图片附件独立的清理路径
   function removeDoc() {
+    invalidateUpload()
     uploadedDoc.value = null
   }
 
@@ -78,14 +104,15 @@ export function usePromptUploads(statusKey: Ref<string>) {
   }
 
   function resetAttachments() {
-    if (imagePreviewUrl.value) URL.revokeObjectURL(imagePreviewUrl.value)
+    invalidateUpload()
+    clearImagePreview()
     uploadedImage.value = null
     uploadedDoc.value = null
-    imagePreviewUrl.value = ''
   }
 
   onBeforeUnmount(() => {
-    if (imagePreviewUrl.value) URL.revokeObjectURL(imagePreviewUrl.value)
+    invalidateUpload()
+    clearImagePreview()
   })
 
   return {

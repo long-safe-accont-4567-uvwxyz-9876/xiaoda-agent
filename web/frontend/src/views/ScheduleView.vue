@@ -23,6 +23,7 @@ const showForm = ref(false)
 const isCreate = ref(true)
 const form = ref<any>({})
 const testing = ref(false)
+const greetingSubmitting = ref(false)
 
 const weekLabels = computed(() => [1, 2, 3, 4, 5, 6, 7].map(i => t(`scheduleView.weekLabel${i}`)))
 
@@ -81,6 +82,8 @@ function openForm(g: any | null) {
 }
 
 async function saveGreeting() {
+  if (greetingSubmitting.value) return
+  greetingSubmitting.value = true
   try {
     if (isCreate.value) {
       await post('/schedule/greetings', form.value)
@@ -91,7 +94,11 @@ async function saveGreeting() {
     }
     showForm.value = false
     await loadAll()
-  } catch (e: any) { message.error(e.message) }
+  } catch (e: any) {
+    message.error(e.message)
+  } finally {
+    greetingSubmitting.value = false
+  }
 }
 
 async function toggleGreeting(g: any, value: boolean) {
@@ -278,8 +285,8 @@ const reasonLabel: Record<string, string> = {
       </n-form>
       <template #footer>
         <div style="display:flex; justify-content:flex-end; gap:10px">
-          <n-button @click="showForm = false">{{ t('cancel') }}</n-button>
-          <n-button type="primary" @click="saveGreeting">{{ t('save') }}</n-button>
+          <n-button :disabled="greetingSubmitting" @click="showForm = false">{{ t('cancel') }}</n-button>
+          <n-button type="primary" :loading="greetingSubmitting" :disabled="greetingSubmitting" @click="saveGreeting">{{ t('save') }}</n-button>
         </div>
       </template>
     </n-modal>

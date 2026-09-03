@@ -958,9 +958,9 @@ class AgentCoreBootstrapper:
                 except Exception as e:  # noqa: BLE001 —— 兜底：执行体自身异常也要告知
                     logger.exception("async_delegation.runner_crashed task={}", job.task_id)
                     ad.mark_done(job.task_id, ok=False, preview=str(e)[:120])
-                    await ad.deliver(job, f"后台任务内部错误：{str(e)[:300]}", failed=True)
+                    await ad.deliver_text(job, f"后台任务内部错误：{str(e)[:300]}", failed=True)
 
-            _spawn(_runner())
+            job.asyncio_task = _spawn(_runner(), owner=getattr(core, "_bg_task_manager", None))
 
             # 中性受理语：不搞机械回执，模型自然带过即可；结果完成后
             # 主代理会以自己的口吻主动转述（async_delegation.compose_and_deliver）
@@ -1033,6 +1033,8 @@ class AgentCoreBootstrapper:
             from core import async_delegation as ad
             from tool_engine.tool_executor import ToolResult
             action = action.strip().lower()
+            if ad._current_request_context() is None:
+                return ToolResult.fail("当前请求缺少会话上下文，无法访问后台任务。")
 
             if action == "status":
                 jobs = ad.snapshot()

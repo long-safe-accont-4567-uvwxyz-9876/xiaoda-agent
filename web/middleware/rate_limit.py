@@ -40,6 +40,10 @@ from starlette.requests import Request
 from starlette.responses import JSONResponse
 
 from utils.thread_pools import to_thread_heavy
+from web.proxy_headers import (
+    parse_trusted_proxy_networks as _parse_trusted_networks,
+)
+from web.proxy_headers import resolve_client_ip as _resolve_client_ip
 
 # ── 写操作 HTTP 方法 (应用更严的写端点限制) ──
 _WRITE_METHODS = frozenset({"POST", "PUT", "DELETE", "PATCH"})
@@ -65,67 +69,10 @@ _LOGIN_PATHS = frozenset({
     "/api/v1/auth/recover",
 })
 
-# ── VULN-28：默认可信范围仅为回环（原实现自动放行所有内网 IP，
-# 公网部署时同 VPS/容器网段的攻击者可无限速爆破）。内网段需通过
-# RATE_LIMIT_TRUSTED_NETWORKS（逗号分隔 IP/CIDR）显式配置。
-_DEFAULT_TRUSTED_NETWORKS = ("127.0.0.0/8", "::1/128")
-
-
-def _parse_trusted_networks(raw: str | None) -> list:
-    """解析逗号分隔的 IP/CIDR 列表为 ip_network 对象，非法项跳过并告警。"""
-    if raw is None:
-        return [ipaddress.ip_network(n) for n in _DEFAULT_TRUSTED_NETWORKS]
-    networks: list = []
-    for item in raw.split(","):
-        item = item.strip()
-        if not item:
-            continue
-        try:
-            networks.append(ipaddress.ip_network(item, strict=False))
-        except ValueError:
-            logger.warning("rate_limit.trusted_network_invalid item={}", item)
-    return networks
-
-
-def _peer_is_trusted_proxy(peer: str, trusted_networks: list | None = None) -> bool:
-    """判断 socket 对端是否为可信代理（回环或显式可信网段）。
-
-    VULN-28 补充：X-Forwarded-For 头**只能**在直接连接方是可信代理时才能
-    解析 —— 攻击者直连（无反代）时完全控制 XFF，若无条件信任即可伪造任意
-    来源 IP 轮换，绕过 per-IP 的 login 限流与失败锁定。
-    """
-    if not peer or peer in _LOCALHOST_HOSTS:
-        return True
-    try:
-        addr = ipaddress.ip_address(peer)
-    except ValueError:
-        return False
-    nets = trusted_networks if trusted_networks is not None else _parse_trusted_networks(
-        os.environ.get("RATE_LIMIT_TRUSTED_NETWORKS"))
-    return any(addr in net for net in nets)
-
 # F7 持久化与淘汰策略常量
 _MAX_BUCKETS = 5000          # 单层最大桶数 (用户桶+写端点桶各自上限)
 _SAVE_INTERVAL = 60.0        # 持久化保存间隔 (秒)
 _EVICT_INACTIVE_AFTER = 3600.0  # 桶超过此时间未访问将被淘汰 (秒)
-
-
-def _trust_forwarded_for() -> bool:
-    """是否信任 X-Forwarded-For 头 (反代场景).
-
-    默认不信任 (兼容现状). 通过环境变量 ``TRUST_FORWARDED_FOR=1`` 或
-    config 字段 ``TRUST_FORWARDED_FOR`` 显式开启.
-    """
-    env_val = os.getenv("TRUST_FORWARDED_FOR", "").strip().lower()
-    if env_val in ("1", "true", "yes", "on"):
-        return True
-    try:
-        from config import TRUST_FORWARDED_FOR as _cfg_val  # type: ignore
-        if _cfg_val:
-            return True
-    except (ImportError, RuntimeError, ValueError):
-        logger.debug("rate_limit.trust_forwarded_for_config_read_failed", exc_info=True)
-    return False
 
 
 def _is_private_ip(host: str) -> bool:
@@ -456,32 +403,17 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
         轮换，绕过 per-IP 限流。
         """
         peer = request.client.host if request.client else "unknown"
-        trust_xff = _trust_forwarded_for()
-        if trust_xff and _peer_is_trusted_proxy(peer, self._trusted_networks):
-            xff = request.headers.get("X-Forwarded-For", "") or request.headers.get("x-forwarded-for", "")
-            if xff:
-                # X-Forwarded-For: client, proxy1, proxy2
-                # 取最右侧非内网/非可信代理的 IP, 避免攻击者伪造 XFF 前缀
-                candidates = [ip.strip() for ip in xff.split(",") if ip.strip()]
-                for ip in reversed(candidates):
-                    try:
-                        addr = ipaddress.ip_address(ip)
-                        if not (addr.is_private or addr.is_loopback):
-                            return ip
-                    except ValueError:
-                        continue
-                # 全部都是内网 (如纯内网部署), 取最左侧 (原始客户端)
-                if candidates:
-                    return candidates[0]
-        return peer
+        return _resolve_client_ip(
+            peer,
+            request.headers.get("X-Forwarded-For", ""),
+            trusted_networks=self._trusted_networks,
+        )
 
     @staticmethod
     def _user_id(request: Request) -> str:
-        """可选 user_id: 优先 X-User-ID header, 其次 request.state.user_id。"""
-        uid = request.headers.get("X-User-ID")
-        if uid:
-            return uid.strip()
-        return getattr(request.state, "user_id", "") or ""
+        """Return a server-verified principal or the fixed single-user identity."""
+        uid = getattr(request.state, "user_id", "")
+        return str(uid).strip() if uid else "webui"
 
     @staticmethod
     def _bucket_key(host: str, user_id: str) -> str:

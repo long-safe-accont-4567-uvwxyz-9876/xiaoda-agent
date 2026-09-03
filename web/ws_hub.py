@@ -1206,15 +1206,18 @@ def _make_status_callback(conn_id: str, msg_id: str):
 # `from web.ws_hub import X` 与 hub._X 引用面不破
 # （tests/test_terminal_output_coalescing.py 等 64 处引用）。
 from web.ws_terminal import (  # noqa: F401, E402 —— 文件尾 re-export(拆分兼容层)
-    _TERM_FLUSH_INTERVAL_S,
-    _TERM_FLUSH_MAX_CHARS,
+    _TERM_ADAPTIVE_ENABLED,
     _TERM_BACKOFF_HIGH_CHARS,
     _TERM_BACKOFF_LOW_CHARS,
+    _TERM_FLUSH_INTERVAL_S,
+    _TERM_FLUSH_MAX_CHARS,
+    _TERM_FLUSH_MAX_INTERVAL_S,
     _cleanup_pty,
     _handle_terminal_input,
     _handle_terminal_kill,
     _handle_terminal_resize,
     _handle_terminal_start,
+    _next_flush_interval,
     _notify_terminal_exit,
     _pty_sessions,
     _pty_sessions_lock,
@@ -1223,10 +1226,7 @@ from web.ws_terminal import (  # noqa: F401, E402 —— 文件尾 re-export(拆
     _setup_pty_reader,
     _setup_win_pipe_reader,
     _setup_win_pty_reader,
-    _term_out_buf,
     _term_flush_interval,
-    _next_flush_interval,
-    _TERM_FLUSH_MAX_INTERVAL_S,
-    _TERM_ADAPTIVE_ENABLED,
+    _term_out_buf,
     _try_import_winpty,
 )

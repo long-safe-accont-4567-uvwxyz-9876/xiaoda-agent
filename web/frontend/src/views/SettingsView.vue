@@ -154,7 +154,7 @@ async function runDoctor() {
 async function doctorFix() {
   fixLoading.value = true
   try {
-    const res = await post<any>('/system/doctor/fix', {})
+    const res = await post<any>('/system/doctor/fix', {}, true)
     if (res.fixed?.length) {
       message.success(`已自动修复 ${res.fixed.length} 个问题`)
     } else {

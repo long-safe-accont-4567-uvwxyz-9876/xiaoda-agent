@@ -23,6 +23,7 @@ from agent_core._shared import (
 
 # TTS 时机控制 v2：统一触发决策（避免子 agent 路径漏守卫导致 voice_mode 开启后"失控"）
 from agent_core.message_processor import _decide_tts_trigger
+from agent_core.subagents import SubAgentInvocation, SubAgentInvocationResult
 from config import TTS_ASYNC_MODE, build_system_prompt, get_agent_display_name
 from core.cancel_token import CancellationError, CancelToken
 from core.degradation_strategy import get_degradation_strategy
@@ -928,17 +929,48 @@ class SubAgentManagerMixin:
         return best
 
     async def _retry_fallback(self, agents: list[str], task: str) -> str:
-        """重试降级：按优先级依次尝试，失败/空结果则降级到下一个。
-
-        适用于可靠性要求高的任务 — 主 agent 不可用或失败时自动降级。
-        """
-        for _i, agent_name in enumerate(agents):
+        """重试降级：按优先级依次尝试，仅返回首个结构化成功结果。"""
+        _ctx = _current_request_ctx.get()
+        context = self._build_sub_agent_context(task_hint=task)
+        for agent_name in agents:
             try:
-                result = await self.delegate_to_agent(agent_name, task, mode="single")
-                if result and len(result) > 20:
-                    return result
-                logger.info("agent.retry_fallback_step agent={} result_short",
-                            agent_name)
+                agent = self.dispatcher.get_agent(agent_name)
+                config = getattr(agent, "config", None)
+                tool_names = agent._filtered_tool_names() if agent else set()
+                invocation = SubAgentInvocation(
+                    target=agent_name,
+                    task=task,
+                    context=context,
+                    allowed_tools=tuple(sorted(tool_names)),
+                    allowed_paths=tuple(getattr(config, "allowed_paths", ()) or ()),
+                    forbidden_paths=tuple(getattr(config, "forbidden_paths", ()) or ()),
+                    permission_mode=getattr(config, "permission_mode", None) or "default",
+                    timeout_seconds=SUB_AGENT_DISPATCH_TIMEOUT_S,
+                )
+                result = await self.dispatcher.dispatch_invocation(
+                    invocation,
+                    status_callback=_ctx.status_callback if _ctx else None,
+                    address_term=self.context.current_address_term,
+                )
+                if (isinstance(result, SubAgentInvocationResult)
+                        and result.status == "completed"):
+                    return result.final_report
+                if (isinstance(result, SubAgentInvocationResult)
+                        and result.status == "cancelled"):
+                    raise asyncio.CancelledError
+                if isinstance(result, SubAgentInvocationResult):
+                    logger.info(
+                        "agent.retry_fallback_step agent={} status={} error_code={} error={}",
+                        agent_name, result.status, result.error_code or "",
+                        (result.error_message or "")[:100],
+                    )
+                else:
+                    logger.warning(
+                        "agent.retry_fallback_invalid_result agent={} result_type={}",
+                        agent_name, type(result).__name__,
+                    )
+            except asyncio.CancelledError:
+                raise
             except Exception as e:
                 logger.warning("agent.retry_fallback_failed agent={} error={}",
                                agent_name, str(e)[:100])

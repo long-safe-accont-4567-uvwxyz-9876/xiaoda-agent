@@ -384,7 +384,12 @@ async def restart_service(request: Request) -> Any:
 
 
 @router.get("/system/doctor", response_model=Envelope[dict])
-async def run_doctor_check(fix: bool = Query(default=False, description="自动修复可修复的问题")) -> Any:
+async def run_doctor_check(
+    request: Request,
+    fix: bool = Query(default=False, description="自动修复可修复的问题"),
+) -> Any:
+    if fix and request.headers.get("X-Confirm") != "yes":
+        raise HTTPException(400, "缺少 X-Confirm: yes 确认头")
     from core.doctor import _create_default_doctor
     doc = _create_default_doctor()
     report = await asyncio.to_thread(doc.run, auto_fix=fix)
@@ -392,7 +397,9 @@ async def run_doctor_check(fix: bool = Query(default=False, description="自动�
 
 
 @router.post("/system/doctor/fix", response_model=Envelope[dict])
-async def run_doctor_fix() -> Any:
+async def run_doctor_fix(request: Request) -> Any:
+    if request.headers.get("X-Confirm") != "yes":
+        raise HTTPException(400, "缺少 X-Confirm: yes 确认头")
     from core.doctor import _create_default_doctor
     doc = _create_default_doctor()
     report = await asyncio.to_thread(doc.run, auto_fix=True)

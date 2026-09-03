@@ -243,7 +243,7 @@ async function startBot() {
 async function disconnect() {
   stopPolling()
   try {
-    const data = await post<{ success?: boolean }>('/wechat/stop')
+    const data = await post<{ success?: boolean }>('/wechat/stop', {}, true)
     if (data?.success === false) {
       // 后端软失败（ok=true 但 success=false）：保留已连接状态，提示失败
       errorMsg.value = t('wechat.disconnectFailed')

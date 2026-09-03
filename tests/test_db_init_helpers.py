@@ -23,6 +23,23 @@ async def test_close_if_present_closes_and_swallows_error():
     conn.close.assert_awaited_once()
 
 
+@pytest.mark.asyncio
+async def test_readonly_probe_failure_closes_candidate_connection(monkeypatch, tmp_path):
+    db = DatabaseManager(tmp_path / "readonly-probe.db")
+    conn = MagicMock()
+    conn.execute = AsyncMock(
+        side_effect=[MagicMock(), MagicMock(), RuntimeError("probe failed")]
+    )
+    conn.close = AsyncMock()
+    connect = AsyncMock(return_value=conn)
+    monkeypatch.setattr("db.database.aiosqlite.connect", connect)
+
+    await db._init_readonly_conn()
+
+    conn.close.assert_awaited_once()
+    assert db._readonly_conn is None
+
+
 def test_ensure_writable_dir_ok(tmp_path):
     db = DatabaseManager.__new__(DatabaseManager)
     db.db_path = tmp_path / "agent.db"

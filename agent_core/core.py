@@ -433,8 +433,7 @@ class AgentCore(MessageProcessorMixin, ToolExecutorMixin, SubAgentManagerMixin):
         _ctx_token = _current_request_ctx.set(ctx)
         from memory.scope import bind_scope, reset_scope
         _scope_token = bind_scope(memory_scope)
-        # 清空证据门禁（请求间隔离，避免跨请求状态泄漏）
-        self._hook_engine.reset_evidence_gate()
+        _evidence_bindings = self._hook_engine.bind_evidence_gate()
         # 全局截止时间保护：保证每个请求必返回回复，不允许超时。
         # 上游 QQ C2C 有 180s 超时，这里用 170s 兜底，预留 10s 给网络/序列化。
         # 即使内部任何阶段挂起（记忆检索/LLM/工具/验收循环），到点强制返回降级回复。
@@ -458,6 +457,7 @@ class AgentCore(MessageProcessorMixin, ToolExecutorMixin, SubAgentManagerMixin):
                     emotion="apologetic",
                 )
         finally:
+            self._hook_engine.reset_evidence_gate(_evidence_bindings)
             reset_scope(_scope_token)
             _current_request_ctx.reset(_ctx_token)
 
@@ -549,6 +549,7 @@ class AgentCore(MessageProcessorMixin, ToolExecutorMixin, SubAgentManagerMixin):
             scope_token = bind_scope(
                 conversation_session.memory_scope(uuid.uuid4().hex)
             )
+            evidence_bindings = self._hook_engine.bind_evidence_gate()
             try:
                 trace = logger.bind(
                     trace_id=uuid.uuid4().hex[:12],
@@ -567,6 +568,7 @@ class AgentCore(MessageProcessorMixin, ToolExecutorMixin, SubAgentManagerMixin):
                     ctx=ctx,
                 )
             finally:
+                self._hook_engine.reset_evidence_gate(evidence_bindings)
                 reset_scope(scope_token)
                 _current_request_ctx.reset(request_ctx_token)
 

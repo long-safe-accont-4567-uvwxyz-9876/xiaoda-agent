@@ -9,6 +9,7 @@ import asyncio
 import os
 import re
 import threading
+from contextvars import Token
 from dataclasses import dataclass
 from enum import Enum
 from typing import Any
@@ -108,13 +109,24 @@ class HookEngine:
                 return True
         return False
 
-    def reset_evidence_gate(self) -> None:
-        """清空证据门禁的读取记录（请求间隔离）。
+    def bind_evidence_gate(self) -> list[tuple[EvidenceGate, Token]]:
+        """为当前请求绑定独立的证据读取状态。"""
+        bindings: list[tuple[EvidenceGate, Token]] = []
+        for hook in self._hooks[HookType.PRE_TOOL_USE]:
+            if isinstance(hook, GateGuardHook):
+                bindings.append((hook._evidence_gate, hook._evidence_gate.bind_request()))
+        return bindings
 
-        EvidenceGate 是全局单例，_read_targets 会在请求间累积。
-        必须在每个请求开始时调用此方法清空，避免跨请求状态泄漏。
-        清空所有 GateGuardHook 实例，而非仅第一个。
-        """
+    def reset_evidence_gate(
+        self,
+        bindings: list[tuple[EvidenceGate, Token]] | None = None,
+    ) -> None:
+        """恢复请求绑定，或兼容旧调用仅清空当前异步上下文。"""
+        if bindings is not None:
+            for gate, token in reversed(bindings):
+                gate.reset_request(token)
+            return
+
         for hook in self._hooks[HookType.PRE_TOOL_USE]:
             if isinstance(hook, GateGuardHook):
                 hook._evidence_gate.clear()

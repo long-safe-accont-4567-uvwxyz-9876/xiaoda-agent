@@ -131,9 +131,16 @@ function renderChart() {
   }))
   if (!usageChart) usageChart = echarts.init(chartEl.value)
   usageChart.setOption({
-    tooltip: { trigger: 'axis' },
-    legend: { textStyle: { color: '#f2f7ee' }, type: 'scroll' },
-    grid: { left: 60, right: 20, top: 40, bottom: 24 },
+    tooltip: { trigger: 'axis', renderMode: 'richText' },
+    legend: {
+      type: 'scroll',
+      top: 0,
+      left: 60,
+      right: 20,
+      height: 28,
+      textStyle: { color: '#f2f7ee' },
+    },
+    grid: { left: 60, right: 20, top: 52, bottom: 24 },
     xAxis: { type: 'category', data: days, axisLabel: { color: '#f2f7ee' } },
     yAxis: { type: 'value', axisLabel: { color: '#f2f7ee' }, splitLine: { lineStyle: { color: 'rgba(127,214,80,.1)' } } },
     series,

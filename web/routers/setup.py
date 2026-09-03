@@ -160,7 +160,7 @@ async def _extract_setup_token(request: Request) -> str:
 
 
 async def _require_setup_token(request: Request) -> None:
-    """首跑 + 私网非回环：必须携带引导令牌，否则 403（code=SETUP_TOKEN_REQUIRED）。
+    """引导期 + 私网非回环：必须携带引导令牌，否则 403（code=SETUP_TOKEN_REQUIRED）。
 
     审计结论：此前首跑仅校验私网来源，局域网内任意主机可 POST /setup/keys
     覆写必填 Key 并自选 webui_password/找回问答，再经 /auth/login 拿到 owner
@@ -178,6 +178,14 @@ async def _require_setup_token(request: Request) -> None:
             "code": "SETUP_TOKEN_REQUIRED",
             "message": "首次运行配置需要引导令牌（X-Setup-Token 头或 body 的 setup_token 字段）",
         })
+
+
+async def _authorize_setup_access(request: Request) -> str:
+    """应用引导期访问规则：仅本机回环免令牌，LAN 必须提供 bootstrap token。"""
+    _require_local_source(request)
+    if not _is_loopback_source(request):
+        await _require_setup_token(request)
+    return "setup"
 
 
 async def _is_first_run_or_authenticated(request: Request) -> str:
@@ -209,11 +217,7 @@ async def _is_first_run_or_authenticated(request: Request) -> str:
             detail="Setup availability check failed. Configure .env manually or contact admin."
         ) from None
     if first_run:
-        _require_local_source(request)
-        if _is_loopback_source(request):
-            return "setup"
-        await _require_setup_token(request)
-        return "setup"
+        return await _authorize_setup_access(request)
     return await get_current_user(request)
 
 
@@ -248,14 +252,15 @@ def _is_profile_done() -> bool:
 async def _profile_endpoint_access(request: Request) -> str:
     """认证依赖：用户资料页端点。
 
-    向导未完成（首次运行 或 用户资料未完成）时允许无认证访问，
-    向导完成后必须携带有效 Bearer Token。
+    向导未完成（首次运行 或 用户资料未完成）时进入引导访问模式：
+    回环来源免令牌，私网非回环必须携带有效 bootstrap token；向导完成后
+    必须携带有效 Bearer Token。
 
     根治 profileSave 401：用户保存必填 key 后 ``is_first_run()`` 立即变
-    False，但前端仍停留在向导的 profile 步骤；若此时要求 token，设置了
-    WEBUI_PASSWORD 的机器上 ``login('')`` 拿不到 token（浏览器也无有效
-    token），保存资料必然 401。资料页只读写 USER.md（非敏感），故在
-    profile 完成前保持免认证，与"向导流程完整性"语义一致。
+    False，但前端仍停留在向导的 profile 步骤；若此时要求 Bearer token，
+    设置了 WEBUI_PASSWORD 的机器上 ``login('')`` 拿不到 token（浏览器也无
+    有效 token），保存资料必然 401。因此资料完成前继续沿用首跑引导访问
+    规则，而不是提前切换到正常 Bearer 认证。
     """
     try:
         from setup_wizard import is_first_run
@@ -272,12 +277,8 @@ async def _profile_endpoint_access(request: Request) -> str:
             status_code=503,
             detail="Setup availability check failed. Configure .env manually or contact admin."
         ) from None
-    if first_run:
-        _require_local_source(request)
-        return "setup"
-    if not _is_profile_done():
-        _require_local_source(request)
-        return "setup"
+    if first_run or not _is_profile_done():
+        return await _authorize_setup_access(request)
     return await get_current_user(request)
 
 

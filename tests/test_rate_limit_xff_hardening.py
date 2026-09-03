@@ -79,6 +79,26 @@ def test_xff_used_for_trusted_proxy_peer(monkeypatch):
     ).status_code == 200
 
 
+def test_spoofed_xff_prefix_rotation_cannot_bypass_private_client_bucket(monkeypatch):
+    """Only configured proxies are skipped; a private client remains the bucket key."""
+    monkeypatch.setenv("TRUST_FORWARDED_FOR", "1")
+    app = _make_app(
+        login_limit=2,
+        trusted_networks=["127.0.0.0/8", "10.0.0.0/8"],
+    )
+    client = TestClient(app, client=("127.0.0.1", 0))
+
+    for prefix in ("8.8.8.1", "8.8.8.2"):
+        assert client.post(
+            "/api/v1/auth/login",
+            headers={"X-Forwarded-For": f"{prefix}, 192.168.1.50, 10.0.0.2"},
+        ).status_code == 200
+    assert client.post(
+        "/api/v1/auth/login",
+        headers={"X-Forwarded-For": "8.8.8.3, 192.168.1.50, 10.0.0.2"},
+    ).status_code == 429
+
+
 # ── 3. auth._get_client_ip 对端可信逻辑 ──
 
 def _make_request(peer: str, xff: str) -> Request:
@@ -109,6 +129,16 @@ def test_get_client_ip_uses_xff_for_trusted_peer(monkeypatch):
     from web.routers.auth import _get_client_ip
     monkeypatch.setenv("TRUST_FORWARDED_FOR", "1")
     assert _get_client_ip(_make_request("127.0.0.1", "1.2.3.4")) == "1.2.3.4"
+
+
+def test_get_client_ip_does_not_treat_private_client_as_proxy(monkeypatch):
+    """An unconfigured private XFF hop is the client, not an implicitly trusted proxy."""
+    from web.routers.auth import _get_client_ip
+    monkeypatch.setenv("TRUST_FORWARDED_FOR", "1")
+    assert (
+        _get_client_ip(_make_request("127.0.0.1", "8.8.8.8, 192.168.1.50"))
+        == "192.168.1.50"
+    )
 
 
 def test_get_client_ip_default_no_xff():

@@ -25,6 +25,7 @@ from agent_core.tool_call_extractors import (
     StandardExtractor,
 )
 from config import get_agent_display_name
+from config_providers import get_provider_capability
 from core.message import AgentMessage
 from emotion.emoji_config import get_status_msg
 from emotion.tts_engine import TTSEngine
@@ -65,7 +66,6 @@ def _inherit_chat_thinking(provider: str) -> dict | None:
     不硬编码 provider 名。返回子代理 route_config 应携带的 thinking 配置（无则 None）。
     """
     try:
-        from config_providers import get_provider_capability
         if not get_provider_capability(provider, "inherit_chat_thinking"):
             return None
     except (ImportError, OSError, ValueError):
@@ -577,7 +577,6 @@ class SubAgent:
         # 系列默认推理模式由 provider_metadata.json 的 reasoning_by_default 表达
         # （如 agnes 系列默认开启），不硬编码 provider/模型名
         try:
-            from config_providers import get_provider_capability
             return bool(get_provider_capability(self.config.provider, "reasoning_by_default"))
         except (ImportError, OSError, ValueError):
             return False

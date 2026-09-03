@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import asyncio
 import time
+from typing import Any
 
 from loguru import logger
 
@@ -118,24 +119,73 @@ class DistillPortraitMixin:
                 raise
             return False
 
-    async def insert_portrait(self, content: str, version: int = 1,
-                               source_ids: str = "", change_log: str = "",
-                               auto_commit: bool = True) -> int:
+    async def insert_portrait(
+        self,
+        content: str,
+        version: int = 1,
+        source_ids: str = "",
+        change_log: str = "",
+        auto_commit: bool = True,
+        *,
+        scope: Any,
+    ) -> int:
+        if not scope.user_id or not scope.agent_id:
+            raise ValueError("portrait scope requires user_id and agent_id")
         cursor = await self._conn.execute(
-            """INSERT INTO user_portrait (content, version, source_ids, change_log, created_at)
-               VALUES (?, ?, ?, ?, ?)""",
-            (content, version, source_ids, change_log, time.time()),
+            """INSERT INTO user_portrait
+               (content, version, source_ids, change_log, created_at,
+                user_id, agent_id)
+               VALUES (?, ?, ?, ?, ?, ?, ?)""",
+            (
+                content,
+                version,
+                source_ids,
+                change_log,
+                time.time(),
+                scope.user_id,
+                scope.agent_id,
+            ),
         )
         if auto_commit:
             await self._conn.commit()
         return cursor.lastrowid
 
-    async def get_latest_portrait(self) -> dict | None:
+    async def get_latest_portrait(self, *, scope: Any | None = None) -> dict | None:
+        if scope is None or not scope.user_id or not scope.agent_id:
+            return None
         cursor = await self._read_conn().execute(
-            "SELECT * FROM user_portrait ORDER BY id DESC LIMIT 1"
+            "SELECT * FROM user_portrait "
+            "WHERE user_id=? AND agent_id=? ORDER BY version DESC, id DESC LIMIT 1",
+            (scope.user_id, scope.agent_id),
         )
         row = await cursor.fetchone()
         return dict(row) if row else None
+
+    async def get_portrait_memories(
+        self, *, scope: Any, limit: int = 50
+    ) -> list[dict]:
+        if not scope.user_id or not scope.agent_id:
+            return []
+        cursor = await self._read_conn().execute(
+            "SELECT * FROM episodic_memories "
+            "WHERE user_id=? AND agent_id=? "
+            "AND COALESCE(status, 'active') != 'archived' "
+            "ORDER BY timestamp DESC LIMIT ?",
+            (scope.user_id, scope.agent_id, limit),
+        )
+        return [dict(row) for row in await cursor.fetchall()]
+
+    async def get_portrait_memory_count(self, *, scope: Any) -> int:
+        if not scope.user_id or not scope.agent_id:
+            return 0
+        cursor = await self._read_conn().execute(
+            "SELECT COUNT(*) AS cnt FROM episodic_memories "
+            "WHERE user_id=? AND agent_id=? "
+            "AND COALESCE(status, 'active') != 'archived'",
+            (scope.user_id, scope.agent_id),
+        )
+        row = await cursor.fetchone()
+        return int(row["cnt"]) if row else 0
 
     async def insert_consolidation_candidate(self, source: str, kind: str, summary: str,
                                               confidence: float = 0.5, importance: float = 0.5,

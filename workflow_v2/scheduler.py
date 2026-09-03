@@ -36,8 +36,19 @@ def compute_ready(revision: WorkflowRevision, steps: list[WorkflowStepRun]) -> l
     incoming: dict[str, list[str]] = {n.id: [] for n in revision.nodes}
     for e in revision.edges:
         incoming[e.target].append(e.source)
-    done = {s.node_id for s in steps if s.status in (StepStatus.SUCCEEDED, StepStatus.SKIPPED)}
-    started = {s.node_id for s in steps}
+    latest: dict[str, WorkflowStepRun] = {}
+    for step in steps:
+        previous = latest.get(step.node_id)
+        if previous is None or step.attempt > previous.attempt:
+            latest[step.node_id] = step
+    done = {
+        node_id for node_id, step in latest.items()
+        if step.status in (StepStatus.SUCCEEDED, StepStatus.SKIPPED)
+    }
+    started = {
+        node_id for node_id, step in latest.items()
+        if step.status != StepStatus.PENDING
+    }
     ready = []
     for n in revision.nodes:
         if n.id in started:
@@ -89,63 +100,69 @@ class Scheduler:
             if claimed is None:
                 continue
             result = await self.executor(node, claimed, {"run": run.input})
-            await self._commit(run_id, node, claimed.attempt, result)
-            if result.status == StepStatus.WAITING_INPUT:
-                # M4 REVIEW：执行器只声明"等人"，审批单落库后 DAG 停在 WAITING
-                # 步骤（compute_ready 不会重取已启动节点），决策端点批准/拒绝
-                # 才恢复推进或停流。
-                await self._require_review(run_id, node, claimed.attempt, result)
+            await self._commit(
+                run_id, node, claimed.attempt, run.lock_version + 1, result,
+            )
         return (await self.repo.get_run(run_id)).status
-
-    async def _require_review(self, run_id: str, node: NodeSpec,
-                              attempt: int, result: NodeResult) -> None:
-        """为 WAITING 的 REVIEW 步骤建审批单（幂等——同一步骤只落一张）。"""
-        cfg = node.config or {}
-        wf_id = None
-        run = await self.repo.get_run(run_id)
-        if run is not None:
-            wf_id = run.workflow_id
-        await self.repo.create_review(
-            run_id, node.id, attempt,
-            title=str(cfg.get("title") or node.name or "人工审批"),
-            note=str(cfg.get("note") or ""))
-        if self.metrics is not None and wf_id is not None:
-            self.metrics.review_created(wf_id)
 
     def _all_ends_done(self, rev: WorkflowRevision, steps: list[WorkflowStepRun]) -> bool:
         ends = [n.id for n in rev.nodes if n.type == NodeType.END]
         done = {s.node_id for s in steps if s.status == StepStatus.SUCCEEDED}
         return bool(ends) and any(e in done for e in ends)
 
-    async def _commit(self, run_id: str, node: NodeSpec, attempt: int, result: NodeResult) -> None:
+    async def _commit(
+        self,
+        run_id: str,
+        node: NodeSpec,
+        attempt: int,
+        expected_lock: int,
+        result: NodeResult,
+    ) -> None:
         run = await self.repo.get_run(run_id)
-        # Terminal-state guard: never regress an already-terminal run (e.g. a
-        # FAILED run must stay FAILED even if another diamond branch later
-        # succeeds) — otherwise the run never terminates.
-        run_status = (run.status if run.status in (RunStatus.SUCCEEDED, RunStatus.FAILED, RunStatus.CANCELLED)
-                      else (RunStatus.FAILED if result.status == StepStatus.FAILED and node.failure_policy == FailurePolicy.FAIL_RUN
-                            else RunStatus.RUNNING))
+        if run is None:
+            return
+        # The claim's post-CAS lock version is the completion token. A later
+        # cancellation or competing transition fences this result even if its
+        # executor returns after the run became terminal.
+        run_status = (
+            RunStatus.FAILED
+            if (result.status == StepStatus.FAILED
+                and node.failure_policy == FailurePolicy.FAIL_RUN)
+            else RunStatus.RUNNING
+        )
         event_type = f"step_{result.status.value}"
+        review = None
+        if result.status == StepStatus.WAITING_INPUT:
+            cfg = node.config or {}
+            review = {
+                "title": str(cfg.get("title") or node.name or "人工审批"),
+                "note": str(cfg.get("note") or ""),
+            }
         committed = await self.repo.commit_step_result(
             run_id, node.id, attempt, result.status,
-            {"output": result.output, "error_code": result.error_code, "error_message": result.error_message},
-            run_status, run.lock_version,
-            WorkflowRunEvent(run_id=run_id, seq=await self.repo.next_seq(run_id),
+            {"output": result.output, "error_code": result.error_code,
+             "error_message": result.error_message},
+            run_status, expected_lock,
+            WorkflowRunEvent(run_id=run_id, seq=0,
                              event_type=event_type, run_status=run_status,
                              step_id=node.id, attempt=attempt, timestamp=time.time(),
                              payload=result.output),
+            review=review,
         )
         # M4 观测：只统计真正落库的步骤结果（CAS 失败/终态守卫不计）
         if committed and self.metrics is not None:
             self.metrics.step_finished(run.workflow_id,
                                        result.status == StepStatus.SUCCEEDED)
+            if review is not None:
+                self.metrics.review_created(run.workflow_id)
 
     async def _finish(self, run_id: str, status: RunStatus) -> None:
         run = await self.repo.get_run(run_id)
         await self.repo.commit_step_result(
             run_id, "__run__", 0, StepStatus.SUCCEEDED, {"output": {}}, status, run.lock_version,
-            WorkflowRunEvent(run_id=run_id, seq=await self.repo.next_seq(run_id),
-                             event_type=f"run_{status.value}", run_status=status, timestamp=time.time()))
+            WorkflowRunEvent(run_id=run_id, seq=0,
+                             event_type=f"run_{status.value}", run_status=status,
+                             timestamp=time.time()))
 
     async def recover(self, run_id: str) -> None:
         rev = await self.revision_provider((await self.repo.get_run(run_id)).revision_id)
@@ -170,7 +187,7 @@ class Scheduler:
                     run_id, s.node_id, s.attempt, StepStatus.PENDING,
                     {"output": {}, "error_code": None, "error_message": None},
                     RunStatus.RUNNING, run.lock_version,
-                    WorkflowRunEvent(run_id=run_id, seq=await self.repo.next_seq(run_id),
+                    WorkflowRunEvent(run_id=run_id, seq=0,
                                      event_type="step_retry_scheduled", run_status=RunStatus.RUNNING,
                                      step_id=s.node_id, attempt=s.attempt, timestamp=time.time(),
                                      payload={"reason": "recovered after restart"}))
@@ -181,20 +198,10 @@ class Scheduler:
                 {"output": {}, "error_code": "EXECUTION_STATE_UNKNOWN",
                  "error_message": "process restarted while node was running"},
                 RunStatus.FAILED, run.lock_version,
-                WorkflowRunEvent(run_id=run_id, seq=await self.repo.next_seq(run_id),
+                WorkflowRunEvent(run_id=run_id, seq=0,
                                  event_type="step_failed", run_status=RunStatus.FAILED,
                                  step_id=s.node_id, attempt=s.attempt, timestamp=time.time(),
                                  payload={"error_code": "EXECUTION_STATE_UNKNOWN"}))
 
     async def _steps(self, run_id: str) -> list[WorkflowStepRun]:
-        cur = await self.repo.conn.execute(
-            "SELECT * FROM wf_step_run WHERE run_id=? ORDER BY attempt", (run_id,))
-        rows = await cur.fetchall()
-        out = []
-        for r in rows:
-            out.append(WorkflowStepRun(
-                run_id=r["run_id"], node_id=r["node_id"], attempt=r["attempt"],
-                status=StepStatus(r["status"]),
-                error_code=r["error_code"], error_message=r["error_message"],
-                lease_owner=r["lease_owner"], lease_expires_at=r["lease_expires_at"]))
-        return out
+        return await self.repo.list_steps(run_id)

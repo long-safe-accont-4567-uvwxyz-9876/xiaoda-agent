@@ -15,6 +15,8 @@ from agent_core.principal import Principal
 from agent_core.tool_executor_mixin import ToolExecutorMixin
 from core.background_tasks import BackgroundTaskManager
 from core.bootstrap import AgentCoreBootstrapper
+from hooks import GateGuardHook, HookEngine
+from memory.scope import Scope
 
 
 class _PausedNotebook:
@@ -174,6 +176,63 @@ async def test_core_lock_switches_identity_term_before_processing() -> None:
 
 
 @pytest.mark.asyncio
+async def test_concurrent_requests_isolate_evidence_gate_reads() -> None:
+    core = AgentCore.__new__(AgentCore)
+    core._initialized = True
+    core._hook_engine = HookEngine()
+    core._hook_engine.register(GateGuardHook())
+    core._resolve_principal = MagicMock(
+        side_effect=lambda user_id, *_args, **_kwargs: Principal(
+            principal_id=user_id,
+            is_owner=True,
+            display_name="爸爸",
+            address_term="爸爸",
+        )
+    )
+    core._resolve_shared_context_id = MagicMock(
+        side_effect=lambda user_id, _source, _is_master: user_id
+    )
+
+    target = "/tmp/evidence-gate-request-isolation.txt"
+    alice_read = asyncio.Event()
+    bob_entered = asyncio.Event()
+    observed: dict[str, bool] = {}
+
+    async def process_impl(ctx, *_args, **_kwargs):
+        if ctx.user_id == "alice":
+            read_result = await core._hook_engine.fire_pre_tool_use(
+                "read_file", {"file_path": target}
+            )
+            observed["alice_read"] = read_result.allowed
+            alice_read.set()
+            await bob_entered.wait()
+            write_result = await core._hook_engine.fire_pre_tool_use(
+                "write_file", {"file_path": target}
+            )
+            observed["alice_write"] = write_result.allowed
+        else:
+            bob_entered.set()
+            write_result = await core._hook_engine.fire_pre_tool_use(
+                "write_file", {"file_path": target}
+            )
+            observed["bob_write"] = write_result.allowed
+        return ProcessResult(reply="ok")
+
+    core._process_impl_locked = process_impl
+
+    alice_task = asyncio.create_task(core.process("alice request", user_id="alice"))
+    await alice_read.wait()
+    bob_task = asyncio.create_task(core.process("bob request", user_id="bob"))
+    await asyncio.gather(alice_task, bob_task)
+
+    assert observed == {
+        "alice_read": True,
+        "alice_write": True,
+        "bob_write": False,
+    }
+
+
+@pytest.mark.asyncio
 async def test_owner_restore_loads_resources_for_explicit_target_token() -> None:
     context = AgentContext()
     host = MagicMock()
@@ -192,6 +251,101 @@ async def test_owner_restore_loads_resources_for_explicit_target_token() -> None
     assert token.user_id == "alice"
     assert token == context.get_user_context_token()
     assert context.current_address_term == "Alice称谓"
+
+
+@pytest.mark.asyncio
+async def test_portrait_storage_and_materials_are_scoped_by_user_and_agent(
+    tmp_path,
+) -> None:
+    from db.database import DatabaseManager
+    from emotion.portrait_manager import PortraitManager
+
+    db = DatabaseManager(tmp_path / "portrait-scope.db")
+    await db.init()
+    alice = Scope.personal(user_id="alice", agent_id="xiaoda")
+    bob = Scope.personal(user_id="bob", agent_id="xiaoda")
+    alice_other_agent = Scope.personal(user_id="alice", agent_id="xiaoli")
+    try:
+        await db.memory.insert_portrait("ALICE_PORTRAIT", scope=alice)
+        await db.memory.insert_portrait("BOB_PORTRAIT", scope=bob)
+        await db.memory.insert_portrait(
+            "ALICE_XIAOLI_PORTRAIT", scope=alice_other_agent
+        )
+        await db.execute(
+            "INSERT INTO user_portrait "
+            "(content, version, source_ids, change_log, created_at) "
+            "VALUES ('LEGACY_UNSCOPED', 99, '', '', 1)"
+        )
+
+        assert (await db.memory.get_latest_portrait(scope=alice))["content"] == (
+            "ALICE_PORTRAIT"
+        )
+        assert (await db.memory.get_latest_portrait(scope=bob))["content"] == (
+            "BOB_PORTRAIT"
+        )
+        assert (
+            await db.memory.get_latest_portrait(scope=alice_other_agent)
+        )["content"] == "ALICE_XIAOLI_PORTRAIT"
+        assert await db.memory.get_latest_portrait() is None
+
+        await db.memory.insert_episodic_memory("ALICE_MEMORY", scope=alice)
+        await db.memory.insert_episodic_memory("BOB_MEMORY", scope=bob)
+        await db.memory.insert_episodic_memory(
+            "ALICE_XIAOLI_MEMORY", scope=alice_other_agent
+        )
+        await db.execute(
+            "INSERT INTO notebook_entries "
+            "(kind, content, status, created_at, updated_at, user_id, agent_id) "
+            "VALUES ('note', 'ALICE_NOTE', 'active', 1, 1, 'alice', 'xiaoda')"
+        )
+        await db.execute(
+            "INSERT INTO notebook_entries "
+            "(kind, content, status, created_at, updated_at) "
+            "VALUES ('note', 'LEGACY_NOTE', 'active', 2, 2)"
+        )
+
+        manager = PortraitManager(
+            db=db,
+            memory=db.memory,
+            router=MagicMock(),
+            notebook=db.notebook,
+        )
+        materials = await manager._gather_portrait_materials(
+            "朋友", scope=alice
+        )
+        memories, notes, old_section, version = materials
+        assert [row["summary"] for row in memories] == ["ALICE_MEMORY"]
+        assert [row["content"] for row in notes] == ["ALICE_NOTE"]
+        assert "ALICE_PORTRAIT" in old_section
+        assert "BOB" not in old_section
+        assert version == 2
+    finally:
+        await db.close()
+
+
+@pytest.mark.asyncio
+async def test_prompt_portrait_load_passes_explicit_scope() -> None:
+    context = AgentContext()
+    host = _ResourceHost()
+    host.context = context
+    host.db = None
+    host.portrait_manager = MagicMock()
+    host.portrait_manager.get_current_portrait = AsyncMock(return_value={
+        "content": "ALICE_PORTRAIT",
+        "version": 1,
+    })
+    host._load_notebook_context = AsyncMock(return_value=True)
+    scope = Scope.personal(user_id="alice", agent_id="xiaoda")
+
+    await MessageProcessorMixin._restore_user_context(
+        host,
+        "alice",
+        scope=scope,
+        load_user_resources=True,
+    )
+
+    host.portrait_manager.get_current_portrait.assert_awaited_once_with(scope=scope)
+    assert context.user_portrait == "ALICE_PORTRAIT"
 
 
 @pytest.mark.asyncio
@@ -221,6 +375,7 @@ async def test_first_user_resources_survive_initial_activation_and_reactivation(
     token = await MessageProcessorMixin._restore_user_context(
         host,
         "alice",
+        scope=Scope.personal(user_id="alice", agent_id="xiaoda"),
         address_term="Alice称谓",
         load_user_resources=True,
     )
@@ -378,7 +533,11 @@ async def test_group_guest_does_not_load_real_owner_managers(tmp_path) -> None:
     db = DatabaseManager(tmp_path / "guest-policy.db")
     await db.init()
     try:
-        await db.memory.insert_portrait("OWNER_PORTRAIT", version=1)
+        await db.memory.insert_portrait(
+            "OWNER_PORTRAIT",
+            version=1,
+            scope=Scope.personal(user_id="owner-principal", agent_id="xiaoda"),
+        )
         owner_notebook = NotebookManager(db=db, notebook=db.notebook, router=MagicMock())
         await owner_notebook.add_focus("OWNER_FOCUS")
         await owner_notebook.schedule_task("OWNER_TASK")
@@ -417,7 +576,12 @@ async def test_group_guest_does_not_load_real_owner_managers(tmp_path) -> None:
             "group-session",
         )
 
-        assert (await host.portrait_manager.get_current_portrait())["content"] == "OWNER_PORTRAIT"
+        owner_scope = Scope.personal(
+            user_id="owner-principal", agent_id="xiaoda"
+        )
+        assert (
+            await host.portrait_manager.get_current_portrait(scope=owner_scope)
+        )["content"] == "OWNER_PORTRAIT"
         assert await owner_notebook.get_current_focus() == "OWNER_FOCUS"
         assert await owner_notebook.get_pending_tasks_summary()
         assert host.context.user_portrait is None

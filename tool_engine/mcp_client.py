@@ -124,14 +124,36 @@ class MCPClient:
 
     async def connect(self) -> bool:
         """根据传输类型连接 MCP 服务器"""
-        if self._config.transport == "stdio":
-            return await self._connect_stdio()
-        if self._config.transport == "sse":
-            return await self._connect_sse()
-        if self._config.transport == "streamable-http":
-            return await self._connect_http()
-        logger.warning("mcp.unknown_transport", transport=self._config.transport)
-        return False
+        try:
+            if self._config.transport == "stdio":
+                return await self._connect_stdio()
+            if self._config.transport == "sse":
+                return await self._connect_sse()
+            if self._config.transport == "streamable-http":
+                return await self._connect_http()
+            logger.warning("mcp.unknown_transport", transport=self._config.transport)
+            return False
+        except asyncio.CancelledError:
+            await self._stop_after_cancel()
+            raise
+
+    async def _stop_after_cancel(self) -> None:
+        """Finish resource cleanup even if the caller is cancelled repeatedly."""
+        cleanup_task = asyncio.create_task(self.stop())
+        while not cleanup_task.done():
+            try:
+                await asyncio.shield(cleanup_task)
+            except asyncio.CancelledError:
+                continue
+            except Exception:
+                logger.exception("mcp_client.cancel_cleanup_failed server={}", self.server_name)
+                return
+        try:
+            cleanup_task.result()
+        except asyncio.CancelledError:
+            logger.warning("mcp_client.cancel_cleanup_cancelled", server=self.server_name)
+        except Exception:
+            logger.exception("mcp_client.cancel_cleanup_failed server={}", self.server_name)
 
     async def _do_handshake(self) -> None:
         """执行 MCP 初始化握手: initialize → initialized → tools/list.
@@ -287,19 +309,21 @@ class MCPClient:
 
         # stderr reader：进程终止后会读到 EOF 自然退出；给 bounded timeout 让其 drain，
         # 超时则 cancel 兜底（避免异常 reader 阻塞 stop()）。
-        if self._stderr_task and not self._stderr_task.done():
-            try:
-                await asyncio.wait_for(self._stderr_task, timeout=2.0)
-            except (TimeoutError, asyncio.CancelledError):
-                self._stderr_task.cancel()
-                with contextlib.suppress(asyncio.CancelledError):
-                    await self._stderr_task
+        if self._stderr_task:
+            if not self._stderr_task.done():
+                try:
+                    await asyncio.wait_for(self._stderr_task, timeout=2.0)
+                except (TimeoutError, asyncio.CancelledError):
+                    self._stderr_task.cancel()
+                    with contextlib.suppress(asyncio.CancelledError):
+                        await self._stderr_task
             self._stderr_task = None
 
-        if self._read_task and not self._read_task.done():
-            self._read_task.cancel()
-            with contextlib.suppress(asyncio.CancelledError):
-                await self._read_task
+        if self._read_task:
+            if not self._read_task.done():
+                self._read_task.cancel()
+                with contextlib.suppress(asyncio.CancelledError):
+                    await self._read_task
             self._read_task = None
 
         self._process = None
@@ -401,19 +425,21 @@ class MCPClient:
 
         line = json.dumps(msg) + "\n"
         try:
-            self._process.stdin.write(line.encode())
-            await self._process.stdin.drain()
-        except (OSError, RuntimeError, ConnectionError) as e:
-            self._pending.pop(msg_id, None)
-            fut.set_result(None)
-            logger.error("mcp_client.write_error", server=self.server_name, error=str(e))
-            return None
+            try:
+                self._process.stdin.write(line.encode())
+                await self._process.stdin.drain()
+            except (OSError, RuntimeError, ConnectionError) as e:
+                if not fut.done():
+                    fut.set_result(None)
+                logger.error("mcp_client.write_error", server=self.server_name, error=str(e))
+                return None
 
-        try:
-            return await asyncio.wait_for(fut, timeout=timeout)
-        except TimeoutError:
+            try:
+                return await asyncio.wait_for(fut, timeout=timeout)
+            except TimeoutError:
+                return None
+        finally:
             self._pending.pop(msg_id, None)
-            return None
 
     async def _request_http(self, msg: dict, timeout: float = 30.0) -> dict | None:
         """通过 HTTP/SSE 传输发送 JSON-RPC 请求并等待响应。"""

@@ -160,6 +160,8 @@ async def get_plugin_config(plugin_id: str, request: Request) -> Any:
 async def set_plugin_config(plugin_id: str, req: PluginConfigRequest, request: Request) -> Any:
     """保存插件配置"""
     mgr = _get_manager(request)
+    if not mgr.get_plugin(plugin_id):
+        raise HTTPException(status_code=404, detail=f"Plugin '{plugin_id}' not found")
     mgr.set_plugin_config(plugin_id, req.config)
     return Envelope(data={"status": "ok"})
 

@@ -276,15 +276,18 @@ async def delete_server(name: str, request: Request) -> Any:
     if not cfg.get(f"mcp.{name}"):
         raise HTTPException(404, f"MCP server {name} 不是 WebUI 管理的（或不存在）")
     mgr = _manager(request)
-    client = mgr._clients.pop(name, None)
+    client = mgr._clients.get(name)
     if client:
         try:
             await client.stop()
         except (OSError, RuntimeError, ConnectionError) as exc:
-            logger.debug("mcp.server_stop_failed: {}", exc, exc_info=True)
+            logger.warning("mcp.delete_server_stop_failed name={} error={}", name, str(exc))
+            raise HTTPException(500, "MCP server 停止失败，配置未删除") from None
         except Exception:
             logger.exception("mcp.delete_server.unexpected_error")
+            raise HTTPException(500, "MCP server 停止失败，配置未删除") from None
     cfg.delete(f"mcp.{name}")
+    mgr._clients.pop(name, None)
     await _audit(request, "delete", name)
     await _broadcast_changed()
     return Envelope(data={"deleted": name})

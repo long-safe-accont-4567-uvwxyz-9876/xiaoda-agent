@@ -79,7 +79,7 @@ def test_role_words_not_hardcoded_but_filtered():
     """2026-08-27 防复发：会话角色词不硬编码在 _STOPWORDS 里，
     而是由 config.KEY_EXTRACTOR_ROLE_WORDS + agent 显示名动态注入。
     提取结果中不得出现角色词（它们 DF 过高，曾致概念图百万边事故）。"""
-    from memory.key_extractor import _STOPWORDS, _get_key_stopwords
+    from memory.key_extractor import _STOPWORDS
 
     ke = KeyExtractor()
     keys = ke.extract("爸爸和小妲还有用户一起吃火锅")
