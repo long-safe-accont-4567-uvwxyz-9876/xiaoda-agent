@@ -669,6 +669,12 @@ docker-compose -f docker-compose.prod.yml up -d
 
 ***
 
+## 致谢
+
+本项目在设计中深入研究了多个优秀开源项目并从中借鉴经过验证的工程思想，特此致谢。完整的借鉴来源清单、所参考各项目的开源协议与合规说明，详见 [ACKNOWLEDGMENTS.md](ACKNOWLEDGMENTS.md)。
+
+***
+
 ## License
 
 MIT
