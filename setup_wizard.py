@@ -202,6 +202,16 @@ OPTIONAL_KEYS = [
         "url_desc": "注册 → API Keys",
     },
     {
+        "key": "JEV_API_KEY",
+        "label": "Jev 决策模型密钥 ⭐推荐",
+        "desc": "TypeSafe AI 的 System One 决策模型 Jev（做结构化判断，不生成文字）。"
+                "用于子代理路由、检索意图等快速是非/选择/评分判断，"
+                "比让大模型写答案再解析更快更稳。选填；不配置则走原有分类逻辑。"
+                "配置后需在「功能节点 → 结构化决策」开启。",
+        "url": "https://console.typesafe.ai/settings/keys",
+        "url_desc": "控制台 → Settings → Keys（密钥形如 jev_…）",
+    },
+    {
         "key": "GITHUB_PERSONAL_ACCESS_TOKEN",
         "label": "GitHub 个人访问令牌",
         "desc": "GitHub MCP Server 所需（需 repo, read:org 权限）",

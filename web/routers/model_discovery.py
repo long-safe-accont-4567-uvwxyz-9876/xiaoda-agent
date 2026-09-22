@@ -30,12 +30,20 @@ _NON_CHAT_KEYWORDS = (
 
 # 不支持 /models 端点的 provider，用内置模型列表作为降级。
 # 名单不由代码硬编码：provider_metadata.json 缺 supports_model_discovery
-# 即视为无发现端点（如 agnes），降级条目由 default_model 派生。
+# 即视为无发现端点，降级条目由 default_model / default_pro_model /
+# default_text_models 派生（可声明多个模型，避免只展示一个）。
 def _derive_builtin_fallback_models() -> dict[str, list[dict]]:
     """从 provider_metadata.json 派生「无 /models 端点」provider 的降级模型表。
 
     只对未声明 supports_model_discovery 的 provider 生成条目；模型 id/展示名/
     免费/工具/视觉能力全部来自元数据与 get_capabilities，不硬编码模型名。
+
+    模型来源（按序去重）：
+      1. metadata.default_text_models（显式多模型清单，最优先）
+      2. metadata.default_model
+      3. metadata.default_pro_model
+    这样即便某个 provider 没有 /models 端点，也能展示其声明的全部文本模型，
+    而不是退化成「只有一个模型」。
     """
     from config_providers import get_default_model_for_provider, get_provider_capability
     from web.model_capabilities import get_capabilities
@@ -50,22 +58,41 @@ def _derive_builtin_fallback_models() -> dict[str, list[dict]]:
         pid = definition.id
         if get_provider_capability(pid, "supports_model_discovery", default=False):
             continue
-        model_id = get_default_model_for_provider(pid)
-        if not model_id:
+
+        candidates: list[str] = []
+        declared = definition.metadata.get("default_text_models")
+        if isinstance(declared, list):
+            candidates.extend(str(item) for item in declared if item)
+        default_model = get_default_model_for_provider(pid)
+        if default_model:
+            candidates.append(default_model)
+        pro_model = definition.metadata.get("default_pro_model")
+        if isinstance(pro_model, str) and pro_model:
+            candidates.append(pro_model)
+
+        # 去重保序
+        seen: set[str] = set()
+        model_ids = [m for m in candidates if not (m in seen or seen.add(m))]
+        if not model_ids:
             continue
-        caps = get_capabilities(model_id)
-        display_name = (
-            definition.metadata.get("default_model_display_name")
-            or caps.display_name
-            or model_id
-        )
-        fallback[pid] = [{
-            "id": model_id,
-            "display_name": display_name,
-            "free": get_provider_capability(pid, "free_tier", default=False),
-            "tool_calling": caps.tool_calling,
-            "vision": caps.vision,
-        }]
+
+        entries: list[dict] = []
+        for index, model_id in enumerate(model_ids):
+            caps = get_capabilities(model_id)
+            # 首条优先用 metadata 的展示名（如 "Agnes Flash 2.0"）
+            display_name = (
+                (definition.metadata.get("default_model_display_name") if index == 0 else None)
+                or caps.display_name
+                or model_id
+            )
+            entries.append({
+                "id": model_id,
+                "display_name": display_name,
+                "free": get_provider_capability(pid, "free_tier", default=False),
+                "tool_calling": caps.tool_calling,
+                "vision": caps.vision,
+            })
+        fallback[pid] = entries
     return fallback
 
 

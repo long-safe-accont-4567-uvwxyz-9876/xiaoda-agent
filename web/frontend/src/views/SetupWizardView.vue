@@ -58,6 +58,7 @@ onMounted(async () => {
     // Fallback: 显示硬编码的 key 列表，确保页面不会空白
     keys.value = [
       { key: 'MIMO_API_KEY', label: t('setupWizard.fallback.MIMO_API_KEY.label'), desc: t('setupWizard.fallback.MIMO_API_KEY.desc'), url: 'https://platform.xiaomimimo.com/', url_desc: t('setupWizard.fallback.MIMO_API_KEY.url_desc'), required: true, configured: false, masked_value: '', raw_value: '' },
+      { key: 'JEV_API_KEY', label: t('setupWizard.fallback.JEV_API_KEY.label'), desc: t('setupWizard.fallback.JEV_API_KEY.desc'), url: 'https://console.typesafe.ai/settings/keys', url_desc: t('setupWizard.fallback.JEV_API_KEY.url_desc'), required: true, configured: false, masked_value: '', raw_value: '' },
       { key: 'QQBOT_APP_ID', label: t('setupWizard.fallback.QQBOT_APP_ID.label'), desc: t('setupWizard.fallback.QQBOT_APP_ID.desc'), url: 'https://q.qq.com', url_desc: t('setupWizard.fallback.QQBOT_APP_ID.url_desc'), required: true, configured: false, masked_value: '', raw_value: '' },
       { key: 'QQBOT_APP_SECRET', label: t('setupWizard.fallback.QQBOT_APP_SECRET.label'), desc: t('setupWizard.fallback.QQBOT_APP_SECRET.desc'), url: 'https://q.qq.com', url_desc: t('setupWizard.fallback.QQBOT_APP_SECRET.url_desc'), required: true, configured: false, masked_value: '', raw_value: '' },
       { key: 'EMBED_API_KEY', label: t('setupWizard.fallback.EMBED_API_KEY.label'), desc: t('setupWizard.fallback.EMBED_API_KEY.desc'), url: 'https://cloud.siliconflow.cn/i/iM5RmeWc', url_desc: t('setupWizard.fallback.EMBED_API_KEY.url_desc'), required: true, configured: false, masked_value: '', raw_value: '' },
@@ -66,6 +67,7 @@ onMounted(async () => {
       { key: 'DEEPSEEK_API_KEY', label: t('setupWizard.fallback.DEEPSEEK_API_KEY.label'), desc: t('setupWizard.fallback.DEEPSEEK_API_KEY.desc'), url: 'https://platform.deepseek.com', url_desc: t('setupWizard.fallback.DEEPSEEK_API_KEY.url_desc'), required: false, configured: false, masked_value: '', raw_value: '' },
       { key: 'OPENROUTER_API_KEY', label: t('setupWizard.fallback.OPENROUTER_API_KEY.label'), desc: t('setupWizard.fallback.OPENROUTER_API_KEY.desc'), url: 'https://openrouter.ai', url_desc: t('setupWizard.fallback.OPENROUTER_API_KEY.url_desc'), required: false, configured: false, masked_value: '', raw_value: '' },
       { key: 'AGNES_API_KEY', label: t('setupWizard.fallback.AGNES_API_KEY.label'), desc: t('setupWizard.fallback.AGNES_API_KEY.desc'), url: 'https://agnes-ai.cn', url_desc: t('setupWizard.fallback.AGNES_API_KEY.url_desc'), required: false, configured: false, masked_value: '', raw_value: '' },
+      { key: 'JEV_API_KEY', label: t('setupWizard.fallback.JEV_API_KEY.label'), desc: t('setupWizard.fallback.JEV_API_KEY.desc'), url: 'https://console.typesafe.ai/settings/keys', url_desc: t('setupWizard.fallback.JEV_API_KEY.url_desc'), required: false, configured: false, masked_value: '', raw_value: '' },
       { key: 'MODELSCOPE_ACCESS_TOKEN', label: t('setupWizard.fallback.MODELSCOPE_ACCESS_TOKEN.label'), desc: t('setupWizard.fallback.MODELSCOPE_ACCESS_TOKEN.desc'), url: 'https://modelscope.cn', url_desc: t('setupWizard.fallback.MODELSCOPE_ACCESS_TOKEN.url_desc'), required: false, configured: false, masked_value: '', raw_value: '' },
     ]
     for (const k of keys.value) {
@@ -387,7 +389,7 @@ async function handleSave() {
             />
             <input
               v-model="recoveryAnswer"
-              type="password"
+              type="text"
               class="dendro-input password-input"
               :placeholder="t('setupWizard.recoveryAnswerPlaceholder')"
             />

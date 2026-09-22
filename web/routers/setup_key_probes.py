@@ -160,6 +160,48 @@ async def _test_agnes(key_value: str) -> tuple[bool, str]:
         key_value, f"{_probe_base_url('agnes')}/models", "Agnes AI")
 
 
+async def _test_jev(key_value: str) -> tuple[bool, str]:
+    """测试 Jev（TypeSafe AI System One 决策模型）密钥。
+
+    Jev 不是 LLM，也没有 OpenAI 兼容的 /v1/models 端点；它只提供
+    POST /v1/systemone（state + questions → 类型化概率答案）。
+    因此这里用一次最小 systemone 调用探活：
+      - 200：密钥有效
+      - 401/403：密钥无效或无权访问
+      - 404：端点不可用（可能是中转网关未透传 /v1/systemone）
+    """
+    url = "https://api.typesafe.ai/v1/systemone"
+    payload = {
+        "model": "jev-latest",
+        "state": "probe",
+        "questions": {"ok": {"type": "noul", "instructions": "Is this a probe?"}},
+    }
+    try:
+        async with httpx.AsyncClient(timeout=_TIMEOUT) as client:
+            resp = await client.post(
+                url,
+                headers={
+                    "Authorization": f"Bearer {key_value}",
+                    "Content-Type": "application/json",
+                },
+                json=payload,
+            )
+        if resp.status_code == 200:
+            return True, "Jev 决策模型密钥验证成功"
+        if resp.status_code in (401, 403):
+            return False, "Jev 密钥无效或无权访问（请确认密钥形如 jev_… 且已开通 System One 权限）"
+        if resp.status_code == 404:
+            return False, "Jev 端点不可用：网关/中转未透传 /v1/systemone（Jev 非 OpenAI 兼容接口）"
+        return False, f"Jev API 返回 HTTP {resp.status_code}"
+    except httpx.TimeoutException:
+        return False, "Jev API 请求超时"
+    except (httpx.HTTPError, OSError, RuntimeError, ValueError) as e:
+        return False, f"Jev API 请求失败: {e}"
+    except Exception as e:
+        logger.exception("setup._test_jev.unexpected_error")
+        return False, f"Jev API 请求失败: {e}"
+
+
 async def _test_wolframalpha(key_value: str) -> tuple[bool, str]:
     """测试 WolframAlpha API Key。"""
     try:
@@ -391,6 +433,8 @@ async def _test_key_by_name(key_name: str, key_value: str, extra: dict) -> tuple
         return await _test_openrouter(key_value)
     if key_name == "AGNES_API_KEY":
         return await _test_agnes(key_value)
+    if key_name == "JEV_API_KEY":
+        return await _test_jev(key_value)
     if key_name == "WOLFRAMALPHA_API_KEY":
         return await _test_wolframalpha(key_value)
     if key_name == "TAVILY_API_KEY":

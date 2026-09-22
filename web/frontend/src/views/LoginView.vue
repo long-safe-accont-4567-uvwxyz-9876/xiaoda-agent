@@ -268,7 +268,7 @@ async function submitRecover() {
             <div class="recover-form">
               <input
                 v-model="recoverAnswer"
-                type="password"
+                type="text"
                 class="dendro-input"
                 :placeholder="t('login.recoverAnswerPlaceholder')"
                 :disabled="recoverSubmitting"

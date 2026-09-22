@@ -27,6 +27,12 @@
       "supports_vision": false,
       "supports_tools": true,
       "builtin": true,
+      "supports_model_discovery": true,
+      "default_text_models": [
+        "agnes-2.0-flash",
+        "agnes-2.0-pro",
+        "agnes-2.0-flash-thinking"
+      ],
       "default_image_model": "agnes-image-2.1-flash",
       "default_video_model": "agnes-video-v2.0",
       "supports_thinking": false,

@@ -35,6 +35,8 @@ _NODE_CONTRACTS: dict[str, tuple[str, str, str, str]] = {
     "spontaneous_recall": ("recall_narrative", "spontaneous_recall", "chat", "skip"),
     "dream": ("preference_discovery", "dream_engine", "chat", "skip"),
     "intent_decomposition": ("intent_decomposition", "intent_decomposer", "chat", "deterministic"),
+    # Jev 决策模型：非生成型，失败时退回原有规则/LLM 分类路径
+    "jev_decision": ("structured_decision", "jev_client", "decision", "original_logic"),
 }
 
 # 节点注册表：kind=encoder 编码型（本地有专有模型）/ generative 生成型（本地=对话小模型）
@@ -197,6 +199,21 @@ NODES: list[dict[str, Any]] = [
         "local_model": "",
         "local_desc": "本地部署的对话小模型",
         "default": "api",
+    },
+    {
+        "id": "jev_decision",
+        "name": "Jev 决策模型",
+        "kind": "decision",
+        # Jev 不是 LLM：TypeSafe AI 的 System One 决策模型，输入 state + questions，
+        # 并行返回带校准概率的类型化答案（是非/选择/评分），不生成任何文字。
+        # 用于替代「用 LLM 生成文字再做字符串匹配」的脆弱分类，更快（70~500ms）更稳。
+        # 当前接入点：子代理路由（core/router_engine）、检索意图分类（memory/query_transform）。
+        "desc": "结构化判断原语（是非/选择/评分），加速子代理路由与检索意图分类",
+        "api_model": "TypeSafe Jev（api.typesafe.ai）",
+        "local_model": "",
+        "local_desc": "暂不支持本地部署（Jev 为云端决策模型）",
+        # decision 节点只有 on / off 两态，默认 off：保持历史行为不漂移
+        "default": "off",
     },
 ]
 

@@ -341,7 +341,111 @@ class RouterEngine:
 
     async def _classify_sub_agent_with_llm(self, user_input: str,
                                             timeout: float = 15.0) -> str | None:
-        """调用 LLM 判断子代理路由。返回 agent 名称或 None（失败时）。"""
+        """判断子代理路由。返回 agent 名称或 None（失败时）。
+
+        优先走 Jev 决策模型（TypeSafe System One）：这是标准的 5 选 1 分类，
+        Jev 的 Choice 原语直接返回选中的子代理 + 完整概率分布 + 置信度，
+        无需生成文字再做字符串匹配（旧实现的 ``llm_classify_unrecognized``
+        就是解析失败的典型症状）。Jev 未配置/失败时降级到原有 LLM 路径。
+        """
+        # ── 路径 A：Jev 决策模型（类型化分类，无需文本解析）──
+        agent = await self._classify_sub_agent_with_jev(user_input, timeout)
+        if agent:
+            return agent
+
+        # ── 路径 B：LLM 生成式分类（原有路径，Jev 不可用时兜底）──
+        return await self._classify_sub_agent_with_generative_llm(user_input, timeout)
+
+    async def _classify_sub_agent_with_jev(self, user_input: str,
+                                            timeout: float = 15.0) -> str | None:
+        """用 Jev Choice 原语做子代理路由分类。未配置/失败/置信度不足返回 None。
+
+        置信度门控（官方 confidence-gated routing）：答错代理会让回复质量
+        下降（用户可立刻纠正），属中等后果，故设较高阈值。低于阈值不直接
+        采纳，返回 None 让调用方升级到 LLM 路径复核。
+        """
+        try:
+            from utils import jev_client as jev
+        except ImportError:
+            return None
+        if not jev.is_available():
+            return None
+
+        agents_info = self._sub_agent_options()
+        if not agents_info:
+            return None
+        options = {key: desc for key, _display, desc in agents_info}
+        labels = ", ".join(f"{key}（{display}）" for key, display, _ in agents_info)
+
+        try:
+            answers = await jev.system_one(
+                state={"user_message": user_input[:2000]},
+                questions={
+                    "agent": jev.choice(
+                        instructions=(
+                            "用户消息应该由哪个子代理处理？"
+                            f"可选：{labels}。"
+                            "判断依据是消息的核心意图，而非个别词语。"
+                        ),
+                        options=options,
+                    ),
+                },
+                timeout=timeout,
+            )
+        except ValueError:
+            return None
+        except Exception:
+            logger.exception("router.jev_classify.unexpected_error")
+            return None
+
+        agent = jev.answer_choice(answers, "agent")
+        if not agent:
+            logger.debug("router.jev_classify_no_answer")
+            return None
+        if agent not in {key for key, _, _ in agents_info}:
+            logger.warning("router.jev_classify_unknown_agent agent={}", agent)
+            return None
+
+        conf = jev.answer_confidence(answers, "agent")
+        threshold = self._jev_route_min_confidence()
+        if not jev.confident_enough(answers, "agent", threshold):
+            # 低置信度：不采纳，交回调用方升级到 LLM 复核
+            logger.info("router.jev_low_confidence agent={} confidence={} threshold={}",
+                        agent, conf, threshold)
+            return None
+        logger.info("router.jev_classified agent={} confidence={} input_preview={}",
+                    agent, conf, user_input[:50])
+        return agent
+
+    @staticmethod
+    def _jev_route_min_confidence() -> float:
+        """子代理路由的置信度门槛（config 优先，读取失败退回默认 0.85）。"""
+        try:
+            import config as _cfg
+            return float(getattr(_cfg, "JEV_MIN_CONFIDENCE_ROUTE", 0.85))
+        except (ImportError, AttributeError, ValueError, TypeError):
+            return 0.85
+
+    @staticmethod
+    def _sub_agent_options() -> list[tuple[str, str, str]]:
+        """子代理选项表 (key, display, 分类说明)，与 _AGENT_TO_TASK_TYPE 对应。"""
+        from config import get_agent_display_name
+        return [
+            ("xiaoda", get_agent_display_name("xiaoda") or "小妲",
+             "记忆检索、回忆、个人历史、时间相关查询、通用闲聊、默认兜底"),
+            ("xiaolang", get_agent_display_name("xiaolang") or "小狼",
+             "编程、调试、代码、技术问题、软件开发"),
+            ("xiaoke", get_agent_display_name("xiaoke") or "小可",
+             "学术研究、论文、调研、文献分析"),
+            ("xiaolian", get_agent_display_name("xiaolian") or "小涟",
+             "信息搜索、查找资料、事实查询"),
+            ("xiaoli", get_agent_display_name("xiaoli") or "小莉",
+             "情感陪伴、聊天、安慰、情绪支持"),
+        ]
+
+    async def _classify_sub_agent_with_generative_llm(self, user_input: str,
+                                                       timeout: float = 15.0) -> str | None:
+        """调用 LLM 生成子代理名称再匹配（Jev 不可用时的降级路径）。"""
         import os
         try:
             import httpx
@@ -355,15 +459,7 @@ class RouterEngine:
         base_url = os.getenv("QUERY_TRANSFORM_BASE_URL", "https://api.siliconflow.cn/v1")
         model = os.getenv("QUERY_TRANSFORM_MODEL", "THUDM/GLM-4-9B-0414")
 
-        # 子代理描述（与 _AGENT_TO_TASK_TYPE 对应）
-        from config import get_agent_display_name
-        agents_info = [
-            ("xiaoda", get_agent_display_name("xiaoda") or "小妲", "记忆检索、回忆、个人历史、时间相关查询、通用闲聊（默认）"),
-            ("xiaolang", get_agent_display_name("xiaolang") or "小狼", "编程、调试、代码、技术问题"),
-            ("xiaoke", get_agent_display_name("xiaoke") or "小可", "学术研究、论文、调研"),
-            ("xiaolian", get_agent_display_name("xiaolian") or "小涟", "信息搜索、查找资料"),
-            ("xiaoli", get_agent_display_name("xiaoli") or "小莉", "情感陪伴、聊天、安慰"),
-        ]
+        agents_info = self._sub_agent_options()
         agents_block = "\n".join(
             f"- {key}（{display}）: {desc}" for key, display, desc in agents_info
         )
@@ -402,7 +498,7 @@ class RouterEngine:
             if not content:
                 return None
             # 匹配返回的 agent 名称
-            valid_agents = {"xiaoda", "xiaolang", "xiaoke", "xiaolian", "xiaoli"}
+            valid_agents = {key for key, _, _ in agents_info}
             for agent in valid_agents:
                 if agent in content:
                     logger.info("router.llm_classified",

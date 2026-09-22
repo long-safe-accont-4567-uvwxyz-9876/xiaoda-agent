@@ -46,95 +46,15 @@ async def _apply_model_overrides(core: Any, provider_service: Any | None = None)
     _restore_chat_model(cfg, core)
 
 
-# 本地 URL 型 provider：无 Key 接口，由 *_BASE_URL 环境变量显式驱动注册
-# 展示顺序（本模块的排序策略；字段值一律以 catalog 为单一事实源）。
-# 不含/含哪些 provider 由 catalog 派生（auth.required=false 即本地 URL 型），详见 _derive_known_env_providers
-_ENV_PROVIDER_ORDER = ("siliconflow", "openrouter", "modelscope", "agnes", "ollama", "llama.cpp")
-
-
-def _derive_known_env_providers(env_values: Any) -> list[dict[str, Any]]:
-    """从 provider catalog 派生「.env 已知免费平台」注册表。
-
-    单一事实源：id/base_url/label/env 别名全部来自 config.get_provider_catalog()，
-    本函数只叠加注册顺序与 url_keyed 策略。catalog 加载失败（元数据 JSON 缺失，
-    降级为空 catalog）时返回空列表，调用方跳过注册但不炸。
-    """
-    from config import get_provider_catalog
-    from config_providers import get_provider_env_prefix, get_provider_label
-    from llm_gateway.contracts import ProviderProtocol
-
-    catalog = get_provider_catalog()
-    derived: list[dict[str, Any]] = []
-    for pid in _ENV_PROVIDER_ORDER:
-        try:
-            definition = catalog.get(pid)
-        except KeyError:
-            continue
-        aliases = definition.auth.environment_aliases
-        env_prefix = get_provider_env_prefix(pid)
-        if not definition.auth.required:
-            env_key = f"{env_prefix}_BASE_URL"
-        else:
-            try:
-                resolved = catalog.resolve_environment_alias(pid, env_values)
-            except KeyError:
-                resolved = None
-            env_key = resolved[0] if resolved else (aliases[0] if aliases else "")
-        if not env_key:
-            continue
-        default_url = (
-            env_values.get(f"{env_prefix}_BASE_URL") or definition.endpoint.base_url or ""
-        ).strip().rstrip("/")
-        derived.append({
-            "env_key": env_key,
-            "id": pid,
-            # ollama 协议本地端点同样走 OpenAI 兼容客户端（与 ProviderService._record 规则一致）
-            "format": "anthropic" if definition.protocol is ProviderProtocol.ANTHROPIC else "openai",
-            "default_url": default_url,
-            "label": get_provider_label(pid),
-            "url_keyed": not definition.auth.required,
-        })
-    return derived
-
-
-def _register_env_providers(cfg: Any, env_values: Any, os_module: Any) -> None:
-    """从 .env 注册已知免费模型平台 provider（元数据单一来源：provider catalog）。"""
-    known_env_providers = _derive_known_env_providers(env_values)
-    if not known_env_providers:
-        logger.warning("webui.env_providers_derive_empty reason=provider_catalog_unavailable")
-    for order, entry in enumerate(known_env_providers):
-        env_key = entry["env_key"]
-        pid = entry["id"]
-        label = entry["label"]
-        fmt = entry["format"]
-        if entry["url_keyed"]:
-            # 本地无 key 接口：仅当 .env 显式配置 base_url 时才注册
-            api_key = pid
-            base_url = env_values.get(env_key, "").strip()
-            if not base_url:
-                continue
-        else:
-            api_key = env_values.get(env_key, "").strip()
-            base_url = entry["default_url"]
-            if not api_key:
-                continue
-        existing = cfg.get("models.providers", {}) or {}
-        if pid not in existing:
-            cfg.set(f"models.providers.{pid}", {
-                "label": label, "format": fmt, "base_url": base_url,
-                "default_model": "", "enabled": True,
-                "order": order,
-            })
-        _ensure_provider_key_file(pid, api_key, os_module)
-
-
-def _ensure_provider_key_file(pid: Any, api_key: Any, os_module: Any) -> None:
-    """确保证书文件存在且内容正确（base64 编码存储，非明文）。"""
-    from llm_gateway.provider_service import ProviderCredentialStore
-
-    credentials = ProviderCredentialStore()
-    if credentials.read(pid) != api_key:
-        credentials.write(pid, api_key)
+# .env → provider 注册逻辑已抽到 web/env_providers（巨型文件止血液轮）。
+# 名称为历史兼容保留：既有 import / monkeypatch 点不受影响。
+from web.env_providers import (  # noqa: E402
+    _ENV_PROVIDER_ORDER,  # noqa: F401
+    _derive_known_env_providers,  # noqa: F401
+    _ensure_provider_key_file,  # noqa: F401
+    builtin_provider_ids as _builtin_provider_ids,  # noqa: F401
+    register_env_providers as _register_env_providers,  # noqa: F401
+)
 
 
 def _provider_sort_key(kv: tuple, key_order: list[str]) -> tuple[int, int]:

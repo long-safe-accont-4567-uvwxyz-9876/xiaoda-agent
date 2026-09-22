@@ -516,6 +516,19 @@ class ProviderService:
 
     def _restore_custom_definitions(self) -> None:
         for provider_id, record in (self.config.get("models.providers", {}) or {}).items():
+            # 内置 provider 身份以 catalog 为单一事实源：持久化记录若丢失
+            # builtin 标记（历史 _record 未写入），此处按 catalog 补回，
+            # 否则重启后内置 provider 会被误判为自定义（模型配置 Tab 丢失）。
+            try:
+                catalog_definition = self.catalog.get(provider_id)
+            except KeyError:
+                catalog_definition = None
+            if catalog_definition is not None and catalog_definition.builtin:
+                record = dict(record, builtin=True)
+                # 内置 provider 不回放用户记录中的 base_url/protocol 覆盖，
+                # 避免用户配置主模型时的临时记录把内置端点改坏。
+                for field in ("base_url", "protocol", "format", "chat_path", "models_path"):
+                    record.pop(field, None)
             try:
                 definition = self._definition(dict(record, id=provider_id))
             except Exception as error:
@@ -641,6 +654,10 @@ class ProviderService:
             "order": definition.metadata.get("order", 9999),
             "capabilities": capabilities,
             "max_tokens_cap": definition.max_tokens_cap,
+            # builtin 必须随记录持久化：绑定内置 provider（如 mimo/agnes）时
+            # 若丢失该字段，重启后 _restore_custom_definitions 会把它重建成
+            # 非内置 provider，导致「配置主模型后内置 MiMo 从模型配置 Tab 消失」。
+            "builtin": definition.builtin,
             "auth": {
                 "environment_aliases": list(definition.auth.environment_aliases),
                 "header": definition.auth.header,

@@ -7,7 +7,11 @@ export type ModelNodeBackend = 'auto' | 'local' | 'api' | 'off'
 export interface ModelNode {
   id: string
   name: string
-  kind: 'encoder' | 'generative' | 'other'
+  /**
+   * encoder=向量编码 / generative=文本生成 / decision=结构化决策（如 Jev，
+   * 只做是非·选择·评分判断，不生成文字）/ other=其他
+   */
+  kind: 'encoder' | 'generative' | 'decision' | 'other'
   desc: string
   api_model: string
   local_desc: string

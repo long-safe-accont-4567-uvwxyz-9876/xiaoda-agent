@@ -290,11 +290,12 @@ _AUTH_DEPS = [Depends(_is_first_run_or_authenticated)]
 # 用户资料端点专用依赖：向导未完成（首次运行或资料未完成）时免认证
 _PROFILE_DEPS = [Depends(_profile_endpoint_access)]
 
-_FALLBACK_REQUIRED_KEYS = (
-    "MIMO_API_KEY",
-    "QQBOT_APP_ID",
-    "QQBOT_APP_SECRET",
-    "SILICONFLOW_API_KEY",
+# Key 元数据降级清单已抽到 setup_key_meta（巨型文件止血液轮）。
+# 名称为历史兼容保留：既有 import / monkeypatch 点不受影响。
+from web.routers.setup_key_meta import (  # noqa: E402
+    _FALLBACK_OPTIONAL_KEYS_META as _FALLBACK_OPTIONAL_KEYS_META_IMPL,
+    _FALLBACK_REQUIRED_KEYS as _FALLBACK_REQUIRED_KEYS,
+    _FALLBACK_REQUIRED_KEYS_META as _FALLBACK_REQUIRED_KEYS_META_IMPL,
 )
 
 
@@ -356,24 +357,8 @@ async def get_version() -> Any:
     return Envelope(data={"version": _read_version()})
 
 
-_FALLBACK_REQUIRED_KEYS_META = [
-    {"key": "MIMO_API_KEY", "label": "MiMo API 密钥", "desc": "小米 MiMo 大模型 API 密钥", "url": "https://platform.xiaomimimo.com?ref=SU5WDZ", "url_desc": "注册 → 控制台 → API Keys"},
-    {"key": "QQBOT_APP_ID", "label": "QQ Bot App ID", "desc": "QQ 机器人应用 ID", "url": "https://q.qq.com", "url_desc": "创建机器人应用 → 获取 AppID"},
-    {"key": "QQBOT_APP_SECRET", "label": "QQ Bot App Secret", "desc": "QQ 机器人应用密钥", "url": "https://q.qq.com", "url_desc": "同一页面的 AppSecret"},
-    {"key": "SILICONFLOW_API_KEY", "label": "SiliconFlow API 密钥", "desc": "硅基流动 API 密钥", "url": "https://cloud.siliconflow.cn/i/iM5RmeWc", "url_desc": "注册 → API Keys"},
-]
-
-_FALLBACK_OPTIONAL_KEYS_META = [
-    {"key": "WEBUI_PASSWORD", "label": "Web UI 密码", "desc": "留空则无需密码登录", "url": "", "url_desc": ""},
-    {"key": "TAVILY_API_KEY", "label": "Tavily 搜索 API 密钥", "desc": "AI 搜索引擎", "url": "https://tavily.com", "url_desc": "注册 → API Keys"},
-    {"key": "ANYSEARCH_API_KEY", "label": "AnySearch 统一搜索密钥", "desc": "统一搜索基础设施（选填，搜索首选引擎，失败自动回退）", "url": "https://www.coze.cn/s/qBK5eb8QVoE/", "url_desc": "使用手册（含 Key 获取方式）"},
-    {"key": "DEEPSEEK_API_KEY", "label": "DeepSeek API 密钥", "desc": "DeepSeek 大模型 API 密钥", "url": "https://platform.deepseek.com", "url_desc": "注册 → API Keys"},
-    {"key": "OPENROUTER_API_KEY", "label": "OpenRouter API 密钥", "desc": "OpenRouter API 密钥", "url": "https://openrouter.ai", "url_desc": "注册 → API Keys"},
-    {"key": "WOLFRAMALPHA_API_KEY", "label": "WolframAlpha 知识计算密钥", "desc": "知识计算引擎", "url": "https://products.wolframalpha.com/api/", "url_desc": "注册 → Get AppID"},
-    {"key": "AGNES_API_KEY", "label": "Agnes AI 图像/视频密钥", "desc": "图片生成和视频生成的核心依赖", "url": "https://agnes-ai.cn", "url_desc": "注册 → API Keys"},
-    {"key": "GITHUB_PERSONAL_ACCESS_TOKEN", "label": "GitHub 个人访问令牌", "desc": "GitHub MCP Server 所需", "url": "https://github.com/settings/tokens", "url_desc": "Generate new token"},
-    {"key": "MODELSCOPE_ACCESS_TOKEN", "label": "魔搭 Access Token", "desc": "魔搭 ModelScope 免费模型发现", "url": "https://modelscope.cn", "url_desc": "注册 → 个人中心 → 访问令牌"},
-]
+_FALLBACK_REQUIRED_KEYS_META = _FALLBACK_REQUIRED_KEYS_META_IMPL
+_FALLBACK_OPTIONAL_KEYS_META = _FALLBACK_OPTIONAL_KEYS_META_IMPL
 
 
 # ── Key 探针库拆分（2026-08-22 P1）：实现见 setup_key_probes.py，此处 re-export 保持兼容 ──
@@ -383,6 +368,7 @@ from web.routers.setup_key_probes import (  # noqa: F401
     _test_deepseek,
     _test_get_with_bearer,
     _test_github,
+    _test_jev,
     _test_key_by_catalog,
     _test_key_by_name,
     _test_llama_cpp,

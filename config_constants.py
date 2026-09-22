@@ -222,6 +222,33 @@ INTENT_LLM_CLASSIFY = env_flag("INTENT_LLM_CLASSIFY", False)
 # 意图分类 LLM 调用超时（秒），默认 5.0s（从 2.0s 提升，避免误超时）
 INTENT_CLASSIFY_TIMEOUT = _safe_float(os.getenv("INTENT_CLASSIFY_TIMEOUT"), 15.0)
 
+# ── Jev 决策模型（TypeSafe AI System One）──────────────────────────
+# Jev 不是 LLM，不生成文字；它是「判断原语」：输入 state + questions，
+# 并行返回带校准概率的类型化答案（是/否 · 选择 · 评分）。
+# 用途：替代「用 LLM 生成文字再做字符串匹配」的脆弱分类，更快更稳。
+# 当前接入点：子代理路由（core/router_engine）、检索意图分类（memory/query_transform）。
+#
+# JEV_ENABLED：总开关。默认关闭——保持历史行为（走规则快路径），
+#   避免升级后行为静默漂移；需要更准的分类时置 true 启用。
+#   仍需配置 JEV_API_KEY，未配置时各接入点自动跳过（零行为变化）。
+# JEV_MODEL：模型别名，默认 jev-latest（服务端解析到具体版本，如 jev-1.13.0）。
+# JEV_TIMEOUT：单次调用超时（秒）。官方 70~500ms，超时即降级到原路径。
+JEV_ENABLED = env_flag("JEV_ENABLED", False)
+JEV_MODEL = os.getenv("JEV_MODEL", "jev-latest")
+JEV_TIMEOUT = _safe_float(os.getenv("JEV_TIMEOUT"), 8.0)
+
+# 低置信度门控（官方 confidence-gated routing 模式）：
+#   Jev 返回的 Choice/Score 答案带 confidence（0~1）。置信度只说明「模型有多确信」，
+#   不说明「答案对不对」——同一个数值在不同场景代表不同风险。
+#   因此按「答错的后果严重程度」分层设阈值，而非一刀切：
+#     - 子代理路由：答错 = 回复质量下降（用户可立刻纠正）→ 后果中等 → 阈值 0.85
+#     - 检索意图：答错 = 检索策略微调（召回略差）→ 后果低 → 阈值 0.80
+#   低于各自阈值的判断不直接采纳，而是升级给原有 LLM 路径复核；
+#   两者都拿不到结果时才回退规则/默认值。
+#   设为 0 表示完全信任 Jev（永不复核）；设为 1 表示永远复核（等价于不用 Jev）。
+JEV_MIN_CONFIDENCE_ROUTE = _safe_float(os.getenv("JEV_MIN_CONFIDENCE_ROUTE"), 0.85)
+JEV_MIN_CONFIDENCE_INTENT = _safe_float(os.getenv("JEV_MIN_CONFIDENCE_INTENT"), 0.80)
+
 # Retrieval Optimization (A1/A2/A3)
 RETRIEVAL_SMART_SKIP = env_flag("RETRIEVAL_SMART_SKIP", True)
 RETRIEVAL_PARALLEL_TRANSFORM = env_flag("RETRIEVAL_PARALLEL_TRANSFORM", True)

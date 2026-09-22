@@ -612,8 +612,6 @@ const permLabel = computed<Record<string, string>>(() => ({
         />
         <n-input
           v-model:value="changePwdAnswer"
-          type="password"
-          show-password-on="click"
           :placeholder="t('settings.changePasswordAnswerPlaceholder')"
         />
         <n-input
@@ -628,8 +626,6 @@ const permLabel = computed<Record<string, string>>(() => ({
         />
         <n-input
           v-model:value="changePwdNewAnswer"
-          type="password"
-          show-password-on="click"
           :placeholder="t('settings.changePasswordNewAnswer')"
         />
       </div>

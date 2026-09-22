@@ -454,7 +454,7 @@ class QueryTransformer:
             if kw in query:
                 return "multi-hop"
 
-        # LLM 可用时，对非明确类型走 LLM 分类
+        # LLM/Jev 可用时，对非明确类型走分类
         # 性能优化：LLM 调用会增加 200-800ms 延迟，默认关闭，规则未命中直接返回 factual
         # 如需更精确的分类，设置 INTENT_LLM_CLASSIFY=true 启用
         try:
@@ -463,31 +463,102 @@ class QueryTransformer:
         except (ImportError, AttributeError):
             llm_classify = False
 
-        if llm_classify and self._available:
-            override = None
-            try:
-                from core_runtime.prompt_profile_repository import try_resolve
+        if llm_classify:
+            # 路径 A：Jev 决策模型（4 选 1，类型化返回，无需解析文字）
+            jev_intent = await self._classify_intent_with_jev(query)
+            if jev_intent:
+                return jev_intent
 
-                override = try_resolve("query.classify", {"query": query})
-            except Exception:
+            # 路径 B：免费模型生成式分类（原有路径，Jev 不可用时兜底）
+            if self._available:
                 override = None
-            if override is not None:
-                prompt = override[1]
-            else:
-                prompt = CLASSIFY_PROMPT.replace("{query}", query)
-            try:
-                _cfg_timeout = getattr(_cfg, "INTENT_CLASSIFY_TIMEOUT", 5.0)
-                result = await asyncio.wait_for(
-                    self._call_free_model(prompt, temperature=0.0, max_tokens=20),
-                    timeout=_cfg_timeout,
-                )
-                if result:
-                    result_clean = result.strip().lower()
-                    for intent in ("temporal", "multi-hop", "factual", "chat"):
-                        if intent in result_clean:
-                            return intent
-            except Exception as e:
-                logger.warning("query_transform.classify_intent_failed", error=str(e), error_type=type(e).__name__)
+                try:
+                    from core_runtime.prompt_profile_repository import try_resolve
+
+                    override = try_resolve("query.classify", {"query": query})
+                except Exception:
+                    override = None
+                if override is not None:
+                    prompt = override[1]
+                else:
+                    prompt = CLASSIFY_PROMPT.replace("{query}", query)
+                try:
+                    _cfg_timeout = getattr(_cfg, "INTENT_CLASSIFY_TIMEOUT", 5.0)
+                    result = await asyncio.wait_for(
+                        self._call_free_model(prompt, temperature=0.0, max_tokens=20),
+                        timeout=_cfg_timeout,
+                    )
+                    if result:
+                        result_clean = result.strip().lower()
+                        for intent in ("temporal", "multi-hop", "factual", "chat"):
+                            if intent in result_clean:
+                                return intent
+                except Exception as e:
+                    logger.warning("query_transform.classify_intent_failed", error=str(e), error_type=type(e).__name__)
 
         # 默认 factual
         return "factual"
+
+    async def _classify_intent_with_jev(self, query: str) -> str | None:
+        """用 Jev Choice 原语做检索意图分类。未配置/失败/置信度不足返回 None。
+
+        与子代理路由同理：这是 4 选 1 分类，Jev 直接返回类型化选项与概率，
+        避免「生成文字 → 子串匹配」的脆弱解析，也省掉一次 LLM 生成开销。
+
+        置信度门控：答错意图只是检索策略微调（召回略差），后果低，
+        故阈值略低于子代理路由；低于阈值交回调用方走 LLM 复核。
+        """
+        try:
+            from utils import jev_client as jev
+        except ImportError:
+            return None
+        if not jev.is_available():
+            return None
+
+        try:
+            import config as _cfg
+            timeout = getattr(_cfg, "INTENT_CLASSIFY_TIMEOUT", 5.0)
+            min_conf = float(getattr(_cfg, "JEV_MIN_CONFIDENCE_INTENT", 0.80))
+        except (ImportError, AttributeError, ValueError, TypeError):
+            timeout = 5.0
+            min_conf = 0.80
+
+        try:
+            answers = await jev.system_one(
+                state={"query": query},
+                questions={
+                    "intent": jev.choice(
+                        instructions=(
+                            "这段话属于哪种查询意图？判断依据是语义而非个别词。"
+                        ),
+                        options={
+                            "temporal": "涉及时间、日期、某天某时发生的事、按时间回忆",
+                            "multi-hop": "需要串联多个事实/多步推理才能回答",
+                            "factual": "询问某个具体事实、定义、属性或客观信息",
+                            "chat": "闲聊、寒暄、情绪表达、无明确检索意图",
+                        },
+                    ),
+                },
+                timeout=timeout,
+            )
+        except ValueError:
+            return None
+        except Exception:
+            logger.exception("query_transform.jev_classify.unexpected_error")
+            return None
+
+        intent = jev.answer_choice(answers, "intent")
+        if intent not in ("temporal", "multi-hop", "factual", "chat"):
+            if intent is not None:
+                logger.warning("query_transform.jev_classify_unknown intent={}", intent)
+            return None
+
+        conf = jev.answer_confidence(answers, "intent")
+        if not jev.confident_enough(answers, "intent", min_conf):
+            # 低置信度：不采纳，交回调用方升级到 LLM 复核
+            logger.info("query_transform.jev_low_confidence intent={} confidence={} threshold={}",
+                        intent, conf, min_conf)
+            return None
+        logger.info("query_transform.jev_classified intent={} confidence={}",
+                    intent, conf)
+        return intent

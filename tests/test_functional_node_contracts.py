@@ -35,6 +35,8 @@ EXPECTED_NODE_IDS = {
     "spontaneous_recall",
     "dream",
     "intent_decomposition",
+    # Jev 决策模型（TypeSafe System One）：非生成型结构化判断节点，on/off 两态
+    "jev_decision",
 }
 
 
@@ -50,8 +52,10 @@ def test_functional_node_registry_is_complete_and_self_describing(tmp_path):
             "rrf",
             "explicit_failure",
             "skip",
+            # decision 节点（Jev）失败时回退到接入点原有逻辑
+            "original_logic",
         }
-        assert node["model_purpose"] in {"embedding", "reranker", "chat", "asr"}
+        assert node["model_purpose"] in {"embedding", "reranker", "chat", "asr", "decision"}
         assert node["default"] in {"local", "api", "off"}
 
 

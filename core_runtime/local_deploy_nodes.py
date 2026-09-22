@@ -36,6 +36,11 @@ def _api_configured() -> bool:
     )
 
 
+def _jev_configured() -> bool:
+    """Jev 决策模型是否已配置密钥（decision 节点专用，与免费模型密钥无关）。"""
+    return bool(os.getenv("JEV_API_KEY"))
+
+
 def _router_available(core: Any) -> bool:
     router = getattr(core, "router", None)
     return router is not None
@@ -352,12 +357,16 @@ async def build_status(core: Any, vs: Any, cfg: Any) -> list[dict[str, Any]]:
                         local_available = False
         elif node_id == "asr":
             local_available = any(c.get("installed") for c in _node_local_models(node, installed))
+        elif node_id == "jev_decision":
+            # decision 节点：无本地模型；可用性取决于是否配置了 JEV_API_KEY
+            local_available = False
         else:  # generative 节点：本地=已安装的对话小模型
             local_available = any(c.get("installed") for c in _node_local_models(node, installed))
         result.append({
             **node,
             "backend": backend,
-            "api_configured": api_ok,
+            # decision 节点（Jev）走独立密钥，不依赖硅基流动免费模型
+            "api_configured": _jev_configured() if node_id == "jev_decision" else api_ok,
             "local_available": local_available,
             "local_model": get_local_model(cfg, node_id),
             "local_models": _node_local_models(node, installed),
@@ -460,10 +469,30 @@ _SERVICE_NODES = {
 }
 
 
+def _apply_decision_node(node_id: str, backend: str) -> None:
+    """decision 型节点（如 Jev）：on/off 语义，热切换总开关。
+
+    Jev 是决策模型（非 LLM），只有开/关两态；backend 取值 "off" 关闭，
+    其余（"api"）视为开启。切换通过 config 模块级常量生效，供各接入点
+    的 `is_available()` 实时读取。
+    """
+    if node_id != "jev_decision":
+        return
+    try:
+        import config as _cfg
+        enabled = backend != "off"
+        _cfg.JEV_ENABLED = enabled
+        logger.info("local_deploy.jev_decision_applied enabled={}", enabled)
+    except (ImportError, AttributeError) as e:
+        logger.warning("local_deploy.jev_decision_apply_failed error={}", str(e))
+
+
 def apply_to_runtime(core: Any, vs: Any, node_id: str, backend: str, app: Any = None,
                      local_model: str | None = None, strict: bool = False) -> None:
     try:
-        if node_id in _SERVICE_NODES:
+        if node_id == "jev_decision":
+            _apply_decision_node(node_id, backend)
+        elif node_id in _SERVICE_NODES:
             _apply_service_node(core, vs, node_id, backend, local_model)
         else:
             _apply_llm_node(core, node_id, backend, local_model, app)

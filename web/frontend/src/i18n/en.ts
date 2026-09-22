@@ -1102,6 +1102,7 @@ export default {
     setupTokenPlaceholder: 'Paste the bootstrap token…',
     fallback: {
       MIMO_API_KEY: { label: 'MiMo API Key', desc: 'Xiaomi MiMo LLM API key (main LLM + TTS + Vision)', url_desc: 'Register → Console → API Keys' },
+      JEV_API_KEY: { label: 'Jev Decision Model Key (optional)', desc: "TypeSafe System One decision model (typed judgments, generates no text); enable it under Functional Nodes", url_desc: 'Console → Settings → Keys (looks like jev_…)' },
       QQBOT_APP_ID: { label: 'QQ Bot App ID', desc: 'QQ Bot application ID', url_desc: 'Create bot app → Get AppID' },
       QQBOT_APP_SECRET: { label: 'QQ Bot App Secret', desc: 'QQ Bot application secret', url_desc: 'AppSecret on the same page' },
       EMBED_API_KEY: { label: 'Embedding API Key', desc: 'SiliconFlow embedding model key', url_desc: 'Register → API Keys → Copy' },

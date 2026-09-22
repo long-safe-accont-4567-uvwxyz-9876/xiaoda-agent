@@ -57,6 +57,14 @@ async def _broadcast_changed() -> None:
 def list_providers_data(cfg: Any) -> list[dict]:
     out = []
     custom = cfg.get("models.providers", {}) or {}
+    # 内置 provider 身份以 catalog 为单一事实源：持久化记录可能丢失 builtin
+    # 标记（历史 _record 未写入 / 用户手改），若只信记录会让内置 provider 被
+    # 误判为自定义（前端模型配置 Tab 里 Mimo 显示到「自定义」区甚至被隐藏）。
+    try:
+        from config import get_builtin_providers
+        builtin_ids = set(get_builtin_providers())
+    except (ImportError, OSError, ValueError):
+        builtin_ids = set()
     # 按 order 字段升序排列；未设置 order 的排在已设置之后，按字典插入顺序
     keys_order = list(custom.keys())
     sorted_custom = sorted(
@@ -65,15 +73,17 @@ def list_providers_data(cfg: Any) -> list[dict]:
     )
     for pid, p in sorted_custom:
         key = load_provider_key(pid)
-        # 没有 API key 的自定义 provider 不显示
-        if not key:
+        is_builtin = bool(p.get("builtin", False)) or pid in builtin_ids
+        # 无 API key 的「自定义」provider 不显示；内置 provider 始终显示
+        # （其 Key 走 .env，可能尚未写入凭据文件，隐藏会导致用户看不到内置 Mimo）
+        if not key and not is_builtin:
             continue
         out.append({
             "id": pid,
             "label": p.get("label", pid),
             "format": p.get("format", "openai"),
             "base_url": p.get("base_url", ""),
-            "builtin": p.get("builtin", False),
+            "builtin": is_builtin,
             "key_masked": _mask(key),
             "enabled": p.get("enabled", True),
             "default_model": p.get("default_model", ""),

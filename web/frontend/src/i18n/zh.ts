@@ -1103,6 +1103,7 @@ export default {
     setupTokenPlaceholder: '请输入初始化令牌…',
     fallback: {
       MIMO_API_KEY: { label: 'MiMo API 密钥', desc: '小米 MiMo 大模型 API 密钥（主 LLM + TTS + Vision）', url_desc: '注册 → 控制台 → API Keys' },
+      JEV_API_KEY: { label: 'Jev 决策模型密钥（选填）', desc: 'TypeSafe System One 决策模型（结构化判断，不生成文字）；配置后在功能节点开启', url_desc: '控制台 → Settings → Keys（形如 jev_…）' },
       QQBOT_APP_ID: { label: 'QQ Bot App ID', desc: 'QQ 机器人应用 ID', url_desc: '创建机器人应用 → 获取 AppID' },
       QQBOT_APP_SECRET: { label: 'QQ Bot App Secret', desc: 'QQ 机器人应用密钥', url_desc: '同一页面的 AppSecret' },
       EMBED_API_KEY: { label: '向量嵌入 API 密钥', desc: '硅基流动嵌入模型密钥', url_desc: '注册 → API Keys → 复制' },

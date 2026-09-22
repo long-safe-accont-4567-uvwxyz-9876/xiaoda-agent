@@ -36,6 +36,11 @@ const purposeLabel = (purpose: string) => {
 }
 
 function effectiveLabel(node: ModelNode) {
+  // decision 节点（Jev）：只有 开启 / 关闭 两态
+  if (node.kind === 'decision') {
+    if (node.backend === 'off') return '已关闭'
+    return node.api_configured ? '已启用' : '已启用（未配置 Key）'
+  }
   if (node.backend === 'local') {
     if (node.local_model) return `本地 · ${node.local_model}`
     return node.local_available ? '本地 · 未选模型' : '本地（未就绪）'
@@ -43,8 +48,28 @@ function effectiveLabel(node: ModelNode) {
   return node.api_configured ? 'API（默认）' : 'API（未配置 Key）'
 }
 const stateType = (node: ModelNode) => {
+  if (node.kind === 'decision') {
+    if (node.backend === 'off') return 'default' as const
+    return node.api_configured ? ('success' as const) : ('warning' as const)
+  }
   if (node.backend === 'local') return node.local_available ? ('success' as const) : ('warning' as const)
   return node.api_configured ? ('info' as const) : ('warning' as const)
+}
+
+/** decision 节点：切换总开关（on ↔ off），非 local/api 语义 */
+async function toggleDecision(node: ModelNode) {
+  if (saving.value) return
+  const next = node.backend === 'off' ? 'api' : 'off'
+  saving.value = node.id
+  try {
+    await store.setModelNodeBackend(node.id, next)
+    node.backend = next
+    message.success(next === 'off' ? `「${node.name}」已关闭` : `「${node.name}」已启用`)
+  } catch (error) {
+    message.error(error instanceof Error ? error.message : String(error))
+  } finally {
+    saving.value = ''
+  }
 }
 
 // 持久化规则提示：本地引擎已启动 + 有节点选 local → 常驻；缺一 → 重启回退 API
@@ -208,8 +233,25 @@ onMounted(load)
           </div>
 
           <div class="node-body">
-            <!-- 后端切换：本地模型（展开候选）/ API -->
-            <div class="backend-row">
+            <!-- decision 节点（Jev）：只有 开启 / 关闭 两态，不涉及本地模型 -->
+            <div v-if="node.kind === 'decision'" class="backend-row">
+              <button
+                class="backend-btn"
+                :class="{ active: node.backend !== 'off' }"
+                :disabled="saving !== '' && saving !== node.id"
+                @click="toggleDecision(node)"
+              >
+                {{ node.backend === 'off' ? '开启' : '关闭' }}
+              </button>
+              <span class="decision-note">
+                {{ node.backend === 'off'
+                  ? '关闭时：走原有规则/大模型分类路径（默认）'
+                  : (node.api_configured ? '开启时：优先用 Jev 做结构化判断' : '开启后需配置 JEV_API_KEY 才会生效') }}
+              </span>
+            </div>
+
+            <!-- 其余节点：本地模型（展开候选）/ API -->
+            <div v-else class="backend-row">
               <button
                 class="backend-btn"
                 :class="{ active: node.backend === 'local', open: localOpen[node.id] }"
@@ -309,6 +351,7 @@ onMounted(load)
 .backend-btn.api:hover { border-color: #70c0e8; color: #70c0e8; }
 .backend-btn.api.active { background: rgba(112, 192, 232, 0.14); border-color: #70c0e8; color: #70c0e8; }
 .backend-btn:disabled { opacity: 0.5; cursor: not-allowed; }
+.decision-note { align-self: center; color: var(--moon-dim); font-size: 12px; }
 
 .local-panel { padding: 12px 14px; border: 1px dashed rgba(143, 229, 96, 0.35); border-radius: 10px; background: rgba(143, 229, 96, 0.04); }
 .lm-title { margin: 0 0 10px; color: var(--moon-dim); font-size: 12px; }
