@@ -9,7 +9,11 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from loguru import logger
 
 # 内置 provider / 默认 provider 全部由 provider_metadata.json 派生，不硬编码
-from config_providers import get_builtin_providers, get_default_provider
+from config_providers import (
+    get_builtin_providers,
+    get_context_window_for_provider,
+    get_default_provider,
+)
 
 # 缓存与凭证读写抽到独立模块, 避免与 web.routers.model_discovery / model_router 互相导入
 from web._discovery_cache import invalidate_discovery_cache
@@ -278,7 +282,7 @@ async def list_routes(request: Request) -> Any:
 
 @router.put("/models/routes/{task}", response_model=Envelope[dict])
 async def update_route(task: str, body: dict, request: Request) -> Any:
-    from model_router import ROUTE_TABLE, ModelRouter
+    from model_router import ROUTE_TABLE
     if task not in ROUTE_TABLE:
         raise HTTPException(404, f"未知路由任务 {task}")
     cfg = _cfg(request)
