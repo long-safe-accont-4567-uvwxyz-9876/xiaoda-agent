@@ -20,6 +20,7 @@ from memory._retrieval_engine_entity import EntityKgBoostMixin
 from memory._retrieval_engine_meta import MemoryMetadataMixin
 from memory.retrieval.channels import RecallChannelMixin, RecallChannels
 from memory.retrieval.fusion import FusionRerankMixin
+from memory.jev_relevance_filter import post_filter
 from memory.retrieval.query_transform import QueryTransformMixin
 from memory.retrieval.scoring import ScoringTouchMixin
 from memory.retrieval.trace import (
@@ -1063,22 +1064,9 @@ class RetrievalEngine(RecallChannelMixin, FusionRerankMixin, QueryTransformMixin
                 mark_retrieval_dropped(dropped.get("id"), "top_k")
             results = results[:_final_k]
 
-        # 智能最低分过滤：非闲聊型 query 过滤低相关度噪声（保留话题触发记忆）
-        # 用 rerank_score（纯相关性）而非 final_score（综合分含保底 ~0.22，过滤失效）
-        # （bench_rag_e2e 实测：技术型 query 返回 rerank 0.007 的亲密内容）
-        _min_score = getattr(config, 'RAG_MIN_FINAL_SCORE', 0.15)
-        if apply_min_score and intent != "chat" and _min_score > 0 and results:
-            _before = len(results)
-            before_results = list(results)
-            results = [r for r in results
-                       if self._passes_min_relevance(r, _min_score)]
-            kept_objects = {id(item) for item in results}
-            for dropped in before_results:
-                if id(dropped) not in kept_objects:
-                    mark_retrieval_dropped(dropped.get("id"), "low_score")
-            if len(results) != _before:
-                logger.info("memory.low_score_filtered",
-                            query=query[:60],
-                            before=_before, after=len(results),
-                            min_score=_min_score)
-        return results
+        # 后置过滤总入口：Jev 语义相关性（意图契合度）+ 原有数值最低分（rerank 相似度）。
+        # 两层逻辑与注释全部收敛在 memory.jev_relevance_filter.post_filter（止血液轮）。
+        return await post_filter(
+            query, results, config, intent, apply_min_score,
+            passes_min_relevance=self._passes_min_relevance,
+            mark_dropped=mark_retrieval_dropped)

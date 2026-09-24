@@ -270,6 +270,15 @@ JEV_MIN_CONFIDENCE_INTENT = _safe_float(os.getenv("JEV_MIN_CONFIDENCE_INTENT"), 
 JEV_RISK_DENY_THRESHOLD = _safe_float(os.getenv("JEV_RISK_DENY_THRESHOLD"), 0.85)
 JEV_RISK_ALLOW_THRESHOLD = _safe_float(os.getenv("JEV_RISK_ALLOW_THRESHOLD"), 0.20)
 
+# ── Jev 记忆相关性过滤阈值（检索召回后的语义后置过滤）────────────
+# 与数值分数（rerank_score/RRF）互补：数值看词的相似度，Jev 看意图契合度。
+# 项目内已有"技术型 query 返回 rerank 0.007 的亲密内容"这类数值失准的铁证，
+# 故叠加一层语义判断。Score 档位：0=无关 / 1=略有关系 / 2=相关 / 3=直接相关。
+#   score < DROP_BELOW → 丢弃（默认 1.0：只丢"无关"，保留"略有关系"）
+# 安全阀：每轮至多过滤 50% 候选（MAX_DROP_RATIO 内置于模块），防模型误判
+# 导致上下文枯竭；且只丢弃、不注入（输出必为输入子集）。
+JEV_RELEVANCE_DROP_BELOW = _safe_float(os.getenv("JEV_RELEVANCE_DROP_BELOW"), 1.0)
+
 # Retrieval Optimization (A1/A2/A3)
 RETRIEVAL_SMART_SKIP = env_flag("RETRIEVAL_SMART_SKIP", True)
 RETRIEVAL_PARALLEL_TRANSFORM = env_flag("RETRIEVAL_PARALLEL_TRANSFORM", True)
