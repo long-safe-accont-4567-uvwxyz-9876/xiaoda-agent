@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, onMounted, ref, watch } from 'vue'
-import { NButton, NTag, NEmpty, useMessage } from 'naive-ui'
+import { NButton, NTag, NEmpty, NSwitch, useMessage } from 'naive-ui'
 import { useLocalAiStore, type ModelNode, type LocalDeployStatus } from '../../stores/localAi'
 import StoragePickerDialog from './StoragePickerDialog.vue'
 
