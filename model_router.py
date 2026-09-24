@@ -80,15 +80,10 @@ from utils.error_classifier import ErrorClassifier
 from utils.metrics import metrics
 from utils.prompt_caching import apply_cache_control
 
-# 长对话路由的 max_tokens 默认值：chat 与 chat_agnes 共用，改值两处同步。
-#
-# 2026-09-24 由 131072 改为 65535（用户决策）：
-#   旧值 128K 超过当前主力 provider agnes 的物理上限（65536），
-#   实际每次请求都会被 _cap_max_tokens 裁到 65535——即"默认值"与
-#   "实际生效值"长期不一致，用户看到 131072 却始终拿不到。
-#   改为 65535 后默认值即真实上限，语义一致、无隐藏裁剪。
-#   注：用户仍可在 WebUI「任务路由表」里自定义调大（不再限制输入上限），
-#   但发送给 agnes 时仍会按 provider 物理上限安全裁剪（超出会 500）。
+# chat/chat_agnes 共用的 max_tokens 默认值（最大输出）。2026-09-24 由 131072
+# 改为 65535：旧值 128K 超过主力 provider agnes 物理上限（65536），每次请求都被
+# _cap_max_tokens 裁掉——默认值与实际生效值长期不一致。用户仍可在 WebUI 自定义
+# 调大，发送时按当次 provider 物理上限安全裁剪。
 CHAT_MAX_TOKENS = 65535
 
 # 两条独立维度（2026-09-24 澄清）：
@@ -97,8 +92,6 @@ CHAT_MAX_TOKENS = 65535
 #                     仅供本地计算历史预算 / 保留轮数；**不发给 API**，也没有
 #                     任何 API 参数能调它。留空(None)时按 provider 自动推导。
 ROUTE_TABLE = {
-    # chat 主路由：输出吃满 agnes 上限（65535），历史预算由 context_window 决定
-    # （agnes 512K 窗口 → 压缩阈值约 367K），不再靠 max_tokens 冒充窗口
     "chat": {"model": _CFG_MODEL_NAME, "max_tokens": CHAT_MAX_TOKENS, "client": _CFG_DEFAULT_PROVIDER, "thinking": {"type": "disabled"}},
     "emotion_analysis": {"model": _CFG_FLASH_MODEL or _CFG_MODEL_NAME, "max_tokens": 1024, "client": _CFG_DEFAULT_PROVIDER, "thinking": {"type": "disabled"}},
     "tool_result_wrap": {"model": _CFG_FLASH_MODEL or _CFG_MODEL_NAME, "max_tokens": 2048, "client": _CFG_DEFAULT_PROVIDER, "thinking": {"type": "disabled"}},
@@ -489,13 +482,9 @@ class ModelRouter(ExecutionMixin, CostTrackingMixin, ClientLifecycleMixin, Fallb
     def get_context_window_for_task(self, task_type: str = "chat") -> int:
         """获取指定 task_type 的 **最大输入**（上下文窗口）token 数。
 
-        取值优先级（方案 C：provider 推导 + 用户可覆盖）：
-          1. 路由表显式配置的 ``context_window``（WebUI 可改，用户说了算）
-          2. provider_metadata.json 的 ``context_window``（按当前 provider 推导）
-          3. 都取不到 → 0（调用方回退保守兜底）
-
-        ⚠️ 与 max_tokens 是**独立维度**：窗口是 输入+输出 的总容量，
-        没有任何 API 参数可调，仅供本地计算历史预算 / 保留轮数。
+        取值优先级：路由表显式 ``context_window``（WebUI 可改）>
+        provider_metadata.json 推导 > 0（调用方兜底）。
+        ⚠️ 与 max_tokens（最大输出）是独立维度，勿混用。
         """
         cfg = self._registry.get_task_ref(task_type) or self._registry.get_task_ref("chat") or {}
         try:
