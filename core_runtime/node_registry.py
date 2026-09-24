@@ -207,14 +207,26 @@ NODES: list[dict[str, Any]] = [
         # Jev 不是 LLM：TypeSafe AI 的 System One 决策模型，输入 state + questions，
         # 并行返回带校准概率的类型化答案（是非/选择/评分），不生成任何文字。
         # 用于替代「用 LLM 生成文字再做字符串匹配」的脆弱分类，更快（70~500ms）更稳。
-        # 当前接入点：工具风控门卫（security/jev_risk_gate）、
-        #             子代理路由（core/router_engine）、检索意图分类（memory/query_transform）。
-        "desc": "结构化判断原语（是非/选择/评分）：工具风控门卫 + 子代理路由 + 检索意图分类",
+        "desc": "用结构化判断替代「让大模型写答案再解析」：更快、更稳、无解析失败",
         "api_model": "TypeSafe Jev（api.typesafe.ai）",
         "local_model": "",
         "local_desc": "暂不支持本地部署（Jev 为云端决策模型）",
         # decision 节点只有 on / off 两态，默认 off：保持历史行为不漂移
         "default": "off",
+        # 受本开关影响的具体功能点（前端在开关旁展示，让用户清楚"开了会改变什么"）。
+        # 新增 Jev 接入点时必须同步维护此清单（前端展示 + 可读性契约）。
+        "usages": [
+            {"id": "risk_gate", "name": "工具风控门卫",
+             "desc": "执行命令前做语义风险判断，明显安全的跳过确认、明显危险的直接拦截"},
+            {"id": "routing", "name": "子代理路由",
+             "desc": "判断消息该由哪个子代理处理，不再依赖大模型输出后做字符串匹配"},
+            {"id": "intent", "name": "检索意图分类",
+             "desc": "判断查询属于回忆/事实/多跳/闲聊，决定记忆检索策略"},
+            {"id": "memory_filter", "name": "记忆相关性过滤",
+             "desc": "过滤检索召回中话题沾边但不解答问题的记忆，减少上下文噪声"},
+        ],
+        # 启用前置条件：需配置 JEV_API_KEY（前端据此给出引导）
+        "requires_key": "JEV_API_KEY",
     },
 ]
 

@@ -13,6 +13,10 @@ export interface ModelNode {
    */
   kind: 'encoder' | 'generative' | 'decision' | 'other'
   desc: string
+  /** decision 节点专有：受本开关影响的功能点清单（供 UI 展示"开了会改变什么"） */
+  usages?: Array<{ id: string; name: string; desc: string }>
+  /** decision 节点专有：启用所需的环境变量名（如 JEV_API_KEY） */
+  requires_key?: string
   api_model: string
   local_desc: string
   /** 本地实际使用的模型名（如 bge-small-zh-v1.5；生成型节点为本地对话小模型） */

@@ -56,15 +56,20 @@ const stateType = (node: ModelNode) => {
   return node.api_configured ? ('info' as const) : ('warning' as const)
 }
 
-/** decision 节点：切换总开关（on ↔ off），非 local/api 语义 */
-async function toggleDecision(node: ModelNode) {
+/** decision 节点：切换能力总开关（on ↔ off），非 local/api 语义。
+ *  enabled 来自 n-switch 的布尔值；后端把 off 视为关闭、其余视为开启。 */
+async function toggleDecision(node: ModelNode, enabled: boolean) {
   if (saving.value) return
-  const next = node.backend === 'off' ? 'api' : 'off'
   saving.value = node.id
   try {
+    const next = enabled ? 'api' : 'off'
     await store.setModelNodeBackend(node.id, next)
     node.backend = next
-    message.success(next === 'off' ? `「${node.name}」已关闭` : `「${node.name}」已启用`)
+    if (enabled && !node.api_configured) {
+      message.warning(`「${node.name}」已启用，但还差 ${node.requires_key}，配置后才会真正生效`)
+    } else {
+      message.success(enabled ? `「${node.name}」已启用` : `「${node.name}」已关闭`)
+    }
   } catch (error) {
     message.error(error instanceof Error ? error.message : String(error))
   } finally {
@@ -233,21 +238,40 @@ onMounted(load)
           </div>
 
           <div class="node-body">
-            <!-- decision 节点（Jev）：只有 开启 / 关闭 两态，不涉及本地模型 -->
-            <div v-if="node.kind === 'decision'" class="backend-row">
-              <button
-                class="backend-btn"
-                :class="{ active: node.backend !== 'off' }"
-                :disabled="saving !== '' && saving !== node.id"
-                @click="toggleDecision(node)"
-              >
-                {{ node.backend === 'off' ? '开启' : '关闭' }}
-              </button>
-              <span class="decision-note">
-                {{ node.backend === 'off'
-                  ? '关闭时：走原有规则/大模型分类路径（默认）'
-                  : (node.api_configured ? '开启时：优先用 Jev 做结构化判断' : '开启后需配置 JEV_API_KEY 才会生效') }}
-              </span>
+            <!-- decision 节点（Jev）：能力总开关，on/off 两态 + 生效范围 + 前置条件 -->
+            <div v-if="node.kind === 'decision'" class="decision-panel">
+              <div class="decision-switch-row">
+                <n-switch
+                  :value="node.backend !== 'off'"
+                  :loading="saving === node.id"
+                  :disabled="saving !== '' && saving !== node.id"
+                  @update:value="(v: boolean) => toggleDecision(node, v)"
+                />
+                <span class="decision-state" :class="{ on: node.backend !== 'off' }">
+                  {{ node.backend === 'off' ? '已关闭' : '已启用' }}
+                </span>
+                <span v-if="node.backend === 'off'" class="decision-note">
+                  关闭时走原有规则／大模型路径
+                </span>
+              </div>
+
+              <!-- 前置条件：未配置 Key 时给出直达引导，避免"开了却没反应" -->
+              <div v-if="!node.api_configured" class="decision-warn">
+                需要先在「系统设置 → API Key 配置」填入
+                <b>{{ node.requires_key }}</b>，否则开启后不会生效。
+              </div>
+
+              <!-- 生效范围：让用户清楚"开了会改变什么"（4 个功能点） -->
+              <div v-if="node.usages?.length" class="decision-usages">
+                <div class="usages-title">
+                  启用后作用于以下 {{ node.usages.length }} 处：
+                </div>
+                <div class="usage-item" v-for="u in node.usages" :key="u.id">
+                  <span class="usage-dot" :class="{ on: node.backend !== 'off' }"></span>
+                  <span class="usage-name">{{ u.name }}</span>
+                  <span class="usage-desc">{{ u.desc }}</span>
+                </div>
+              </div>
             </div>
 
             <!-- 其余节点：本地模型（展开候选）/ API -->
@@ -351,7 +375,29 @@ onMounted(load)
 .backend-btn.api:hover { border-color: #70c0e8; color: #70c0e8; }
 .backend-btn.api.active { background: rgba(112, 192, 232, 0.14); border-color: #70c0e8; color: #70c0e8; }
 .backend-btn:disabled { opacity: 0.5; cursor: not-allowed; }
-.decision-note { align-self: center; color: var(--moon-dim); font-size: 12px; }
+
+/* ── decision 节点（能力总开关）面板 ── */
+.decision-panel { display: flex; flex-direction: column; gap: 12px; }
+.decision-switch-row { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.decision-state { font-size: 13px; font-weight: 700; color: var(--moon-dim); }
+.decision-state.on { color: #8fe560; }
+.decision-note { color: var(--moon-dim); font-size: 12px; }
+
+.decision-warn { padding: 8px 12px; border-radius: 9px; font-size: 12.5px;
+  border: 1px solid rgba(232, 213, 163, 0.4); background: rgba(232, 213, 163, 0.1);
+  color: #e8d5a3; }
+
+.decision-usages { display: flex; flex-direction: column; gap: 6px; padding: 10px 12px;
+  border-radius: 10px; border: 1px solid rgba(128, 128, 128, 0.15);
+  background: rgba(255, 255, 255, 0.02); }
+.usages-title { font-size: 11.5px; color: var(--moon-dim); margin-bottom: 2px; }
+.usage-item { display: flex; align-items: baseline; gap: 8px; font-size: 12.5px;
+  flex-wrap: wrap; }
+.usage-dot { width: 6px; height: 6px; border-radius: 50%; flex-shrink: 0;
+  background: rgba(128, 128, 128, 0.45); align-self: center; transition: background 0.2s ease; }
+.usage-dot.on { background: #8fe560; box-shadow: 0 0 6px rgba(143, 229, 96, 0.6); }
+.usage-name { font-weight: 700; color: rgba(255, 255, 255, 0.9); }
+.usage-desc { color: var(--moon-dim); }
 
 .local-panel { padding: 12px 14px; border: 1px dashed rgba(143, 229, 96, 0.35); border-radius: 10px; background: rgba(143, 229, 96, 0.04); }
 .lm-title { margin: 0 0 10px; color: var(--moon-dim); font-size: 12px; }
