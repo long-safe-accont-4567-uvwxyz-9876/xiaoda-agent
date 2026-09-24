@@ -126,10 +126,12 @@ async def filter_memories(query: str, results: list[dict], *,
     timeout = _config_float("JEV_TIMEOUT", 8.0)
     try:
         answers = await jev.system_one(state=state, questions=questions, timeout=timeout)
-    except ValueError:
+    except (ValueError, TypeError, KeyError, AttributeError):
+        # 参数/结构类异常：降级为 None，调用方保留原有数值过滤（fail-soft）
         return None
-    except Exception:
-        logger.exception("jev_relevance_filter.unexpected_error")
+    except (OSError, RuntimeError) as e:
+        logger.warning("jev_relevance_filter.failed error={} type={}",
+                       repr(e)[:160], type(e).__name__)
         return None
 
     if not answers:
@@ -202,8 +204,9 @@ async def apply_and_mark(query: str, results: list[dict],
             if id(item) not in kept_ids:
                 try:
                     mark_dropped(item.get("id"), "jev_low_relevance")
-                except Exception:
-                    logger.debug("jev_relevance_filter.mark_failed", exc_info=True)
+                except (OSError, RuntimeError, ValueError, TypeError, KeyError) as e:
+                    # 打点失败不影响过滤结果本身，仅记 debug
+                    logger.debug("jev_relevance_filter.mark_failed error={}", repr(e)[:120])
     return filtered
 
 

@@ -123,10 +123,12 @@ async def assess_command(command: str, *, tool_name: str = "shell_command") -> s
             questions={"needs_confirmation": _build_question()},
             timeout=timeout,
         )
-    except ValueError:
+    except (ValueError, TypeError, KeyError, AttributeError):
+        # 参数/结构类异常统一降级为 None，由调用方走原有确认流程（fail-closed）
         return None
-    except Exception:
-        logger.exception("jev_risk_gate.assess_unexpected")
+    except (OSError, RuntimeError) as e:
+        logger.warning("jev_risk_gate.assess_failed error={} type={}",
+                       repr(e)[:160], type(e).__name__)
         return None
 
     risk = jev.answer_noul(answers, "needs_confirmation")

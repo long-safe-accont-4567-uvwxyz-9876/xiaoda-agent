@@ -459,8 +459,9 @@ class ToolExecutor:
             return None
         try:
             verdict = await assess_command(command, tool_name=tool_name)
-        except Exception:
-            logger.exception("tool_executor.jev_risk_assess_unexpected")
+        except (OSError, RuntimeError, ValueError, TypeError) as e:
+            # 风控门卫失败一律降级为 None → 走原有确认流程（fail-closed，不放宽）
+            logger.warning("tool_executor.jev_risk_assess_failed error={}", repr(e)[:160])
             return None
         # RISK_CONFIRM 与 None 同义：都走原有确认流程
         if verdict in ("allow", "deny"):

@@ -414,8 +414,10 @@ class RouterEngine:
             )
         except ValueError:
             return None
-        except Exception:
-            logger.exception("router.jev_classify.unexpected_error")
+        except (OSError, RuntimeError, TypeError, KeyError, AttributeError) as e:
+            # Jev 不可用时降级到生成式 LLM 路径（由调用方接管）
+            logger.warning("router.jev_classify.failed error={} type={}",
+                           repr(e)[:160], type(e).__name__)
             return None
 
         # 三道防线统一走 jev.evaluate_choice（逃生门 → 分布形状 → 置信度），

@@ -476,7 +476,7 @@ class QueryTransformer:
                     from core_runtime.prompt_profile_repository import try_resolve
 
                     override = try_resolve("query.classify", {"query": query})
-                except Exception:
+                except (ImportError, OSError, ValueError, RuntimeError, KeyError):
                     override = None
                 if override is not None:
                     prompt = override[1]
@@ -493,7 +493,7 @@ class QueryTransformer:
                         for intent in ("temporal", "multi-hop", "factual", "chat"):
                             if intent in result_clean:
                                 return intent
-                except Exception as e:
+                except (OSError, RuntimeError, ValueError, TypeError, asyncio.TimeoutError) as e:
                     logger.warning("query_transform.classify_intent_failed", error=str(e), error_type=type(e).__name__)
 
         # 默认 factual
@@ -551,8 +551,10 @@ class QueryTransformer:
             )
         except ValueError:
             return None
-        except Exception:
-            logger.exception("query_transform.jev_classify.unexpected_error")
+        except (OSError, RuntimeError, TypeError, KeyError, AttributeError) as e:
+            # Jev 不可用时返回 None，调用方降级到免费模型分类路径
+            logger.warning("query_transform.jev_classify.failed error={} type={}",
+                           repr(e)[:160], type(e).__name__)
             return None
 
         # 三道防线统一走 jev.evaluate_choice（逃生门 → 分布形状 → 置信度），

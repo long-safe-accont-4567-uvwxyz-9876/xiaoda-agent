@@ -195,10 +195,8 @@ async def _test_jev(key_value: str) -> tuple[bool, str]:
         return False, f"Jev API 返回 HTTP {resp.status_code}"
     except httpx.TimeoutException:
         return False, "Jev API 请求超时"
-    except (httpx.HTTPError, OSError, RuntimeError, ValueError) as e:
-        return False, f"Jev API 请求失败: {e}"
-    except Exception as e:
-        logger.exception("setup._test_jev.unexpected_error")
+    except (httpx.HTTPError, OSError, RuntimeError, ValueError, TypeError, KeyError) as e:
+        logger.warning("setup._test_jev.failed error={}", repr(e)[:160])
         return False, f"Jev API 请求失败: {e}"
 
 

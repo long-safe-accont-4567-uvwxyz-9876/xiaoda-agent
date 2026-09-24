@@ -279,8 +279,10 @@ async def system_one(
         # 超时/网络异常不属 OSError 全族（TimeoutException str 常为空），显式捕获
         logger.debug("jev.request_failed error={} type={}", repr(e)[:160], type(e).__name__)
         return None
-    except Exception:
-        logger.exception("jev.request_unexpected")
+    except (ValueError, TypeError, KeyError, AttributeError, ImportError) as e:
+        # 非网络类异常（响应结构畸形 / 客户端构建失败等）：同样降级，不打断调用方
+        logger.warning("jev.request_unexpected error={} type={}",
+                       repr(e)[:160], type(e).__name__)
         return None
 
     if resp.status_code == 429 or resp.status_code == 529:
