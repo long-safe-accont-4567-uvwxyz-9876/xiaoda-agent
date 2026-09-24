@@ -304,6 +304,17 @@ JEV_RISK_ALLOW_THRESHOLD = _safe_float(os.getenv("JEV_RISK_ALLOW_THRESHOLD"), 0.
 # 导致上下文枯竭；且只丢弃、不注入（输出必为输入子集）。
 JEV_RELEVANCE_DROP_BELOW = _safe_float(os.getenv("JEV_RELEVANCE_DROP_BELOW"), 1.0)
 
+# ── 紧急免费车道（降级链最后一环，2026-09-24 用户决策）────────────
+# 背景：chat 的降级链是 chat → chat_agnes，两者同为 agnes——agnes 免费档
+# 429 限流时主路和降级路一起死，用户看到"所有降级目标均不可用"（内在世界
+# 学习记录里 9/23、9/24 中午两批 429 存档即此）。
+# 本开关：仅当**整条降级链全部失败**、即将对用户返回空结果时，才用硅基流动
+# 免费模型（GLM-4-9B-0414，功能节点同款）完成本次对话。
+# 只对 chat 类任务生效；正常失败（可重试/可同 provider 降级）不会走到这里，
+# 不违背 2026-08-04「禁止随意跨 provider 切换」约束的初衷——那是防日常失败
+# 就乱切，这是链路彻底死亡时的最后退路。质量低于主力模型，但远好于失败。
+FREE_EMERGENCY_FALLBACK = env_optout_flag("FREE_EMERGENCY_FALLBACK", True)
+
 # Retrieval Optimization (A1/A2/A3)
 RETRIEVAL_SMART_SKIP = env_flag("RETRIEVAL_SMART_SKIP", True)
 RETRIEVAL_PARALLEL_TRANSFORM = env_flag("RETRIEVAL_PARALLEL_TRANSFORM", True)

@@ -231,9 +231,15 @@ async def test_fallback_max_tokens_passthrough():
         original_max_tokens=32768,
     )
 
-    # 验证：同 provider fallback 被触发，max_tokens 全部 ≥ 32768
+    # 验证：同 provider fallback 透传 original_max_tokens（≥ 32768）。
+    # 例外：紧急免费车道（chat_free）**有意**夹到 [1024, 4096]——
+    # 兜底用 9B 小模型（32K 窗口），塞 65535 输出预算必然爆窗，4096 是安全值。
     assert len(received_max_tokens) > 0, "同 provider fallback 未触发"
     for task_type, mt in received_max_tokens:
+        if task_type == "chat_free":
+            assert 1024 <= mt <= 4096, \
+                f"紧急免费车道 max_tokens={mt} 应夹在 [1024, 4096]（9B 模型 32K 窗口）"
+            continue
         assert mt >= 32768, \
             f"fallback {task_type} 的 max_tokens={mt} 被压缩（应 ≥ 32768）"
     print(f"✅ Task 1.3 验证通过：{len(received_max_tokens)} 次同 provider fallback，max_tokens 全部 ≥ 32768")
@@ -243,10 +249,13 @@ async def test_fallback_max_tokens_passthrough():
 
 @pytest.mark.asyncio
 async def test_cross_provider_fallback_disabled():
-    """用户硬约束（2026-08-04）：禁止跨 provider 自动切换模型。
+    """降级链中间环节禁止跨 provider（2026-08-04 约束保留），紧急免费车道收尾。
 
-    原 provider（如 mimo）失败时，不得 fallback 到 agnes/自定义 provider。
-    验证：跨 provider fallback 全部被跳过，_route_with_retry 不被调用。
+    2026-09-24 语义更新（用户决策）：中间环节（agnes/自定义 provider）仍禁止
+    跨 provider——日常失败不乱切；但链路彻底死亡时，允许走**紧急免费车道**
+    （硅基流动 GLM-4-9B-0414）作为最后退路，替代直接失败。
+
+    验证：mimo 失败 → 中间环节全跳过 → 仅触发一次 chat_free（紧急车道）。
     """
     from model_router import ModelRouter
 
@@ -275,9 +284,11 @@ async def test_cross_provider_fallback_disabled():
 
     received_calls = []
 
-    async def _mock_route_with_retry(task_type, *args, **kwargs):
+    async def _mock_route_with_retry(task_type, config, *args, **kwargs):
         received_calls.append(task_type)
-        raise RuntimeError("should not reach")
+        if task_type == "chat_free":
+            return "free-ok"
+        raise RuntimeError("should not reach mid-chain")
 
     router._route_with_retry = _mock_route_with_retry
 
@@ -288,10 +299,60 @@ async def test_cross_provider_fallback_disabled():
         original_max_tokens=32768,
     )
 
-    # 验证：跨 provider fallback 被全部跳过，未触发任何 _route_with_retry 调用
-    assert result is None, "跨 provider fallback 应返回 None"
-    assert len(received_calls) == 0, f"跨 provider fallback 不应执行，但调用了: {received_calls}"
-    print("✅ 跨 provider fallback 已禁用：mimo 失败不会切换到 agnes/自定义 provider")
+    # 验证：中间环节（agnes/自定义）全被跳过；仅紧急免费车道触发一次
+    assert result == "free-ok", f"紧急免费车道应兜底成功，实际: {result!r}"
+    assert received_calls == ["chat_free"], (
+        f"应只触发紧急免费车道一次，实际: {received_calls}"
+    )
+    print("✅ 中间环节禁止跨 provider；紧急免费车道正常收尾")
+
+
+@pytest.mark.asyncio
+async def test_emergency_free_fallback_disabled():
+    """FREE_EMERGENCY_FALLBACK=false 时紧急车道关闭，行为回到 2026-08-04 语义。"""
+    from model_router import ModelRouter
+
+    router = ModelRouter.__new__(ModelRouter)
+    router._client = MagicMock()
+    router._agnes_client = MagicMock()
+    router._custom_clients = {"siliconflow": MagicMock()}
+    router._cache_stats = {"total_calls": 0, "hit_tokens": 0, "miss_tokens": 0}
+    router._credential_locks = {}
+    router._apply_prompt_caching = lambda p, m: m
+    router._filter_tools_for_model = lambda t, m: t
+    router._is_client_configured = lambda p: True
+    router._select_client_for_provider = AsyncMock(return_value=router._client)
+    router._track_cache = lambda r: None
+    router._build_route_kwargs = MagicMock(return_value={"model": "test"})
+    router._get_custom_provider_default_model = lambda p: "test-model"
+    router.TASK_TIMEOUTS = {"chat": 30}
+    router._check_cache_health = lambda: None
+    router._last_cache_warning = 0.0
+
+    _registry = MagicMock()
+    _registry.get_task = lambda t: {"client": "mimo", "model": "mimo-v2.5", "max_tokens": 131072}
+    _registry.snapshot_task = lambda t: {"client": "agnes", "model": "agnes-2.0-flash", "max_tokens": 2000}
+    router._registry = _registry
+
+    received_calls = []
+
+    async def _mock_route_with_retry(task_type, *args, **kwargs):
+        received_calls.append(task_type)
+        return "should-not-happen"
+
+    router._route_with_retry = _mock_route_with_retry
+
+    with patch("llm_gateway.fallback_chain.FREE_EMERGENCY_FALLBACK", False):
+        result = await router._try_fallback_chain(
+            RuntimeError("main call failed"), "chat",
+            [{"role": "user", "content": "test"}],
+            0.7, False, None, None, 30, "user1", "session1", None,
+            original_max_tokens=32768,
+        )
+
+    assert result is None, "开关关闭时紧急车道不应触发"
+    assert len(received_calls) == 0, f"不应有任何降级调用，实际: {received_calls}"
+    print("✅ FREE_EMERGENCY_FALLBACK=false：紧急车道关闭，完全回到旧语义")
 
 
 @pytest.mark.asyncio

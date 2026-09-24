@@ -17,8 +17,10 @@ import openai as _openai_mod
 from loguru import logger
 
 from config import DEFAULT_PROVIDER as _CFG_DEFAULT_PROVIDER
+from config import FREE_EMERGENCY_FALLBACK
 from core.app_exception import LLMError
 from model_router_registry import FALLBACK_ROUTE
+from utils.free_model_backend import DEFAULT_FREE_MODEL
 
 
 class FallbackChainMixin:
@@ -201,4 +203,46 @@ class FallbackChainMixin:
                                  action=classified.action.value,
                                  error=f"{type(cp_err).__name__}: {cp_err}")
                     continue
+
+        # 4. 紧急免费车道（2026-09-24 用户决策，env: FREE_EMERGENCY_FALLBACK=false 关闭）
+        # 仅当以上全部降级失败、即将对用户返回"所有降级目标均不可用"时触发：
+        # 用硅基流动免费模型（与各功能节点同款，久经验证）完成本次对话。
+        # 背景：chat → chat_agnes 同为 agnes，agnes 免费档 429 时两条路一起死
+        # （9/23、9/24 中午两批 429 存档即此）。质量低于主力模型，但远好于失败。
+        # 只对 chat 类任务生效；失败被捕获，行为与此前一致（返回 None）。
+        if (
+            FREE_EMERGENCY_FALLBACK
+            and task_type.startswith("chat")
+            and self._is_client_configured("siliconflow")
+        ):
+            try:
+                # 9B 小模型 + 32K 窗口：输出预算夹在 [1024, 4096]，
+                # 避免把主力路由的大 max_tokens（65535）原样喂给小模型爆窗
+                _free_max_tokens = min(max(original_max_tokens or 0, 1024), 4096)
+                free_config = {
+                    "model": DEFAULT_FREE_MODEL,
+                    "max_tokens": _free_max_tokens,
+                    "client": "siliconflow",
+                }
+                logger.warning(
+                    "router.emergency_free_fallback",
+                    original_task=task_type,
+                    original_provider=_original_provider,
+                    model=DEFAULT_FREE_MODEL,
+                    max_tokens=_free_max_tokens,
+                    note="all fallbacks exhausted; using free model as last resort",
+                )
+                free_tools = self._filter_tools_for_model(tools, DEFAULT_FREE_MODEL)
+                return await self._route_with_retry(
+                    "chat_free", free_config, messages, temperature,
+                    _free_max_tokens, stream, free_tools, tool_choice, timeout,
+                    user_openid, session_id, extra_headers=extra_headers,
+                )
+            except (RuntimeError, OSError, KeyError, ValueError, LLMError,
+                    _openai_mod.APIError) as free_err:
+                classified = self._error_classifier.classify(free_err)
+                logger.error("router.emergency_free_fallback_failed",
+                             reason=classified.reason.value,
+                             action=classified.action.value,
+                             error=f"{type(free_err).__name__}: {free_err}")
         return None
