@@ -555,30 +555,17 @@ class QueryTransformer:
             logger.exception("query_transform.jev_classify.unexpected_error")
             return None
 
-        intent = jev.answer_choice(answers, "intent")
-        if intent == jev.ESCAPE_HATCH_KEY:
-            conf = jev.answer_confidence(answers, "intent")
-            logger.info("query_transform.jev_escape_hatch confidence={} query={}",
-                        conf, query[:50])
-            return None
-        if intent not in ("temporal", "multi-hop", "factual", "chat"):
-            if intent is not None:
-                logger.warning("query_transform.jev_classify_unknown intent={}", intent)
-            return None
-
+        # 三道防线统一走 jev.evaluate_choice（逃生门 → 分布形状 → 置信度），
+        # 与子代理路由接入点共用同一套规则，避免逻辑复制后漂移。
+        intent, reason = jev.evaluate_choice(
+            answers, "intent",
+            valid_options={"temporal", "multi-hop", "factual", "chat"},
+            min_confidence=min_conf,
+        )
         conf = jev.answer_confidence(answers, "intent")
-
-        # 防线 2：分布形状（比单看 confidence 更能发现"选项集合有偏"）
-        suspicious, reason = jev.distribution_is_suspicious(answers, "intent")
-        if suspicious:
-            logger.info("query_transform.jev_suspicious_distribution intent={} confidence={} reason={}",
-                        intent, conf, reason)
-            return None
-
-        # 防线 3：置信度阈值
-        if not jev.confident_enough(answers, "intent", min_conf):
-            logger.info("query_transform.jev_low_confidence intent={} confidence={} threshold={}",
-                        intent, conf, min_conf)
+        if intent is None:
+            logger.info("query_transform.jev_not_adopted reason={} confidence={} query={}",
+                        reason, conf, query[:50])
             return None
         logger.info("query_transform.jev_classified intent={} confidence={}",
                     intent, conf)

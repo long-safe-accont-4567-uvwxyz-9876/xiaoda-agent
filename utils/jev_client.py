@@ -69,7 +69,6 @@ HTTP 契约（https://docs.typesafe.ai/api）：
 """
 from __future__ import annotations
 
-import asyncio
 import os
 from typing import Any
 
@@ -256,6 +255,15 @@ async def system_one(
     payload = {"model": _model(), "state": state, "questions": questions}
     url = f"{_base_url()}/v1/systemone"
 
+    # 预先校验可序列化：state 里混入 set/自定义对象等时，httpx 会在编码阶段
+    # 抛 TypeError，混在网络异常里难以定位。这里提前检查并给出可读告警。
+    try:
+        import json as _json
+        _json.dumps(payload)
+    except (TypeError, ValueError) as e:
+        logger.warning("jev.state_not_serializable error={}", str(e)[:200])
+        return None
+
     try:
         client = get_shared_client()
         resp = await client.post(
@@ -429,6 +437,46 @@ def answer_payload(answers: dict[str, dict] | None, key: str) -> dict:
     return dict(item) if isinstance(item, dict) else {}
 
 
+def evaluate_choice(answers: dict[str, dict] | None, key: str, *,
+                    valid_options: Any = None,
+                    min_confidence: float = 0.0,
+                    check_distribution: bool = True) -> tuple[str | None, str]:
+    """对 Choice 答案跑统一的三道防线，返回 ``(采纳值, 未采纳原因)``。
+
+    抽出此函数是为了让各接入点（子代理路由 / 检索意图）**共用同一套门控规则**，
+    避免逻辑在两处复制后漂移。三道防线（顺序固定，与实测报告一致）：
+
+      1. **逃生门**：命中 ``ESCAPE_HATCH_KEY`` → 视为"无法判断"，交回升级
+      2. **分布形状**：``distribution_is_suspicious`` 判为摊薄/无倾向 → 不可信
+      3. **置信度阈值**：``confident_enough`` 不达标 → 交回复核
+
+    Args:
+        answers: ``system_one`` 的返回。
+        key: 问题 id。
+        valid_options: 允许的选项集合；None 表示不校验（逃生门已单独处理）。
+        min_confidence: 置信度阈值（0 = 不启用该道防线）。
+        check_distribution: 是否启用分布形状检查。
+
+    Returns:
+        ``(value, reason)``：采纳时 ``reason`` 为空串；未采纳时 ``value`` 为 None，
+        ``reason`` 是简短的英文原因标签（供调用方拼日志，不直接展示给用户）。
+    """
+    value = answer_choice(answers, key)
+    if not value:
+        return None, "no_answer"
+    if value == ESCAPE_HATCH_KEY:
+        return None, "escape_hatch"
+    if valid_options is not None and value not in valid_options:
+        return None, "unknown_option"
+    if check_distribution:
+        suspicious, _why = distribution_is_suspicious(answers, key)
+        if suspicious:
+            return None, "suspicious_distribution"
+    if not confident_enough(answers, key, min_confidence):
+        return None, "low_confidence"
+    return value, ""
+
+
 async def probe(timeout: float = 8.0) -> tuple[bool, str]:
     """连通性探针：返回 (是否可用, 说明)。供向导/健康检查复用。"""
     if not is_available():
@@ -474,6 +522,7 @@ __all__ = [
     "confident_enough",
     "distribution_is_suspicious",
     "escape_hatch_option",
+    "evaluate_choice",
     "ESCAPE_HATCH_KEY",
     "health_check",
     "is_available",

@@ -33,8 +33,6 @@
 """
 from __future__ import annotations
 
-from typing import Any
-
 from loguru import logger
 
 # 默认阈值（config 可覆盖）：

@@ -415,33 +415,17 @@ class RouterEngine:
             logger.exception("router.jev_classify.unexpected_error")
             return None
 
-        agent = jev.answer_choice(answers, "agent")
-        if not agent:
-            logger.debug("router.jev_classify_no_answer")
-            return None
-        if agent == jev.ESCAPE_HATCH_KEY:
-            conf = jev.answer_confidence(answers, "agent")
-            logger.info("router.jev_escape_hatch confidence={} input_preview={}",
-                        conf, user_input[:50])
-            return None
-        if agent not in {key for key, _, _ in agents_info}:
-            logger.warning("router.jev_classify_unknown_agent agent={}", agent)
-            return None
-
+        # 三道防线统一走 jev.evaluate_choice（逃生门 → 分布形状 → 置信度），
+        # 与检索意图接入点共用同一套规则，避免逻辑复制后漂移。
+        agent, reason = jev.evaluate_choice(
+            answers, "agent",
+            valid_options={key for key, _, _ in agents_info},
+            min_confidence=self._jev_route_min_confidence(),
+        )
         conf = jev.answer_confidence(answers, "agent")
-        threshold = self._jev_route_min_confidence()
-
-        # 防线 2：分布形状（只看 confidence 会漏掉"选项集合有偏"的自信错答）
-        suspicious, reason = jev.distribution_is_suspicious(answers, "agent")
-        if suspicious:
-            logger.info("router.jev_suspicious_distribution agent={} confidence={} reason={}",
-                        agent, conf, reason)
-            return None
-
-        # 防线 3：置信度阈值
-        if not jev.confident_enough(answers, "agent", threshold):
-            logger.info("router.jev_low_confidence agent={} confidence={} threshold={}",
-                        agent, conf, threshold)
+        if agent is None:
+            logger.info("router.jev_not_adopted reason={} confidence={} input_preview={}",
+                        reason, conf, user_input[:50])
             return None
 
         logger.info("router.jev_classified agent={} confidence={} input_preview={}",

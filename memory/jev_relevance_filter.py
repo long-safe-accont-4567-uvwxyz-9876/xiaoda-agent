@@ -135,42 +135,33 @@ async def filter_memories(query: str, results: list[dict], *,
     if not answers:
         return None
 
-    # 逐条读取分数；取不到分数的候选一律**保留**（fail-soft，不因缺失而误删）
-    kept: list[dict] = []
-    dropped: list[dict] = []
+    # 逐条读取分数，只收集**确定要丢**的候选（fail-soft：取不到分数的一律保留，
+    # 不因评分缺失而误删）。最终返回以 dropped 为准，避免维护两份列表产生漂移。
+    dropped: list[tuple[float, dict]] = []
     for idx, item in enumerate(candidates):
         key = f"m{idx}"
         if key not in key_to_index:
-            # 无正文的候选：保留（不参与评分，也不因评分缺失被删）
-            kept.append(item)
-            continue
+            continue  # 无正文的候选不参与评分，自然保留
         score = jev.answer_score(answers, key)
         if score is None:
-            kept.append(item)
-            continue
+            continue  # 评分缺失 → 保留
         if score < drop_below:
             dropped.append((score, item))
-        else:
-            kept.append(item)
-
-    # 兜底：过滤比例上限（防模型误判把上下文清空）
-    max_drop = int(len(candidates) * MAX_DROP_RATIO)
-    if len(dropped) > max_drop:
-        dropped.sort(key=lambda pair: pair[0])  # 分数最低的优先丢，保住其余
-        recovered = dropped[max_drop:]
-        dropped = dropped[:max_drop]
-        kept.extend(item for _score, item in recovered)
-        logger.warning("jev_relevance_filter.drop_capped",
-                       cap=max_drop, requested=len(dropped) + len(recovered),
-                       recovered=len(recovered))
-
-    # 超出 MAX_CANDIDATES 的尾部候选原样保留（未参与评分）
-    kept.extend(results[MAX_CANDIDATES:])
 
     if not dropped:
         return results
 
-    # 保序返回（按原输入顺序）
+    # 兜底：过滤比例上限（防模型误判把上下文清空）。
+    # 超限时按分数升序丢最狠的 max_drop 条，其余「恢复」为保留。
+    max_drop = int(len(candidates) * MAX_DROP_RATIO)
+    if len(dropped) > max_drop:
+        dropped.sort(key=lambda pair: pair[0])
+        recovered = len(dropped) - max_drop
+        dropped = dropped[:max_drop]
+        logger.warning("jev_relevance_filter.drop_capped",
+                       cap=max_drop, recovered=recovered)
+
+    # 保序返回：从原输入中剔除最终确定要丢的候选
     dropped_ids = {id(item) for _s, item in dropped}
     ordered = [r for r in results if id(r) not in dropped_ids]
     logger.info("jev_relevance_filter.applied",
