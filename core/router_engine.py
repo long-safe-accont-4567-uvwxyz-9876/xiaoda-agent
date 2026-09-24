@@ -399,10 +399,11 @@ class RouterEngine:
                             "xiaolang 仅限写代码/调试/技术实现类请求；"
                             "xiaolian 仅限需要联网检索外部实时信息的请求（如天气、新闻、股价）；"
                             "xiaoke 仅限学术论文/文献研究；"
-                            "xiaoli 仅限情感陪伴/情绪宣泄/需要安慰；"
-                            "xiaoda 负责回忆过往对话、查询个人历史、以及上述之外的通用闲聊。"
+                            "xiaoda 负责回忆过往对话、查询个人历史、通用闲聊、"
+                            "情感陪伴与情绪宣泄，以及上述之外的兜底。"
                             "注意：看诉求本质而非表面词汇。"
-                            "仅当 `user_message` 的诉求无法归入以上任何一项时才选「以上都不对」。"
+                            "情感/情绪类消息由 xiaoda 承接即可，不必选「以上都不对」。"
+                            "仅当 `user_message` 的诉求确实无法归入以上任何一项时才选「以上都不对」。"
                         ),
                         options=options,
                     ),
@@ -443,19 +444,27 @@ class RouterEngine:
 
     @staticmethod
     def _sub_agent_options() -> list[tuple[str, str, str]]:
-        """子代理选项表 (key, display, 分类说明)，与 _AGENT_TO_TASK_TYPE 对应。"""
+        """子代理选项表 (key, display, 分类说明)，与 _AGENT_TO_TASK_TYPE 对应。
+
+        注意：**xiaoli 不在自动分类候选中**（用户 2026-09-24 决策）。
+        小莉是交互型陪伴角色，没有独立职能，普通情感/闲聊消息由主 Agent（小妲）
+        直接承接即可，无需为此唤起子代理。她仅在被用户**显式提及**时可用
+        （@小莉 / "让小莉…" / "找小莉…"），该路径由 @mention 与关键词模式处理，
+        不经过本表。
+        历史问题：此前把"情感陪伴/情绪支持"写进她的分类说明，导致
+        "我今天好难过"这类普通消息被自动路由到小莉。
+        """
         from config import get_agent_display_name
         return [
             ("xiaoda", get_agent_display_name("xiaoda") or "小妲",
-             "记忆检索、回忆、个人历史、时间相关查询、通用闲聊、默认兜底"),
+             "记忆检索、回忆、个人历史、时间相关查询、通用闲聊、"
+             "情感陪伴与情绪支持、以及上述之外的兜底"),
             ("xiaolang", get_agent_display_name("xiaolang") or "小狼",
              "编程、调试、代码、技术问题、软件开发"),
             ("xiaoke", get_agent_display_name("xiaoke") or "小可",
              "学术研究、论文、调研、文献分析"),
             ("xiaolian", get_agent_display_name("xiaolian") or "小涟",
              "信息搜索、查找资料、事实查询"),
-            ("xiaoli", get_agent_display_name("xiaoli") or "小莉",
-             "情感陪伴、聊天、安慰、情绪支持"),
         ]
 
     async def _classify_sub_agent_with_generative_llm(self, user_input: str,

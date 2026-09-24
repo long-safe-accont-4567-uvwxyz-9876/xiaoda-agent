@@ -19,7 +19,7 @@ _FALLBACK_REQUIRED_KEYS: tuple[str, ...] = (
 )
 
 _FALLBACK_REQUIRED_KEYS_META: list[dict[str, Any]] = [
-    {"key": "MIMO_API_KEY", "label": "MiMo API 密钥", "desc": "小米 MiMo 大模型 API 密钥", "url": "https://platform.xiaomimimo.com?ref=SU5WDZ", "url_desc": "注册 → 控制台 → API Keys"},
+    {"key": "MIMO_API_KEY", "label": "MiMo API 密钥", "desc": "小米 MiMo 大模型 API 密钥", "url": "https://platform.xiaomimimo.com?ref=A54DLY", "url_desc": "注册 → 控制台 → API Keys"},
     {"key": "QQBOT_APP_ID", "label": "QQ Bot App ID", "desc": "QQ 机器人应用 ID", "url": "https://q.qq.com", "url_desc": "创建机器人应用 → 获取 AppID"},
     {"key": "QQBOT_APP_SECRET", "label": "QQ Bot App Secret", "desc": "QQ 机器人应用密钥", "url": "https://q.qq.com", "url_desc": "同一页面的 AppSecret"},
     {"key": "SILICONFLOW_API_KEY", "label": "SiliconFlow API 密钥", "desc": "硅基流动 API 密钥", "url": "https://cloud.siliconflow.cn/i/iM5RmeWc", "url_desc": "注册 → API Keys"},
