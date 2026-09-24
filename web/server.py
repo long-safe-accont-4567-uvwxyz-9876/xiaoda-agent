@@ -768,6 +768,13 @@ async def _restore_local_node_instances(core: Any) -> None:
 
 
 async def _restore_generative_backends(core: Any, app: FastAPI) -> None:
+    """启动时回放功能节点配置到运行时。
+
+    覆盖两类节点：
+      - generative：本地模型 / API 后端切换
+      - decision  ：能力开关（如 Jev），回放 config.<SWITCH> 使 WebUI 的开关
+                    在重启后仍然生效（否则只依赖 .env，WebUI 点了重启就丢）
+    """
     try:
         from web.config_service import get_config_service
         from web.local_deploy_nodes import (
@@ -778,7 +785,8 @@ async def _restore_generative_backends(core: Any, app: FastAPI) -> None:
         )
         _cfg = get_config_service()
         for _node in NODES:
-            if _node.get("kind") != "generative":
+            _kind = _node.get("kind")
+            if _kind not in ("generative", "decision"):
                 continue
             _node_id = _node["id"]
             _backend = get_backend(_cfg, _node_id)
