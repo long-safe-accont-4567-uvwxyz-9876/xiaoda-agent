@@ -215,27 +215,48 @@ class ToolExecutor:
         if ws_err:
             if ws_err.startswith("__NEEDS_CONFIRMATION__:"):
                 cmd = ws_err[len("__NEEDS_CONFIRMATION__:"):]
-                # 暂停-确认-继续：不直接失败，推送确认卡片并等待用户决策。
-                # 确认后继续执行并返回真实结果给 LLM；拒绝/超时则作为用户决策失败返回。
-                decision = await self._await_cmd_confirmation(cmd, tool_name)
-                if decision == "deny":
-                    logger.info("tool_executor.cmd_denied", command=cmd[:200])
+                # ── Jev 风控门卫（语义风险判断，叠加层）──
+                # 关键词白名单只能做二值判断，对"看着安全实则危险"的命令变体无能为力。
+                # Jev 用 Noul 语义判定补这一档：明显安全→跳过确认，明显危险→直接拒绝，
+                # 拿不准→保持确认。**绝不放宽上面已生效的黑名单硬拦截**（黑名单在
+                # _enforce_sandbox / is_command_allowed 内先行生效，走到这里说明未命中）。
+                jev_verdict = await self._assess_command_risk(cmd, tool_name)
+                if jev_verdict == "allow":
+                    logger.info("tool_executor.jev_risk_allowed", command=cmd[:200])
+                    # 跳过确认，直接进入后续权限/审批检查（不放宽其它门禁）
+                elif jev_verdict == "deny":
+                    logger.warning("tool_executor.jev_risk_denied", command=cmd[:200])
+                    if self.db:
+                        await self._write_audit_log(
+                            tool_name, arguments,
+                            ToolResult.fail("语义风险判定为高危，已拦截", user_decision=True),
+                            user_id)
                     return ToolResult.fail(
-                        f"命令已被用户拒绝执行：{cmd[:200]}", user_decision=True)
-                if decision == "timeout":
-                    logger.warning("tool_executor.cmd_timeout_denied", command=cmd[:200])
-                    return ToolResult.fail(
-                        f"命令确认超时（{int(self._cmd_confirm_timeout)}秒），未执行：{cmd[:200]}",
+                        f"安全策略阻止了此操作（语义风险判定为高危）：{cmd[:200]}",
                         user_decision=True)
-                # Fail-closed：只放行明确的 allow/allow_once，其余未知值一律拒绝，
-                # 避免畸形决策（如 "error"）意外授权命令执行。
-                if decision not in ("allow", "allow_once"):
-                    logger.warning("tool_executor.cmd_invalid_decision",
-                                   decision=decision, command=cmd[:200])
-                    return ToolResult.fail(
-                        f"命令确认结果无效，未执行：{cmd[:200]}",
-                        user_decision=True)
-                # decision in ("allow", "allow_once") → 放行，继续执行
+                else:
+                    # 保持原有确认流程（含 Jev 不可用时返回 None 的情况）
+                    # 暂停-确认-继续：不直接失败，推送确认卡片并等待用户决策。
+                    # 确认后继续执行并返回真实结果给 LLM；拒绝/超时则作为用户决策失败返回。
+                    decision = await self._await_cmd_confirmation(cmd, tool_name)
+                    if decision == "deny":
+                        logger.info("tool_executor.cmd_denied", command=cmd[:200])
+                        return ToolResult.fail(
+                            f"命令已被用户拒绝执行：{cmd[:200]}", user_decision=True)
+                    if decision == "timeout":
+                        logger.warning("tool_executor.cmd_timeout_denied", command=cmd[:200])
+                        return ToolResult.fail(
+                            f"命令确认超时（{int(self._cmd_confirm_timeout)}秒），未执行：{cmd[:200]}",
+                            user_decision=True)
+                    # Fail-closed：只放行明确的 allow/allow_once，其余未知值一律拒绝，
+                    # 避免畸形决策（如 "error"）意外授权命令执行。
+                    if decision not in ("allow", "allow_once"):
+                        logger.warning("tool_executor.cmd_invalid_decision",
+                                       decision=decision, command=cmd[:200])
+                        return ToolResult.fail(
+                            f"命令确认结果无效，未执行：{cmd[:200]}",
+                            user_decision=True)
+                    # decision in ("allow", "allow_once") → 放行，继续执行
             else:
                 logger.warning("tool_executor.workspace_blocked", tool=tool_name, reason=ws_err)
                 return ToolResult.fail(ws_err)
@@ -421,6 +442,30 @@ class ToolExecutor:
             import os as _os
             return _os.path.dirname(pattern) or "."
         return ""
+
+    async def _assess_command_risk(self, command: str, tool_name: str) -> str | None:
+        """调用 Jev 风控门卫判断命令的语义风险。
+
+        返回 "allow" / "deny" / None（None = 保持原有确认流程）。
+
+        失败一律降级为 None，绝不影响工具执行主流程；Jev 不可用时
+        ``assess_command`` 内部直接返回 None，零额外开销。
+        安全约束：本函数只处理「关键词白名单判为需确认」的模糊地带，
+        不参与也不能推翻 dangerous_targets 的硬拦截。
+        """
+        try:
+            from security.jev_risk_gate import assess_command
+        except ImportError:
+            return None
+        try:
+            verdict = await assess_command(command, tool_name=tool_name)
+        except Exception:
+            logger.exception("tool_executor.jev_risk_assess_unexpected")
+            return None
+        # RISK_CONFIRM 与 None 同义：都走原有确认流程
+        if verdict in ("allow", "deny"):
+            return verdict
+        return None
 
     def _enforce_sandbox(self, tool_name: str, arguments: dict) -> str | None:
         """工具执行前沙箱检查。返回 None 表示放行，返回字符串为拒绝原因。"""

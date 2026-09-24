@@ -207,8 +207,9 @@ NODES: list[dict[str, Any]] = [
         # Jev 不是 LLM：TypeSafe AI 的 System One 决策模型，输入 state + questions，
         # 并行返回带校准概率的类型化答案（是非/选择/评分），不生成任何文字。
         # 用于替代「用 LLM 生成文字再做字符串匹配」的脆弱分类，更快（70~500ms）更稳。
-        # 当前接入点：子代理路由（core/router_engine）、检索意图分类（memory/query_transform）。
-        "desc": "结构化判断原语（是非/选择/评分），加速子代理路由与检索意图分类",
+        # 当前接入点：工具风控门卫（security/jev_risk_gate）、
+        #             子代理路由（core/router_engine）、检索意图分类（memory/query_transform）。
+        "desc": "结构化判断原语（是非/选择/评分）：工具风控门卫 + 子代理路由 + 检索意图分类",
         "api_model": "TypeSafe Jev（api.typesafe.ai）",
         "local_model": "",
         "local_desc": "暂不支持本地部署（Jev 为云端决策模型）",

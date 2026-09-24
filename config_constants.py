@@ -258,6 +258,18 @@ JEV_TIMEOUT = _safe_float(os.getenv("JEV_TIMEOUT"), 8.0)
 JEV_MIN_CONFIDENCE_ROUTE = _safe_float(os.getenv("JEV_MIN_CONFIDENCE_ROUTE"), 0.80)
 JEV_MIN_CONFIDENCE_INTENT = _safe_float(os.getenv("JEV_MIN_CONFIDENCE_INTENT"), 0.75)
 
+# ── Jev 风控门卫阈值（工具执行前的语义风险判断）──────────────────
+# 用途：补关键词黑名单的漏（"看着安全实则危险"的命令变体）。
+# 采用**双向阈值**，中间地带一律回落到「需确认」，绝不放宽已有硬拦截：
+#   risk >= DENY_THRESHOLD   → 直接拒绝（需较高确信，避免误杀合法操作）
+#   risk <= ALLOW_THRESHOLD  → 可跳过确认（需较低风险分，避免放行危险操作）
+#   其余                     → 保持原有确认流程
+# 实测参考（jev-1.13）：`sudo rm -rf` 得 0.80、`ls -la` 得 0.07。
+# 注意：0.80 < 默认 DENY 阈值 0.85，即实测那条"危险"样本只会落到 confirm 档——
+# 这是刻意的保守选择（宁可多问一次，也不误杀用户操作）；如需更激进可下调。
+JEV_RISK_DENY_THRESHOLD = _safe_float(os.getenv("JEV_RISK_DENY_THRESHOLD"), 0.85)
+JEV_RISK_ALLOW_THRESHOLD = _safe_float(os.getenv("JEV_RISK_ALLOW_THRESHOLD"), 0.20)
+
 # Retrieval Optimization (A1/A2/A3)
 RETRIEVAL_SMART_SKIP = env_flag("RETRIEVAL_SMART_SKIP", True)
 RETRIEVAL_PARALLEL_TRANSFORM = env_flag("RETRIEVAL_PARALLEL_TRANSFORM", True)
