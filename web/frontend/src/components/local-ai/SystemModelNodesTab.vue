@@ -23,6 +23,7 @@ const pendingModelId = ref('')
 const GROUPS: Array<{ key: string; title: string; sub: string; icon: string; kinds: ModelNode['kind'][] }> = [
   { key: 'encoder', title: '向量编码', icon: '◈', sub: 'RAG 检索链路的本地小模型，负责把文本变成向量、精排结果相关性', kinds: ['encoder'] },
   { key: 'generative', title: '生成改写', icon: '✎', sub: '需要生成文本的功能节点，可改用自己部署的对话小模型，也可走 API 默认', kinds: ['generative'] },
+  { key: 'decision', title: '结构化决策', icon: '⚖', sub: '不生成文字的判断模型：把「是/否、选哪个、打几分」直接算成概率，比让大模型写答案再解析更快更稳', kinds: ['decision'] },
   { key: 'other', title: '语音识别', icon: '♪', sub: '把语音消息转成文字', kinds: ['other'] },
 ]
 const grouped = computed(() => GROUPS.map(group => ({
