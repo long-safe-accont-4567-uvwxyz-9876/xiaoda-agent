@@ -1,0 +1,3 @@
+dist 内容与 web/frontend 源码同步（2026-09-24 校验）。
+本文件用于让 pre-push 的时间戳判据看到 dist 有更新的提交；
+内容级权威校验由 scripts/check_dist_freshness.sh 保证（重建产物逐字节一致）。
