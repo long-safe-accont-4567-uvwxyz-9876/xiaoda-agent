@@ -17,7 +17,15 @@ from pathlib import Path
 from loguru import logger
 
 # 路由表可编辑字段 (供 web.routers.models / web.agent_registry 等使用)
-ROUTE_EDITABLE_FIELDS = {"model", "client", "max_tokens", "thinking", "timeout"}
+# 路由表可编辑字段。
+# 注意区分两个不同概念（2026-09-24 澄清，此前长期混淆）：
+#   max_tokens     —— **最大输出**：单次响应允许生成多少 token（发给 API 的参数）
+#   context_window —— **最大输入**（上下文窗口）：整段请求 输入+输出 的总容量，
+#                     仅供本地计算「历史预算 / 保留轮数」，不发给 API
+# 二者是独立维度：输出上限是窗口的子集，且窗口没有任何 API 参数可调。
+ROUTE_EDITABLE_FIELDS = {
+    "model", "client", "max_tokens", "context_window", "thinking", "timeout",
+}
 
 
 def _get_cred_dir() -> Path:

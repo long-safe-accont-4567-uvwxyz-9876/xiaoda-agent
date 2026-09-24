@@ -72,9 +72,14 @@ def test_classify_error_classification():
 
 
 def test_build_route_kwargs_clamps_via_mixin_cap():
-    """_build_route_kwargs 内 ExecutionMixin._cap_max_tokens 引用可执行（agnes 上限裁剪）。"""
+    """_build_route_kwargs 内 ExecutionMixin._cap_max_tokens 引用可执行（agnes 上限裁剪）。
+
+    2026-09-24：上限由 65535 修正为 65536——实测二分确认
+    （65535→200 / 65536→200 / 65537→400 'max_tokens exceeds the limit of 65536'），
+    旧值 65535 是无依据的「上限-1」保守猜测。
+    """
     kwargs = model_router.ModelRouter._build_route_kwargs(
-        model="agnes-2.0-flash",
+        model="agnes-2.5-flash",
         messages=[{"role": "user", "content": "hi"}],
         temperature=0.7,
         max_tokens=131072,
@@ -85,7 +90,7 @@ def test_build_route_kwargs_clamps_via_mixin_cap():
         config={"thinking": {"type": "disabled"}},
         provider="agnes",
     )
-    assert kwargs["max_tokens"] == 65535
+    assert kwargs["max_tokens"] == 65536
 
 
 def test_build_route_kwargs_mimo_uncapped():

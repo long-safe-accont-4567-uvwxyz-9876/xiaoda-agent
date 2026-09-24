@@ -103,6 +103,7 @@ class ModelRouteRegistry:
 
     def update_route(self, task: str, model_id: str, provider: str,
                      max_tokens: int | None = None,
+                     context_window: int | None = None,
                      thinking: dict | None = None,
                      timeout: int | None = None,
                      persist: bool = True,
@@ -113,7 +114,9 @@ class ModelRouteRegistry:
             task: 路由 task 名称（如 "chat"）
             model_id: 模型 ID
             provider: provider 名称
-            max_tokens: 可选，max_tokens 上限
+            max_tokens: 可选，**最大输出**（单次生成上限，发给 API）
+            context_window: 可选，**最大输入**（上下文窗口，本地算历史预算用）；
+                None 表示「自动」（按 provider 推导）
             thinking: 可选，{"type": "enabled"|"disabled", "budget_tokens": ...}
             timeout: 可选，超时秒数
             persist: 是否持久化到 ConfigService（启动恢复时设为 False）
@@ -135,7 +138,8 @@ class ModelRouteRegistry:
 
         # 构造新 entry
         new_entry = self._merge_route_entry(
-            old_entry, model_id, provider, max_tokens, thinking, timeout)
+            old_entry, model_id, provider, max_tokens, context_window,
+            thinking, timeout)
 
         # 写内存
         self._table[task] = new_entry
@@ -161,14 +165,26 @@ class ModelRouteRegistry:
 
     @staticmethod
     def _merge_route_entry(old_entry: dict, model_id: str, provider: str,
-                           max_tokens: int | None, thinking: dict | None,
-                           timeout: int | None) -> dict:
-        """基于旧 entry 构造新 entry（deepcopy 后合并新值）。"""
+                           max_tokens: int | None, context_window: int | None,
+                           thinking: dict | None, timeout: int | None) -> dict:
+        """基于旧 entry 构造新 entry（deepcopy 后合并新值）。
+
+        context_window 与 max_tokens 是**独立维度**：
+          - max_tokens     = 最大输出（发给 API）
+          - context_window = 最大输入/窗口（本地算历史预算用）
+        context_window 为 None 时表示「自动」——**删除**显式值，
+        使其回落到 provider 推导；传正数则写入显式覆盖值。
+        """
         new_entry = copy.deepcopy(old_entry)
         new_entry["model"] = model_id
         new_entry["client"] = provider
         if max_tokens is not None:
             new_entry["max_tokens"] = max_tokens
+        # context_window: None → 清除显式值（回到自动推导）；正数 → 写入覆盖
+        if context_window is None:
+            new_entry.pop("context_window", None)
+        else:
+            new_entry["context_window"] = context_window
         if thinking is not None:
             new_entry["thinking"] = copy.deepcopy(thinking)
         # CodeRabbit#7 修复：timeout 也合并进 new_entry，
@@ -193,10 +209,16 @@ class ModelRouteRegistry:
         _effective_timeout = new_entry.get("timeout")
         if _effective_timeout is None and timeout is not None:
             _effective_timeout = timeout
-        return {
+        _value = {
             "model": new_entry["model"],
             "client": new_entry["client"],
             "max_tokens": new_entry.get("max_tokens"),
             "thinking": _thinking_bool,
             "timeout": _effective_timeout,
         }
+        # context_window（最大输入/窗口）仅在用户显式设置时落盘；
+        # 缺失即表示「自动」，由 provider_metadata.json 的 context_window 推导。
+        _cw = new_entry.get("context_window")
+        if _cw:
+            _value["context_window"] = _cw
+        return _value

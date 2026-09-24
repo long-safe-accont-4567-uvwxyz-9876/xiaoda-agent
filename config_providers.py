@@ -194,6 +194,50 @@ def get_provider_env_prefix(provider: str) -> str:
     return provider.strip().upper().replace(".", "_")
 
 
+def get_context_window_for_provider(provider: str, default: int = 0) -> int:
+    """返回 provider 的**最大输入**（上下文窗口）token 数。
+
+    ⚠️ 与 ``max_tokens_cap``（**最大输出**）是两个独立概念，勿混用：
+        - context_window  = 单次请求 输入+输出 的**总容量**，仅供本地计算
+                            历史预算 / 保留轮数；**没有任何 API 参数可调**
+        - max_tokens_cap  = 单次响应**生成**的上限，通过 max_tokens 传给 API
+    输出上限是窗口的子集。历史 bug：本仓多处把 max_tokens 当窗口用，
+    导致历史预算被低估约 8 倍、"大上下文保留 10 轮"永不生效。
+
+    数据来源：provider_metadata.json 的 providers.{id}.context_window；
+    可用环境变量 {PREFIX}_CONTEXT_WINDOW 覆盖（与其它 provider 配置一致）。
+
+    Args:
+        provider: provider 名称（如 "agnes"）
+        default: 元数据缺失/非法时的兜底值（默认 0 = 未知，调用方自行兜底）
+
+    Returns:
+        上下文窗口 token 数（int）
+    """
+    provider_lower = provider.strip().lower()
+    env_val = os.getenv(f"{get_provider_env_prefix(provider_lower)}_CONTEXT_WINDOW", "").strip()
+    if env_val:
+        try:
+            parsed = int(env_val)
+            if parsed > 0:
+                return parsed
+        except (TypeError, ValueError):
+            logger.debug("config.context_window_env_invalid provider={} value={!r}",
+                         provider_lower, env_val)
+    meta = _load_provider_metadata_cached()
+    providers = meta.get("providers", {})
+    if not isinstance(providers, dict):
+        return default
+    entry = providers.get(provider_lower)
+    if not isinstance(entry, dict):
+        return default
+    try:
+        value = int(entry.get("context_window") or 0)
+    except (TypeError, ValueError):
+        return default
+    return value if value > 0 else default
+
+
 def get_provider_label(provider: str) -> str:
     """返回指定 provider 的展示名（provider_metadata.json 的 label 字段）。
 

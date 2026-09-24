@@ -91,8 +91,11 @@ BASELINES: dict[str, int] = {
 }
 
 WEB_TEST_BASELINES: dict[str, int] = {
-    "web/frontend/src/i18n/zh.ts": 1562,
-    "web/frontend/src/i18n/en.ts": 1561,
+    # 2026-09-24 上调 1562/1561 → 1567/1566（+5）：路由表区分「最大输入/最大输出」
+    # 说明，新增 maxInputCol/maxInputHint/maxOutputCol/maxOutputHint/autoPlaceholder
+    # 五个 i18n key。i18n 键必须集中在本文件，无法外置到子模块（键表本身就是本体）。
+    "web/frontend/src/i18n/zh.ts": 1567,
+    "web/frontend/src/i18n/en.ts": 1566,
     "web/frontend/src/views/ChatView.vue": 988,
     "web/frontend/src/views/RetrievalView.vue": 915,
     "tests/test_local_ai_device_registry.py": 2260,

@@ -542,47 +542,41 @@ class AgentContext:
     def _get_dynamic_max_tokens(self) -> int:
         """动态计算 history 的最大允许 token 数。
 
-        根据 router 当前激活模型偏好的 max_tokens（上下文窗口大小），
-        预留 SYSTEM_PROMPT_RESERVE_RATIO（30%）给 system prompt + tools + 输出，
-        剩余 70% 用于 history。
+        基于 router 上报的**上下文窗口**（最大输入），预留
+        SYSTEM_PROMPT_RESERVE_RATIO(30%) 给 system prompt + tools + 输出，
+        剩余 70% 用于 history。agnes 512K 窗口 → 约 367K。
+        router 不可用 / 容量未知（<=0/异常）→ 回退 FALLBACK_MAX_HISTORY_TOKENS。
 
-        - mimo chat (128K): 阈值约 90K
-        - chat_ultra (1M): 阈值约 730K
-        - 8K 小窗口模型: 阈值约 5734（小上下文必须按比例收紧，否则历史永不裁剪）
-        - router 不可用 / 容量未知（<=0 或异常）: 回退 FALLBACK_MAX_HISTORY_TOKENS (60000)
+        2026-09-24 语义修正：此前读 get_active_max_tokens()，而该值实为
+        max_tokens（**输出上限**，现 65535），把 512K 窗口当 65K 用，
+        历史预算低估约 8 倍。现读 get_active_context_window()。
 
-        审计修复（2026-08-29 Fix2）：router 上报有效容量时不再与 60000 取 max。
-        原实现 `max(history_budget, 60000)` 会把 8K/32K 小窗口模型的阈值抬到 60K，
-        导致历史永不触发裁剪，反向压垮小上下文模型（8K 模型注入 60K 历史必然爆窗）。
+        2026-08-29 Fix2：router 上报有效容量时不再与 60000 取 max——原实现会把
+        8K/32K 小窗口模型的阈值抬到 60K，导致历史永不裁剪、反向爆窗。
         """
-        if not self._router or not hasattr(self._router, "get_active_max_tokens"):
+        if not self._router or not hasattr(self._router, "get_active_context_window"):
             return self.FALLBACK_MAX_HISTORY_TOKENS
         try:
-            model_max = self._router.get_active_max_tokens()
-            if model_max <= 0:
+            window = self._router.get_active_context_window()
+            if window <= 0:
                 return self.FALLBACK_MAX_HISTORY_TOKENS
             # 容量已知：严格按 70% 计算；仅容量未知（<=0/None/异常）时才用 60000 兜底
-            return int(model_max * (1 - self.SYSTEM_PROMPT_RESERVE_RATIO))
+            return int(window * (1 - self.SYSTEM_PROMPT_RESERVE_RATIO))
         except Exception as e:
             logger.debug("agent_context.dynamic_max_tokens_failed", error=str(e))
             return self.FALLBACK_MAX_HISTORY_TOKENS
 
     def _get_keep_recent(self) -> int:
-        """根据当前上下文窗口大小动态决定保留多少轮完整对话。
+        """按上下文窗口决定保留多少轮完整对话：≥512K 保留 10 轮，否则 5 轮。
 
-        大上下文模型（≥512K）保留 10 轮，普通模型保留 5 轮。
-        避免大上下文模型被压缩后丢失过多上下文。
-
-        注意：判断基于 router 原始 max_tokens（模型实际上下文窗口大小），
-        而非 _get_dynamic_max_tokens() 返回的 history_budget（已预留 30%
-        给 system prompt + tools + 输出）。否则会出现 512K 模型因 70%
-        缩水后被误判为普通上下文的逻辑错误。
+        判断用**原始窗口值**，而非 history_budget（已扣 30%），否则 512K 模型
+        缩水后会被误判为普通上下文。2026-09-24 修正：此前读输出上限(65535)，
+        永远够不到 LARGE_CONTEXT_THRESHOLD(524288)，本分支从未生效。
         """
-        if not self._router or not hasattr(self._router, "get_active_max_tokens"):
+        if not self._router or not hasattr(self._router, "get_active_context_window"):
             return self.NORMAL_CONTEXT_KEEP_RECENT
         try:
-            model_max = self._router.get_active_max_tokens()
-            if model_max >= self.LARGE_CONTEXT_THRESHOLD:
+            if self._router.get_active_context_window() >= self.LARGE_CONTEXT_THRESHOLD:
                 return self.LARGE_CONTEXT_KEEP_RECENT
             return self.NORMAL_CONTEXT_KEEP_RECENT
         except Exception as e:

@@ -20,10 +20,11 @@
         "AGNES_API_KEY"
       ],
       "base_url_default": "https://apihub.agnes-ai.cn/v1",
-      "max_tokens_cap": 65535,
-      "default_model": "agnes-2.0-flash",
-      "doc_url": "https://docs.agnes-ai.cn/",
-      "doc_note": "agnes-2.0-flash 官方 max_tokens 上限 65536（2026-07 官方文档确认；超过返回 500 InternalServerError 'max_tokens exceeds the limit of 65536'）。配置取 65535（=上限-1）作为安全裁剪阈值，避免边界值因 SDK/服务端差异偶发 500。",
+      "max_tokens_cap": 65536,
+      "context_window": 524288,
+      "default_model": "agnes-2.5-flash",
+      "doc_url": "https://agnes-ai.com/zh-Hans/docs/agnes-25-flash",
+      "doc_note": "max_tokens 上限 65536（2026-09-24 实测二分确认：65535→200、65536→200、65537→400 'max_tokens exceeds the limit of 65536'）。文档写 65.5K 即此值。注意上下文窗口是 512K，与输出上限是两个概念——不要再把二者混淆。历史注释曾写 500 InternalServerError，实测为 400 BadRequest。",
       "supports_vision": false,
       "supports_tools": true,
       "builtin": true,
@@ -50,6 +51,7 @@
       ],
       "base_url_default": "https://api.xiaomimimo.com/v1",
       "max_tokens_cap": 131072,
+      "context_window": 131072,
       "default_model": "mimo-v2.5",
       "default_pro_model": "mimo-v2.5-pro",
       "doc_url": "https://platform.xiaomimimo.com?ref=A54DLY",
@@ -75,7 +77,8 @@
       "doc_note": "deepseek-chat 官方 max_output_tokens 上限 8192（2026-07 官方文档）",
       "supports_vision": false,
       "supports_tools": true,
-      "supports_model_discovery": true
+      "supports_model_discovery": true,
+      "context_window": 65536
     },
     "siliconflow": {
       "protocol": "openai_compatible",
@@ -93,7 +96,8 @@
       "default_asr_model": "FunAudioLLM/SenseVoiceSmall",
       "default_reranker_model": "BAAI/bge-reranker-v2-m3",
       "default_embedding_model": "BAAI/bge-m3",
-      "supports_model_discovery": true
+      "supports_model_discovery": true,
+      "context_window": 32768
     },
     "openrouter": {
       "protocol": "openai_compatible",
@@ -108,7 +112,8 @@
       "doc_note": "OpenRouter 聚合平台，max_tokens 上限视具体模型而定，默认不裁剪",
       "supports_vision": false,
       "supports_tools": true,
-      "supports_model_discovery": true
+      "supports_model_discovery": true,
+      "context_window": 32768
     },
     "modelscope": {
       "protocol": "openai_compatible",
@@ -125,7 +130,8 @@
       "supports_vision": false,
       "supports_tools": true,
       "supports_model_discovery": true,
-      "free_tier": true
+      "free_tier": true,
+      "context_window": 32768
     },
     "ollama": {
       "protocol": "ollama",
@@ -149,7 +155,8 @@
         "required": false
       },
       "supports_model_discovery": true,
-      "free_tier": true
+      "free_tier": true,
+      "context_window": 32768
     },
     "llama.cpp": {
       "protocol": "openai_compatible",
@@ -168,7 +175,8 @@
         "required": false
       },
       "supports_model_discovery": true,
-      "free_tier": true
+      "free_tier": true,
+      "context_window": 32768
     }
   },
   "_cross_provider_fallback": {

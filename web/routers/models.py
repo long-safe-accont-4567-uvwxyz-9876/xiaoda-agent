@@ -248,13 +248,29 @@ async def reorder_providers(body: dict, request: Request) -> Any:
 
 @router.get("/models/routes", response_model=Envelope[dict])
 async def list_routes(request: Request) -> Any:
+    """任务路由表。
+
+    区分两个独立维度（2026-09-24 澄清，此前长期混淆）：
+      - max_tokens       最大输出：发给 API 的生成上限
+      - context_window   最大输入（上下文窗口）：仅供本地算历史预算，不发给 API
+    context_window 为 None 时表示「自动」，由 provider 推导（见
+    context_window_effective，前端用作输入框 placeholder）。
+    """
+    from config_providers import get_context_window_for_provider
     from model_router import FALLBACK_ROUTE, ROUTE_TABLE
     routes = {}
     for task, c in ROUTE_TABLE.items():
+        provider = c.get("client", get_default_provider())
+        try:
+            explicit_cw = int(c.get("context_window") or 0)
+        except (TypeError, ValueError):
+            explicit_cw = 0
         routes[task] = {
             "model": c.get("model", ""),
-            "provider": c.get("client", get_default_provider()),
+            "provider": provider,
             "max_tokens": c.get("max_tokens", 1500),
+            "context_window": explicit_cw if explicit_cw > 0 else None,
+            "context_window_effective": explicit_cw or get_context_window_for_provider(provider, default=0),
             "thinking": bool(c.get("thinking") and c["thinking"].get("type") == "enabled"),
             "timeout": _router_of(request).TASK_TIMEOUTS.get(task),
         }
@@ -296,14 +312,25 @@ async def update_route(task: str, body: dict, request: Request) -> Any:
     try:
         max_tokens = int(body["max_tokens"]) if body.get("max_tokens") else None
         timeout = int(body["timeout"]) if body.get("timeout") else None
+        # context_window（最大输入）与 max_tokens（最大输出）是两个独立维度：
+        # 传空/0 表示「自动」，由 provider 的 context_window 推导。
+        context_window = int(body["context_window"]) if body.get("context_window") else None
     except (TypeError, ValueError):
-        raise HTTPException(400, "max_tokens/timeout 必须为整数") from None
+        raise HTTPException(400, "max_tokens/context_window/timeout 必须为整数") from None
 
-    # CodeRabbit#14 + C3 修复：max_tokens clamp 用 PROVIDER_MAX_TOKENS_CAP 动态裁剪，
-    # 不再硬编码 32768。旧实现把 chat 路由的 131072 压到 32768，严重退化为默认值。
-    # _cap_max_tokens(provider) 返回该 provider 的上限（无 cap 时返回原值），下限保留 64。
+    # 2026-09-24（用户决策）：**保存时不再按 provider 上限裁剪**。
+    #   旧实现在这里就以 PROVIDER_MAX_TOKENS_CAP 压值，导致用户填 512K
+    #   存进去变成 65535，且切换 provider 后无法恢复原意——用户失去对
+    #   「我到底设了多少」的掌控。
+    #   现只做下限保护（>=64），原样保存用户输入；真正的物理上限由运行时
+    #   _cap_max_tokens 在**发起请求前**按当次 provider 裁剪（agnes 超 65536
+    #   会返回 400，这一步不可省）。这样：用户设的值被尊重并可随时改回，
+    #   换 provider 时也不会因历史裁剪而丢信息。
     if max_tokens is not None:
-        max_tokens = max(64, ModelRouter._cap_max_tokens(max_tokens, final_provider))
+        max_tokens = max(64, max_tokens)
+    # context_window 下限 1024（低于此值历史无从裁剪），无上限（用户自定义）
+    if context_window is not None:
+        context_window = max(1024, context_window)
 
     thinking = None
     if "thinking" in body:
@@ -330,7 +357,8 @@ async def update_route(task: str, body: dict, request: Request) -> Any:
     try:
         registry.update_route(
             task, model_id=model_id, provider=final_provider,
-            max_tokens=max_tokens, thinking=thinking, timeout=timeout,
+            max_tokens=max_tokens, context_window=context_window,
+            thinking=thinking, timeout=timeout,
             extra_persist=extra_persist,
         )
     except KeyError as e:

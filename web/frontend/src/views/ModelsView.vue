@@ -493,7 +493,19 @@ async function moveProvider(pid: string, dir: -1 | 1) {
       <div class="table-scroll">
         <table class="route-table">
           <thead>
-            <tr><th>{{ t('modelsView.taskCol') }}</th><th>model</th><th>max_tokens</th><th>thinking</th><th></th></tr>
+            <tr>
+              <th>{{ t('modelsView.taskCol') }}</th>
+              <th>model</th>
+              <th>
+                <span class="th-label">{{ t('modelsView.maxInputCol') }}</span>
+                <span class="th-hint">{{ t('modelsView.maxInputHint') }}</span>
+              </th>
+              <th>
+                <span class="th-label">{{ t('modelsView.maxOutputCol') }}</span>
+                <span class="th-hint">{{ t('modelsView.maxOutputHint') }}</span>
+              </th>
+              <th>thinking</th><th></th>
+            </tr>
           </thead>
           <tbody>
             <tr v-for="(r, task) in routes" :key="task">
@@ -508,7 +520,20 @@ async function moveProvider(pid: string, dir: -1 | 1) {
                   @update:value="(v: string) => onRouteModelChange(r, v)"
                 />
               </td>
-              <td><n-input-number v-model:value="r.max_tokens" class="route-number" size="small" :min="64" :max="32768" :show-button="false" /></td>
+              <!-- 最大输入（上下文窗口）：仅供本地算历史预算/保留轮数，不发给 API。
+                   留空则按当前 provider 的 context_window 自动推导（方案 C）。 -->
+              <td>
+                <n-input-number v-model:value="r.context_window" class="route-number" size="small"
+                                :min="1024" :show-button="false"
+                                :placeholder="r.context_window_effective ? String(r.context_window_effective) : t('modelsView.autoPlaceholder')" />
+              </td>
+              <!-- 最大输出（max_tokens）：发给 API 的生成上限，不设输入上限（用户自定义）；
+                   真正的物理上限在发起请求前由运行时按 provider 裁剪（agnes 超 65536 会 400） -->
+              <td>
+                <n-input-number v-model:value="r.max_tokens" class="route-number" size="small"
+                                :min="64" :show-button="false"
+                                :placeholder="t('modelsView.maxTokensPlaceholder')" />
+              </td>
               <td><n-switch v-model:value="r.thinking" size="small" /></td>
               <td class="route-ops">
                 <n-button size="tiny" type="primary" secondary @click="saveRoute(task as string)">{{ t('modelsView.save') }}</n-button>
@@ -700,6 +725,10 @@ async function moveProvider(pid: string, dir: -1 | 1) {
 .route-table td { padding: 6px 8px; border-bottom: 1px solid rgba(127, 214, 80, 0.08); }
 .route-select { width: 220px; min-width: 220px; }
 .route-number { width: 90px; }
+/* 表头两行：主标签 + 灰字说明，避免 max_tokens 这类内部字段名造成误解 */
+.th-label { display: block; font-weight: 600; }
+.th-hint { display: block; margin-top: 1px; font-size: 10.5px; font-weight: 400;
+  color: var(--moon-dim); opacity: 0.75; }
 .route-ops { display: flex; align-items: center; gap: 6px; white-space: nowrap; }
 .mono { font-family: 'JetBrains Mono', monospace; font-size: 12.5px; }
 .error-cell {

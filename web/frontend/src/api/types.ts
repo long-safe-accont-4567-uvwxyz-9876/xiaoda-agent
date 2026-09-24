@@ -123,7 +123,16 @@ export interface UsageSummary {
 export interface ModelRouteInfo {
   model: string
   provider: string
+  /** 最大输出：单次响应生成上限（发给 API 的 max_tokens） */
   max_tokens: number
+  /**
+   * 最大输入（上下文窗口）：整段请求 输入+输出 的总容量。
+   * 仅供本地计算历史预算/保留轮数，**不发给 API**。
+   * null = 自动，按 provider 的 context_window 推导。
+   */
+  context_window?: number | null
+  /** 实际生效的窗口值（显式值 或 provider 推导值），用于输入框 placeholder */
+  context_window_effective?: number
   thinking: boolean
   timeout?: number | null
 }

@@ -79,12 +79,25 @@ from utils.error_classifier import ErrorClassifier
 from utils.metrics import metrics
 from utils.prompt_caching import apply_cache_control
 
-# 长对话路由的 max_tokens 上限（128K）：chat 与 chat_agnes 共用，改值两处同步。
-CHAT_MAX_TOKENS = 131072
+# 长对话路由的 max_tokens 默认值：chat 与 chat_agnes 共用，改值两处同步。
+#
+# 2026-09-24 由 131072 改为 65535（用户决策）：
+#   旧值 128K 超过当前主力 provider agnes 的物理上限（65536），
+#   实际每次请求都会被 _cap_max_tokens 裁到 65535——即"默认值"与
+#   "实际生效值"长期不一致，用户看到 131072 却始终拿不到。
+#   改为 65535 后默认值即真实上限，语义一致、无隐藏裁剪。
+#   注：用户仍可在 WebUI「任务路由表」里自定义调大（不再限制输入上限），
+#   但发送给 agnes 时仍会按 provider 物理上限安全裁剪（超出会 500）。
+CHAT_MAX_TOKENS = 65535
 
+# 两条独立维度（2026-09-24 澄清）：
+#   max_tokens     —— 最大**输出**：单次响应生成上限，发给 API
+#   context_window —— 最大**输入**（上下文窗口）：整段请求 输入+输出 的总容量，
+#                     仅供本地计算历史预算 / 保留轮数；**不发给 API**，也没有
+#                     任何 API 参数能调它。留空(None)时按 provider 自动推导。
 ROUTE_TABLE = {
-    # chat 主路由：128K 上限，支撑长时间连贯对话，搭配滑动窗口+摘要压缩避免退化
-    # 不再锁死 8192，避免长会话频繁截断历史导致记忆断裂
+    # chat 主路由：输出吃满 agnes 上限（65535），历史预算由 context_window 决定
+    # （agnes 512K 窗口 → 压缩阈值约 367K），不再靠 max_tokens 冒充窗口
     "chat": {"model": _CFG_MODEL_NAME, "max_tokens": CHAT_MAX_TOKENS, "client": _CFG_DEFAULT_PROVIDER, "thinking": {"type": "disabled"}},
     "emotion_analysis": {"model": _CFG_FLASH_MODEL or _CFG_MODEL_NAME, "max_tokens": 1024, "client": _CFG_DEFAULT_PROVIDER, "thinking": {"type": "disabled"}},
     "tool_result_wrap": {"model": _CFG_FLASH_MODEL or _CFG_MODEL_NAME, "max_tokens": 2048, "client": _CFG_DEFAULT_PROVIDER, "thinking": {"type": "disabled"}},
@@ -463,23 +476,60 @@ class ModelRouter(ExecutionMixin, CostTrackingMixin, ClientLifecycleMixin, Fallb
         return {"provider": _CFG_DEFAULT_PROVIDER, "model_id": ROUTE_TABLE.get("chat", {}).get("model", _CFG_MODEL_NAME)}
 
     def get_max_tokens_for_task(self, task_type: str = "chat") -> int:
-        """获取指定 task_type 的 max_tokens（上下文窗口大小）。
+        """获取指定 task_type 的 **最大输出**（max_tokens，发给 API 的参数）。
 
-        用于 AgentContext 动态计算压缩阈值，避免硬编码不分模型的问题。
-        若 task_type 不存在或字段缺失，返回保守兜底值 60000。
+        注意：这是**输出上限**，不是上下文窗口。历史实现把它当窗口用是错的
+        （见 get_active_context_window 的注释）。需要窗口请用
+        ``get_context_window_for_task`` / ``get_active_context_window``。
         """
         cfg = self._registry.get_task_ref(task_type) or self._registry.get_task_ref("chat") or {}
         return int(cfg.get("max_tokens", 60000))
 
-    def get_active_max_tokens(self) -> int:
-        """获取当前激活模型偏好的实际上下文窗口大小。
+    def get_context_window_for_task(self, task_type: str = "chat") -> int:
+        """获取指定 task_type 的 **最大输入**（上下文窗口）token 数。
 
-        直接解析 chat 主路由的 max_tokens（模型切换统一走动态 provider/模型，
-        已废弃的 mimo-pro/mimo-flash/mimo-mini 预设不再参与 task_type 解析）。
-        供 AgentContext 动态压缩阈值使用。
+        取值优先级（方案 C：provider 推导 + 用户可覆盖）：
+          1. 路由表显式配置的 ``context_window``（WebUI 可改，用户说了算）
+          2. provider_metadata.json 的 ``context_window``（按当前 provider 推导）
+          3. 都取不到 → 0（调用方回退保守兜底）
+
+        ⚠️ 与 max_tokens 是**独立维度**：窗口是 输入+输出 的总容量，
+        没有任何 API 参数可调，仅供本地计算历史预算 / 保留轮数。
+        """
+        cfg = self._registry.get_task_ref(task_type) or self._registry.get_task_ref("chat") or {}
+        try:
+            explicit = int(cfg.get("context_window") or 0)
+        except (TypeError, ValueError):
+            explicit = 0
+        if explicit > 0:
+            return explicit
+        provider = cfg.get("client") or _CFG_DEFAULT_PROVIDER
+        try:
+            from config_providers import get_context_window_for_provider
+            return get_context_window_for_provider(provider, default=0)
+        except (ImportError, OSError, ValueError):
+            return 0
+
+    def get_active_max_tokens(self) -> int:
+        """获取当前激活模型偏好的**最大输出**（max_tokens）。
+
+        保留原方法名以兼容既有调用方；语义已修正为「输出上限」。
+        需要上下文窗口请用 ``get_active_context_window()``。
         """
         task_type = self.resolve_task_type("chat")
         return self.get_max_tokens_for_task(task_type)
+
+    def get_active_context_window(self) -> int:
+        """获取当前激活模型偏好的**上下文窗口**（最大输入）。
+
+        供 AgentContext 动态压缩阈值 / 保留轮数使用。
+        历史 bug：旧实现读的是 chat 路由的 max_tokens（输出上限，现为 65535），
+        把 512K 的窗口算成 65K，导致
+          - 历史预算被低估约 8 倍（45K vs 367K）
+          - LARGE_CONTEXT_THRESHOLD(524288) 永不触发，"大上下文保留 10 轮"是死代码
+        """
+        task_type = self.resolve_task_type("chat")
+        return self.get_context_window_for_task(task_type)
 
     # 已知自定义 provider 的默认模型映射（从 provider_metadata.json 派生，无硬编码）
     # 注意：这些是 fallback 值，当 provider 的 default_model 为空时使用
