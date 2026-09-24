@@ -33,6 +33,8 @@ from typing import Any
 
 from loguru import logger
 
+from utils import jev_client as jev
+
 # Score 档位（有序，下标即分值）——措辞要具体到"两个审查者能达成一致"
 _SCORE_LEVELS = [
     "无关：与问题主题没有任何关联，或纯属其他话题",
@@ -61,10 +63,6 @@ def _config_float(name: str, default: float) -> float:
 
 def is_enabled() -> bool:
     """过滤层是否启用（JEV_ENABLED 且已配置密钥）。"""
-    try:
-        from utils import jev_client as jev
-    except ImportError:
-        return False
     return jev.is_available()
 
 
@@ -86,11 +84,6 @@ async def filter_memories(query: str, results: list[dict], *,
     if not results:
         return None
     if not is_enabled():
-        return None
-
-    try:
-        from utils import jev_client as jev
-    except ImportError:
         return None
 
     if drop_below is None:

@@ -35,6 +35,8 @@ from __future__ import annotations
 
 from loguru import logger
 
+from utils import jev_client as jev
+
 # 默认阈值（config 可覆盖）：
 #   >= deny_threshold  直接拒绝（需较高确信，避免误杀合法操作）
 #   <= allow_threshold 可跳过确认（需较低风险分，避免放行危险操作）
@@ -49,6 +51,7 @@ RISK_DENY = "deny"
 
 
 def _config_float(name: str, default: float) -> float:
+    """读 config 运行时值；必须函数内 import（WebUI 开关会改写模块属性）。"""
     try:
         import config as _cfg
         return float(getattr(_cfg, name, default))
@@ -58,10 +61,6 @@ def _config_float(name: str, default: float) -> float:
 
 def is_enabled() -> bool:
     """风控门卫是否启用（JEV_ENABLED 且已配置密钥）。"""
-    try:
-        from utils import jev_client as jev
-    except ImportError:
-        return False
     return jev.is_available()
 
 
@@ -71,7 +70,6 @@ def _build_question() -> dict:
     措辞遵循实测守则：rubric 具体到"两个审查者能达成一致"，并写明
     判定的是"是否需要人工确认"而非"是否绝对禁止"。
     """
-    from utils import jev_client as jev
     return jev.noul(
         instructions=(
             "下面这条 shell 命令，如果在用户的开发机上直接执行，"
@@ -105,11 +103,6 @@ async def assess_command(command: str, *, tool_name: str = "shell_command") -> s
     if not command or not command.strip():
         return None
     if not is_enabled():
-        return None
-
-    try:
-        from utils import jev_client as jev
-    except ImportError:
         return None
 
     deny_threshold = _config_float("JEV_RISK_DENY_THRESHOLD", DEFAULT_DENY_THRESHOLD)

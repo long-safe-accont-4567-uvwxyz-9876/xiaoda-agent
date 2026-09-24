@@ -69,6 +69,7 @@ HTTP 契约（https://docs.typesafe.ai/api）：
 """
 from __future__ import annotations
 
+import json
 import os
 from typing import Any
 
@@ -99,6 +100,22 @@ MAX_QUESTIONS = 64
 
 def _env(name: str, default: str = "") -> str:
     return (os.getenv(name) or default).strip()
+
+
+def _cfg_value(name: str, default: Any) -> Any:
+    """读取 config 模块的运行时值。
+
+    ⚠️ 必须函数内 import config，不能上提到模块顶层：WebUI 的
+    「功能节点 → Jev 决策模型」开关通过 ``config.JEV_ENABLED = ...``
+    在**运行时**改写模块属性（core_runtime/local_deploy_nodes.py）。
+    顶层 ``from config import X`` 会冻结启动快照，导致开关点了不生效。
+    这也是本模块存在函数内 import 的唯一原因（属必要的延迟 import）。
+    """
+    try:
+        import config as _cfg
+        return getattr(_cfg, name, default)
+    except (ImportError, AttributeError, ValueError):
+        return default
 
 
 def is_enabled() -> bool:
@@ -258,8 +275,7 @@ async def system_one(
     # 预先校验可序列化：state 里混入 set/自定义对象等时，httpx 会在编码阶段
     # 抛 TypeError，混在网络异常里难以定位。这里提前检查并给出可读告警。
     try:
-        import json as _json
-        _json.dumps(payload)
+        json.dumps(payload)
     except (TypeError, ValueError) as e:
         logger.warning("jev.state_not_serializable error={}", str(e)[:200])
         return None
