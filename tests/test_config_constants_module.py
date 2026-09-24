@@ -196,7 +196,11 @@ def test_env_switch_defaults():
     import config
     import config_constants as cc
 
+    # INTENT_LLM_CLASSIFY 的默认值随 API Key 自适应，故需一并清空 Key 环境变量，
+    # 才能验证「无 Key 时的默认值」（否则本地 .env 有 Key 会得到 True）。
+    _key_vars = ("JEV_API_KEY", "SILICONFLOW_API_KEY", "EMBED_API_KEY")
     saved = {env_var: os.environ.get(env_var) for _, (env_var, _) in _ENV_DEFAULTS.items()}
+    saved.update({k: os.environ.get(k) for k in _key_vars})
     for env_var in saved:
         os.environ.pop(env_var, None)
     try:

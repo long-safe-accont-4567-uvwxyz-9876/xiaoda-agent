@@ -216,9 +216,34 @@ HYDE_SUBSET_MODE = os.getenv("HYDE_SUBSET_MODE", "off")
 # 默认开启：配合 Reranker 精排兜底，扩散召回的结果可被交叉编码器过滤，
 # 仅当 Reranker 不可用时扩散结果才以最低优先级进入最终输出（权重 0.4，RAG_MIN_FINAL_SCORE 兜底）。
 MEMORY_RETRIEVAL_DIFFUSION = env_flag("MEMORY_RETRIEVAL_DIFFUSION", True)
-# 意图分类 LLM 调用：默认开启（GLM-Z1-9B-0414 推理质量高，速度可接受）
-# 设置 INTENT_LLM_CLASSIFY=false 可关闭 LLM 分类，仅用规则匹配（更快）
-INTENT_LLM_CLASSIFY = env_flag("INTENT_LLM_CLASSIFY", False)
+# 意图分类（子代理路由 + 检索意图）：默认**开启**，但未配置任何可用 API Key
+# 时自动关闭——分类器本身依赖远程模型（Jev 决策模型或免费 LLM），无 Key 时
+# 调用必然失败，不如直接走规则匹配（更快且不会产生无谓告警）。
+#
+# 判定依据（任一满足即认为"可分类"）：
+#   JEV_API_KEY        —— Jev 决策模型（首选，快且无文本解析失败）
+#   SILICONFLOW_API_KEY / EMBED_API_KEY —— 免费 LLM 兜底路径
+# 显式设置环境变量可覆盖自动判定：INTENT_LLM_CLASSIFY=true/false。
+# 显式 true 但无 Key 时仍会被强制关闭（避免每次分类都失败重试）。
+def _intent_classify_available() -> bool:
+    """是否存在可用于意图分类的 API Key（Jev 或免费模型）。"""
+    return bool(
+        (os.getenv("JEV_API_KEY") or "").strip()
+        or (os.getenv("SILICONFLOW_API_KEY") or "").strip()
+        or (os.getenv("EMBED_API_KEY") or "").strip()
+    )
+
+
+def _intent_classify_default() -> bool:
+    """默认值 = 已配置可用 Key。无 Key 时关闭，有 Key 时开启。"""
+    return _intent_classify_available()
+
+
+# 注意：显式置 true 但无 Key 时仍强制关闭（调用必然失败，不如走规则）
+INTENT_LLM_CLASSIFY = (
+    env_flag("INTENT_LLM_CLASSIFY", _intent_classify_default())
+    and _intent_classify_available()
+)
 # 意图分类 LLM 调用超时（秒），默认 5.0s（从 2.0s 提升，避免误超时）
 INTENT_CLASSIFY_TIMEOUT = _safe_float(os.getenv("INTENT_CLASSIFY_TIMEOUT"), 15.0)
 

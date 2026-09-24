@@ -24,42 +24,66 @@ if str(PROJECT_ROOT) not in sys.path:
 class TestIntentClassifyDefault:
     """测试意图分类默认配置"""
 
-    def test_intent_llm_classify_default_false(self):
-        """INTENT_LLM_CLASSIFY 默认应为 False，避免 3-8s LLM 延迟
+    def test_intent_llm_classify_default_follows_api_key(self):
+        """INTENT_LLM_CLASSIFY 默认值应随「是否配置可用 API Key」自适应。
 
-        2026-08-24 修复：此前该用例在 CI 被 --deselect 跳过（CI 环境曾预置
-        INTENT_LLM_CLASSIFY=true 导致断言失败）。deselect 掩盖了真实回归——
-        正确做法是测试内显式清空该环境变量，让被测对象暴露「无环境干预时的
-        默认值」；若默认值真的漂移为 True，本用例应当变红。
+        2026-09-24 语义变更（用户决策）：由「默认关闭」改为「默认开启，
+        未配置 Key 时自动关闭」。原设计关闭是为避免 LLM 分类 3-8s 延迟，
+        现分类首选 Jev 决策模型（70~500ms、无文本解析失败），该顾虑不成立。
 
-        2026-08-24 二次修复：reload(config_constants) 后必须同步 reload(config)，
-        否则 float 常量在两个模块中变成不同对象，下游
-        test_config_reexports_same_objects 的恒等断言随机失败；
-        环境变量需在最后一次 reload 前还原，避免残留值被固化进模块。
+        本用例验证三种情形（reload 方式与旧用例一致，环境变量需在最后一次
+        reload 前还原，避免残留值固化进模块）：
+          1. 无任何 Key + 未显式设置 → False（自动关闭）
+          2. 有 JEV_API_KEY + 未显式设置 → True（自动开启）
+          3. 无 Key 但显式 true → False（无 Key 时强制关闭，调用必然失败）
         """
+        import importlib
         import os as _os
 
         import config
-        original = _os.environ.get("INTENT_LLM_CLASSIFY")
-        try:
-            _os.environ.pop("INTENT_LLM_CLASSIFY", None)
-            import importlib
+        import config_constants
 
-            import config_constants
-            importlib.reload(config_constants)
-            assert config_constants.INTENT_LLM_CLASSIFY is False, (
-                "INTENT_LLM_CLASSIFY 默认应为 False，避免每次意图分类都调用 LLM（3-8s 延迟）。"
-                "规则匹配已经足够处理大部分情况。"
-            )
-        finally:
-            if original is not None:
-                _os.environ["INTENT_LLM_CLASSIFY"] = original
-            else:
-                _os.environ.pop("INTENT_LLM_CLASSIFY", None)
-            import importlib
+        _KEY_VARS = ("JEV_API_KEY", "SILICONFLOW_API_KEY", "EMBED_API_KEY")
+        saved = {k: _os.environ.get(k) for k in (*_KEY_VARS, "INTENT_LLM_CLASSIFY")}
 
+        def _reload():
             importlib.reload(config_constants)
             importlib.reload(config)
+
+        def _reset_env(**kv):
+            for k in (*_KEY_VARS, "INTENT_LLM_CLASSIFY"):
+                _os.environ.pop(k, None)
+            for k, v in kv.items():
+                _os.environ[k] = v
+
+        try:
+            # 1. 无 Key + 未显式设置 → 自动关闭
+            _reset_env()
+            _reload()
+            assert config_constants.INTENT_LLM_CLASSIFY is False, (
+                "未配置任何 API Key 时应自动关闭意图分类（调用必然失败）"
+            )
+
+            # 2. 有 JEV_API_KEY + 未显式设置 → 自动开启
+            _reset_env(JEV_API_KEY="apikey_test")
+            _reload()
+            assert config_constants.INTENT_LLM_CLASSIFY is True, (
+                "配置了 JEV_API_KEY 时意图分类应默认开启"
+            )
+
+            # 3. 无 Key 但显式 true → 强制关闭（避免每次分类都失败重试）
+            _reset_env(INTENT_LLM_CLASSIFY="true")
+            _reload()
+            assert config_constants.INTENT_LLM_CLASSIFY is False, (
+                "显式置 true 但无可用 Key 时应强制关闭"
+            )
+        finally:
+            for k, v in saved.items():
+                if v is not None:
+                    _os.environ[k] = v
+                else:
+                    _os.environ.pop(k, None)
+            _reload()
 
     def test_intent_classify_timeout_at_least_10s(self):
         """INTENT_CLASSIFY_TIMEOUT 应至少 10s，覆盖慢速模型的响应时间"""

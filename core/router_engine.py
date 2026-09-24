@@ -294,7 +294,18 @@ class RouterEngine:
                     reasoning="voice_pattern → xiaoda",
                 )
 
-        # 5. LLM 意图分类（核心改进：让 LLM 判断子代理，而非关键词匹配）
+        # 5. 显式指名关键词（"让小莉…" / "找小狼…"）优先于 LLM 分类。
+        # 关键：xiaoli 已从 LLM 分类候选中移除（她只在显式提及时可用），
+        # 若关键词匹配排在 LLM 之后，"让小莉陪我"会被 LLM 判成 xiaoda，
+        # 导致显式指名失效。故先跑关键词，保住显式通路的确定性。
+        for pattern, target in self._keyword_patterns:
+            if re.search(pattern, q):
+                return RoutingDecision(
+                    agent_names=[target], mode="single",
+                    reasoning=f"keyword_pattern → {target}",
+                )
+
+        # 5b. LLM/Jev 意图分类（模糊输入才走这里）
         try:
             import config as _cfg
             llm_classify = getattr(_cfg, "INTENT_LLM_CLASSIFY", False)
@@ -310,16 +321,7 @@ class RouterEngine:
                     agent_names=[agent], mode="single",
                     reasoning=f"llm_classify → {agent}",
                 )
-            # LLM 失败，降级到关键词匹配
-            logger.debug("router.llm_classify_failed_fallback_to_keywords")
-
-        # 5b. 关键词兜底（LLM 不可用或失败时）
-        for pattern, target in self._keyword_patterns:
-            if re.search(pattern, q):
-                return RoutingDecision(
-                    agent_names=[target], mode="single",
-                    reasoning=f"keyword_pattern → {target}",
-                )
+            logger.debug("router.llm_classify_failed_fallback_to_default")
 
         # 5c. BeliefRouter
         if self._use_belief:
