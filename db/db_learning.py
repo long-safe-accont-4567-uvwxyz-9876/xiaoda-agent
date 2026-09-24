@@ -1,7 +1,32 @@
+import re
 import time
 
 import aiosqlite
 from loguru import logger
+
+# 瞬态错误特征：限流/超时/连接类失败是**运行噪声**，不是可积累的经验。
+# 记进学习记录只会堆积噪声（实测：TimeoutError 存档躺了两个月没人清，
+# 429 限流一天积一批），用户被迫手动逐条删。源头过滤 + 周期清扫共用本表。
+_TRANSIENT_ERROR_RE = re.compile(
+    r"rate.?limit|429|too many requests|timeout|timed out|overloaded|529"
+    r"|connection.*(error|reset|refused)|apiconnectionerror",
+    re.IGNORECASE,
+)
+
+# error_pattern 学习记录的保留天数：超期视为已自愈/不再相关，自动清除。
+# （仅清理 pending 状态；promoted 的已进系统提示、resolved 的已处理，均不动。）
+ERROR_PATTERN_RETENTION_DAYS = 7
+
+
+def is_transient_error(text: str) -> bool:
+    """判断错误文本是否为瞬态运行错误（限流/超时/连接类）。
+
+    瞬态错误的特点：换时间重试即可自愈，没有可沉淀的修复经验，
+    记入学习系统只会产生无法清除的噪声存档。
+    """
+    if not text:
+        return False
+    return bool(_TRANSIENT_ERROR_RE.search(text))
 
 
 class LearningDB:
@@ -120,6 +145,54 @@ class LearningDB:
         )
         rows = await cursor.fetchall()
         return [dict(r) for r in rows]
+
+    async def purge_transient_learnings(self,
+                                        retention_days: int = ERROR_PATTERN_RETENTION_DAYS,
+                                        auto_commit: bool = True) -> dict[str, int]:
+        """自动清理 error_pattern 学习记录中的噪声与过期项。
+
+        清理两类（仅 pending 状态；promoted/resolved 是已沉淀经验，不动）：
+          1. 瞬态错误（限流/超时/连接类）—— 换时间重试即可自愈，无沉淀价值
+          2. 超过保留期的过期项（默认 7 天未再出现，视为已自愈/不再相关）
+
+        由 LearningManager.auto_promote 的周期调度驱动，免去用户手动逐条删。
+
+        Returns:
+            {"transient": 删除的瞬态条数, "stale": 删除的过期条数}
+        """
+        result = {"transient": 0, "stale": 0}
+        cutoff = time.time() - retention_days * 86400
+        try:
+            # 1. 瞬态错误：全部清除（无论多新——它们本来就不该入库）。
+            #    逐模式 LIKE（正则含元字符不能直接进 LIKE）
+            transient_deleted = 0
+            for pat in ("429", "RateLimitError", "rate limit", "Too Many Requests",
+                        "TimeoutError", "timed out", "timeout", "Overloaded",
+                        "APIConnectionError"):
+                cursor = await self._conn.execute(
+                    """DELETE FROM learnings
+                       WHERE category='error_pattern' AND status='pending'
+                         AND (summary LIKE ? OR pattern_key LIKE ?)""",
+                    (f"%{pat}%", f"%{pat}%"),
+                )
+                transient_deleted += cursor.rowcount or 0
+            result["transient"] = transient_deleted
+
+            # 2. 过期项：error_pattern 超过保留期未再出现
+            cursor = await self._conn.execute(
+                """DELETE FROM learnings
+                   WHERE category='error_pattern' AND status='pending'
+                     AND last_seen < ?""",
+                (cutoff,),
+            )
+            result["stale"] = cursor.rowcount or 0
+
+            if (result["transient"] or result["stale"]) and auto_commit:
+                await self._conn.commit()
+                logger.info("db_learning.purge_transient_learnings", **result)
+        except Exception as e:
+            logger.warning("db_learning.purge_failed", error=str(e))
+        return result
 
     async def insert_error(self, summary: str, error_text: str = "",
                             context: str = "", suggested_fix: str = "",

@@ -87,6 +87,16 @@ class LearningManager:
             logger.warning("learning.evaluate_failed", error=str(e))
 
     async def auto_promote(self) -> None:
+        """周期任务：先清扫噪声/过期记录，再把高复现经验晋升为系统提示规则。
+
+        清扫（2026-09-24 新增）挂在同一周期入口，免去用户手动逐条删
+        失败响应的学习记录（瞬态错误与超期 error_pattern 自动清除）。
+        """
+        try:
+            await self.learning.purge_transient_learnings()
+        except Exception as e:
+            logger.warning("learning.cleanup_failed", error=str(e))
+
         try:
             promotable = await self.learning.get_promotable_learnings(min_recurrence=3)
             for learning in promotable:

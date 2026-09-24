@@ -10,6 +10,8 @@ from typing import Any
 import httpx
 from loguru import logger
 
+from db.db_learning import is_transient_error
+
 
 @dataclass
 class ErrorContext:
@@ -179,8 +181,21 @@ class SmartErrorHandler:
         )
 
     async def _learn_from_error(self, error_ctx: ErrorContext) -> None:
-        """将错误记录到学习系统，避免重复犯错"""
+        """将错误记录到学习系统，避免重复犯错。
+
+        2026-09-24：**瞬态错误不入库**（限流/超时/连接类）——它们换时间重试
+        即可自愈，没有可沉淀的修复经验；此前全量入库导致 TimeoutError 存档
+        躺两个月、429 一天积一批，用户被迫手动逐条删。瞬态判定与周期清扫
+        共用 db_learning.is_transient_error 的单一模式表。
+        """
         if not hasattr(self._db, 'learning'):
+            return
+
+        summary = f"{error_ctx.error_type}: {error_ctx.error_message[:100]}"
+        if is_transient_error(summary) or is_transient_error(error_ctx.error_message):
+            logger.debug("error_handler.skip_transient",
+                         error_type=error_ctx.error_type,
+                         preview=summary[:60])
             return
 
         pattern_key = f"{error_ctx.error_type}:{error_ctx.error_message[:50]}"
@@ -188,7 +203,7 @@ class SmartErrorHandler:
         await self._db.learning.insert_learning(
             category="error_pattern",
             priority="high",
-            summary=f"{error_ctx.error_type}: {error_ctx.error_message[:100]}",
+            summary=summary,
             details=(
                 f"文件: {error_ctx.file_path}\n"
                 f"行号: {error_ctx.line_number}\n"
