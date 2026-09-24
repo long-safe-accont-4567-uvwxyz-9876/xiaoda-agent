@@ -523,6 +523,18 @@ class QueryTransformer:
             timeout = 5.0
             min_conf = 0.80
 
+        # 防线 1：逃生门。查询可能不属于任何一类（如纯指令/无意义串），
+        # 不设出口时模型会在错误类别间自信分配概率。
+        options = {
+            "temporal": "涉及时间、日期、某天某时发生的事、按时间回忆",
+            "multi-hop": "需要串联多个事实/多步推理才能回答",
+            "factual": "询问某个具体事实、定义、属性或客观信息",
+            "chat": "闲聊、寒暄、情绪表达、无明确检索意图",
+        }
+        options[jev.ESCAPE_HATCH_KEY] = jev.escape_hatch_option(
+            "以上都不对：无法归入任何一类检索意图"
+        )[1]
+
         try:
             answers = await jev.system_one(
                 state={"query": query},
@@ -530,13 +542,9 @@ class QueryTransformer:
                     "intent": jev.choice(
                         instructions=(
                             "这段话属于哪种查询意图？判断依据是语义而非个别词。"
+                            "无法明确归类时选「以上都不对」。"
                         ),
-                        options={
-                            "temporal": "涉及时间、日期、某天某时发生的事、按时间回忆",
-                            "multi-hop": "需要串联多个事实/多步推理才能回答",
-                            "factual": "询问某个具体事实、定义、属性或客观信息",
-                            "chat": "闲聊、寒暄、情绪表达、无明确检索意图",
-                        },
+                        options=options,
                     ),
                 },
                 timeout=timeout,
@@ -548,14 +556,27 @@ class QueryTransformer:
             return None
 
         intent = jev.answer_choice(answers, "intent")
+        if intent == jev.ESCAPE_HATCH_KEY:
+            conf = jev.answer_confidence(answers, "intent")
+            logger.info("query_transform.jev_escape_hatch confidence={} query={}",
+                        conf, query[:50])
+            return None
         if intent not in ("temporal", "multi-hop", "factual", "chat"):
             if intent is not None:
                 logger.warning("query_transform.jev_classify_unknown intent={}", intent)
             return None
 
         conf = jev.answer_confidence(answers, "intent")
+
+        # 防线 2：分布形状（比单看 confidence 更能发现"选项集合有偏"）
+        suspicious, reason = jev.distribution_is_suspicious(answers, "intent")
+        if suspicious:
+            logger.info("query_transform.jev_suspicious_distribution intent={} confidence={} reason={}",
+                        intent, conf, reason)
+            return None
+
+        # 防线 3：置信度阈值
         if not jev.confident_enough(answers, "intent", min_conf):
-            # 低置信度：不采纳，交回调用方升级到 LLM 复核
             logger.info("query_transform.jev_low_confidence intent={} confidence={} threshold={}",
                         intent, conf, min_conf)
             return None

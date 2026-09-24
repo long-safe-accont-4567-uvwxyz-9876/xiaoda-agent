@@ -240,14 +240,23 @@ JEV_TIMEOUT = _safe_float(os.getenv("JEV_TIMEOUT"), 8.0)
 # 低置信度门控（官方 confidence-gated routing 模式）：
 #   Jev 返回的 Choice/Score 答案带 confidence（0~1）。置信度只说明「模型有多确信」，
 #   不说明「答案对不对」——同一个数值在不同场景代表不同风险。
-#   因此按「答错的后果严重程度」分层设阈值，而非一刀切：
-#     - 子代理路由：答错 = 回复质量下降（用户可立刻纠正）→ 后果中等 → 阈值 0.85
-#     - 检索意图：答错 = 检索策略微调（召回略差）→ 后果低 → 阈值 0.80
+#   因此按「答错的后果严重程度」分层设阈值，而非一刀切。
+#
+# 阈值定标依据（jev-1.13 能力探索报告 · 2026-09-23 实测 17 次调用）：
+#   - 官方建议级联线从 0.50（转人工）和 0.90（自动执行）起调，按风险上下浮动；
+#     报告给出的实践升级线是 **0.7**。
+#   - 实测明确案例 conf 常为 1.0，模糊案例 0.80~0.84，且**逃生门命中时 conf 可低至 0.53**。
+#   - 关键教训：conf 高 ≠ 正确。无逃生门时乱选也能给到 0.80~0.85，
+#     故置信度阈值不能定得太接近这些"假高"值，否则会放行错误答案。
+#     真正的防线是「逃生门选项 + 分布形状检查」（见 jev_client），阈值只作最后一道。
+# 定标结论：
+#   - 子代理路由：答错 = 回复质量下降（用户可立刻纠正）→ 后果中等 → 0.80
+#   - 检索意图：答错 = 检索策略微调（召回略差）→ 后果低 → 0.75
 #   低于各自阈值的判断不直接采纳，而是升级给原有 LLM 路径复核；
 #   两者都拿不到结果时才回退规则/默认值。
 #   设为 0 表示完全信任 Jev（永不复核）；设为 1 表示永远复核（等价于不用 Jev）。
-JEV_MIN_CONFIDENCE_ROUTE = _safe_float(os.getenv("JEV_MIN_CONFIDENCE_ROUTE"), 0.85)
-JEV_MIN_CONFIDENCE_INTENT = _safe_float(os.getenv("JEV_MIN_CONFIDENCE_INTENT"), 0.80)
+JEV_MIN_CONFIDENCE_ROUTE = _safe_float(os.getenv("JEV_MIN_CONFIDENCE_ROUTE"), 0.80)
+JEV_MIN_CONFIDENCE_INTENT = _safe_float(os.getenv("JEV_MIN_CONFIDENCE_INTENT"), 0.75)
 
 # Retrieval Optimization (A1/A2/A3)
 RETRIEVAL_SMART_SKIP = env_flag("RETRIEVAL_SMART_SKIP", True)

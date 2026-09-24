@@ -50,6 +50,22 @@ HTTP 契约（https://docs.typesafe.ai/api）：
       不要把一个逻辑拆成多次调用（官方实测 13 题批量比逐个快 ~10 倍）。
     - 未配置 JEV_API_KEY 时：``available`` 为 False，所有调用立即返回 None，
       让调用方走原有降级路径（向后兼容，零行为变化）。
+
+⚠️ 能力边界（jev-1.13 能力探索报告 · 2026-09-23 实测 17 次调用，必须遵守）：
+    放心交给它：意图路由/分类、风控门卫、相关性打分、是非判断（配逃生门）。
+    要用但设防：中文（官方承认弱于英语）、模糊文本（会"温和偏自信"）、
+                延迟（国内实测 0.7~1.1s，高于官方宣称的 70~500ms）。
+    别指望它：数数（实测 0.81 置信答错）、算术、日期比较、多跳推理、生成文字。
+
+    因此接入时必须做到：
+      1. **永远留逃生门选项**（``ESCAPE_HATCH_KEY``）：不加时模型会"自信地乱选"
+         （实测 0.80~0.85，与答对时几乎一样高）；加上「以上都不对」后立刻正确拒绝。
+      2. **别只读 confidence**：概率是相对于**选项集合**的，不是相对于世界事实的。
+         用 ``distribution_is_suspicious`` 看分布形状（摊薄/多峰 = 拿不准）。
+         注意：支持度集中在单一选项是**理想情形**（实测答对常为 1.0），不是可疑。
+      3. **计数/算术/日期/多跳逻辑留在代码里**，只把"答案空间有限"的语义判断给它。
+      4. **state 只放问题需要的字段**：无关内容会稀释准确率（context rot）。
+      5. **rubric 要具体**：选项说明应细到"两个审查者能达成一致"。
 """
 from __future__ import annotations
 
@@ -162,6 +178,27 @@ def choice(instructions: str, options: dict[str, str]) -> dict:
     if len(options) > 255:
         raise ValueError("choice 最多 255 个选项")
     return {"type": "choice", "instructions": instructions, "criteria": dict(options)}
+
+
+# 逃生门选项的保留 key（调用方拿到此值时应视为「无法判断」，走升级路径）。
+ESCAPE_HATCH_KEY = "__none__"
+
+
+def escape_hatch_option(description: str = "") -> tuple[str, str]:
+    """返回「以上都不对」逃生门选项的 ``(key, 说明)``，供调用方并入 options。
+
+    实测依据（jev-1.13 能力探索报告 · 发现二）：
+        选项都不匹配时，不加逃生门模型会「自信地乱选」（实测 0.80~0.85，
+        与答对时的 0.9 几乎一样高，难以察觉）；加上「以上都不对」后
+        立刻变成 1.0 正确拒绝。**这是最便宜的准确率提升。**
+
+    用法::
+
+        opts = {"a": "...", "b": "..."}
+        opts[jev.ESCAPE_HATCH_KEY] = jev.escape_hatch_option("以上都不对")[1]
+        # 拿到答案后：choice == ESCAPE_HATCH_KEY → 视为无法判断，升级复核
+    """
+    return ESCAPE_HATCH_KEY, (description or "以上都不对，多项都不合适或证据不足")
 
 
 def score(instructions: str, levels: list[str]) -> dict:
@@ -331,11 +368,65 @@ def confident_enough(answers: dict[str, dict] | None, key: str,
     - min_confidence <= 0：完全信任（永不复核）
     - 答案缺失 / 无 confidence 字段：视为不够确信（交回调用方复核）
     - Noul 答案没有 confidence 字段：由调用方自行用概率做阈值判断
+
+    ⚠️ 官方与社区实测（jev-1.13）一致警告：**不要只读 confidence 数字**。
+    「高置信 + 选项集合有偏」才是最危险的组合（模型会把支持度压给错误选项）。
+    本函数只做数字门控，请配合 ``distribution_is_suspicious`` 一起判断。
     """
     if min_confidence <= 0:
         return True
     conf = answer_confidence(answers, key)
     return conf is not None and conf >= min_confidence
+
+
+def distribution_is_suspicious(answers: dict[str, dict] | None, key: str,
+                               *, min_top_prob: float = 0.5) -> tuple[bool, str]:
+    """检查 Choice 概率分布的「形状」是否可疑——比单看 confidence 更能发现问题。
+
+    实测依据（jev-1.13 能力探索报告 · 第五节「把握 ≠ 正确」）：
+        模型概率是相对于**选项集合**的，不是相对于世界事实的。若选项集合里
+        没有正确答案，它会把支持度压给某个错误选项，confidence 可能仍然很高
+        （实测无逃生门时 0.80~0.85），此**时单看数字无法发现**，只能靠：
+          1. 概率是否被"摊薄"到多个选项上（最高概率偏低 = 拿不准）
+          2. 分布形状是「一峰独大」还是「多峰/平坦」
+
+    ⚠️ 注意正向理解的坑：**支持度集中在单一选项是理想情形**（实测答对时
+    常为 1.0，其余全 0），不是可疑信号。真正可疑的是**摊薄/多峰**。
+
+    判定规则（任一命中即可疑）：
+        - 最高概率 < min_top_prob（默认 0.5）：模型没有明确倾向
+        - 非零选项（>1%）≥ 3 个：支持度被摊到 3 个以上，拿不准
+    返回 ``(是否可疑, 原因)``。可疑 ≠ 一定错误，而是「值得让更强的模型复核」。
+
+    Args:
+        answers: system_one 的返回。
+        key: 问题 id。
+        min_top_prob: 最高概率下限；低于此值判可疑（默认 0.5，设为 0 关闭该规则）。
+    """
+    probs = answer_choice_probs(answers, key)
+    if not probs:
+        return True, "无概率分布"
+
+    ordered = sorted(probs.values(), reverse=True)
+    top = ordered[0]
+    if min_top_prob > 0 and top < min_top_prob:
+        return True, f"最高概率仅 {top:.2f}（< {min_top_prob}），模型没有明确倾向"
+
+    # 非零选项数：>=4 个选项都有实体概率 = 严重摊薄（真的拿不准）。
+    # 3 个非零在 5~6 选项的题里属常见（一个主选 + 两个小尾巴），不判可疑，
+    # 由 min_top_prob 规则兜底（主选概率够高就说明倾向明确）。
+    non_zero = [p for p in ordered if p > 0.01]
+    if len(non_zero) >= 4:
+        return True, f"支持度摊薄在 {len(non_zero)} 个选项上，模型拿不准"
+    return False, ""
+
+
+def answer_payload(answers: dict[str, dict] | None, key: str) -> dict:
+    """返回原始 answer 结构（便于日志/审计时记录完整概率分布）。"""
+    if not answers:
+        return {}
+    item = answers.get(key)
+    return dict(item) if isinstance(item, dict) else {}
 
 
 async def probe(timeout: float = 8.0) -> tuple[bool, str]:
@@ -378,8 +469,12 @@ __all__ = [
     "answer_confidence",
     "answer_noul",
     "answer_score",
+    "answer_payload",
     "choice",
     "confident_enough",
+    "distribution_is_suspicious",
+    "escape_hatch_option",
+    "ESCAPE_HATCH_KEY",
     "health_check",
     "is_available",
     "is_enabled",

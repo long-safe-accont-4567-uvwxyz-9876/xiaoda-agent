@@ -358,11 +358,15 @@ class RouterEngine:
 
     async def _classify_sub_agent_with_jev(self, user_input: str,
                                             timeout: float = 15.0) -> str | None:
-        """用 Jev Choice 原语做子代理路由分类。未配置/失败/置信度不足返回 None。
+        """用 Jev Choice 原语做子代理路由分类。未配置/失败/不够确信返回 None。
 
-        置信度门控（官方 confidence-gated routing）：答错代理会让回复质量
-        下降（用户可立刻纠正），属中等后果，故设较高阈值。低于阈值不直接
-        采纳，返回 None 让调用方升级到 LLM 路径复核。
+        三道防线（jev-1.13 能力探索报告「把握 ≠ 正确」）：
+          1. **逃生门选项**：消息可能不属于任何子代理（如"帮我订机票"），
+             不设逃生门时模型会自信地乱选（实测 conf 0.80~0.85，与答对时
+             几乎一样高）。加上"以上都不对"后才会诚实拒绝。
+          2. **分布形状**：只看 confidence 不够——支持度全压在单选项上
+             说明选项集合可能有偏，需交叉验证。
+          3. **置信度阈值**：低于阈值不采纳，交回调用方升级 LLM 复核。
         """
         try:
             from utils import jev_client as jev
@@ -376,16 +380,29 @@ class RouterEngine:
             return None
         options = {key: desc for key, _display, desc in agents_info}
         labels = ", ".join(f"{key}（{display}）" for key, display, _ in agents_info)
+        # 防线 1：逃生门。消息可能不属于任何子代理，必须给出"都不对"的出口
+        options[jev.ESCAPE_HATCH_KEY] = jev.escape_hatch_option(
+            "以上都不对：消息不属于任何上述子代理，或意图不明确"
+        )[1]
 
         try:
             answers = await jev.system_one(
                 state={"user_message": user_input[:2000]},
                 questions={
                     "agent": jev.choice(
+                        # 措辞遵循实测守则：rubric 要具体到"两个审查者能达成一致"，
+                        # 并明确各选项的边界与逃生门触发条件
                         instructions=(
-                            "用户消息应该由哪个子代理处理？"
-                            f"可选：{labels}。"
-                            "判断依据是消息的核心意图，而非个别词语。"
+                            "分析 `user_message` 的核心诉求，判断应由哪个子代理处理。"
+                            f"候选：{labels}，以及「以上都不对」。"
+                            "各子代理的职责边界："
+                            "xiaolang 仅限写代码/调试/技术实现类请求；"
+                            "xiaolian 仅限需要联网检索外部实时信息的请求（如天气、新闻、股价）；"
+                            "xiaoke 仅限学术论文/文献研究；"
+                            "xiaoli 仅限情感陪伴/情绪宣泄/需要安慰；"
+                            "xiaoda 负责回忆过往对话、查询个人历史、以及上述之外的通用闲聊。"
+                            "注意：看诉求本质而非表面词汇。"
+                            "仅当 `user_message` 的诉求无法归入以上任何一项时才选「以上都不对」。"
                         ),
                         options=options,
                     ),
@@ -402,17 +419,31 @@ class RouterEngine:
         if not agent:
             logger.debug("router.jev_classify_no_answer")
             return None
+        if agent == jev.ESCAPE_HATCH_KEY:
+            conf = jev.answer_confidence(answers, "agent")
+            logger.info("router.jev_escape_hatch confidence={} input_preview={}",
+                        conf, user_input[:50])
+            return None
         if agent not in {key for key, _, _ in agents_info}:
             logger.warning("router.jev_classify_unknown_agent agent={}", agent)
             return None
 
         conf = jev.answer_confidence(answers, "agent")
         threshold = self._jev_route_min_confidence()
+
+        # 防线 2：分布形状（只看 confidence 会漏掉"选项集合有偏"的自信错答）
+        suspicious, reason = jev.distribution_is_suspicious(answers, "agent")
+        if suspicious:
+            logger.info("router.jev_suspicious_distribution agent={} confidence={} reason={}",
+                        agent, conf, reason)
+            return None
+
+        # 防线 3：置信度阈值
         if not jev.confident_enough(answers, "agent", threshold):
-            # 低置信度：不采纳，交回调用方升级到 LLM 复核
             logger.info("router.jev_low_confidence agent={} confidence={} threshold={}",
                         agent, conf, threshold)
             return None
+
         logger.info("router.jev_classified agent={} confidence={} input_preview={}",
                     agent, conf, user_input[:50])
         return agent
