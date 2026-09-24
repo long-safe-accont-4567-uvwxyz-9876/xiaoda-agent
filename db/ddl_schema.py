@@ -353,7 +353,14 @@ class DDLMixin:
         await self._conn.execute("""CREATE INDEX IF NOT EXISTS idx_mem_undistilled ON episodic_memories(timestamp) WHERE distilled = 0""")
 
     async def _seed_cleanup_config(self) -> None:
-        """Phase 4: 插入默认清理策略（仅当 cleanup_config 表为空时）。"""
+        """Phase 4: 插入默认清理策略（仅当 cleanup_config 表为空时）。
+
+        2026-09-24 新增五张（与既有三条同机制，nudge 引擎每日执行）：
+        此前 errors / feature_requests / context_audit_log / greeting_log /
+        proactive_messages 只进不出——errors 72 条 pending 停在 7 月中旬、
+        context_audit_log 涨到 5688 条，与学习记录噪声同源（无清理机制）。
+        保留期按表性质定：审计类长（90/180 天），瞬时报告类短（30/14 天）。
+        """
         try:
             cursor = await self._conn.execute("SELECT COUNT(*) FROM cleanup_config")
             row = await cursor.fetchone()
@@ -364,6 +371,12 @@ class DDLMixin:
                         ("audit_logs", 90, "timestamp"),
                         ("api_usage", 30, "created_at"),
                         ("sessions", 180, "ended_at"),
+                        # ── 2026-09-24 补齐：修复"只进不出"的同类问题 ──
+                        ("errors", 30, "created_at"),
+                        ("feature_requests", 30, "created_at"),
+                        ("context_audit_log", 90, "retrieved_at"),
+                        ("greeting_log", 180, "fired_at"),
+                        ("proactive_messages", 180, "sent_at"),
                     ],
                 )
         except (OSError, RuntimeError) as e:
