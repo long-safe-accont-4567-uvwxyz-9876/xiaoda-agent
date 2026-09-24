@@ -14,6 +14,7 @@ from config import FLASH_MODEL_NAME as _CFG_FLASH_MODEL
 from config import MODEL_NAME as _CFG_MODEL_NAME
 from config import get_builtin_providers as _get_builtin_providers
 from config import set_default_provider as _set_default_provider
+from config_providers import get_context_window_for_provider
 from core.app_exception import LLMError
 from core.error_codes import ErrorCodeEnum
 from db.db_analytics import AnalyticsDB
@@ -505,7 +506,6 @@ class ModelRouter(ExecutionMixin, CostTrackingMixin, ClientLifecycleMixin, Fallb
             return explicit
         provider = cfg.get("client") or _CFG_DEFAULT_PROVIDER
         try:
-            from config_providers import get_context_window_for_provider
             return get_context_window_for_provider(provider, default=0)
         except (ImportError, OSError, ValueError):
             return 0

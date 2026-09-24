@@ -256,7 +256,6 @@ async def list_routes(request: Request) -> Any:
     context_window 为 None 时表示「自动」，由 provider 推导（见
     context_window_effective，前端用作输入框 placeholder）。
     """
-    from config_providers import get_context_window_for_provider
     from model_router import FALLBACK_ROUTE, ROUTE_TABLE
     routes = {}
     for task, c in ROUTE_TABLE.items():
