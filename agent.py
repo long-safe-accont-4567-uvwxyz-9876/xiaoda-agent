@@ -12,7 +12,24 @@ from typing import Any
 # 而 jieba 用 except ImportError 抓不住 → 分词/记忆模块整体不可用。
 import utils.pycompat  # noqa: F401  # isort: skip
 
-from loguru import logger
+# ── 依赖预检：缺包时给可操作提示，而不是一屏 Traceback ──────────────
+# "装完用不了"最常见的形态就是这里直接抛 ModuleNotFoundError，用户看到
+# 堆栈却不知道该跑什么命令。loguru 又是最容易被环境吞掉的包（容器
+# overlay 层丢失、虚拟环境与解释器错位、只装了 requirements 的一部分）。
+# 单独预检它，命中就打印明确指令后退出，让用户一步就能自救。
+try:
+    from loguru import logger
+except ModuleNotFoundError as _dep_err:  # pragma: no cover - 仅缺包环境触发
+    _missing = _dep_err.name or "loguru"
+    sys.stderr.write(
+        f"\n[启动失败] 缺少核心依赖：{_missing}\n"
+        "  修复：pip install -r requirements.txt\n"
+        "  若已安装仍报错：确认安装与运行用的是同一个 Python\n"
+        "    which python3    # 运行用的解释器\n"
+        "    python3 -m pip -V  # 安装目标的解释器\n"
+        "  更多排查：python3 agent.py doctor\n\n"
+    )
+    raise SystemExit(1) from _dep_err
 
 from config_constants import env_flag
 from utils.common import DEFAULT_WEBUI_PORT
