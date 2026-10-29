@@ -1,0 +1,19 @@
+# 开发 / 测试 / Lint 依赖
+#
+# 运行本项目**不需要**安装本文件，只有贡献代码、跑测试、跑 review 门禁时才需要。
+#   pip install -r requirements-dev.txt
+#   python3 -m pytest tests/
+#
+# 背景：pytest.ini 里配置了 timeout = 60（防止单个测试因 SQLite 锁或
+# asyncio event loop 卡死拖垮整轮运行），但 requirements.txt 只列运行时
+# 依赖、没有 pytest-timeout，导致按 requirements.txt 装完的环境里该配置
+# 静默失效（pytest 报 Unknown config option: timeout），测试挂死时无法
+# 自动中止。同理 pytest-asyncio 缺失会让 asyncio_mode = auto 失效，
+# 所有 async 测试直接报 "async def functions are not natively supported"。
+-r requirements.txt
+
+pytest>=8.0
+pytest-asyncio>=0.24
+pytest-cov>=5.0
+pytest-timeout>=2.3
+ruff>=0.6

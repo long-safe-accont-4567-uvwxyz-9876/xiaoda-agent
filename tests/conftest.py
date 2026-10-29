@@ -4,6 +4,16 @@ import sys
 import tempfile
 from pathlib import Path
 
+# ── pkgutil.ImpImporter 垫片：必须早于任何第三方库 ───────────────
+# Python 3.12+ 移除了 pkgutil.ImpImporter，而旧版 pkg_resources（系统
+# dist-packages 里的版本 setuptools 管不到）在模块级 register_finder 时
+# 会抛 AttributeError，导致 jieba 整个导入失败 → 记忆链路实体召回为 0。
+# pytest 直接收集测试文件时不会经过 agent.py 等入口，垫片必须在
+# conftest 里再补一次（与 agent.py / web/server.py / cli.py 同一做法）。
+if str(Path(__file__).resolve().parent.parent) not in sys.path:
+    sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+import utils.pycompat  # noqa: F401,E402  # isort: skip  # pkgutil.ImpImporter 垫片
+
 import pytest
 
 # ── 会话级环境重定向：必须在任何被测模块 import 之前完成 ─────────────

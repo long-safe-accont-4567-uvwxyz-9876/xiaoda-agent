@@ -151,6 +151,8 @@ async def test_agnes_tools():
     print("Part 2: Agnes 图片/视频生成工具测试")
     print("=" * 60)
 
+    import os
+
     from config import AGNES_API_KEY, AGNES_BASE_URL, AGNES_IMAGE_MODEL, AGNES_VIDEO_MODEL
 
     # 2.1 API Key 检查
@@ -161,12 +163,20 @@ async def test_agnes_tools():
     print(f"  AGNES_VIDEO_MODEL: {AGNES_VIDEO_MODEL}")
 
     # 2.2 图片生成工具 - 无 Key 降级测试
+    # 注意：tools.agnes_tools 已改为每次调用时 os.getenv("AGNES_API_KEY")，
+    # 不再暴露模块级 AGNES_API_KEY 常量（支持运行时改 .env 无需重启）。
+    # 因此这里必须通过环境变量控制，不能 patch 模块属性。
     print("\n[2.2] 图片生成工具 - 无 Key 降级测试:")
-    # 保存原始 Key
-    import tools.agnes_tools as at
     from tools.agnes_tools import agnes_image_generate, agnes_video_generate
-    original_key = at.AGNES_API_KEY
-    at.AGNES_API_KEY = ""
+    original_key = os.environ.get("AGNES_API_KEY", "")
+
+    def _set_agnes_key(value: str) -> None:
+        if value:
+            os.environ["AGNES_API_KEY"] = value
+        else:
+            os.environ.pop("AGNES_API_KEY", None)
+
+    _set_agnes_key("")
 
     result = await agnes_image_generate(prompt="a cute cat")
     print(f"  success={result.success}, error={result.error if not result.success else 'N/A'}")
@@ -175,12 +185,11 @@ async def test_agnes_tools():
     else:
         report_bug("HIGH", "agnes_image", f"无 Key 降级失败: success={result.success}, error={result.error}")
 
-    # 恢复 Key
-    at.AGNES_API_KEY = original_key
+    _set_agnes_key(original_key)
 
     # 2.3 视频生成工具 - 无 Key 降级测试
     print("\n[2.3] 视频生成工具 - 无 Key 降级测试:")
-    at.AGNES_API_KEY = ""
+    _set_agnes_key("")
 
     result = await agnes_video_generate(prompt="a cute cat playing")
     print(f"  success={result.success}, error={result.error if not result.success else 'N/A'}")
@@ -189,7 +198,7 @@ async def test_agnes_tools():
     else:
         report_bug("HIGH", "agnes_video", f"无 Key 降级失败: success={result.success}, error={result.error}")
 
-    at.AGNES_API_KEY = original_key
+    _set_agnes_key(original_key)
 
     # 2.4 图片生成 - 图生图参数检查
     print("\n[2.4] 图片生成 - 图生图参数检查:")

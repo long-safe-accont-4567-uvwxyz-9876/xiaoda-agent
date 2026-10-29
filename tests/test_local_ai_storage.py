@@ -245,6 +245,10 @@ def test_validate_destination_creates_missing_path_if_parent_writable(policy, tm
 # ─────────────────────────────────────────────────────────────
 
 @pytest.mark.skipif(sys.platform == "win32", reason="Windows path resolution differs for non-existent roots")
+@pytest.mark.skipif(
+    hasattr(os, "geteuid") and os.geteuid() == 0,
+    reason="root 能在根目录下创建任意目录，'父目录不存在且不可创建'的前提不成立",
+)
 def test_validate_destination_rejects_nonexistent_uncreatable_path(policy):
     """A path whose parent does not exist cannot be created → not writable."""
     val = policy.validate_destination("/nonexistent_root_xyz/deep/nested", 0)

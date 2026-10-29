@@ -694,10 +694,16 @@ async def test_openai_runtime_client_blocks_request_time_dns_rebinding(monkeypat
     def unsafe(url):
         raise ValueError("SSRF 校验失败: 目标 attacker.example 解析到危险 IP 169.254.169.254")
 
-    monkeypatch.setattr("web.custom_providers.resolve_and_pin", unsafe)
+    # openai 分支走 build_secure_async_client，解析发生在 security.ssrf_guard 内部，
+    # patch custom_providers 命名空间不会影响它（该名字只被 anthropic 分支使用）。
+    monkeypatch.setattr("security.ssrf_guard.resolve_and_pin", unsafe)
     client = build_client("openai", "https://attacker.example/v1", "k")
 
-    with pytest.raises(openai.APIConnectionError):
+    # 契约：SecureAsyncTransport 传播 ValueError（见
+    # test_ssrf_guard.py::test_secure_transport_propagates_value_error），
+    # 因此这里接受"裸 ValueError 透出"或"被 SDK 包装成连接错误"两种形态，
+    # 唯一不允许的是静默放行。
+    with pytest.raises((ValueError, openai.APIConnectionError)):
         await client.chat.completions.create(
             model="m", messages=[{"role": "user", "content": "hi"}]
         )
