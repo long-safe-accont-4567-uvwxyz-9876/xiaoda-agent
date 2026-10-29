@@ -10,6 +10,8 @@ source 取值：qq_group / qq_c2c / web / cli
 
 from __future__ import annotations
 
+import utils.pycompat  # noqa: F401  # isort: skip  # pkgutil.ImpImporter 垫片，须先于 jieba
+
 import re
 import threading
 from pathlib import Path
@@ -204,8 +206,10 @@ class ConstraintInjector:
                 if len(w_s) >= 2 and w_s not in stopwords and not w_s.isdigit():
                     keywords.append(w_s)
             return keywords[:15]  # 最多 15 个关键词
-        except ImportError:
+        except (ImportError, AttributeError):
             # jieba 不可用时退化为简单分词
+            # AttributeError：Python 3.12+ 下旧版 pkg_resources 的
+            #   pkgutil.ImpImporter 缺失（见 utils/pycompat.py）
             import re
             return [w for w in re.split(r'[\s,，。！？、；：]+', text)
                     if len(w) >= 2][:15]

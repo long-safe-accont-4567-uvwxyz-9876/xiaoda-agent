@@ -7,6 +7,11 @@ import sys
 from pathlib import Path
 from typing import Any
 
+# 必须在任何第三方库导入前生效：Python 3.12+ 移除了 pkgutil.ImpImporter，
+# 旧版 pkg_resources（setuptools<81）会在 import 时 AttributeError，
+# 而 jieba 用 except ImportError 抓不住 → 分词/记忆模块整体不可用。
+import utils.pycompat  # noqa: F401  # isort: skip
+
 from loguru import logger
 
 from config_constants import env_flag
@@ -599,19 +604,50 @@ def _start_splash_server(port: int) -> str:
 
 
 def _wait_for_server_ready(window: Any, port: int) -> None:
-    """后台线程：等待 WebUI 就绪后调用 splash.js 的 onServerReady。"""
+    """后台线程：等待 WebUI 就绪后调用 splash.js 的 onServerReady。
+
+    超时预算 180 秒：实测冷启动（首次建库 + 迁移 + 加载分词词典 + 构建
+    工具注册表 + 注册 29 个 router）在本机约 66 秒，慢机器 / 机械硬盘 /
+    首次解压词典很容易翻倍。原来 120 秒的预算会在这种情况下误判超时，
+    用户看到的就是"一直转圈然后 Connection timeout"。
+
+    探活地址用 127.0.0.1 而非 localhost：Windows 上 localhost 可能先解析到
+    ::1，而服务只监听 IPv4，导致每轮探活都多一次无谓等待。
+    """
     import time
+    import urllib.error
     import urllib.request
 
     from loguru import logger
 
-    for _ in range(120):
+    probe_url = f"http://127.0.0.1:{port}/"
+    deadline_rounds = 180
+    warned_slow = False
+
+    for attempt in range(deadline_rounds):
         try:
-            urllib.request.urlopen(f"http://localhost:{port}/", timeout=2)
+            urllib.request.urlopen(probe_url, timeout=2)
             break
         except (urllib.error.URLError, OSError, ConnectionError):
+            # 第 60 秒仍未就绪：给一条日志，便于用户对照 splash 上的慢启动提示
+            if attempt == 60 and not warned_slow:
+                warned_slow = True
+                logger.warning(
+                    "webui.startup_slow elapsed=60s port={} — 首次启动需要建库/迁移/加载词典，"
+                    "通常 1-2 分钟内完成；若长时间无响应请运行 `python agent.py doctor`",
+                    port,
+                )
             time.sleep(1)
+            continue
     else:
+        from config import LOG_DIR
+
+        logger.error(
+            "webui.startup_timeout port={} budget=180s log_dir={} "
+            "next_steps='python agent.py doctor' / 检查端口占用 / 确认 .env 至少配置一个 provider",
+            port,
+            LOG_DIR,
+        )
         try:
             window.evaluate_js("if(typeof onServerTimeout==='function')onServerTimeout();")
         except Exception:

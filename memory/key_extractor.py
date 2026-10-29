@@ -5,6 +5,11 @@
 import re
 from typing import ClassVar
 
+# 必须先于 jieba：Python 3.12+ 移除 pkgutil.ImpImporter 后，旧版
+# pkg_resources 会 AttributeError，而 jieba 的 except ImportError 抓不住，
+# 会让本模块（及依赖它的概念图/记忆链路）整体导入失败。
+import utils.pycompat  # noqa: F401  # isort: skip
+
 import jieba
 
 # 停用词表（与项目现有 _TOPIC_STOPWORDS 保持一致 + 扩展）

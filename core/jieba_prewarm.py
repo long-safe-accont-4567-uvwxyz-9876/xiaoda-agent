@@ -6,6 +6,8 @@ db/fts_utils.py 与 memory/memory_manager.py 在函数内 lazy import jieba，
 """
 from __future__ import annotations
 
+import utils.pycompat  # noqa: F401  # isort: skip  # pkgutil.ImpImporter 垫片，须先于 jieba
+
 import asyncio
 
 from loguru import logger

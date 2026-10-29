@@ -15,9 +15,10 @@ import threading
 import time
 from collections.abc import Callable
 
-from loguru import logger
-
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import utils.pycompat  # noqa: E402,F401,I001  # pkgutil.ImpImporter 垫片，须最先执行
+
+from loguru import logger
 
 from dotenv import load_dotenv
 
@@ -49,18 +50,21 @@ try:
     _HAS_PROMPT_TOOLKIT = True
 except ImportError:
     _HAS_PROMPT_TOOLKIT = False
+    from utils.cli_compat import Completer, Completion  # noqa: F401  # 降级占位
 
 try:
     from cli_menu import MenuItem, select_from_menu
     _HAS_MENU = True
 except ImportError:
     _HAS_MENU = False
+    from utils.cli_compat import MenuItem, select_from_menu  # noqa: F401  # 降级占位
 
 try:
     from cli_palette import CommandPalette, PaletteNode
     _HAS_PALETTE = True
 except ImportError:
     _HAS_PALETTE = False
+    from utils.cli_compat import CommandPalette, PaletteNode  # noqa: F401  # 降级占位
 
 # ── readline 支持 ──────────────────────────────────────────
 try:

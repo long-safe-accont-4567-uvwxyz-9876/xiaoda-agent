@@ -11,6 +11,8 @@ _build_fts_query 被 db.database / db.db_memory 反向导入, 形成循环:
 """
 from __future__ import annotations
 
+import utils.pycompat  # noqa: F401  # isort: skip  # pkgutil.ImpImporter 垫片，须先于 jieba
+
 import re
 
 # ── FTS5 预分词相关正则 ──
@@ -52,7 +54,10 @@ def _extract_fts_keywords(text: str, *, min_length: int = 2) -> list[str]:
         try:
             import jieba
             raw_tokens = jieba.lcut_for_search(text)
-        except ImportError:
+        except (ImportError, AttributeError):
+            # ImportError：jieba 未安装
+            # AttributeError：Python 3.12+ 下旧版 pkg_resources 抛的
+            #   pkgutil.ImpImporter 缺失（见 utils/pycompat.py）
             # n-gram 降级（含单字 gram，与 jieba 路径的单字保留保持一致）
             raw_tokens = [text[i:i+n] for n in range(1, 5) for i in range(len(text)-n+1)]
     else:

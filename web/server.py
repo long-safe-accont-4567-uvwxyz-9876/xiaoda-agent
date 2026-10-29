@@ -7,14 +7,14 @@ from contextlib import asynccontextmanager, suppress
 from pathlib import Path
 from typing import Any
 
+sys.path.insert(0, str(Path(__file__).parent.parent))
+import utils.pycompat  # noqa: E402,F401,I001  # pkgutil.ImpImporter 垫片，须最先执行
+
 from fastapi import FastAPI
 from fastapi.staticfiles import StaticFiles
 from loguru import logger
 
 from core.app_exception import LLMError
-
-# Ensure project root is in path
-sys.path.insert(0, str(Path(__file__).parent.parent))
 
 
 async def _apply_model_overrides(core: Any, provider_service: Any | None = None) -> None:

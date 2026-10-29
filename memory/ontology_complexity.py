@@ -18,6 +18,8 @@ Complexity dimensions (0.0-1.0 each, combined weighted):
 """
 from __future__ import annotations
 
+import utils.pycompat  # noqa: F401  # isort: skip  # pkgutil.ImpImporter 垫片，须先于 jieba
+
 import re
 from dataclasses import dataclass, field
 

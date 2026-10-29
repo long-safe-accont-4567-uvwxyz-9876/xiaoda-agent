@@ -10,6 +10,8 @@
 - TOPIC: 主题关键词（jieba.extract_tags）
 - IDENTIFIER: 技术标识符（英文/代码符号）
 """
+
+import utils.pycompat  # noqa: F401  # isort: skip  # pkgutil.ImpImporter 垫片，须先于 jieba
 import asyncio
 import json
 import re
@@ -154,7 +156,9 @@ class EntityExtractor:
             except Exception as e:
                 logger.debug("entity_extractor.jieba_tags_failed", error=str(e))
 
-        except ImportError:
+        except (ImportError, AttributeError):
+            # AttributeError：Python 3.12+ 下旧版 pkg_resources 的
+            #   pkgutil.ImpImporter 缺失（见 utils/pycompat.py）
             logger.debug("entity_extractor.jieba_not_available, using n-gram fallback")
             # 降级到 n-gram
             for n in range(2, 5):

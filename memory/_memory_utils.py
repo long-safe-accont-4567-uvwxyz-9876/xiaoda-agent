@@ -3,6 +3,8 @@
 memory_manager.py 通过 `from memory._memory_utils import ...` 重新导出这些名称，
 以保持 `from memory.memory_manager import X` 的向后兼容。
 """
+
+import utils.pycompat  # noqa: F401  # isort: skip  # pkgutil.ImpImporter 垫片，须先于 jieba
 import asyncio
 import re
 import time
@@ -48,7 +50,9 @@ def _extract_entities(text: str) -> list[str]:
         import jieba
         words = jieba.cut(text)
         return [w for w in words if len(w) >= 2]
-    except ImportError:
+    except (ImportError, AttributeError):
+        # AttributeError：Python 3.12+ 下旧版 pkg_resources 的
+        #   pkgutil.ImpImporter 缺失（见 utils/pycompat.py）
         return [text[i:i+n] for n in range(2, 5) for i in range(len(text)-n+1)]
 
 
@@ -396,15 +400,17 @@ def _extract_topic_keywords(query: str, top_n: int = 2) -> list[str]:
         stopwords = _get_topic_stopwords()
         keywords = [kw for kw in keywords if len(kw) >= 2 and kw not in stopwords]
         return keywords[:top_n]
-    except (ImportError, OSError):
+    except (ImportError, OSError, AttributeError):
         # 降级到普通分词
+        # AttributeError：Python 3.12+ 下旧版 pkg_resources 的
+        #   pkgutil.ImpImporter 缺失（见 utils/pycompat.py）
         try:
             import jieba
             words = jieba.lcut(query)
             stopwords = _get_topic_stopwords()
             words = [w for w in words if len(w) >= 2 and w not in stopwords]
             return words[:top_n]
-        except (ImportError, OSError):
+        except (ImportError, OSError, AttributeError):
             return []
 
 
