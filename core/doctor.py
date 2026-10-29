@@ -5,6 +5,7 @@
 用法: xiaoda doctor [--json] [--fix]
 """
 import contextlib
+import importlib.util
 import json
 import os
 import shutil
@@ -216,10 +217,69 @@ def _fix_db_integrity() -> None:
         )
 
 def _check_config() -> tuple:
+    """检查是否至少配置了一个 provider 凭证。
+
+    原实现只看 MIMO_API_KEY，但项目支持 MiMo / Agnes / OpenRouter /
+    SiliconFlow / DeepSeek / 智谱 以及自定义 provider。用户只配了其中任意
+    一个也能正常对话，原判定会误报 FAIL，把用户引向"我没配置"的错误结论
+    —— 这也是"doctor 说配置有问题但我明明能用"这类反馈的来源。
+
+    现在改为：MiMo 优先 → 扫描 .env 与环境变量里常见的 `*_API_KEY` →
+    检查 config_service 里注册过的自定义 provider 凭证文件。任一命中即通过，
+    并在结果里说明命中的是哪一个，便于用户对照。
+    """
     from config import MIMO_API_KEY
-    if not MIMO_API_KEY:
-        return False, "MIMO_API_KEY not set"
-    return True, "MIMO_API_KEY configured"
+
+    if MIMO_API_KEY:
+        return True, "MIMO_API_KEY configured"
+
+    # .env 里的其它 provider 凭证（与 setup_wizard 写盘的位置保持一致）
+    env_vals = {}
+    try:
+        from setup_wizard import _load_env_values
+
+        env_vals = _load_env_values() or {}
+    except (ImportError, OSError, ValueError):
+        logger.debug("doctor.config_env_load_failed", exc_info=True)
+
+    known_keys = (
+        "AGNES_API_KEY",
+        "OPENROUTER_API_KEY",
+        "SILICONFLOW_API_KEY",
+        "DEEPSEEK_API_KEY",
+        "ZHIPU_API_KEY",
+        "ZHIPUAI_API_KEY",
+        "DASHSCOPE_API_KEY",
+        "MOONSHOT_API_KEY",
+        "OPENAI_API_KEY",
+        "ANTHROPIC_API_KEY",
+        "GEMINI_API_KEY",
+        "GROQ_API_KEY",
+        "TOGETHER_API_KEY",
+        "XIAOMI_API_KEY",
+    )
+    for key in known_keys:
+        if (env_vals.get(key) or "").strip() or os.environ.get(key, "").strip():
+            return True, f"{key} configured (MIMO_API_KEY not set)"
+
+    # 自定义 provider：config_service 里注册过且有凭证文件也算可用
+    try:
+        from web._provider_keys import load_provider_key
+        from web.config_service import get_config_service
+
+        providers = get_config_service().get("models.providers", {}) or {}
+        for pid in providers:
+            if pid in ("ollama", "llama.cpp"):
+                continue
+            if load_provider_key(pid).strip():
+                return True, f"custom provider '{pid}' configured"
+    except (ImportError, OSError, ValueError, AttributeError):
+        logger.debug("doctor.config_custom_provider_check_failed", exc_info=True)
+
+    return False, (
+        "No provider API key configured — 在 .env 里至少设置一个，"
+        "例如 MIMO_API_KEY / AGNES_API_KEY / DEEPSEEK_API_KEY"
+    )
 
 def _check_env_file() -> tuple:
     from config import _KIOXIA_BASE
@@ -255,7 +315,85 @@ def _check_security() -> tuple:
 
 
 
+# ── L0-Dependencies：依赖完整性 ────────────────────────────
+# 为什么需要这一层：用户反馈"装完用不了"里，占比最高的不是配置问题，
+# 而是依赖缺失或依赖装上了却导入失败（典型：Python 3.12+ 下旧版
+# pkg_resources 让 jieba 抛 AttributeError，find_spec 却显示"已安装"）。
+# 原 doctor 完全不查依赖，一路绿，反而把用户引向错误的排查方向。
+#
+# (模块, 用途, 是否需要真实导入验证)
+# 第三项为 True 的，都是"文件在但 import 可能崩"的类型：
+#   二进制扩展（C 编译版本不匹配）、有 import 期副作用的包（pkg_resources 坑）。
+_REQUIRED_MODULES: tuple[tuple[str, str, bool], ...] = (
+    ("fastapi", "Web 服务", False),
+    ("uvicorn", "Web 服务", False),
+    ("httpx", "HTTP 客户端", False),
+    ("pydantic", "数据校验", False),
+    ("loguru", "日志", False),
+    ("dotenv", "环境变量", False),
+    ("aiosqlite", "数据库驱动", True),
+    ("jieba", "中文分词/记忆检索", True),
+)
+
+# 可选依赖：缺失只让对应功能降级，不阻塞启动，因此不判 FAIL
+_OPTIONAL_MODULES: tuple[tuple[str, str], ...] = (
+    ("prompt_toolkit", "CLI 补全与菜单"),
+    ("botpy", "QQ 渠道"),
+    ("networkx", "概念图"),
+    ("onnxruntime", "本地向量模型"),
+    ("tokenizers", "本地向量模型"),
+    ("sqlite_vec", "向量检索扩展"),
+)
+
+
+def _probe_module(mod: str, need_import: bool) -> str:
+    """探测单个模块，返回空串表示正常，否则返回失败描述。"""
+    try:
+        if importlib.util.find_spec(mod) is None:
+            return "未安装"
+    except (ImportError, ValueError, AttributeError) as exc:
+        # find_spec 自身就可能因 sys.path 异常 / 父包损坏而抛错
+        return f"探测失败: {type(exc).__name__}: {exc}"
+    if not need_import:
+        return ""
+    try:
+        importlib.import_module(mod)
+    except (ImportError, AttributeError, OSError, RuntimeError) as exc:
+        return f"导入失败: {type(exc).__name__}: {exc}"
+    return ""
+
+
+def _check_required_deps() -> tuple:
+    """核心运行时依赖：缺失或导入失败即无法正常启动。"""
+    problems = []
+    for mod, purpose, need_import in _REQUIRED_MODULES:
+        detail = _probe_module(mod, need_import)
+        if detail:
+            problems.append(f"{mod}({purpose}) {detail}")
+    if problems:
+        return False, (
+            f"核心依赖异常: {'; '.join(problems)} — 运行 "
+            "`pip install -r requirements.txt` 补齐；若显示'导入失败'，"
+            "多为 Python 3.12+ 的 pkg_resources/jieba 兼容问题"
+        )
+    return True, f"{len(_REQUIRED_MODULES)} 个核心依赖就绪"
+
+
+def _check_optional_deps() -> tuple:
+    """可选依赖：缺失只影响对应功能（走降级路径），不算失败。"""
+    missing = []
+    for mod, purpose in _OPTIONAL_MODULES:
+        detail = _probe_module(mod, False)
+        if detail:
+            missing.append(f"{mod}({purpose}) {detail}")
+    if missing:
+        return True, f"可选依赖缺失（相关功能降级）: {', '.join(missing)}"
+    return True, f"{len(_OPTIONAL_MODULES)} 个可选依赖就绪"
+
+
 _CONFIG_CHECKS: list[tuple[str, str, Any, Any]] = [
+    ("Required Dependencies", "L0-Dependencies", _check_required_deps, None),
+    ("Optional Dependencies", "L0-Dependencies", _check_optional_deps, None),
     ("Database Driver", "L3-Database", _check_db, None),
     ("Database Integrity", "L3-Database", _check_db_integrity, _fix_db_integrity),
     ("Config Loaded", "L4-Config", _check_config, None),
@@ -266,7 +404,7 @@ _CONFIG_CHECKS: list[tuple[str, str, Any, Any]] = [
 
 
 def _register_config_checks(doc: DoctorCheck) -> None:
-    """注册数据库、配置、记忆、安全检查（Layer 3-6）。"""
+    """注册依赖、数据库、配置、记忆、安全检查（Layer 0/3-6）。"""
     for name, layer, check, fix in _CONFIG_CHECKS:
         doc.add_check(name, layer, check, fix)
 
@@ -326,6 +464,11 @@ def _check_disk_space() -> tuple:
         except Exception:
             logger.exception("doctor.disk_space_check_unexpected")
             return True, "Disk space check skipped (unsupported)"
+    # 合理性上限：云盘 / FUSE / 容器 overlay 挂载可能返回占位值
+    # （实测 f_bavail=2^54-1、f_frsize=512 → 算出 8589934592 GB），
+    # 这种天文数字只会让用户困惑，超过 1 PB 直接判定为不可信。
+    if free_gb > 1024 * 1024:
+        return True, "Disk space check skipped (mount reports placeholder values)"
     if free_gb < 0.5:
         return False, f"Low disk space: {free_gb:.1f} GB free"
     return True, f"Disk space OK: {free_gb:.1f} GB free"
