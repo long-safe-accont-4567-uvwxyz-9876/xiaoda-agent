@@ -314,3 +314,106 @@ html, body {
     from { opacity: 0; transform: translateY(4px); }
     to { opacity: 1; transform: translateY(0); }
 }
+
+/* ==================== 启动超时排查面板 ====================
+   由 splash.js 的 onServerTimeout 通过 .show 显示。
+   目标：把"Connection timeout"这种无信息提示，换成用户能照着做的排查步骤。 */
+.troubleshoot {
+    display: none;
+    max-width: 560px;
+    margin: 32px auto 0;
+    padding: 22px 26px 20px;
+    text-align: left;
+    border: 1px solid rgba(127, 214, 80, 0.22);
+    border-radius: 14px;
+    background: rgba(12, 20, 14, 0.72);
+    backdrop-filter: blur(6px);
+    color: rgba(232, 240, 224, 0.82);
+    font-size: 13px;
+    line-height: 1.75;
+    opacity: 0;
+    transform: translateY(8px);
+    transition: opacity 0.45s ease, transform 0.45s ease;
+}
+
+.troubleshoot.show {
+    display: block;
+    opacity: 1;
+    transform: translateY(0);
+}
+
+.ts-title {
+    margin: 0 0 10px;
+    font-size: 15px;
+    font-weight: 500;
+    letter-spacing: 1px;
+    color: #e8a33d;
+}
+
+.ts-lead {
+    margin: 0 0 14px;
+    color: rgba(232, 240, 224, 0.6);
+}
+
+.ts-lead strong {
+    color: #7fd650;
+    font-weight: 500;
+}
+
+.ts-steps {
+    margin: 0 0 16px;
+    padding-left: 20px;
+    color: rgba(232, 240, 224, 0.72);
+}
+
+.ts-steps li {
+    margin-bottom: 7px;
+}
+
+.ts-steps code {
+    padding: 1px 6px;
+    border-radius: 4px;
+    background: rgba(127, 214, 80, 0.1);
+    color: #a8e87a;
+    font-family: ui-monospace, "SFMono-Regular", Menlo, Consolas, monospace;
+    font-size: 12px;
+    word-break: break-all;
+}
+
+.ts-actions {
+    display: flex;
+    gap: 10px;
+    flex-wrap: wrap;
+}
+
+.ts-btn {
+    padding: 8px 18px;
+    border: 1px solid rgba(127, 214, 80, 0.3);
+    border-radius: 8px;
+    background: transparent;
+    color: rgba(232, 240, 224, 0.8);
+    font-size: 12px;
+    letter-spacing: 1px;
+    cursor: pointer;
+    transition: background 0.2s ease, border-color 0.2s ease, color 0.2s ease;
+}
+
+.ts-btn:hover {
+    background: rgba(127, 214, 80, 0.12);
+    border-color: rgba(127, 214, 80, 0.55);
+    color: #e8f0e0;
+}
+
+.ts-btn-primary {
+    background: rgba(127, 214, 80, 0.16);
+    border-color: rgba(127, 214, 80, 0.5);
+    color: #a8e87a;
+}
+
+.ts-hint {
+    margin: 10px 0 0;
+    min-height: 16px;
+    font-size: 11px;
+    letter-spacing: 1px;
+    color: rgba(127, 214, 80, 0.75);
+}

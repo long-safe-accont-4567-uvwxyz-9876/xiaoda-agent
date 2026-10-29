@@ -54,6 +54,26 @@
             <p class="loading-text" id="loading-text">Initializing</p>
         </div>
 
+        <!-- 启动超时排查面板：由 splash.js 的 onServerTimeout 显示 -->
+        <div class="troubleshoot" id="troubleshoot" role="alert">
+            <h2 class="ts-title">启动超时 · Startup timeout</h2>
+            <p class="ts-lead">
+                后端服务在 <strong id="ts-port">8082</strong> 端口 180 秒内未就绪。
+                通常是首次启动较慢、API Key 未配置，或端口被占用。
+            </p>
+            <ol class="ts-steps">
+                <li>查看日志：<code id="ts-logdir">~/.ai-agent/data/logs</code> 下的 <code>agent.log</code></li>
+                <li>运行自检：<code>python agent.py doctor</code>（零 API 调用，2 秒内出结果）</li>
+                <li>确认 <code>.env</code> 里至少配置了一个 provider 的 API Key</li>
+                <li>确认 <strong id="ts-port2">8082</strong> 端口没有被其它程序占用</li>
+            </ol>
+            <div class="ts-actions">
+                <button class="ts-btn ts-btn-primary" id="ts-retry">重试 / Retry</button>
+                <button class="ts-btn" id="ts-doctor">复制自检命令</button>
+            </div>
+            <p class="ts-hint" id="ts-copy-hint"></p>
+        </div>
+
         <div class="enter-btn-wrap" id="enter-btn-wrap">
             <button class="enter-btn" id="enter-btn">Enter</button>
         </div>

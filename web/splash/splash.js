@@ -182,6 +182,28 @@ const msgInterval = setInterval(() => {
     loadingText.textContent = loadingMessages[msgIndex];
 }, 3000);
 
+// ==================== 慢启动分级提示 ====================
+// 后端就绪前是 180 秒的静默期（agent.py::_wait_for_server_ready 每秒探活）。
+// 原来这段等待里只有 5 条轮换文案在转，用户无法判断"还在正常启动"还是"已经卡死"。
+// 这里按时间点给出递进提示，让等待有解释；真正的超时排查面板仍由
+// onServerTimeout 在 180 秒时显示。
+let _slowHintTimer = setTimeout(() => {
+    clearInterval(msgInterval);
+    loadingText.textContent = 'Still starting · 30s+ · 首次启动需要加载词典与索引';
+}, 30000);
+
+let _verySlowTimer = setTimeout(() => {
+    loadingText.textContent = 'Still starting · 60s+ · 如长时间无响应可查看日志';
+}, 60000);
+
+function _clearStartupTimers() {
+    clearInterval(msgInterval);
+    clearTimeout(_slowHintTimer);
+    clearTimeout(_verySlowTimer);
+    _slowHintTimer = null;
+    _verySlowTimer = null;
+}
+
 // ==================== 打字机效果（Claude CLI 风格，参考 Vibe Motion claude-typer） ====================
 function typewriter(element, text, baseSpeed, callback) {
     element.classList.add('typing');
@@ -286,7 +308,7 @@ window.onServerReady = function() {
     if (_serverReadyCalled) return;
     _serverReadyCalled = true;
     if (_reflowKicker) { clearInterval(_reflowKicker); _reflowKicker = null; }
-    clearInterval(msgInterval);
+    _clearStartupTimers();
     loadingText.textContent = 'Ready';
     if (loadingBar) loadingBar.style.animation = 'none';
     enterBtnWrap.classList.add('ready');
@@ -300,10 +322,51 @@ window.onServerReady = function() {
     }
 };
 
+// 启动超时：不只是报个 "Connection timeout"，而是把端口、日志位置、
+// 自检命令、常见原因一起给出来，用户能照着做而不是干瞪眼。
 window.onServerTimeout = function() {
     if (_reflowKicker) { clearInterval(_reflowKicker); _reflowKicker = null; }
-    clearInterval(msgInterval);
-    loadingText.textContent = 'Connection timeout';
+    _clearStartupTimers();
+    loadingText.textContent = 'Startup timed out · 启动超时';
+
+    var port = window.__SPLASH_PORT ||
+        (location.hash.length > 1 ? location.hash.substring(1) : '8082');
+
+    var portEl = document.getElementById('ts-port');
+    if (portEl) portEl.textContent = port;
+    var portEl2 = document.getElementById('ts-port2');
+    if (portEl2) portEl2.textContent = port;
+
+    var panel = document.getElementById('troubleshoot');
+    if (panel) panel.classList.add('show');
+
+    // 隐藏进入按钮：服务没起来，点进去只会看到空白页
+    if (enterBtnWrap) enterBtnWrap.classList.remove('ready');
+
+    var retryBtn = document.getElementById('ts-retry');
+    if (retryBtn && !retryBtn._bound) {
+        retryBtn._bound = true;
+        retryBtn.addEventListener('click', function() { location.reload(); });
+    }
+
+    var doctorBtn = document.getElementById('ts-doctor');
+    var hint = document.getElementById('ts-copy-hint');
+    if (doctorBtn && !doctorBtn._bound) {
+        doctorBtn._bound = true;
+        doctorBtn.addEventListener('click', function() {
+            var cmd = 'python agent.py doctor';
+            var done = function() {
+                if (hint) hint.textContent = '已复制：' + cmd;
+            };
+            if (navigator.clipboard && navigator.clipboard.writeText) {
+                navigator.clipboard.writeText(cmd).then(done, function() {
+                    if (hint) hint.textContent = '请手动执行：' + cmd;
+                });
+            } else if (hint) {
+                hint.textContent = '请手动执行：' + cmd;
+            }
+        });
+    }
 };
 
 // 预览模式：自动显示 Enter 按钮（仅调试用）
