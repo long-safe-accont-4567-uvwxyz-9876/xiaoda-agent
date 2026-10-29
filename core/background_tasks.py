@@ -175,7 +175,8 @@ class BackgroundTaskManager:
         _spawn(coro, timeout=timeout, owner=self)
 
     def get_owned_tasks(self) -> set[asyncio.Task]:
-        return set(self._owned_tasks)
+        """返回名下未完成的后台任务：已完成 task 的清理靠 done callback，混入会让等待方饥饿。"""
+        return {task for task in self._owned_tasks if not task.done()}
 
     async def cancel_background_tasks(self) -> None:
         tasks = list(self._owned_tasks)

@@ -137,10 +137,21 @@ ALLOWLIST_BASELINES: dict[str, int] = {
     "agent_core/sub_agent.py": 1161,
     "tools/_builtin_manifest.py": 1001,
     "web/routers/insight.py": 937,
-    "core/background_tasks.py": 1018,
+    # 2026-10-28 上调记录（协议 b：必要增长 +1 行）：
+    #   core/background_tasks.py 1018→1019 —— get_owned_tasks 只返回未完成 task，
+    #     避免已完成 task 混入导致 await gather 不让出、done callback 饥饿。
+    "core/background_tasks.py": 1019,
     "web/agent_registry.py": 912,
     "web/routers/local_deploy.py": 919,
-    "cli.py": 908,
+    # 2026-10-28 上调记录（协议 b：必要增长）：
+    #   cli.py 908→912 —— 4 行不可压缩的模块级 import：
+    #     1) utils.pycompat（Python 3.12+ 的 pkgutil.ImpImporter 垫片，必须在
+    #        任何第三方库之前执行，无法移出本体）；
+    #     2~4) utils.cli_compat 的三组降级占位（prompt_toolkit / cli_menu /
+    #        cli_palette 缺失时的基类，须在各自 except 分支内 import）。
+    #   占位类本体已从 cli.py（原 +68 行）抽出到 utils/cli_compat.py，
+    #   本条仅保留 import 语句本身。
+    "cli.py": 912,
 }
 
 def test_hotspot_files_do_not_grow():
