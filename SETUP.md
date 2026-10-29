@@ -19,7 +19,7 @@ cp .env.example .env
 docker compose up -d
 
 # 4. 访问 Web UI
-# 浏览器打开 http://localhost:8080
+# 浏览器打开 http://localhost:8082
 ```
 
 ---
@@ -152,7 +152,9 @@ docker compose up -d --build
 
 **数据持久化**：数据库、日志、凭证等存储在 Docker volume `agent-data` 中，删除容器不会丢失数据。
 
-**端口配置**：默认 8080，可通过 `.env` 中的 `WEBUI_PORT` 修改。
+**端口配置**：默认 8082，可通过 `.env` 中的 `WEBUI_PORT` 修改。
+
+> 注：v0.5.x 之前的旧版默认端口为 8080。若 `.env` 是从旧版复制而来，`agent.py` 会在启动时自动把遗留默认值迁移到 8082；手动部署请直接访问 8082。
 
 ### 方式二：手动部署
 
@@ -177,7 +179,7 @@ cp .env.example .env
 # 编辑 .env 填写 API 密钥
 
 # 5a. 启动 Web UI 模式（推荐）
-python agent.py --web 8080
+python agent.py --web          # 默认 8082，如需指定端口：--web --port 8082
 
 # 5b. 启动 CLI 模式（开发调试）
 python cli.py

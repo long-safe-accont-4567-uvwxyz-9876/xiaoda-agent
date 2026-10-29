@@ -13,7 +13,7 @@
 
 ### 1.2 研究发现：SPEC诊断与实际代码的差距
 
-通过完整阅读 [memory_manager.py](file:///home/orangepi/ai-agent/memory/memory_manager.py)（1993行）和 [vector_store.py](file:///home/orangepi/ai-agent/memory/vector_store.py)（627行），发现 SPEC 中有 5 项诊断已过时：
+通过完整阅读 `memory_manager.py`（1993行）和 `vector_store.py`（627行），发现 SPEC 中有 5 项诊断已过时：
 
 | SPEC诊断 | 实际代码状态 |
 |---------|------------|
@@ -72,11 +72,11 @@ memory/
 
 | 文件 | 修改内容 |
 |------|---------|
-| [memory_manager.py](file:///home/orangepi/ai-agent/memory/memory_manager.py) | 编码流程接入实体提取+ADD-only；检索流程接入 Entity Boost |
-| [vector_store.py](file:///home/orangepi/ai-agent/memory/vector_store.py) | 无需修改（不新增实体向量表） |
-| [db/db_memory.py](file:///home/orangepi/ai-agent/db/db_memory.py) | 新增 scope 过滤方法 + entity_store CRUD |
-| [db/schema.sql](file:///home/orangepi/ai-agent/db/schema.sql) | episodic_memories 加3字段 + 新建3表 |
-| [memory/memory_distiller.py](file:///home/orangepi/ai-agent/memory/memory_distiller.py) | 新增 `merge_knowledge()` 方法 |
+| `memory_manager.py` | 编码流程接入实体提取+ADD-only；检索流程接入 Entity Boost |
+| `vector_store.py` | 无需修改（不新增实体向量表） |
+| `db/db_memory.py` | 新增 scope 过滤方法 + entity_store CRUD |
+| `db/schema.sql` | episodic_memories 加3字段 + 新建3表 |
+| `memory/memory_distiller.py` | 新增 `merge_knowledge()` 方法 |
 
 ### 2.3 数据流变化
 
@@ -360,7 +360,7 @@ def compute_entity_boost(entity: dict, query_entities: set[str], now: float) -> 
 
 | 已有代码 | 变更 |
 |---------|------|
-| `_extract_entities()` ([memory_manager.py:20](file:///home/orangepi/ai-agent/memory/memory_manager.py#L20)) | 保留为降级方案，`EntityExtractor` 为主入口 |
+| `_extract_entities()` (`memory_manager.py:20:20`) | 保留为降级方案，`EntityExtractor` 为主入口 |
 | `entities` 字段（episodic_memories 表） | 保留，存储 JSON 实体名列表；`entity_memory_links` 为反向链接 |
 | `knowledge_graph.py` | 不变，KG 和实体链接职责分离 |
 
@@ -473,8 +473,8 @@ async def retrieve_memories_hybrid(self, query, scope: Scope, ...):
 
 | 已有机制 | 变更 |
 |---------|------|
-| `_has_duplicate()` ([memory_manager.py:322](file:///home/orangepi/ai-agent/memory/memory_manager.py#L322)) | 改为只对 `is_raw=0` 的提炼知识生效；原始记忆不去重 |
-| `MemoryDistiller` ([memory_distiller.py](file:///home/orangepi/ai-agent/memory/memory_distiller.py)) | 新增 `merge_knowledge()` 方法用于合并相似知识 |
+| `_has_duplicate()` (`memory_manager.py:322:322`) | 改为只对 `is_raw=0` 的提炼知识生效；原始记忆不去重 |
+| `MemoryDistiller` (`memory_distiller.py`) | 新增 `merge_knowledge()` 方法用于合并相似知识 |
 | 梦境整合/遗忘曲线 | 通过 `rag_status='excluded'` 标记删除，不真正 DELETE |
 | `RuleBasedMemoryExtractor` | 不变，规则提取结果作为蒸馏输入 |
 
@@ -575,9 +575,9 @@ message_processor
 
 ### 7.1 已有实现（无需重写）
 
-- [_parse_temporal_query()](file:///home/orangepi/ai-agent/memory/memory_manager.py#L47) 解析中文时间词（昨天/前天/上周等）
+- `_parse_temporal_query():47` 解析中文时间词（昨天/前天/上周等）
 - `_try_temporal_search()` 按时间范围检索
-- [FluidMemory](file:///home/orangepi/ai-agent/memory/fluid_memory.py) Ebbinghaus 衰减 + 访问频率 boost
+- `FluidMemory` Ebbinghaus 衰减 + 访问频率 boost
 
 ### 7.2 增强点（与新增组件兼容）
 
@@ -702,7 +702,7 @@ async def test_end_to_end_memory_flow():
   - `mem0/utils/scoring.py` — BM25 归一化 + Entity Boost 计算
   - `mem0/utils/entity_extraction.py` — spaCy NER + 正则提取
 - 外部 SPEC：`https://www.coze.cn/s/LLpy94BHkxs/`
-- 项目已有 RAG 优化 SPEC：[RAG-OPTIMIZATION-SPEC.md](file:///home/orangepi/ai-agent/RAG-OPTIMIZATION-SPEC.md)
+- 项目已有 RAG 优化 SPEC：`RAG-OPTIMIZATION-SPEC.md`
 - 技术研究：
   - RRF (Reciprocal Rank Fusion)，k=60 标准参数
   - BM25 sigmoid 归一化：`1/(1+e^(-steepness*(x-midpoint)))`

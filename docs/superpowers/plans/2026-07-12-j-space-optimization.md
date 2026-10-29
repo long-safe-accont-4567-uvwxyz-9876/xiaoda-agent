@@ -145,7 +145,7 @@ async def test_get_history_all_types():
 
 - [ ] **Step 2: Run test to verify it fails**
 
-Run: `cd /home/orangepi/ai-agent && python -m pytest tests/test_behavioral_signal.py -v`
+Run: `cd 项目根目录 && python -m pytest tests/test_behavioral_signal.py -v`
 Expected: FAIL with `ModuleNotFoundError: No module named 'core.behavioral_signal'`
 
 - [ ] **Step 3: Write minimal implementation**
@@ -234,13 +234,13 @@ class BehavioralSignalStream:
 
 - [ ] **Step 4: Run test to verify it passes**
 
-Run: `cd /home/orangepi/ai-agent && python -m pytest tests/test_behavioral_signal.py -v`
+Run: `cd 项目根目录 && python -m pytest tests/test_behavioral_signal.py -v`
 Expected: 9 tests PASS
 
 - [ ] **Step 5: Commit**
 
 ```bash
-cd /home/orangepi/ai-agent
+cd 项目根目录
 git add core/behavioral_signal.py tests/test_behavioral_signal.py
 git commit -m "feat: 行为信号流模块 (BehavioralSignalStream) — Stage 1 基础层"
 ```
@@ -375,7 +375,7 @@ def test_registry_load_corrupted_falls_back():
 
 - [ ] **Step 2: Run test to verify it fails**
 
-Run: `cd /home/orangepi/ai-agent && python -m pytest tests/test_behavioral_direction.py -v`
+Run: `cd 项目根目录 && python -m pytest tests/test_behavioral_direction.py -v`
 Expected: FAIL with `ModuleNotFoundError: No module named 'core.behavioral_direction'`
 
 - [ ] **Step 3: Write minimal implementation**
@@ -529,13 +529,13 @@ class DirectionRegistry:
 
 - [ ] **Step 4: Run test to verify it passes**
 
-Run: `cd /home/orangepi/ai-agent && python -m pytest tests/test_behavioral_direction.py -v`
+Run: `cd 项目根目录 && python -m pytest tests/test_behavioral_direction.py -v`
 Expected: 11 tests PASS
 
 - [ ] **Step 5: Commit**
 
 ```bash
-cd /home/orangepi/ai-agent
+cd 项目根目录
 git add core/behavioral_direction.py tests/test_behavioral_direction.py
 git commit -m "feat: 行为方向向量模块 (DirectionVector + DirectionRegistry) — Stage 1 基础层"
 ```
@@ -552,7 +552,7 @@ git commit -m "feat: 行为方向向量模块 (DirectionVector + DirectionRegist
 
 - [ ] **Step 1: Read current config.py to find insertion point**
 
-Run: `cd /home/orangepi/ai-agent && grep -n "^[A-Z_]* *=" config.py | tail -20`
+Run: `cd 项目根目录 && grep -n "^[A-Z_]* *=" config.py | tail -20`
 Find the last config variable to append after.
 
 - [ ] **Step 2: Add J-Space config variables to config.py**
@@ -569,13 +569,13 @@ INTERVENTION_DEFAULT_COOLDOWN = float(os.getenv("INTERVENTION_DEFAULT_COOLDOWN",
 
 - [ ] **Step 3: Verify config loads correctly**
 
-Run: `cd /home/orangepi/ai-agent && python -c "from config import ENABLE_J_SPACE_HOOKS, DIRECTION_REGISTRY_PATH, SIGNAL_STREAM_MAX_HISTORY, INTERVENTION_DEFAULT_COOLDOWN; print(f'hooks={ENABLE_J_SPACE_HOOKS} path={DIRECTION_REGISTRY_PATH} max={SIGNAL_STREAM_MAX_HISTORY} cooldown={INTERVENTION_DEFAULT_COOLDOWN}')"`
+Run: `cd 项目根目录 && python -c "from config import ENABLE_J_SPACE_HOOKS, DIRECTION_REGISTRY_PATH, SIGNAL_STREAM_MAX_HISTORY, INTERVENTION_DEFAULT_COOLDOWN; print(f'hooks={ENABLE_J_SPACE_HOOKS} path={DIRECTION_REGISTRY_PATH} max={SIGNAL_STREAM_MAX_HISTORY} cooldown={INTERVENTION_DEFAULT_COOLDOWN}')"`
 Expected: Prints values without error
 
 - [ ] **Step 4: Commit**
 
 ```bash
-cd /home/orangepi/ai-agent
+cd 项目根目录
 git add config.py
 git commit -m "feat: J-Space 配置开关 (ENABLE_J_SPACE_HOOKS 等) — Stage 1"
 ```
@@ -720,7 +720,7 @@ async def test_convergence_metrics_after_interventions():
 
 - [ ] **Step 2: Run test to verify it fails**
 
-Run: `cd /home/orangepi/ai-agent && python -m pytest tests/test_intervention_loop.py -v`
+Run: `cd 项目根目录 && python -m pytest tests/test_intervention_loop.py -v`
 Expected: FAIL with `ModuleNotFoundError: No module named 'core.intervention_loop'`
 
 - [ ] **Step 3: Write minimal implementation**
@@ -847,13 +847,13 @@ class InterventionLoop:
 
 - [ ] **Step 4: Run test to verify it passes**
 
-Run: `cd /home/orangepi/ai-agent && python -m pytest tests/test_intervention_loop.py -v`
+Run: `cd 项目根目录 && python -m pytest tests/test_intervention_loop.py -v`
 Expected: 8 tests PASS
 
 - [ ] **Step 5: Commit**
 
 ```bash
-cd /home/orangepi/ai-agent
+cd 项目根目录
 git add core/intervention_loop.py tests/test_intervention_loop.py
 git commit -m "feat: 干预闭环模块 (InterventionLoop) — Stage 2 闭环层"
 ```
@@ -965,7 +965,7 @@ async def test_raw_output_preserved():
 
 - [ ] **Step 2: Run test to verify it fails**
 
-Run: `cd /home/orangepi/ai-agent && python -m pytest tests/test_intent_decomposition.py -v`
+Run: `cd 项目根目录 && python -m pytest tests/test_intent_decomposition.py -v`
 Expected: FAIL with `ModuleNotFoundError`
 
 - [ ] **Step 3: Write minimal implementation**
@@ -1102,13 +1102,13 @@ class IntentDecomposer:
 
 - [ ] **Step 4: Run test to verify it passes**
 
-Run: `cd /home/orangepi/ai-agent && python -m pytest tests/test_intent_decomposition.py -v`
+Run: `cd 项目根目录 && python -m pytest tests/test_intent_decomposition.py -v`
 Expected: 10 tests PASS
 
 - [ ] **Step 5: Commit**
 
 ```bash
-cd /home/orangepi/ai-agent
+cd 项目根目录
 git add core/intent_decomposition.py tests/test_intent_decomposition.py
 git commit -m "feat: 输出意图分解模块 (IntentDecomposer) — Stage 3 智能层"
 ```
@@ -1212,7 +1212,7 @@ async def test_update_belief_delegates(mock_base_router):
 
 - [ ] **Step 2: Run test to verify it fails**
 
-Run: `cd /home/orangepi/ai-agent && python -m pytest tests/test_enhanced_router.py -v`
+Run: `cd 项目根目录 && python -m pytest tests/test_enhanced_router.py -v`
 Expected: FAIL with `ModuleNotFoundError`
 
 - [ ] **Step 3: Write minimal implementation**
@@ -1317,13 +1317,13 @@ class EnhancedBeliefRouter:
 
 - [ ] **Step 4: Run test to verify it passes**
 
-Run: `cd /home/orangepi/ai-agent && python -m pytest tests/test_enhanced_router.py -v`
+Run: `cd 项目根目录 && python -m pytest tests/test_enhanced_router.py -v`
 Expected: 6 tests PASS
 
 - [ ] **Step 5: Commit**
 
 ```bash
-cd /home/orangepi/ai-agent
+cd 项目根目录
 git add core/enhanced_router.py tests/test_enhanced_router.py
 git commit -m "feat: 增强型路由模块 (EnhancedBeliefRouter) — Stage 3 智能层"
 ```
@@ -1344,7 +1344,7 @@ git commit -m "feat: 增强型路由模块 (EnhancedBeliefRouter) — Stage 3 �
 
 - [ ] **Step 1: Read existing SharedBlackboard to understand interface**
 
-Run: `cd /home/orangepi/ai-agent && head -60 agent_core/shared_blackboard.py`
+Run: `cd 项目根目录 && head -60 agent_core/shared_blackboard.py`
 Understand the `put`, `get`, `get_with_meta`, `keys` methods.
 
 - [ ] **Step 2: Write the failing test**
@@ -1426,7 +1426,7 @@ async def test_merge_from_skip_existing():
 
 - [ ] **Step 3: Run test to verify it fails**
 
-Run: `cd /home/orangepi/ai-agent && python -m pytest tests/test_structured_blackboard.py -v`
+Run: `cd 项目根目录 && python -m pytest tests/test_structured_blackboard.py -v`
 Expected: FAIL with `ModuleNotFoundError`
 
 - [ ] **Step 4: Write minimal implementation**
@@ -1535,13 +1535,13 @@ class StructuredBlackboard(SharedBlackboard):
 
 - [ ] **Step 5: Run test to verify it passes**
 
-Run: `cd /home/orangepi/ai-agent && python -m pytest tests/test_structured_blackboard.py -v`
+Run: `cd 项目根目录 && python -m pytest tests/test_structured_blackboard.py -v`
 Expected: 7 tests PASS
 
 - [ ] **Step 6: Commit**
 
 ```bash
-cd /home/orangepi/ai-agent
+cd 项目根目录
 git add agent_core/structured_blackboard.py tests/test_structured_blackboard.py
 git commit -m "feat: 结构化共享黑板 (StructuredBlackboard) — Stage 4 基础设施"
 ```
@@ -1561,11 +1561,11 @@ git commit -m "feat: 结构化共享黑板 (StructuredBlackboard) — Stage 4 �
 
 - [ ] **Step 1: Read agent_introspection.py to find get_current_state()**
 
-Run: `cd /home/orangepi/ai-agent && grep -n "def get_current_state\|def get_state\|cognitive_load" core/agent_introspection.py | head -10`
+Run: `cd 项目根目录 && grep -n "def get_current_state\|def get_state\|cognitive_load" core/agent_introspection.py | head -10`
 
 - [ ] **Step 2: Read behavioral_health.py to find health scoring**
 
-Run: `cd /home/orangepi/ai-agent && grep -n "def.*health\|def.*score\|health_score" core/behavioral_health.py | head -10`
+Run: `cd 项目根目录 && grep -n "def.*health\|def.*score\|health_score" core/behavioral_health.py | head -10`
 
 - [ ] **Step 3: Write the failing test**
 
@@ -1614,7 +1614,7 @@ async def test_hook_behavioral_health_emits_signal():
 
 - [ ] **Step 4: Run test to verify it fails**
 
-Run: `cd /home/orangepi/ai-agent && python -m pytest tests/test_hook_integration.py -v`
+Run: `cd 项目根目录 && python -m pytest tests/test_hook_integration.py -v`
 Expected: FAIL (hooks not yet installed)
 
 - [ ] **Step 5: Install hooks in agent_introspection.py**
@@ -1665,18 +1665,18 @@ Add similar import block and emit call in health scoring method:
 
 - [ ] **Step 7: Run test to verify it passes**
 
-Run: `cd /home/orangepi/ai-agent && python -m pytest tests/test_hook_integration.py -v`
+Run: `cd 项目根目录 && python -m pytest tests/test_hook_integration.py -v`
 Expected: PASS
 
 - [ ] **Step 8: Run existing tests to verify no regression**
 
-Run: `cd /home/orangepi/ai-agent && python -m pytest tests/ -k "introspection or behavioral_health" -v --timeout=30`
+Run: `cd 项目根目录 && python -m pytest tests/ -k "introspection or behavioral_health" -v --timeout=30`
 Expected: Existing tests still pass
 
 - [ ] **Step 9: Commit**
 
 ```bash
-cd /home/orangepi/ai-agent
+cd 项目根目录
 git add core/agent_introspection.py core/behavioral_health.py tests/test_hook_integration.py
 git commit -m "feat: Hook #1+#6 信号采集接入 (introspection + behavioral_health) — Stage 4"
 ```
@@ -1691,7 +1691,7 @@ git commit -m "feat: Hook #1+#6 信号采集接入 (introspection + behavioral_h
 
 - [ ] **Step 1: Read agent_dispatcher.py SubAgent.chat() method**
 
-Run: `cd /home/orangepi/ai-agent && grep -n "async def chat\|async def _chat\|async def _invoke" agent_dispatcher.py | head -10`
+Run: `cd 项目根目录 && grep -n "async def chat\|async def _chat\|async def _invoke" agent_dispatcher.py | head -10`
 
 - [ ] **Step 2: Add hook imports at top of agent_dispatcher.py**
 
@@ -1742,13 +1742,13 @@ After successful response:
 
 - [ ] **Step 4: Run existing dispatcher tests to verify no regression**
 
-Run: `cd /home/orangepi/ai-agent && python -m pytest tests/ -k "dispatcher" -v --timeout=30`
+Run: `cd 项目根目录 && python -m pytest tests/ -k "dispatcher" -v --timeout=30`
 Expected: Existing tests still pass
 
 - [ ] **Step 5: Commit**
 
 ```bash
-cd /home/orangepi/ai-agent
+cd 项目根目录
 git add agent_dispatcher.py
 git commit -m "feat: Hook #3 闭环干预接入 (agent_dispatcher) — Stage 4"
 ```
@@ -1764,8 +1764,8 @@ git commit -m "feat: Hook #3 闭环干预接入 (agent_dispatcher) — Stage 4"
 
 - [ ] **Step 1: Read emotion_state.py and prompt_builder.py**
 
-Run: `cd /home/orangepi/ai-agent && grep -n "class\|def " emotion/emotion_state.py | head -15`
-Run: `cd /home/orangepi/ai-agent && find . -name "prompt_builder*" -o -name "*prompt*build*" | head -5`
+Run: `cd 项目根目录 && grep -n "class\|def " emotion/emotion_state.py | head -15`
+Run: `cd 项目根目录 && find . -name "prompt_builder*" -o -name "*prompt*build*" | head -5`
 
 - [ ] **Step 2: Add direction hook to emotion_state.py**
 
@@ -1803,13 +1803,13 @@ In prompt building method:
 
 - [ ] **Step 4: Run existing tests to verify no regression**
 
-Run: `cd /home/orangepi/ai-agent && python -m pytest tests/ -k "emotion or prompt" -v --timeout=30`
+Run: `cd 项目根目录 && python -m pytest tests/ -k "emotion or prompt" -v --timeout=30`
 Expected: Existing tests still pass
 
 - [ ] **Step 5: Commit**
 
 ```bash
-cd /home/orangepi/ai-agent
+cd 项目根目录
 git add emotion/emotion_state.py agent_core/message_processor.py
 git commit -m "feat: Hook #4+#8 方向干预接入 (emotion_state + prompt_builder) — Stage 4"
 ```
@@ -1871,13 +1871,13 @@ In select_agent method, add optional EnhancedBeliefRouter delegation:
 
 - [ ] **Step 4: Run existing tests to verify no regression**
 
-Run: `cd /home/orangepi/ai-agent && python -m pytest tests/ -k "degradation or cognitive_memory or belief_router" -v --timeout=30`
+Run: `cd 项目根目录 && python -m pytest tests/ -k "degradation or cognitive_memory or belief_router" -v --timeout=30`
 Expected: Existing tests still pass
 
 - [ ] **Step 5: Commit**
 
 ```bash
-cd /home/orangepi/ai-agent
+cd 项目根目录
 git add core/degradation_strategy.py memory/cognitive_memory.py belief_router.py
 git commit -m "feat: Hook #5+#7+#2 信号驱动降级+结构化存储+增强路由 — Stage 4"
 ```
@@ -2010,13 +2010,13 @@ async def test_e2e_non_blocking_on_failure():
 
 - [ ] **Step 2: Run test to verify it passes**
 
-Run: `cd /home/orangepi/ai-agent && python -m pytest tests/test_e2e_closed_loop.py -v`
+Run: `cd 项目根目录 && python -m pytest tests/test_e2e_closed_loop.py -v`
 Expected: 4 tests PASS
 
 - [ ] **Step 3: Commit**
 
 ```bash
-cd /home/orangepi/ai-agent
+cd 项目根目录
 git add tests/test_e2e_closed_loop.py
 git commit -m "test: 端到端闭环测试 (e2e_closed_loop) — Stage 4"
 ```
@@ -2121,7 +2121,7 @@ def get_intervention_loop() -> InterventionLoop | None:
 - [ ] **Step 2: Add init call to Agent startup**
 
 Find the main startup sequence (likely in `agent.py` or `core/bootstrap.py`):
-Run: `cd /home/orangepi/ai-agent && grep -rn "async def main\|async def startup\|async def init" agent.py core/bootstrap.py 2>/dev/null | head -5`
+Run: `cd 项目根目录 && grep -rn "async def main\|async def startup\|async def init" agent.py core/bootstrap.py 2>/dev/null | head -5`
 
 Add after database init:
 ```python
@@ -2135,18 +2135,18 @@ Add after database init:
 
 - [ ] **Step 3: Run all J-Space tests**
 
-Run: `cd /home/orangepi/ai-agent && python -m pytest tests/test_behavioral_signal.py tests/test_behavioral_direction.py tests/test_intervention_loop.py tests/test_intent_decomposition.py tests/test_enhanced_router.py tests/test_structured_blackboard.py tests/test_e2e_closed_loop.py -v`
+Run: `cd 项目根目录 && python -m pytest tests/test_behavioral_signal.py tests/test_behavioral_direction.py tests/test_intervention_loop.py tests/test_intent_decomposition.py tests/test_enhanced_router.py tests/test_structured_blackboard.py tests/test_e2e_closed_loop.py -v`
 Expected: All tests PASS
 
 - [ ] **Step 4: Run full test suite to verify no regression**
 
-Run: `cd /home/orangepi/ai-agent && python -m pytest tests/ -x --timeout=60 -q 2>&1 | tail -20`
+Run: `cd 项目根目录 && python -m pytest tests/ -x --timeout=60 -q 2>&1 | tail -20`
 Expected: No new failures introduced by J-Space changes
 
 - [ ] **Step 5: Commit**
 
 ```bash
-cd /home/orangepi/ai-agent
+cd 项目根目录
 git add core/j_space_bootstrap.py
 git commit -m "feat: J-Space 启动初始化模块 (j_space_bootstrap) — 预注册方向+默认规则"
 ```

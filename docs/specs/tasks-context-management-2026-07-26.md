@@ -8,7 +8,7 @@
 ## 阶段一：P0 紧急修复（消除重试风暴 + 图片识别）
 
 ### Task 1.1：截断重试去递归化
-**文件**：`/home/orangepi/.ai-agent/proj/model_router.py`
+**文件**：`~/.ai-agent/proj/model_router.py`
 **位置**：line 1041-1075
 **改动**：
 - 新增内部方法 `_route_raw(task_type, messages, ...)`，跳过 `_handle_route_response` 的截断检测
@@ -23,7 +23,7 @@
 ---
 
 ### Task 1.2：修复 finish_reason 检测 bug
-**文件**：`/home/orangepi/.ai-agent/proj/model_router.py`
+**文件**：`~/.ai-agent/proj/model_router.py`
 **位置**：line 1065-1068
 **改动**：
 - `_handle_route_response` 返回值改为 `(content, finish_reason)` 元组（保持向后兼容：调用方按需解包）
@@ -36,7 +36,7 @@
 ---
 
 ### Task 1.3：fallback 链透传 max_tokens
-**文件**：`/home/orangepi/.ai-agent/proj/model_router.py`
+**文件**：`~/.ai-agent/proj/model_router.py`
 **位置**：line 669, 691, 705-711
 **改动**：
 - `_try_fallback_chain` 签名增加 `original_max_tokens` 参数
@@ -50,7 +50,7 @@
 ---
 
 ### Task 1.4：收敛多层重试叠加
-**文件**：`/home/orangepi/.ai-agent/proj/agent_core/message_processor.py`
+**文件**：`~/.ai-agent/proj/agent_core/message_processor.py`
 **位置**：line 165-168（常量）、line 233/289/1919（重试循环）
 **改动**：
 - `MAX_VERIFICATION_TURNS` 8 → 4
@@ -65,7 +65,7 @@
 ---
 
 ### Task 1.5：empty_content 错误不触发 fallback
-**文件**：`/home/orangepi/.ai-agent/proj/utils/error_classifier.py`、`/home/orangepi/.ai-agent/proj/model_router.py`
+**文件**：`~/.ai-agent/proj/utils/error_classifier.py`、`~/.ai-agent/proj/model_router.py`
 **位置**：error_classifier.py:60-70（RECOVERY_MAP）、model_router.py:1096-1100
 **改动**：
 - 新增 `FailoverReason.EMPTY_REPLY`
@@ -80,7 +80,7 @@
 ---
 
 ### Task 1.6：`_describe_images` 走安全客户端路径
-**文件**：`/home/orangepi/.ai-agent/proj/agent_core/message_processor.py`
+**文件**：`~/.ai-agent/proj/agent_core/message_processor.py`
 **位置**：line 2286-2322
 **改动**：
 - line 2289 / 2312 改用 `await self.router._select_client_for_provider("mimo")`
@@ -94,7 +94,7 @@
 ---
 
 ### Task 1.7：校验 vision 响应内容
-**文件**：`/home/orangepi/.ai-agent/proj/agent_core/message_processor.py`
+**文件**：`~/.ai-agent/proj/agent_core/message_processor.py`
 **位置**：line 2317 之后
 **改动**：
 - 新增 `VISION_FAILURE_PATTERNS = ["cannot read image", "unable to read", "i cannot read", "image not readable", "无法识别", "图片无法识别"]`
@@ -108,7 +108,7 @@
 ---
 
 ### Task 1.8：捕获 BadRequestError 区分错误码
-**文件**：`/home/orangepi/.ai-agent/proj/agent_core/message_processor.py`
+**文件**：`~/.ai-agent/proj/agent_core/message_processor.py`
 **位置**：line 2320 `except Exception`
 **改动**：
 - 拆为 `except _openai_mod.BadRequestError as e:` 优先捕获
@@ -121,7 +121,7 @@
 ---
 
 ### Task 1.9：前端区分文档上传 vs 图片上传
-**文件**：`/home/orangepi/.ai-agent/proj/web/frontend/src/components/chat/PromptInput.vue`、`/home/orangepi/.ai-agent/proj/web/routers/chat.py`
+**文件**：`~/.ai-agent/proj/web/frontend/src/components/chat/PromptInput.vue`、`~/.ai-agent/proj/web/routers/chat.py`
 **改动**：
 - 上传组件增加 tab："图片" / "文档"
 - 文档上传走 `/chat/upload-doc` 端点（新增）
@@ -137,7 +137,7 @@
 ## 阶段二：P1 前端按钮重构 + 模式持久化
 
 ### Task 2.1：WS payload 结构化字段
-**文件**：`/home/orangepi/.ai-agent/proj/web/frontend/src/stores/chat.ts`、`/home/orangepi/.ai-agent/proj/web/ws_hub.py`
+**文件**：`~/.ai-agent/proj/web/frontend/src/stores/chat.ts`、`~/.ai-agent/proj/web/ws_hub.py`
 **改动**：
 - 前端 `sendMessage` WS payload 增加 `search_mode` / `think_mode` / `image_url` / `doc_paths` 字段
 - 后端 `_handle_chat` 接收这些字段，构造 `image_data`、设 `_search_mode` / `_think_mode`
@@ -150,7 +150,7 @@
 ---
 
 ### Task 2.2：`conversation_logs` 新增 mode_flags 列
-**文件**：`/home/orangepi/.ai-agent/proj/db/database.py`、`/home/orangepi/.ai-agent/proj/db/migrations/`
+**文件**：`~/.ai-agent/proj/db/database.py`、`~/.ai-agent/proj/db/migrations/`
 **改动**：
 - 新增 migration：`ALTER TABLE conversation_logs ADD COLUMN mode_flags TEXT DEFAULT '';`
 - `insert_conversation_log` 签名增加 `mode_flags` 参数
@@ -163,7 +163,7 @@
 ---
 
 ### Task 2.3：`get_messages` 返回 mode_flags
-**文件**：`/home/orangepi/.ai-agent/proj/web/routers/chat.py`
+**文件**：`~/.ai-agent/proj/web/routers/chat.py`
 **位置**：line 105-134
 **改动**：
 - 查询返回 `mode_flags` 列
@@ -176,7 +176,7 @@
 ---
 
 ### Task 2.4：`agent_context` 增加 cwd 字段
-**文件**：`/home/orangepi/.ai-agent/proj/agent_context.py`、`/home/orangepi/.ai-agent/proj/web/routers/workspace.py`
+**文件**：`~/.ai-agent/proj/agent_context.py`、`~/.ai-agent/proj/web/routers/workspace.py`
 **改动**：
 - `AgentContext.__init__` 增加 `self.cwd: str = ""`
 - `/workspace/confirm` 端点调用后同步更新 `agent_context.cwd`
@@ -188,7 +188,7 @@
 ---
 
 ### Task 2.5：prompt_builder 注入当前 cwd
-**文件**：`/home/orangepi/.ai-agent/proj/prompt_builder.py`
+**文件**：`~/.ai-agent/proj/prompt_builder.py`
 **改动**：
 - 系统 prompt 中增加 `<workspace>当前授权工作目录：{cwd}</workspace>`
 - 从 `agent_context.cwd` 读取
@@ -200,7 +200,7 @@
 ---
 
 ### Task 2.6：`/workspace/confirm` 追加系统消息
-**文件**：`/home/orangepi/.ai-agent/proj/web/routers/workspace.py`
+**文件**：`~/.ai-agent/proj/web/routers/workspace.py`
 **位置**：line 81-99
 **改动**：
 - 调用 `agent_context.add_message("system", f"[系统] 用户已切换工作目录到：{path}")`
@@ -212,7 +212,7 @@
 ---
 
 ### Task 2.7：PermissionManager 按 session 隔离
-**文件**：`/home/orangepi/.ai-agent/proj/utils/permission.py`（或对应文件）
+**文件**：`~/.ai-agent/proj/utils/permission.py`（或对应文件）
 **改动**：
 - `PermissionManager` 改为按 `session_id` 隔离 cwd
 - 保留全局默认 cwd 作为兜底
@@ -224,7 +224,7 @@
 ---
 
 ### Task 2.8：过渡兼容旧 marker
-**文件**：`/home/orangepi/.ai-agent/proj/agent_core/message_processor.py`
+**文件**：`~/.ai-agent/proj/agent_core/message_processor.py`
 **位置**：line 421-432
 **改动**：
 - 保留 `[Search:]` / `[Think:]` / `[Image:]` 解析作为兜底
@@ -240,7 +240,7 @@
 ## 阶段三：P1 空回复 + 主动问候治理
 
 ### Task 3.1：空回复不入库
-**文件**：`/home/orangepi/.ai-agent/proj/core/background_tasks.py`
+**文件**：`~/.ai-agent/proj/core/background_tasks.py`
 **位置**：line 178-193
 **改动**：
 - 增加守卫：`if not reply or not reply.strip():` 跳过 `insert_conversation_log`
@@ -253,7 +253,7 @@
 ---
 
 ### Task 3.2：agent_context 注入时跳过空 assistant_reply
-**文件**：`/home/orangepi/.ai-agent/proj/agent_context.py`
+**文件**：`~/.ai-agent/proj/agent_context.py`
 **位置**：line 792-801
 **改动**：
 - 增加 `if not asst_msg: continue` 守卫
@@ -265,7 +265,7 @@
 ---
 
 ### Task 3.3：proactive_greeting 走独立通道
-**文件**：新增 `/home/orangepi/.ai-agent/proj/core/greeting_channel.py`
+**文件**：新增 `~/.ai-agent/proj/core/greeting_channel.py`
 **改动**：
 - 系统提示词作为 system message 注入，不作为 user message
 - 问候生成后直接发送给用户，不写入 `conversation_logs.user_message`
@@ -280,7 +280,7 @@
 ---
 
 ### Task 3.4：截断续写指令不入历史
-**文件**：`/home/orangepi/.ai-agent/proj/model_router.py`
+**文件**：`~/.ai-agent/proj/model_router.py`
 **位置**：line 1048-1060
 **改动**：
 - 确认 `retry_messages` 是 `messages.copy()` + 临时 append，不写回 `context.history`
@@ -294,7 +294,7 @@
 ## 阶段四：P2 内部提示词收敛
 
 ### Task 4.1：系统 prompt 移除元词汇
-**文件**：`/home/orangepi/.ai-agent/proj/prompt_builder.py`
+**文件**：`~/.ai-agent/proj/prompt_builder.py`
 **改动**：
 - 审查全文，将"工具调用"、"DSML 协议"、"上下文压缩"、"记忆编码"改为角色化表达
 - 例如："小妲可以通过世界树根系感知..." / "过往点滴" / "世界树的记忆"
@@ -305,7 +305,7 @@
 ---
 
 ### Task 4.2：截断续写指令角色化
-**文件**：`/home/orangepi/.ai-agent/proj/model_router.py`
+**文件**：`~/.ai-agent/proj/model_router.py`
 **位置**：line 1052
 **改动**：
 - `"请继续完成你的回复，不要重复已说的内容。"` → `"（继续说完）"`
@@ -317,7 +317,7 @@
 ---
 
 ### Task 4.3：`[Search:]` 模式不再重写 user_input
-**文件**：`/home/orangepi/.ai-agent/proj/agent_core/message_processor.py`
+**文件**：`~/.ai-agent/proj/agent_core/message_processor.py`
 **位置**：line 423-427
 **改动**：
 - 不再重写 `user_input = f"请使用 web_search 工具搜索最新信息后回答：{原文本}"`
@@ -331,7 +331,7 @@
 ---
 
 ### Task 4.4：上下文压缩摘要角色化
-**文件**：`/home/orangepi/.ai-agent/proj/agent_context.py`
+**文件**：`~/.ai-agent/proj/agent_context.py`
 **位置**：line 208-210
 **改动**：
 - `"上下文压缩"` 关键词 → `"历史回顾"` 或 `"过往点滴"`
@@ -345,7 +345,7 @@
 ## 阶段五：P2 跨渠道一致性
 
 ### Task 5.1：统一 max_tokens 配置入口
-**文件**：`/home/orangepi/.ai-agent/proj/config.py`、`/home/orangepi/.ai-agent/proj/agent_core/message_processor.py`
+**文件**：`~/.ai-agent/proj/config.py`、`~/.ai-agent/proj/agent_core/message_processor.py`
 **改动**：
 - `WEB_UI_MAX_TOKENS` 改为 `CHANNEL_MAX_TOKENS` JSON 配置
 - 各渠道按平台限制设置（web: 32768, qq_c2c: 1500, qq_group: 1000, cli: 8192）
@@ -357,7 +357,7 @@
 ---
 
 ### Task 5.2：渠道感知的场景标识
-**文件**：`/home/orangepi/.ai-agent/proj/agent_context.py`
+**文件**：`~/.ai-agent/proj/agent_context.py`
 **位置**：line 35-48
 **改动**：
 - `_SCENE_HINTS` 扩展为完整的渠道策略表
@@ -369,7 +369,7 @@
 ---
 
 ### Task 5.3：群聊多用户上下文隔离强化
-**文件**：`/home/orangepi/.ai-agent/proj/agent_context.py`、`/home/orangepi/.ai-agent/proj/agent_core/message_processor.py`
+**文件**：`~/.ai-agent/proj/agent_context.py`、`~/.ai-agent/proj/agent_core/message_processor.py`
 **改动**：
 - 验证 `switch_user_context` 在群聊场景下被正确调用
 - 凭证池、画像、记忆检索按用户隔离
@@ -384,7 +384,7 @@
 ## 阶段六：验证与回归
 
 ### Task 6.1：端到端测试
-**文件**：`/home/orangepi/.ai-agent/proj/tests/test_context_management_e2e.py`（新增）
+**文件**：`~/.ai-agent/proj/tests/test_context_management_e2e.py`（新增）
 **改动**：
 - 每个按钮点击 → 发送 → 持久化 → 重载会话 → 校验
 - 校验 `user_message` 是否为用户原话
@@ -397,7 +397,7 @@
 ---
 
 ### Task 6.2：监控指标基线
-**文件**：`/home/orangepi/.ai-agent/proj/utils/metrics.py`
+**文件**：`~/.ai-agent/proj/utils/metrics.py`
 **改动**：
 - 新增指标：`llm.calls_per_request`（直方图）
 - 新增指标：`context.empty_reply_skipped`（计数器）
@@ -409,7 +409,7 @@
 ---
 
 ### Task 6.3：文档更新
-**文件**：`/home/orangepi/.ai-agent/proj/docs/ARCHITECTURE.md`
+**文件**：`~/.ai-agent/proj/docs/ARCHITECTURE.md`
 **改动**：
 - 更新上下文管理架构图
 - 更新渠道差异说明

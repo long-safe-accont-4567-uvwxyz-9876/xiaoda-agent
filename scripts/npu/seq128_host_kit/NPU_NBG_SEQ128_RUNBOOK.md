@@ -242,7 +242,7 @@ PY
 
 ## 8. 切流与回滚（板上）
 
-`/home/orangepi/ai-agent/.env`：
+`项目根目录/.env`：
 
 ```ini
 # 新包就位后改两行；EMBED_MODE/BACKEND 不动

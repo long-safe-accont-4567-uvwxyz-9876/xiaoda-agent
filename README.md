@@ -595,37 +595,45 @@ docker-compose -f docker-compose.prod.yml up -d
 
 选填：`SILICONFLOW_API_KEY`（Reranker/查询变换，免费）、`AGNES_API_KEY`（AI 生成）、`WOLFRAM_ALPHA_KEY`（知识查询）等。
 
+### 参与开发 / 跑测试（可选）
+
+只运行项目不需要这一步。要跑测试或 review 门禁时：
+
+```bash
+pip install -r requirements-dev.txt   # 在 requirements.txt 之上补 pytest / ruff 等
+python3 -m pytest tests/              # pytest.ini 已配 asyncio_mode=auto、timeout=60
+bash scripts/check_giant_files.sh     # 巨型文件棘轮
+bash scripts/check_broad_except.sh    # 宽泛 except 棘轮
+bash scripts/check_ruff.sh            # ruff 棘轮（有 .venv 优先用 .venv，否则回退系统 python3）
+```
+
+> 注意：`requirements.txt` 只含运行时依赖。缺 `pytest-timeout` 会让 `pytest.ini`
+> 里的 `timeout = 60` 静默失效（测试卡死时无法自动中止），缺 `pytest-asyncio`
+> 会让所有 async 测试直接报错——这也是必须装 `requirements-dev.txt` 的原因。
+
 ***
 
-## 最新更新（v0.5.32）
+## 版本与更新
 
-> **当前版本**：v0.5.32（详见 `pyproject.toml`；后续版本变更见 `git log`，未在此手动维护）
+> **当前版本**：v0.5.84（以 `VERSION` 与 `pyproject.toml` 为准）
+> **完整变更记录**：[GitHub Releases](https://github.com/long-safe-accont-4567-uvwxyz-9876/xiaoda-agent/releases) 与 `git log`
 
-| 特性 | 说明 |
+### v0.5.x 重点修复（面向"装了用不了"的高频问题）
+
+| 问题 | 修复内容 |
 |------|------|
-| **QQ 上下文失忆修复** | 会话恢复键与写库键统一为 `qq_{openid}`，重启后不再丢历史 |
-| **并发场景隔离** | `_system_context` 改用 ContextVar，主动问候与用户消息不再串场景 |
-| **主动问候截断修复** | 超时 30s→90s，内部场景跳过 early_complete 短回复判定，避免半句问候 |
-| **群聊/C2C 发送完整性** | 长回复全文送达或带截断标记，不再静默丢弃尾部 |
-| **临时 session 失效** | `qq_tmp_` 前缀检测，DB 超时恢复后不再写到不存在的 session |
-| **死路由清理** | 删除 ROUTE_TABLE 中的 chat_mini/chat_mimo/chat_ultra 等无引用遗留 |
-| **MiMo 链接更新** | provider doc_url 更新为有效注册链接 |
-| **Web UI 性能** | token 缓存 + N+1 改 JOIN + SQLite 异步化 |
-| **配置文档完善** | .env.example 补全 13 个遗漏环境变量 |
-| **10轮代码治理** | 安全/泄漏/正确性/异常处理/配置，共修复 50+ 缺陷 |
+| **安装版端口错位** | 旧版 `.env` 把 `WEBUI_PORT` 固化成 8080，按文档访问打不开；启动时自动把遗留默认值迁移到 8082 |
+| **登录死结** | 无密码用户被强制输密码、`WEBUI_HOST=0.0.0.0` 场景下本机也 403；改为登录页统一跳转向导补设密码 |
+| **登录页白屏** | 壁纸死链导致静默白屏；后端加存在性闸门 + 前端三级兜底 |
+| **升级丢素材** | exe 目录迁移改为递归逐项合并，升级后壁纸/表情包不再丢失 |
+| **旧配置拒载** | 旧版 `provider_metadata.json` 缺 `schema_version` 时宽容为 v1，不再直接报错 |
+| **Windows 打包** | 补 `winpty-agent.exe`、修 `UnicodeEncodeError`，桌面版启动链路恢复 |
+| **安全与正确性** | T1–T11 审计收口，152 个文件，测试基线 5961 passed |
 
-### v0.4.82
+### 更早版本
 
-| 特性 | 说明 |
-|------|------|
-| **Tool Search v2 混合检索** | BM25 + Vector + RRF 融合，按需加载工具节省 85% token |
-| **提示词矩阵治理 L1-L5** | 5 层闭环：检测→优化→A/B 测试→效果验证→自动回滚 |
-| **CI 集成 L5 验证** | GitHub Actions 自动运行矩阵治理健康检查 |
-| **Canary 真实 LLM 调用** | A/B 测试 canary 阶段使用真实 LLM-as-Judge 评分 |
-| **自发回忆与成长叙事** | Agent 主动思考：每小时回忆 + 每日成长总结 |
-| **SPA fallback 修复** | 15/15 前端路由刷新不白屏 |
-| **WebUI 15 模块** | 新增 Workflows / Mail / Disclaimer 视图 |
-| **免责声明完善** | 参考 Fairydex 专业写法，自然口语风格 |
+- **v0.5.32**：QQ 上下文失忆修复、并发场景隔离（ContextVar）、主动问候截断修复、群聊长回复完整性
+- **v0.4.82**：Tool Search v2 混合检索（BM25 + Vector + RRF，省 85% token）、提示词矩阵治理 L1–L5 闭环、SPA fallback 修复（15/15 路由刷新不白屏）
 
 ***
 

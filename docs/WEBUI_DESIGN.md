@@ -30,7 +30,7 @@
 
 ## 1. 项目概述与目标
 
-为现有的小妲 AI Agent（`/home/orangepi/ai-agent/`，Python 3.11，运行于 Orange Pi ARM64）构建一套**生产级 Web UI + HTTP/WebSocket API 网关**，替代现有的极简 Streamlit 页面（`web/app.py`，实现后废弃）。
+为现有的小妲 AI Agent（`项目根目录/`，Python 3.11，运行于 Orange Pi ARM64）构建一套**生产级 Web UI + HTTP/WebSocket API 网关**，替代现有的极简 Streamlit 页面（`web/app.py`，实现后废弃）。
 
 ### 1.1 必须实现的用户需求（原文需求逐条编号，后文以 R1~R14 引用）
 
@@ -392,11 +392,11 @@ web/
 
 ### 6.3 背景图资产处理（回应你之前关于 `<img src>` 路径的问题）
 
-**不要用 `file:///home/orangepi/Desktop/...` 绝对路径** —— 浏览器出于安全策略禁止 http 页面引用本地 `file://` 资源，部署后也找不到该路径。正确做法（实现的第一步）：
+**不要用 `file://~Desktop/...` 绝对路径** —— 浏览器出于安全策略禁止 http 页面引用本地 `file://` 资源，部署后也找不到该路径。正确做法（实现的第一步）：
 
 ```bash
 mkdir -p web/frontend/public/assets
-cp /home/orangepi/Desktop/webui_background.jpg web/frontend/public/assets/webui_background.jpg
+cp ~Desktop/webui_background.jpg web/frontend/public/assets/webui_background.jpg
 ```
 
 构建后随 `dist/assets/` 一起由 FastAPI 托管，CSS 中以相对路径引用：

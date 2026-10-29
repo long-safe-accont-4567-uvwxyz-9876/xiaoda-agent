@@ -10,7 +10,7 @@
 
 ## Global Constraints
 
-- 项目根：`/home/orangepi/ai-agent`（`/home/orangepi/.ai-agent/proj` 是其符号链接，工作区内用 `proj/` 路径读写）。
+- 项目根：`项目根目录`（`~/.ai-agent/proj` 是其符号链接，工作区内用 `proj/` 路径读写）。
 - `AgentCore(MessageProcessorMixin, ToolExecutorMixin, SubAgentManagerMixin)`（`agent_core/core.py:79`）；`self._finalize_reply`/`_extract_media_from_tool_results`/`_clean_reply` 在 `ToolExecutorMixin`（`agent_core/tool_executor.py`）；fast-path `_finalize_fast_path_reply` 与主路径 `_finalize_response` 在 `MessageProcessorMixin`（`agent_core/message_processor.py`）。两 mixin 同属一个 `self`。
 - `tool_executor.py` 顶部已 import：`json, re, time, Path, logger, FILE_DIR, get_agent_display_name, strip_dsml, strip_reasoning, humanize, deduplicate_multi_reply, get_degradation_strategy`。`httpx` 在 `_extract_media_from_tool_results` 内 inline import。
 - `get_sticker_manager(name)` 在 `AgentCore`（`agent_core/core.py:158`）；`get_sticker_info` 返回的 `clean_reply` 已剥离 emotion tag。
@@ -116,7 +116,7 @@ def test_empty_input():
 
 - [ ] **Step 2: 运行测试确认失败**
 
-Run: `cd /home/orangepi/ai-agent && .venv/bin/python -m pytest tests/test_strip_image_gen_leak.py -v`
+Run: `cd 项目根目录 && .venv/bin/python -m pytest tests/test_strip_image_gen_leak.py -v`
 Expected: FAIL — `ImportError: cannot import name 'strip_image_gen_leak'`
 
 - [ ] **Step 3: 实现 `strip_image_gen_leak`**
@@ -178,13 +178,13 @@ def strip_image_gen_leak(text: str, *, context: str = "") -> str:
 
 - [ ] **Step 4: 运行测试确认通过**
 
-Run: `cd /home/orangepi/ai-agent && .venv/bin/python -m pytest tests/test_strip_image_gen_leak.py -v`
+Run: `cd 项目根目录 && .venv/bin/python -m pytest tests/test_strip_image_gen_leak.py -v`
 Expected: PASS（9 个测试全绿）
 
 - [ ] **Step 5: 提交**
 
 ```bash
-cd /home/orangepi/ai-agent
+cd 项目根目录
 git add utils/llm_cleanup.py tests/test_strip_image_gen_leak.py
 git commit -m "fix: 新增 strip_image_gen_leak 清洗生图类泄漏(模型名/状态行/元数据)"
 ```
@@ -316,7 +316,7 @@ def test_empty_reply():
 
 - [ ] **Step 2: 运行测试确认失败**
 
-Run: `cd /home/orangepi/ai-agent && .venv/bin/python -m pytest tests/test_extract_fabricated_images.py -v`
+Run: `cd 项目根目录 && .venv/bin/python -m pytest tests/test_extract_fabricated_images.py -v`
 Expected: FAIL — `AttributeError: '_DummyMixin' object has no attribute '_extract_fabricated_images_from_reply'`
 
 - [ ] **Step 3: 实现 `_extract_fabricated_images_from_reply`**
@@ -388,13 +388,13 @@ Expected: FAIL — `AttributeError: '_DummyMixin' object has no attribute '_extr
 
 - [ ] **Step 4: 运行测试确认通过**
 
-Run: `cd /home/orangepi/ai-agent && .venv/bin/python -m pytest tests/test_extract_fabricated_images.py -v`
+Run: `cd 项目根目录 && .venv/bin/python -m pytest tests/test_extract_fabricated_images.py -v`
 Expected: PASS（6 个测试全绿）
 
 - [ ] **Step 5: 提交**
 
 ```bash
-cd /home/orangepi/ai-agent
+cd 项目根目录
 git add agent_core/tool_executor.py tests/test_extract_fabricated_images.py
 git commit -m "fix: 新增 _extract_fabricated_images_from_reply 兜底拦截伪造图片URL"
 ```
@@ -484,7 +484,7 @@ def test_empty_input():
 
 - [ ] **Step 2: 运行测试确认失败**
 
-Run: `cd /home/orangepi/ai-agent && .venv/bin/python -m pytest tests/test_clean_reply_full.py -v`
+Run: `cd 项目根目录 && .venv/bin/python -m pytest tests/test_clean_reply_full.py -v`
 Expected: FAIL — `AttributeError: '_Stub' object has no attribute '_clean_reply_full'`
 
 - [ ] **Step 3: 补充顶部 import**
@@ -578,13 +578,13 @@ from utils.llm_cleanup import (
 
 - [ ] **Step 6: 运行测试确认通过**
 
-Run: `cd /home/orangepi/ai-agent && .venv/bin/python -m pytest tests/test_clean_reply_full.py tests/test_strip_image_gen_leak.py -v`
+Run: `cd 项目根目录 && .venv/bin/python -m pytest tests/test_clean_reply_full.py tests/test_strip_image_gen_leak.py -v`
 Expected: PASS
 
 - [ ] **Step 7: 提交**
 
 ```bash
-cd /home/orangepi/ai-agent
+cd 项目根目录
 git add agent_core/tool_executor.py tests/test_clean_reply_full.py
 git commit -m "refactor: 新增 _clean_reply_full 统一清洗出口，_finalize_reply 复用之"
 ```
@@ -710,7 +710,7 @@ git commit -m "refactor: 新增 _clean_reply_full 统一清洗出口，_finalize
 
 Run:
 ```bash
-cd /home/orangepi/ai-agent
+cd 项目根目录
 .venv/bin/python -m py_compile agent_core/message_processor.py agent_core/tool_executor.py utils/llm_cleanup.py
 .venv/bin/python -m pytest tests/test_clean_reply_full.py tests/test_strip_image_gen_leak.py tests/test_extract_fabricated_images.py tests/test_n_system_leak.py tests/test_l1_dsml_variant_leak.py tests/test_l2_l3_error_leak.py -v
 ```
@@ -718,13 +718,13 @@ Expected: 编译通过；目标测试全绿（确认未破坏既有清洗测试�
 
 - [ ] **Step 6: 全量回归**
 
-Run: `cd /home/orangepi/ai-agent && .venv/bin/python -m pytest -x -q 2>&1 | tail -30`
+Run: `cd 项目根目录 && .venv/bin/python -m pytest -x -q 2>&1 | tail -30`
 Expected: 2275 通过（2 个预存 `test_webui_subagent_xp.py` 失败属基线，不归责本改动）。
 
 - [ ] **Step 7: 提交**
 
 ```bash
-cd /home/orangepi/ai-agent
+cd 项目根目录
 git add agent_core/message_processor.py
 git commit -m "fix: fast-path/主路径接入 _clean_reply_full 统一清洗 + 兜底提图"
 ```
@@ -759,7 +759,7 @@ git commit -m "fix: fast-path/主路径接入 _clean_reply_full 统一清洗 + �
 - [ ] **Step 3: 提交**
 
 ```bash
-cd /home/orangepi/ai-agent
+cd 项目根目录
 git add config/workspace/SOUL.md.tpl config/workspace/TOOLS.md
 git commit -m "fix: 提示词强化禁止伪造图片URL/模型名/生图状态泄漏"
 ```
@@ -855,13 +855,13 @@ def test_1966_strip_image_gen_leak_alone_covers_text_leaks():
 
 - [ ] **Step 2: 运行测试确认通过**
 
-Run: `cd /home/orangepi/ai-agent && .venv/bin/python -m pytest tests/test_qq_image_leak_e2e.py -v`
+Run: `cd 项目根目录 && .venv/bin/python -m pytest tests/test_qq_image_leak_e2e.py -v`
 Expected: PASS（2 个测试全绿）
 
 - [ ] **Step 3: 提交**
 
 ```bash
-cd /home/orangepi/ai-agent
+cd 项目根目录
 git add tests/test_qq_image_leak_e2e.py
 git commit -m "test: 新增 1965/1966 生产样本端到端回归(零泄漏+真图提取)"
 ```

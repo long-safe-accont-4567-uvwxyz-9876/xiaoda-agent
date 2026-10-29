@@ -71,7 +71,7 @@ def test_get_audit_log_still_works_with_deque():
 
 - [ ] **Step 2: 跑测试确认失败**
 
-Run: `cd /home/orangepi/ai-agent && python -m pytest tests/test_recovery_audit_log_maxlen.py -v`
+Run: `cd 项目根目录 && python -m pytest tests/test_recovery_audit_log_maxlen.py -v`
 Expected: FAIL with "AssertionError: list is not deque" 或类似
 
 - [ ] **Step 3: 修改实现**
@@ -89,18 +89,18 @@ self._audit_log: deque[dict] = deque(maxlen=500)
 
 - [ ] **Step 4: 跑测试确认通过**
 
-Run: `cd /home/orangepi/ai-agent && python -m pytest tests/test_recovery_audit_log_maxlen.py -v`
+Run: `cd 项目根目录 && python -m pytest tests/test_recovery_audit_log_maxlen.py -v`
 Expected: PASS (3 tests)
 
 - [ ] **Step 5: 跑回归测试**
 
-Run: `cd /home/orangepi/ai-agent && python -m pytest tests/test_recovery_orchestrator.py tests/test_recovery_audit_log_maxlen.py -v --timeout=60`
+Run: `cd 项目根目录 && python -m pytest tests/test_recovery_orchestrator.py tests/test_recovery_audit_log_maxlen.py -v --timeout=60`
 Expected: PASS
 
 - [ ] **Step 6: 提交**
 
 ```bash
-cd /home/orangepi/ai-agent
+cd 项目根目录
 git add core/recovery_orchestrator.py tests/test_recovery_audit_log_maxlen.py
 git commit -m "fix(G6): recovery_orchestrator audit_log 改用 deque(maxlen=500) 防内存泄漏"
 ```
@@ -202,7 +202,7 @@ async def test_scheduler_fallback_to_consolidate_when_no_db():
 
 - [ ] **Step 2: 跑测试确认失败**
 
-Run: `cd /home/orangepi/ai-agent && python -m pytest tests/test_dream_scheduler_calls_from_db.py -v`
+Run: `cd 项目根目录 && python -m pytest tests/test_dream_scheduler_calls_from_db.py -v`
 Expected: FAIL with "TypeError: __init__() got an unexpected keyword argument 'memory_db'"
 
 - [ ] **Step 3: 修改 __init__ 接受 memory_db**
@@ -291,7 +291,7 @@ def get_dream_consolidator(memory_db: Any = None) -> DreamConsolidator:
 查找 `get_dream_consolidator()` 调用点（在 agent 启动初始化处），改为传入 memory_db 实例。
 
 ```bash
-cd /home/orangepi/ai-agent
+cd 项目根目录
 grep -rn "get_dream_consolidator" --include="*.py" .
 ```
 
@@ -304,18 +304,18 @@ get_dream_consolidator(memory_db=memory_db).start_scheduler(hour=3)
 
 - [ ] **Step 8: 跑测试确认通过**
 
-Run: `cd /home/orangepi/ai-agent && python -m pytest tests/test_dream_scheduler_calls_from_db.py -v --timeout=60`
+Run: `cd 项目根目录 && python -m pytest tests/test_dream_scheduler_calls_from_db.py -v --timeout=60`
 Expected: PASS (3 tests)
 
 - [ ] **Step 9: 跑回归测试**
 
-Run: `cd /home/orangepi/ai-agent && python -m pytest tests/test_dream_engine_v2.py tests/test_dream_scheduler_calls_from_db.py -v --timeout=60`
+Run: `cd 项目根目录 && python -m pytest tests/test_dream_engine_v2.py tests/test_dream_scheduler_calls_from_db.py -v --timeout=60`
 Expected: PASS
 
 - [ ] **Step 10: 提交**
 
 ```bash
-cd /home/orangepi/ai-agent
+cd 项目根目录
 git add core/dream_consolidation.py tests/test_dream_scheduler_calls_from_db.py
 git commit -m "fix(G7): dream scheduler 改调 consolidate_from_db 修复空整合 bug"
 ```
@@ -414,7 +414,7 @@ def test_disabled_via_env():
 
 - [ ] **Step 2: 跑测试确认失败**
 
-Run: `cd /home/orangepi/ai-agent && python -m pytest tests/test_greeting_shortcut.py -v --timeout=60`
+Run: `cd 项目根目录 && python -m pytest tests/test_greeting_shortcut.py -v --timeout=60`
 Expected: FAIL with "AttributeError: 'MessageProcessor' object has no attribute '_try_greeting_shortcut'"
 
 - [ ] **Step 3: 实现 _try_greeting_shortcut**
@@ -516,18 +516,18 @@ chat_targets = await self._parse_chat_target(user_input, user_id)
 
 - [ ] **Step 5: 跑测试确认通过**
 
-Run: `cd /home/orangepi/ai-agent && python -m pytest tests/test_greeting_shortcut.py -v --timeout=60`
+Run: `cd 项目根目录 && python -m pytest tests/test_greeting_shortcut.py -v --timeout=60`
 Expected: PASS (6 tests)
 
 - [ ] **Step 6: 跑回归测试**
 
-Run: `cd /home/orangepi/ai-agent && python -m pytest tests/test_qq_streaming.py tests/test_greeting_shortcut.py -v --timeout=60`
+Run: `cd 项目根目录 && python -m pytest tests/test_qq_streaming.py tests/test_greeting_shortcut.py -v --timeout=60`
 Expected: PASS
 
 - [ ] **Step 7: 提交**
 
 ```bash
-cd /home/orangepi/ai-agent
+cd 项目根目录
 git add agent_core/message_processor.py tests/test_greeting_shortcut.py
 git commit -m "feat(G1): 问候短路 <100ms 返回，跳过 LLM（默认开启，群聊跳过）"
 ```
@@ -609,7 +609,7 @@ def test_no_deadlock_on_concurrent_saves():
 
 - [ ] **Step 2: 跑测试确认失败**
 
-Run: `cd /home/orangepi/ai-agent && python -m pytest tests/test_mental_state_debounce.py -v --timeout=60`
+Run: `cd 项目根目录 && python -m pytest tests/test_mental_state_debounce.py -v --timeout=60`
 Expected: FAIL with "AssertionError: assert 0 == 0"（第一次 _save 直接写盘了 call_count=10）
 
 - [ ] **Step 3: 改造 _save 为 debounce**
@@ -676,18 +676,18 @@ except Exception:
 
 - [ ] **Step 5: 跑测试确认通过**
 
-Run: `cd /home/orangepi/ai-agent && python -m pytest tests/test_mental_state_debounce.py -v --timeout=60`
+Run: `cd 项目根目录 && python -m pytest tests/test_mental_state_debounce.py -v --timeout=60`
 Expected: PASS (3 tests)
 
 - [ ] **Step 6: 跑回归测试**
 
-Run: `cd /home/orangepi/ai-agent && python -m pytest tests/test_mental_state.py tests/test_mental_state_debounce.py -v --timeout=60`
+Run: `cd 项目根目录 && python -m pytest tests/test_mental_state.py tests/test_mental_state_debounce.py -v --timeout=60`
 Expected: PASS
 
 - [ ] **Step 7: 提交**
 
 ```bash
-cd /home/orangepi/ai-agent
+cd 项目根目录
 git add core/mental_state.py tests/test_mental_state_debounce.py
 git commit -m "feat(G3): mental_state debounce 300ms 写盘，避免 Windows 卡顿"
 ```
@@ -761,7 +761,7 @@ async def test_retrieve_async_does_not_block_event_loop():
 
 - [ ] **Step 2: 跑测试确认失败**
 
-Run: `cd /home/orangepi/ai-agent && python -m pytest tests/test_context_compressor_async.py -v --timeout=60`
+Run: `cd 项目根目录 && python -m pytest tests/test_context_compressor_async.py -v --timeout=60`
 Expected: FAIL with "AttributeError: 'ContextCompressor' object has no attribute 'retrieve_async'"
 
 - [ ] **Step 3: 实现 retrieve_async**
@@ -782,7 +782,7 @@ class ContextCompressor:
 - [ ] **Step 4: 修改 retrieve_context 工具调用点**
 
 ```bash
-cd /home/orangepi/ai-agent
+cd 项目根目录
 grep -rn "retrieve_context\|ctx_comp\.retrieve\|compressor\.retrieve" --include="*.py" agent_core/ tools/
 ```
 
@@ -790,18 +790,18 @@ grep -rn "retrieve_context\|ctx_comp\.retrieve\|compressor\.retrieve" --include=
 
 - [ ] **Step 5: 跑测试确认通过**
 
-Run: `cd /home/orangepi/ai-agent && python -m pytest tests/test_context_compressor_async.py -v --timeout=60`
+Run: `cd 项目根目录 && python -m pytest tests/test_context_compressor_async.py -v --timeout=60`
 Expected: PASS (3 tests)
 
 - [ ] **Step 6: 跑回归测试**
 
-Run: `cd /home/orangepi/ai-agent && python -m pytest tests/test_context_compressor.py tests/test_context_compressor_async.py -v --timeout=60`
+Run: `cd 项目根目录 && python -m pytest tests/test_context_compressor.py tests/test_context_compressor_async.py -v --timeout=60`
 Expected: PASS
 
 - [ ] **Step 7: 提交**
 
 ```bash
-cd /home/orangepi/ai-agent
+cd 项目根目录
 git add memory/context_compressor.py tests/test_context_compressor_async.py
 git commit -m "feat(G8): context_compressor 新增 retrieve_async，避免阻塞事件循环"
 ```
@@ -870,7 +870,7 @@ async def test_concurrent_read_does_not_block():
 
 - [ ] **Step 2: 跑测试确认失败**
 
-Run: `cd /home/orangepi/ai-agent && python -m pytest tests/test_tts_read_bytes_async.py -v --timeout=60`
+Run: `cd 项目根目录 && python -m pytest tests/test_tts_read_bytes_async.py -v --timeout=60`
 Expected: FAIL
 
 - [ ] **Step 3: 改造 tts_engine**
@@ -887,13 +887,13 @@ data = await asyncio.to_thread(path.read_bytes)
 
 - [ ] **Step 4: 跑测试确认通过**
 
-Run: `cd /home/orangepi/ai-agent && python -m pytest tests/test_tts_read_bytes_async.py -v --timeout=60`
+Run: `cd 项目根目录 && python -m pytest tests/test_tts_read_bytes_async.py -v --timeout=60`
 Expected: PASS
 
 - [ ] **Step 5: 提交**
 
 ```bash
-cd /home/orangepi/ai-agent
+cd 项目根目录
 git add emotion/tts_engine.py tests/test_tts_read_bytes_async.py
 git commit -m "feat(G9): tts_engine read_bytes 改用 asyncio.to_thread 避免阻塞"
 ```
@@ -974,7 +974,7 @@ async def test_broadcast_cleans_up_failed_connections():
 
 - [ ] **Step 2: 跑测试确认失败**
 
-Run: `cd /home/orangepi/ai-agent && python -m pytest tests/test_ws_broadcast_backpressure.py -v --timeout=60`
+Run: `cd 项目根目录 && python -m pytest tests/test_ws_broadcast_backpressure.py -v --timeout=60`
 Expected: FAIL with timeout（原 broadcast 串行会被慢连接阻塞）
 
 - [ ] **Step 3: 改造 broadcast**
@@ -1013,18 +1013,18 @@ async def _safe_send(self, conn_id: str, event: dict) -> None:
 
 - [ ] **Step 4: 跑测试确认通过**
 
-Run: `cd /home/orangepi/ai-agent && python -m pytest tests/test_ws_broadcast_backpressure.py -v --timeout=60`
+Run: `cd 项目根目录 && python -m pytest tests/test_ws_broadcast_backpressure.py -v --timeout=60`
 Expected: PASS (3 tests)
 
 - [ ] **Step 5: 跑回归测试**
 
-Run: `cd /home/orangepi/ai-agent && python -m pytest tests/ -k "ws" -v --timeout=60`
+Run: `cd 项目根目录 && python -m pytest tests/ -k "ws" -v --timeout=60`
 Expected: PASS
 
 - [ ] **Step 6: 提交**
 
 ```bash
-cd /home/orangepi/ai-agent
+cd 项目根目录
 git add web/ws_hub.py tests/test_ws_broadcast_backpressure.py
 git commit -m "feat(G2): WS broadcast 改 fire-and-forget 扇出 + 5s 超时背压"
 ```
@@ -1085,7 +1085,7 @@ async def test_heartbeat_cleans_up_dead_connection():
 
 - [ ] **Step 2: 跑测试确认失败**
 
-Run: `cd /home/orangepi/ai-agent && python -m pytest tests/test_ws_heartbeat.py -v --timeout=60`
+Run: `cd 项目根目录 && python -m pytest tests/test_ws_heartbeat.py -v --timeout=60`
 Expected: FAIL with "AttributeError: 'ConnectionManager' object has no attribute '_heartbeat_loop'"
 
 - [ ] **Step 3: 实现 heartbeat_loop**
@@ -1139,13 +1139,13 @@ if msg_type == "pong":
 
 - [ ] **Step 4: 跑测试确认通过**
 
-Run: `cd /home/orangepi/ai-agent && python -m pytest tests/test_ws_heartbeat.py -v --timeout=60`
+Run: `cd 项目根目录 && python -m pytest tests/test_ws_heartbeat.py -v --timeout=60`
 Expected: PASS
 
 - [ ] **Step 5: 提交**
 
 ```bash
-cd /home/orangepi/ai-agent
+cd 项目根目录
 git add web/ws_hub.py tests/test_ws_heartbeat.py
 git commit -m "feat(G5): WS 新增 30s 心跳 + 10s 超时清理死连接"
 ```
@@ -1201,7 +1201,7 @@ async def test_close_resets_singleton():
 
 - [ ] **Step 2: 跑测试确认失败**
 
-Run: `cd /home/orangepi/ai-agent && python -m pytest tests/test_http_pool.py -v --timeout=60`
+Run: `cd 项目根目录 && python -m pytest tests/test_http_pool.py -v --timeout=60`
 Expected: FAIL with "ModuleNotFoundError: No module named 'utils.http_pool'"
 
 - [ ] **Step 3: 创建 http_pool.py**
@@ -1250,13 +1250,13 @@ async def close_shared_client() -> None:
 
 - [ ] **Step 4: 跑测试确认通过**
 
-Run: `cd /home/orangepi/ai-agent && python -m pytest tests/test_http_pool.py -v --timeout=60`
+Run: `cd 项目根目录 && python -m pytest tests/test_http_pool.py -v --timeout=60`
 Expected: PASS (4 tests)
 
 - [ ] **Step 5: 改造高频调用点**
 
 ```bash
-cd /home/orangepi/ai-agent
+cd 项目根目录
 # 查找所有 httpx.AsyncClient() 用法
 grep -rn "async with httpx.AsyncClient" --include="*.py" . | grep -v tests/
 ```
@@ -1292,13 +1292,13 @@ await close_shared_client()
 
 - [ ] **Step 7: 跑回归测试**
 
-Run: `cd /home/orangepi/ai-agent && python -m pytest tests/ -k "http or reranker or query_transform or distiller" -v --timeout=60`
+Run: `cd 项目根目录 && python -m pytest tests/ -k "http or reranker or query_transform or distiller" -v --timeout=60`
 Expected: PASS
 
 - [ ] **Step 8: 提交**
 
 ```bash
-cd /home/orangepi/ai-agent
+cd 项目根目录
 git add utils/http_pool.py tests/test_http_pool.py
 # + 所有改造的文件
 git commit -m "feat(G4): HTTP 连接池复用 - 共享 httpx.AsyncClient 单例 + HTTP/2"
@@ -1346,7 +1346,7 @@ logger.info("process.trace slash={:.0f}ms greeting={:.0f}ms ctx={:.0f}ms mem={:.
 - [ ] **Step 2: RAG 检索审计**
 
 ```bash
-cd /home/orangepi/ai-agent
+cd 项目根目录
 # 查询计划
 sqlite3 data/memory.db "EXPLAIN QUERY PLAN SELECT * FROM episodic_memory_fts WHERE episodic_memory_fts MATCH 'test';"
 # 数据量
@@ -1358,7 +1358,7 @@ sqlite3 data/memory.db "SELECT COUNT(*) FROM episodic_memories; SELECT COUNT(*) 
 - [ ] **Step 3: Windows 桌面审计**
 
 ```bash
-cd /home/orangepi/ai-agent
+cd 项目根目录
 # 前端静态资源大小
 du -sh web/frontend/dist/
 du -sh web/frontend/dist/assets/*.js
@@ -1369,7 +1369,7 @@ du -sh web/frontend/dist/assets/*.js
 - [ ] **Step 4: 数据库审计**
 
 ```bash
-cd /home/orangepi/ai-agent
+cd 项目根目录
 sqlite3 data/memory.db "EXPLAIN QUERY PLAN SELECT * FROM episodic_memories WHERE user_id='test' ORDER BY created_at DESC LIMIT 10;"
 sqlite3 data/memory.db "EXPLAIN QUERY PLAN SELECT * FROM memory_child_chunks WHERE parent_id='test';"
 sqlite3 data/memory.db "PRAGMA wal_checkpoint;"
@@ -1378,7 +1378,7 @@ sqlite3 data/memory.db "PRAGMA wal_checkpoint;"
 - [ ] **Step 5: 并发审计**
 
 ```bash
-cd /home/orangepi/ai-agent
+cd 项目根目录
 # 查找同步 IO 残留
 grep -rn "open(" --include="*.py" . | grep -v "test" | grep -v "openai\|httpx\|websocket" | head -30
 # 查找 subprocess.run
@@ -1407,7 +1407,7 @@ for stat in top_stats[:20]:
 - [ ] **Step 8: 提交审计报告**
 
 ```bash
-cd /home/orangepi/ai-agent
+cd 项目根目录
 git add docs/performance_audit_2026-07-20.md
 git commit -m "docs: 系统性性能审计报告 2026-07-20"
 ```
@@ -1420,7 +1420,7 @@ git commit -m "docs: 系统性性能审计报告 2026-07-20"
 
 - [ ] **Step 1: 跑全量测试**
 
-Run: `cd /home/orangepi/ai-agent && python -m pytest tests/ -x --timeout=60 --ignore=tests/perf 2>&1 | tail -50`
+Run: `cd 项目根目录 && python -m pytest tests/ -x --timeout=60 --ignore=tests/perf 2>&1 | tail -50`
 Expected: 全部 PASS，零失败
 
 - [ ] **Step 2: 修复任何失败**
@@ -1430,7 +1430,7 @@ Expected: 全部 PASS，零失败
 - [ ] **Step 3: 提交修复**
 
 ```bash
-cd /home/orangepi/ai-agent
+cd 项目根目录
 git add -A
 git commit -m "test: 修复全量回归发现的失败"
 ```
@@ -1439,7 +1439,7 @@ git commit -m "test: 修复全量回归发现的失败"
 
 - [ ] **Step 1: 启动冒烟**
 
-Run: `cd /home/orangepi/ai-agent && timeout 10 python -c "
+Run: `cd 项目根目录 && timeout 10 python -c "
 import asyncio
 from agent_core.message_processor import MessageProcessor
 mp = MessageProcessor()
@@ -1451,7 +1451,7 @@ print('G1 greeting OK:', result.reply)
 
 - [ ] **Step 2: WebSocket 冒烟**
 
-Run: `cd /home/orangepi/ai-agent && python -c "
+Run: `cd 项目根目录 && python -c "
 import asyncio
 from web.ws_hub import manager
 async def test():
@@ -1462,7 +1462,7 @@ asyncio.run(test())
 
 - [ ] **Step 3: HTTP 池冒烟**
 
-Run: `cd /home/orangepi/ai-agent && python -c "
+Run: `cd 项目根目录 && python -c "
 import asyncio, httpx
 from utils.http_pool import get_shared_client, close_shared_client
 async def test():
@@ -1480,7 +1480,7 @@ asyncio.run(test())
 - [ ] **Step 5: 最终提交 + tag**
 
 ```bash
-cd /home/orangepi/ai-agent
+cd 项目根目录
 git log --oneline -10  # 确认所有 G 项已提交
 # 若全部通过，准备发版
 ```

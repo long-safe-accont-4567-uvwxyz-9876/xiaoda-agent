@@ -484,13 +484,13 @@ retry_messages.append({"role": "system", "content": "继续生成未完成的回
 
 ## 八、参考文件
 
-- `/home/orangepi/.ai-agent/proj/model_router.py`（截断重试 line 1041-1075，fallback 链 line 644-719，ROUTE_TABLE line 79-95，`_select_client_for_provider` line 792-816）
-- `/home/orangepi/.ai-agent/proj/agent_core/message_processor.py`（`_describe_images` line 2286-2322，`_run_verification_loop` line 179-411，marker 解析 line 421-432，max_tokens 解析 line 1683-1720）
-- `/home/orangepi/.ai-agent/proj/agent_context.py`（历史注入 line 792-801，群聊隔离 line 109-148）
-- `/home/orangepi/.ai-agent/proj/core/background_tasks.py`（`insert_conversation_log` line 181-189）
-- `/home/orangepi/.ai-agent/proj/web/ws_hub.py`（`[Image:]` 提取 line 573-595）
-- `/home/orangepi/.ai-agent/proj/web/routers/workspace.py`（`/workspace/confirm` line 81-99）
-- `/home/orangepi/.ai-agent/proj/web/frontend/src/views/ChatView.vue`（marker 拼装 line 168-181）
-- `/home/orangepi/.ai-agent/proj/web/frontend/src/stores/chat.ts`（displayText 剥离 line 235-253，retryLast line 293-309）
-- `/home/orangepi/.ai-agent/proj/utils/credential_pool.py`（`error_no_state_change` line 181）
-- `/home/orangepi/.ai-agent/proj/utils/error_classifier.py`（UNKNOWN 分类 line 193）
+- `~/.ai-agent/proj/model_router.py`（截断重试 line 1041-1075，fallback 链 line 644-719，ROUTE_TABLE line 79-95，`_select_client_for_provider` line 792-816）
+- `~/.ai-agent/proj/agent_core/message_processor.py`（`_describe_images` line 2286-2322，`_run_verification_loop` line 179-411，marker 解析 line 421-432，max_tokens 解析 line 1683-1720）
+- `~/.ai-agent/proj/agent_context.py`（历史注入 line 792-801，群聊隔离 line 109-148）
+- `~/.ai-agent/proj/core/background_tasks.py`（`insert_conversation_log` line 181-189）
+- `~/.ai-agent/proj/web/ws_hub.py`（`[Image:]` 提取 line 573-595）
+- `~/.ai-agent/proj/web/routers/workspace.py`（`/workspace/confirm` line 81-99）
+- `~/.ai-agent/proj/web/frontend/src/views/ChatView.vue`（marker 拼装 line 168-181）
+- `~/.ai-agent/proj/web/frontend/src/stores/chat.ts`（displayText 剥离 line 235-253，retryLast line 293-309）
+- `~/.ai-agent/proj/utils/credential_pool.py`（`error_no_state_change` line 181）
+- `~/.ai-agent/proj/utils/error_classifier.py`（UNKNOWN 分类 line 193）

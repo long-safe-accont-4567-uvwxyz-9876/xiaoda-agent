@@ -284,8 +284,8 @@ print('marker 污染数:', cur.fetchone()[0])
 journalctl -u nahida-web.service --since "10 minutes ago" | grep -c "llm.call"
 
 # 4. 运行单元测试
-cd /home/orangepi/.ai-agent/proj && python -m pytest tests/test_model_router_truncation.py -v
+cd ~/.ai-agent/proj && python -m pytest tests/test_model_router_truncation.py -v
 
 # 5. 运行端到端测试
-cd /home/orangepi/.ai-agent/proj && python -m pytest tests/test_context_management_e2e.py -v
+cd ~/.ai-agent/proj && python -m pytest tests/test_context_management_e2e.py -v
 ```

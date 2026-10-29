@@ -128,5 +128,5 @@ v1 写路径冻结时点 → 存量数据迁移 → v1 路由下线，避免双�
 - **在途会话（工作区，未提交）**：ruff 全仓清理、env_flag 统一、model_discovery
   缓存重构、server.py 凭证同步修复、test_pipeline_call_signatures.py 守卫。
   工作区其余改动归其所有，收尾门禁见 §七 P0。
-- **另见**：/home/orangepi/wt-fix 工作树（fix/sqlite-httpx-hygiene 分支）为第三条
+- **另见**：~wt-fix 工作树（fix/sqlite-httpx-hygiene 分支）为第三条
   在途线，本轮未触碰。

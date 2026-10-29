@@ -162,7 +162,7 @@ def test_event_type_values():
 
 - [ ] **Step 2: Run test to verify it fails**
 
-Run: `cd /home/orangepi/ai-agent && python3 -m pytest tests/test_event_bus.py -v --no-header --timeout=10`
+Run: `cd 项目根目录 && python3 -m pytest tests/test_event_bus.py -v --no-header --timeout=10`
 Expected: FAIL with `ModuleNotFoundError: No module named 'core.event_bus'`
 
 - [ ] **Step 3: Write minimal implementation**
@@ -285,13 +285,13 @@ event_bus = AgentEventBus()
 
 - [ ] **Step 4: Run test to verify it passes**
 
-Run: `cd /home/orangepi/ai-agent && python3 -m pytest tests/test_event_bus.py -v --no-header --timeout=10`
+Run: `cd 项目根目录 && python3 -m pytest tests/test_event_bus.py -v --no-header --timeout=10`
 Expected: 5 passed
 
 - [ ] **Step 5: Commit**
 
 ```bash
-cd /home/orangepi/ai-agent && git add core/event_bus.py tests/test_event_bus.py && git commit -m "feat: add AgentEventBus with ContextVar-based User binding"
+cd 项目根目录 && git add core/event_bus.py tests/test_event_bus.py && git commit -m "feat: add AgentEventBus with ContextVar-based User binding"
 ```
 
 ---
@@ -344,7 +344,7 @@ def test_userbase_is_abstract():
 
 - [ ] **Step 2: Run test to verify it fails**
 
-Run: `cd /home/orangepi/ai-agent && python3 -m pytest tests/test_user_base.py -v --no-header --timeout=10`
+Run: `cd 项目根目录 && python3 -m pytest tests/test_user_base.py -v --no-header --timeout=10`
 Expected: FAIL with `ModuleNotFoundError: No module named 'agent_core.user_base'`
 
 - [ ] **Step 3: Write minimal implementation**
@@ -404,13 +404,13 @@ STATUS_ICON: dict[str, str] = {
 
 - [ ] **Step 4: Run test to verify it passes**
 
-Run: `cd /home/orangepi/ai-agent && python3 -m pytest tests/test_user_base.py -v --no-header --timeout=10`
+Run: `cd 项目根目录 && python3 -m pytest tests/test_user_base.py -v --no-header --timeout=10`
 Expected: 3 passed
 
 - [ ] **Step 5: Commit**
 
 ```bash
-cd /home/orangepi/ai-agent && git add agent_core/user_base.py tests/test_user_base.py && git commit -m "feat: add UserBase ABC with AGENT_DISPLAY and STATUS_ICON mappings"
+cd 项目根目录 && git add agent_core/user_base.py tests/test_user_base.py && git commit -m "feat: add UserBase ABC with AGENT_DISPLAY and STATUS_ICON mappings"
 ```
 
 ---
@@ -496,7 +496,7 @@ async def test_cli_user_uses_agent_display_fallback(capsys):
 
 - [ ] **Step 2: Run test to verify it fails**
 
-Run: `cd /home/orangepi/ai-agent && python3 -m pytest tests/test_user_cli.py -v --no-header --timeout=10`
+Run: `cd 项目根目录 && python3 -m pytest tests/test_user_cli.py -v --no-header --timeout=10`
 Expected: FAIL with `ModuleNotFoundError: No module named 'agent_core.user_cli'`
 
 - [ ] **Step 3: Write minimal implementation**
@@ -537,13 +537,13 @@ class CLIUser(UserBase):
 
 - [ ] **Step 4: Run test to verify it passes**
 
-Run: `cd /home/orangepi/ai-agent && python3 -m pytest tests/test_user_cli.py -v --no-header --timeout=10`
+Run: `cd 项目根目录 && python3 -m pytest tests/test_user_cli.py -v --no-header --timeout=10`
 Expected: 4 passed
 
 - [ ] **Step 5: Commit**
 
 ```bash
-cd /home/orangepi/ai-agent && git add agent_core/user_cli.py tests/test_user_cli.py && git commit -m "feat: add CLIUser with full event printing"
+cd 项目根目录 && git add agent_core/user_cli.py tests/test_user_cli.py && git commit -m "feat: add CLIUser with full event printing"
 ```
 
 ---
@@ -626,7 +626,7 @@ async def test_web_user_send_error_does_not_raise():
 
 - [ ] **Step 2: Run test to verify it fails**
 
-Run: `cd /home/orangepi/ai-agent && python3 -m pytest tests/test_user_web.py -v --no-header --timeout=10`
+Run: `cd 项目根目录 && python3 -m pytest tests/test_user_web.py -v --no-header --timeout=10`
 Expected: FAIL with `ModuleNotFoundError: No module named 'agent_core.user_web'`
 
 - [ ] **Step 3: Write minimal implementation**
@@ -675,13 +675,13 @@ class WebUser(UserBase):
 
 - [ ] **Step 4: Run test to verify it passes**
 
-Run: `cd /home/orangepi/ai-agent && python3 -m pytest tests/test_user_web.py -v --no-header --timeout=10`
+Run: `cd 项目根目录 && python3 -m pytest tests/test_user_web.py -v --no-header --timeout=10`
 Expected: 3 passed
 
 - [ ] **Step 5: Commit**
 
 ```bash
-cd /home/orangepi/ai-agent && git add agent_core/user_web.py tests/test_user_web.py && git commit -m "feat: add WebUser with WebSocket event push"
+cd 项目根目录 && git add agent_core/user_web.py tests/test_user_web.py && git commit -m "feat: add WebUser with WebSocket event push"
 ```
 
 ---
@@ -803,7 +803,7 @@ async def test_qq_user_reply_error_does_not_raise():
 
 - [ ] **Step 2: Run test to verify it fails**
 
-Run: `cd /home/orangepi/ai-agent && python3 -m pytest tests/test_user_qq.py -v --no-header --timeout=10`
+Run: `cd 项目根目录 && python3 -m pytest tests/test_user_qq.py -v --no-header --timeout=10`
 Expected: FAIL with `ModuleNotFoundError: No module named 'agent_core.user_qq'`
 
 - [ ] **Step 3: Write minimal implementation**
@@ -855,13 +855,13 @@ class QQUser(UserBase):
 
 - [ ] **Step 4: Run test to verify it passes**
 
-Run: `cd /home/orangepi/ai-agent && python3 -m pytest tests/test_user_qq.py -v --no-header --timeout=10`
+Run: `cd 项目根目录 && python3 -m pytest tests/test_user_qq.py -v --no-header --timeout=10`
 Expected: 5 passed
 
 - [ ] **Step 5: Commit**
 
 ```bash
-cd /home/orangepi/ai-agent && git add agent_core/user_qq.py tests/test_user_qq.py && git commit -m "feat: add QQUser with start-only notification (5-msg limit compliant)"
+cd 项目根目录 && git add agent_core/user_qq.py tests/test_user_qq.py && git commit -m "feat: add QQUser with start-only notification (5-msg limit compliant)"
 ```
 
 ---
@@ -986,7 +986,7 @@ async def test_dispatch_single_emits_failed_on_exception():
 
 - [ ] **Step 2: Run test to verify it fails**
 
-Run: `cd /home/orangepi/ai-agent && python3 -m pytest tests/test_sub_agent_events.py -v --no-header --timeout=10`
+Run: `cd 项目根目录 && python3 -m pytest tests/test_sub_agent_events.py -v --no-header --timeout=10`
 Expected: FAIL — 事件未发射（user.events 为空）
 
 - [ ] **Step 3: Implement — 修改 `_dispatch_single_sub_agent`**
@@ -1115,18 +1115,18 @@ from core.event_bus import event_bus, AgentEvent, AgentEventType, gen_task_id
 
 - [ ] **Step 6: Run test to verify it passes**
 
-Run: `cd /home/orangepi/ai-agent && python3 -m pytest tests/test_sub_agent_events.py -v --no-header --timeout=10`
+Run: `cd 项目根目录 && python3 -m pytest tests/test_sub_agent_events.py -v --no-header --timeout=10`
 Expected: 2 passed
 
 - [ ] **Step 7: Run regression to verify no breakage**
 
-Run: `cd /home/orangepi/ai-agent && python3 -m pytest tests/ -q --no-header --timeout=60 -x 2>&1 | tail -5`
+Run: `cd 项目根目录 && python3 -m pytest tests/ -q --no-header --timeout=60 -x 2>&1 | tail -5`
 Expected: 0 failures
 
 - [ ] **Step 8: Commit**
 
 ```bash
-cd /home/orangepi/ai-agent && git add agent_core/sub_agent_manager.py tests/test_sub_agent_events.py && git commit -m "feat: emit SUB_STARTED/COMPLETED/FAILED events in 3 dispatch methods"
+cd 项目根目录 && git add agent_core/sub_agent_manager.py tests/test_sub_agent_events.py && git commit -m "feat: emit SUB_STARTED/COMPLETED/FAILED events in 3 dispatch methods"
 ```
 
 ---
@@ -1223,7 +1223,7 @@ async def test_notify_tool_status_failed_emits_event():
 
 - [ ] **Step 2: Run test to verify it fails**
 
-Run: `cd /home/orangepi/ai-agent && python3 -m pytest tests/test_tool_event_migration.py -v --no-header --timeout=10`
+Run: `cd 项目根目录 && python3 -m pytest tests/test_tool_event_migration.py -v --no-header --timeout=10`
 Expected: FAIL — 事件未发射
 
 - [ ] **Step 3: Implement — 修改 `_notify_tool_status`**
@@ -1283,13 +1283,13 @@ from core.event_bus import event_bus, AgentEvent, AgentEventType
 
 - [ ] **Step 4: Run test to verify it passes**
 
-Run: `cd /home/orangepi/ai-agent && python3 -m pytest tests/test_tool_event_migration.py -v --no-header --timeout=10`
+Run: `cd 项目根目录 && python3 -m pytest tests/test_tool_event_migration.py -v --no-header --timeout=10`
 Expected: 3 passed
 
 - [ ] **Step 5: Commit**
 
 ```bash
-cd /home/orangepi/ai-agent && git add tool_engine/tool_call_handler.py tests/test_tool_event_migration.py && git commit -m "feat: migrate tool status events to EventBus (keep status_callback fallback)"
+cd 项目根目录 && git add tool_engine/tool_call_handler.py tests/test_tool_event_migration.py && git commit -m "feat: migrate tool status events to EventBus (keep status_callback fallback)"
 ```
 
 ---
@@ -1356,7 +1356,7 @@ async def test_web_adapter_binds_web_user():
 
 - [ ] **Step 2: Run test to verify it fails**
 
-Run: `cd /home/orangepi/ai-agent && python3 -m pytest tests/test_transport_user_binding.py -v --no-header --timeout=10`
+Run: `cd 项目根目录 && python3 -m pytest tests/test_transport_user_binding.py -v --no-header --timeout=10`
 Expected: PASS（测试本身不依赖修改，验证现有行为）— 如果 FAIL 则有回归
 
 - [ ] **Step 3: Implement — 修改 `qq_bot_adapter.py`**
@@ -1420,18 +1420,18 @@ from agent_core.user_qq import QQUser
 
 - [ ] **Step 5: Run test to verify it passes**
 
-Run: `cd /home/orangepi/ai-agent && python3 -m pytest tests/test_transport_user_binding.py -v --no-header --timeout=10`
+Run: `cd 项目根目录 && python3 -m pytest tests/test_transport_user_binding.py -v --no-header --timeout=10`
 Expected: 3 passed
 
 - [ ] **Step 6: Run regression**
 
-Run: `cd /home/orangepi/ai-agent && python3 -m pytest tests/ -q --no-header --timeout=60 -x 2>&1 | tail -5`
+Run: `cd 项目根目录 && python3 -m pytest tests/ -q --no-header --timeout=60 -x 2>&1 | tail -5`
 Expected: 0 failures
 
 - [ ] **Step 7: Commit**
 
 ```bash
-cd /home/orangepi/ai-agent && git add qq_bot_adapter.py web/ws_hub.py tests/test_transport_user_binding.py && git commit -m "feat: bind QQUser/WebUser to EventBus in transport layer"
+cd 项目根目录 && git add qq_bot_adapter.py web/ws_hub.py tests/test_transport_user_binding.py && git commit -m "feat: bind QQUser/WebUser to EventBus in transport layer"
 ```
 
 ---
@@ -1508,7 +1508,7 @@ async def test_cancel_token_with_timeout_none_never_auto_cancel():
 
 - [ ] **Step 2: Run test to verify it fails**
 
-Run: `cd /home/orangepi/ai-agent && python3 -m pytest tests/test_cancel_token.py -v --no-header --timeout=10`
+Run: `cd 项目根目录 && python3 -m pytest tests/test_cancel_token.py -v --no-header --timeout=10`
 Expected: FAIL with `ModuleNotFoundError: No module named 'core.cancel_token'`
 
 - [ ] **Step 3: Write minimal implementation**
@@ -1613,7 +1613,7 @@ class CancelToken:
 
 - [ ] **Step 4: Run test to verify it passes**
 
-Run: `cd /home/orangepi/ai-agent && python3 -m pytest tests/test_cancel_token.py -v --no-header --timeout=10`
+Run: `cd 项目根目录 && python3 -m pytest tests/test_cancel_token.py -v --no-header --timeout=10`
 Expected: 6 passed
 
 - [ ] **Step 5: Integrate CancelToken into sub_agent_manager**
@@ -1649,13 +1649,13 @@ from core.cancel_token import CancelToken, CancellationError
 
 - [ ] **Step 6: Run regression**
 
-Run: `cd /home/orangepi/ai-agent && python3 -m pytest tests/ -q --no-header --timeout=60 -x 2>&1 | tail -5`
+Run: `cd 项目根目录 && python3 -m pytest tests/ -q --no-header --timeout=60 -x 2>&1 | tail -5`
 Expected: 0 failures
 
 - [ ] **Step 7: Commit**
 
 ```bash
-cd /home/orangepi/ai-agent && git add core/cancel_token.py tests/test_cancel_token.py agent_core/sub_agent_manager.py && git commit -m "feat: add CancelToken with timeout + manual cancel support"
+cd 项目根目录 && git add core/cancel_token.py tests/test_cancel_token.py agent_core/sub_agent_manager.py && git commit -m "feat: add CancelToken with timeout + manual cancel support"
 ```
 
 ---
@@ -1719,7 +1719,7 @@ def test_decide_belief_fallback_on_exception():
 
 - [ ] **Step 2: Run test to verify it fails**
 
-Run: `cd /home/orangepi/ai-agent && python3 -m pytest tests/test_belief_router_bugfix.py -v --no-header --timeout=10`
+Run: `cd 项目根目录 && python3 -m pytest tests/test_belief_router_bugfix.py -v --no-header --timeout=10`
 Expected: FAIL — `select_agent` 未被调用（因为代码调用的是 `decide()`）
 
 - [ ] **Step 3: Implement — 修复 bug**
@@ -1736,13 +1736,13 @@ Expected: FAIL — `select_agent` 未被调用（因为代码调用的是 `decid
 
 - [ ] **Step 4: Run test to verify it passes**
 
-Run: `cd /home/orangepi/ai-agent && python3 -m pytest tests/test_belief_router_bugfix.py -v --no-header --timeout=10`
+Run: `cd 项目根目录 && python3 -m pytest tests/test_belief_router_bugfix.py -v --no-header --timeout=10`
 Expected: 2 passed
 
 - [ ] **Step 5: Commit**
 
 ```bash
-cd /home/orangepi/ai-agent && git add core/router_engine.py tests/test_belief_router_bugfix.py && git commit -m "fix: RouterEngine calls BeliefRouter.select_agent() instead of non-existent decide()"
+cd 项目根目录 && git add core/router_engine.py tests/test_belief_router_bugfix.py && git commit -m "fix: RouterEngine calls BeliefRouter.select_agent() instead of non-existent decide()"
 ```
 
 ---
@@ -1852,7 +1852,7 @@ async def test_dispatch_failure_updates_belief():
 
 - [ ] **Step 2: Run test to verify it fails**
 
-Run: `cd /home/orangepi/ai-agent && python3 -m pytest tests/test_belief_feedback.py -v --no-header --timeout=10`
+Run: `cd 项目根目录 && python3 -m pytest tests/test_belief_feedback.py -v --no-header --timeout=10`
 Expected: FAIL — `update_belief` 未被调用
 
 - [ ] **Step 3: Implement — 在 sub_agent_manager 中加反馈回路**
@@ -1885,18 +1885,18 @@ Expected: FAIL — `update_belief` 未被调用
 
 - [ ] **Step 4: Run test to verify it passes**
 
-Run: `cd /home/orangepi/ai-agent && python3 -m pytest tests/test_belief_feedback.py -v --no-header --timeout=10`
+Run: `cd 项目根目录 && python3 -m pytest tests/test_belief_feedback.py -v --no-header --timeout=10`
 Expected: 2 passed
 
 - [ ] **Step 5: Run regression**
 
-Run: `cd /home/orangepi/ai-agent && python3 -m pytest tests/ -q --no-header --timeout=60 -x 2>&1 | tail -5`
+Run: `cd 项目根目录 && python3 -m pytest tests/ -q --no-header --timeout=60 -x 2>&1 | tail -5`
 Expected: 0 failures
 
 - [ ] **Step 6: Commit**
 
 ```bash
-cd /home/orangepi/ai-agent && git add agent_core/sub_agent_manager.py tests/test_belief_feedback.py && git commit -m "feat: add BeliefRouter feedback loop - update_belief after dispatch"
+cd 项目根目录 && git add agent_core/sub_agent_manager.py tests/test_belief_feedback.py && git commit -m "feat: add BeliefRouter feedback loop - update_belief after dispatch"
 ```
 
 ---
@@ -2008,7 +2008,7 @@ async def test_db_blackboard_cleanup_expired(db_path):
 
 - [ ] **Step 2: Run test to verify it fails**
 
-Run: `cd /home/orangepi/ai-agent && python3 -m pytest tests/test_shared_blackboard_db.py -v --no-header --timeout=10`
+Run: `cd 项目根目录 && python3 -m pytest tests/test_shared_blackboard_db.py -v --no-header --timeout=10`
 Expected: FAIL with `ModuleNotFoundError: No module named 'agent_core.shared_blackboard_db'`
 
 - [ ] **Step 3: Write minimal implementation**
@@ -2227,13 +2227,13 @@ class SharedBlackboardDB:
 
 - [ ] **Step 4: Run test to verify it passes**
 
-Run: `cd /home/orangepi/ai-agent && python3 -m pytest tests/test_shared_blackboard_db.py -v --no-header --timeout=15`
+Run: `cd 项目根目录 && python3 -m pytest tests/test_shared_blackboard_db.py -v --no-header --timeout=15`
 Expected: 7 passed
 
 - [ ] **Step 5: Commit**
 
 ```bash
-cd /home/orangepi/ai-agent && git add agent_core/shared_blackboard_db.py tests/test_shared_blackboard_db.py && git commit -m "feat: add SharedBlackboardDB with SQLite WAL backing for cross-process sharing"
+cd 项目根目录 && git add agent_core/shared_blackboard_db.py tests/test_shared_blackboard_db.py && git commit -m "feat: add SharedBlackboardDB with SQLite WAL backing for cross-process sharing"
 ```
 
 ---

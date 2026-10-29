@@ -10,7 +10,7 @@
 
 ## Global Constraints
 
-- Python venv 路径: `/home/orangepi/ai-agent/.venv/bin/python`
+- Python venv 路径: `项目根目录/.venv/bin/python`
 - 测试命令: `.venv/bin/python -m pytest tests/test_<name>.py -v`
 - 数据库: SQLite (aiosqlite异步), 向量存储: sqlite-vec
 - 所有新模块使用 `from __future__ import annotations`
@@ -46,7 +46,7 @@ networkx>=3.2
 
 - [ ] **Step 2: 安装依赖**
 
-Run: `cd /home/orangepi/ai-agent && .venv/bin/pip install networkx>=3.2`
+Run: `cd 项目根目录 && .venv/bin/pip install networkx>=3.2`
 Expected: Successfully installed networkx
 
 - [ ] **Step 3: 编写迁移SQL**
@@ -193,7 +193,7 @@ async def test_episodic_memories_new_columns(migrated_db):
 
 - [ ] **Step 5: 运行测试验证**
 
-Run: `cd /home/orangepi/ai-agent && .venv/bin/python -m pytest tests/test_v06_migration.py -v`
+Run: `cd 项目根目录 && .venv/bin/python -m pytest tests/test_v06_migration.py -v`
 Expected: 4 passed
 
 - [ ] **Step 6: Commit**
@@ -298,7 +298,7 @@ def test_old_memory_low_score():
 
 - [ ] **Step 2: 运行测试验证失败**
 
-Run: `cd /home/orangepi/ai-agent && .venv/bin/python -m pytest tests/test_salience.py -v`
+Run: `cd 项目根目录 && .venv/bin/python -m pytest tests/test_salience.py -v`
 Expected: FAIL (ModuleNotFoundError)
 
 - [ ] **Step 3: 实现 SalienceScorer**
@@ -393,7 +393,7 @@ class SalienceScorer:
 
 - [ ] **Step 4: 运行测试验证通过**
 
-Run: `cd /home/orangepi/ai-agent && .venv/bin/python -m pytest tests/test_salience.py -v`
+Run: `cd 项目根目录 && .venv/bin/python -m pytest tests/test_salience.py -v`
 Expected: 5 passed
 
 - [ ] **Step 5: Commit**
@@ -494,7 +494,7 @@ def test_update_salience():
 
 - [ ] **Step 2: 运行测试验证失败**
 
-Run: `cd /home/orangepi/ai-agent && .venv/bin/python -m pytest tests/test_hopfield_layer.py -v`
+Run: `cd 项目根目录 && .venv/bin/python -m pytest tests/test_hopfield_layer.py -v`
 Expected: FAIL (ModuleNotFoundError)
 
 - [ ] **Step 3: 实现 HopfieldLayer**
@@ -716,7 +716,7 @@ class HopfieldLayer:
 
 - [ ] **Step 4: 运行测试验证通过**
 
-Run: `cd /home/orangepi/ai-agent && .venv/bin/python -m pytest tests/test_hopfield_layer.py -v`
+Run: `cd 项目根目录 && .venv/bin/python -m pytest tests/test_hopfield_layer.py -v`
 Expected: 6 passed
 
 - [ ] **Step 5: Commit**
@@ -826,7 +826,7 @@ def test_self_attention_sweep(cog_mem):
 
 - [ ] **Step 2: 运行测试验证失败**
 
-Run: `cd /home/orangepi/ai-agent && .venv/bin/python -m pytest tests/test_cognitive_memory.py -v`
+Run: `cd 项目根目录 && .venv/bin/python -m pytest tests/test_cognitive_memory.py -v`
 Expected: FAIL (ModuleNotFoundError)
 
 - [ ] **Step 3: 实现 CognitiveMemory**
@@ -1151,7 +1151,7 @@ class CognitiveMemory:
 
 - [ ] **Step 4: 运行测试验证通过**
 
-Run: `cd /home/orangepi/ai-agent && .venv/bin/python -m pytest tests/test_cognitive_memory.py -v`
+Run: `cd 项目根目录 && .venv/bin/python -m pytest tests/test_cognitive_memory.py -v`
 Expected: 5 passed
 
 - [ ] **Step 5: Commit**
@@ -1248,7 +1248,7 @@ def test_no_bridge_for_identical(manager):
 
 - [ ] **Step 2: 运行测试验证失败**
 
-Run: `cd /home/orangepi/ai-agent && .venv/bin/python -m pytest tests/test_bridge_memory.py -v`
+Run: `cd 项目根目录 && .venv/bin/python -m pytest tests/test_bridge_memory.py -v`
 Expected: FAIL (ModuleNotFoundError)
 
 - [ ] **Step 3: 实现 BridgeMemoryManager**
@@ -1418,7 +1418,7 @@ class BridgeMemoryManager:
 
 - [ ] **Step 4: 运行测试验证通过**
 
-Run: `cd /home/orangepi/ai-agent && .venv/bin/python -m pytest tests/test_bridge_memory.py -v`
+Run: `cd 项目根目录 && .venv/bin/python -m pytest tests/test_bridge_memory.py -v`
 Expected: 3 passed
 
 - [ ] **Step 5: Commit**
@@ -1501,7 +1501,7 @@ def test_predict_links(graph):
 
 - [ ] **Step 2: 运行测试验证失败**
 
-Run: `cd /home/orangepi/ai-agent && .venv/bin/python -m pytest tests/test_spreading_activation.py -v`
+Run: `cd 项目根目录 && .venv/bin/python -m pytest tests/test_spreading_activation.py -v`
 Expected: FAIL (ModuleNotFoundError)
 
 - [ ] **Step 3: 实现 SpreadingActivation**
@@ -1661,7 +1661,7 @@ class SpreadingActivation:
 
 - [ ] **Step 4: 运行测试验证通过**
 
-Run: `cd /home/orangepi/ai-agent && .venv/bin/python -m pytest tests/test_spreading_activation.py -v`
+Run: `cd 项目根目录 && .venv/bin/python -m pytest tests/test_spreading_activation.py -v`
 Expected: 4 passed
 
 - [ ] **Step 5: Commit**
@@ -1743,7 +1743,7 @@ def test_no_conflict_same_numbers(cs):
 
 - [ ] **Step 2: 运行测试验证失败**
 
-Run: `cd /home/orangepi/ai-agent && .venv/bin/python -m pytest tests/test_conflict_supersession.py -v`
+Run: `cd 项目根目录 && .venv/bin/python -m pytest tests/test_conflict_supersession.py -v`
 Expected: FAIL (ModuleNotFoundError)
 
 - [ ] **Step 3: 实现 ConflictSupersession**
@@ -1894,7 +1894,7 @@ class ConflictSupersession:
 
 - [ ] **Step 4: 运行测试验证通过**
 
-Run: `cd /home/orangepi/ai-agent && .venv/bin/python -m pytest tests/test_conflict_supersession.py -v`
+Run: `cd 项目根目录 && .venv/bin/python -m pytest tests/test_conflict_supersession.py -v`
 Expected: 4 passed
 
 - [ ] **Step 5: Commit**
@@ -1970,7 +1970,7 @@ def test_run_cycle_with_memories(dream):
 
 - [ ] **Step 2: 运行测试验证失败**
 
-Run: `cd /home/orangepi/ai-agent && .venv/bin/python -m pytest tests/test_dream_engine_v2.py -v`
+Run: `cd 项目根目录 && .venv/bin/python -m pytest tests/test_dream_engine_v2.py -v`
 Expected: FAIL (ModuleNotFoundError)
 
 - [ ] **Step 3: 实现 DreamEngineV2**
@@ -2272,7 +2272,7 @@ class DreamEngineV2:
 
 - [ ] **Step 4: 运行测试验证通过**
 
-Run: `cd /home/orangepi/ai-agent && .venv/bin/python -m pytest tests/test_dream_engine_v2.py -v`
+Run: `cd 项目根目录 && .venv/bin/python -m pytest tests/test_dream_engine_v2.py -v`
 Expected: 3 passed
 
 - [ ] **Step 5: Commit**
@@ -2328,7 +2328,7 @@ def test_pattern_salience(pd):
 
 - [ ] **Step 2: 运行测试验证失败**
 
-Run: `cd /home/orangepi/ai-agent && .venv/bin/python -m pytest tests/test_preference_discovery.py -v`
+Run: `cd 项目根目录 && .venv/bin/python -m pytest tests/test_preference_discovery.py -v`
 Expected: FAIL (ModuleNotFoundError)
 
 - [ ] **Step 3: 实现 PreferenceDiscovery**
@@ -2483,7 +2483,7 @@ class PreferenceDiscovery:
 
 - [ ] **Step 4: 运行测试验证通过**
 
-Run: `cd /home/orangepi/ai-agent && .venv/bin/python -m pytest tests/test_preference_discovery.py -v`
+Run: `cd 项目根目录 && .venv/bin/python -m pytest tests/test_preference_discovery.py -v`
 Expected: 2 passed
 
 - [ ] **Step 5: Commit**
@@ -2595,12 +2595,12 @@ async def test_salience_with_emotion(system):
 
 - [ ] **Step 2: 运行集成测试**
 
-Run: `cd /home/orangepi/ai-agent && .venv/bin/python -m pytest tests/test_v06_integration.py -v`
+Run: `cd 项目根目录 && .venv/bin/python -m pytest tests/test_v06_integration.py -v`
 Expected: 4 passed
 
 - [ ] **Step 3: 运行全部v0.6.0测试**
 
-Run: `cd /home/orangepi/ai-agent && .venv/bin/python -m pytest tests/test_v06_migration.py tests/test_salience.py tests/test_hopfield_layer.py tests/test_cognitive_memory.py tests/test_bridge_memory.py tests/test_spreading_activation.py tests/test_conflict_supersession.py tests/test_dream_engine_v2.py tests/test_preference_discovery.py tests/test_v06_integration.py -v`
+Run: `cd 项目根目录 && .venv/bin/python -m pytest tests/test_v06_migration.py tests/test_salience.py tests/test_hopfield_layer.py tests/test_cognitive_memory.py tests/test_bridge_memory.py tests/test_spreading_activation.py tests/test_conflict_supersession.py tests/test_dream_engine_v2.py tests/test_preference_discovery.py tests/test_v06_integration.py -v`
 Expected: All passed
 
 - [ ] **Step 4: Commit**

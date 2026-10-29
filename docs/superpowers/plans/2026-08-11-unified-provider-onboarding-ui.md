@@ -427,7 +427,7 @@ Expected: all tests pass with zero failures.
 Run: `cd web/frontend && npx vue-tsc --noEmit && npm run build`
 Expected: both commands exit 0.
 
-Run: `cd /home/orangepi/ai-agent && git diff --check`
+Run: `cd 项目根目录 && git diff --check`
 Expected: exit 0.
 
 - [ ] **Step 3: Perform independent code review**

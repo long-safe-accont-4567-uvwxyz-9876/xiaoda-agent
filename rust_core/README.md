@@ -37,7 +37,7 @@ bash rust_core/build.sh        # 需要 cargo（https://rustup.rs）
 # .env 或环境变量：
 RUST_HYBRID_ENABLED=true
 # 运行时让 Python 能找到扩展（systemd 场景加 Environment=PYTHONPATH=...）
-PYTHONPATH=/home/orangepi/ai-agent/rust_core/target/release
+PYTHONPATH=项目根目录/rust_core/target/release
 ```
 
 ## 安全边界

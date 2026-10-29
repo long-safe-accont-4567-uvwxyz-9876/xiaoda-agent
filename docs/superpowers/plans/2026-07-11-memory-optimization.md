@@ -146,7 +146,7 @@ class TestMigrationV13:
 
 - [ ] **Step 2: Run test to verify it fails**
 
-Run: `cd /home/orangepi/ai-agent && .venv/bin/python -m pytest tests/test_db_migration_v13.py -v`
+Run: `cd 项目根目录 && .venv/bin/python -m pytest tests/test_db_migration_v13.py -v`
 Expected: FAIL — columns and table don't exist yet
 
 - [ ] **Step 3: Implement the migration method**
@@ -227,13 +227,13 @@ Also update `CURRENT_SCHEMA_VERSION = 13` at the top of the file.
 
 - [ ] **Step 5: Run test to verify it passes**
 
-Run: `cd /home/orangepi/ai-agent && .venv/bin/python -m pytest tests/test_db_migration_v13.py -v`
+Run: `cd 项目根目录 && .venv/bin/python -m pytest tests/test_db_migration_v13.py -v`
 Expected: PASS
 
 - [ ] **Step 6: Commit**
 
 ```bash
-cd /home/orangepi/ai-agent && git add db/database.py tests/test_db_migration_v13.py && git commit -m "feat(db): v13 migration for memory optimization (tier/temporal/reflection)"
+cd 项目根目录 && git add db/database.py tests/test_db_migration_v13.py && git commit -m "feat(db): v13 migration for memory optimization (tier/temporal/reflection)"
 ```
 
 ---
@@ -362,7 +362,7 @@ class TestHierarchicalMemoryManager:
 
 - [ ] **Step 2: Run test to verify it fails**
 
-Run: `cd /home/orangepi/ai-agent && .venv/bin/python -m pytest tests/test_hierarchical_memory.py -v`
+Run: `cd 项目根目录 && .venv/bin/python -m pytest tests/test_hierarchical_memory.py -v`
 Expected: FAIL — `memory.hierarchical_memory` module not found
 
 - [ ] **Step 3: Implement hierarchical_memory.py**
@@ -657,18 +657,18 @@ class HierarchicalMemoryManager:
 
 - [ ] **Step 4: Run test to verify it passes**
 
-Run: `cd /home/orangepi/ai-agent && .venv/bin/python -m pytest tests/test_hierarchical_memory.py -v`
+Run: `cd 项目根目录 && .venv/bin/python -m pytest tests/test_hierarchical_memory.py -v`
 Expected: PASS
 
 - [ ] **Step 5: Verify no regression**
 
-Run: `cd /home/orangepi/ai-agent && .venv/bin/python -m py_compile memory/hierarchical_memory.py`
+Run: `cd 项目根目录 && .venv/bin/python -m py_compile memory/hierarchical_memory.py`
 Expected: No errors
 
 - [ ] **Step 6: Commit**
 
 ```bash
-cd /home/orangepi/ai-agent && git add memory/hierarchical_memory.py tests/test_hierarchical_memory.py && git commit -m "feat(memory): #13 hierarchical memory architecture (L1/L2/L3 tiers)"
+cd 项目根目录 && git add memory/hierarchical_memory.py tests/test_hierarchical_memory.py && git commit -m "feat(memory): #13 hierarchical memory architecture (L1/L2/L3 tiers)"
 ```
 
 ---
@@ -800,7 +800,7 @@ class TestEvictionEngine:
 
 - [ ] **Step 2: Run test to verify it fails**
 
-Run: `cd /home/orangepi/ai-agent && .venv/bin/python -m pytest tests/test_working_memory.py -v`
+Run: `cd 项目根目录 && .venv/bin/python -m pytest tests/test_working_memory.py -v`
 Expected: FAIL — `WorkingMemoryItem`, `SalienceScorer`, `EvictionEngine` not defined
 
 - [ ] **Step 3: Add WorkingMemoryItem and SalienceScorer to agent_context.py**
@@ -923,18 +923,18 @@ class EvictionEngine:
 
 - [ ] **Step 5: Run test to verify it passes**
 
-Run: `cd /home/orangepi/ai-agent && .venv/bin/python -m pytest tests/test_working_memory.py -v`
+Run: `cd 项目根目录 && .venv/bin/python -m pytest tests/test_working_memory.py -v`
 Expected: PASS
 
 - [ ] **Step 6: Verify no regression**
 
-Run: `cd /home/orangepi/ai-agent && .venv/bin/python -m py_compile agent_context.py memory/episodic_limiter.py`
+Run: `cd 项目根目录 && .venv/bin/python -m py_compile agent_context.py memory/episodic_limiter.py`
 Expected: No errors
 
 - [ ] **Step 7: Commit**
 
 ```bash
-cd /home/orangepi/ai-agent && git add agent_context.py memory/episodic_limiter.py tests/test_working_memory.py && git commit -m "feat(memory): #12 working memory with salience scoring and eviction engine"
+cd 项目根目录 && git add agent_context.py memory/episodic_limiter.py tests/test_working_memory.py && git commit -m "feat(memory): #12 working memory with salience scoring and eviction engine"
 ```
 
 ---
@@ -1030,7 +1030,7 @@ class TestMemoryRouter:
 
 - [ ] **Step 2: Run test to verify it fails**
 
-Run: `cd /home/orangepi/ai-agent && .venv/bin/python -m pytest tests/test_memory_router.py -v`
+Run: `cd 项目根目录 && .venv/bin/python -m pytest tests/test_memory_router.py -v`
 Expected: FAIL — `memory.memory_router` module not found
 
 - [ ] **Step 3: Implement memory_router.py**
@@ -1174,13 +1174,13 @@ class MemoryRouter:
 
 - [ ] **Step 4: Run test to verify it passes**
 
-Run: `cd /home/orangepi/ai-agent && .venv/bin/python -m pytest tests/test_memory_router.py -v`
+Run: `cd 项目根目录 && .venv/bin/python -m pytest tests/test_memory_router.py -v`
 Expected: PASS
 
 - [ ] **Step 5: Commit**
 
 ```bash
-cd /home/orangepi/ai-agent && git add memory/memory_router.py tests/test_memory_router.py && git commit -m "feat(memory): #17 memory router with rule-based classification"
+cd 项目根目录 && git add memory/memory_router.py tests/test_memory_router.py && git commit -m "feat(memory): #17 memory router with rule-based classification"
 ```
 
 ---
@@ -1295,7 +1295,7 @@ class TestCrossSessionManager:
 
 - [ ] **Step 2: Run test to verify it fails**
 
-Run: `cd /home/orangepi/ai-agent && .venv/bin/python -m pytest tests/test_cross_session.py -v`
+Run: `cd 项目根目录 && .venv/bin/python -m pytest tests/test_cross_session.py -v`
 Expected: FAIL — `memory.cross_session_manager` module not found
 
 - [ ] **Step 3: Implement cross_session_manager.py**
@@ -1491,13 +1491,13 @@ class CrossSessionManager:
 
 - [ ] **Step 4: Run test to verify it passes**
 
-Run: `cd /home/orangepi/ai-agent && .venv/bin/python -m pytest tests/test_cross_session.py -v`
+Run: `cd 项目根目录 && .venv/bin/python -m pytest tests/test_cross_session.py -v`
 Expected: PASS
 
 - [ ] **Step 5: Commit**
 
 ```bash
-cd /home/orangepi/ai-agent && git add memory/cross_session_manager.py tests/test_cross_session.py && git commit -m "feat(memory): #21 cross-session memory bridge with adaptive loading"
+cd 项目根目录 && git add memory/cross_session_manager.py tests/test_cross_session.py && git commit -m "feat(memory): #21 cross-session memory bridge with adaptive loading"
 ```
 
 ---
@@ -1620,7 +1620,7 @@ class TestTemporalMemoryStore:
 
 - [ ] **Step 2: Run test to verify it fails**
 
-Run: `cd /home/orangepi/ai-agent && .venv/bin/python -m pytest tests/test_temporal_memory.py -v`
+Run: `cd 项目根目录 && .venv/bin/python -m pytest tests/test_temporal_memory.py -v`
 Expected: FAIL — `memory.temporal_memory` module not found
 
 - [ ] **Step 3: Implement temporal_memory.py**
@@ -1814,13 +1814,13 @@ class TemporalMemoryStore:
 
 - [ ] **Step 4: Run test to verify it passes**
 
-Run: `cd /home/orangepi/ai-agent && .venv/bin/python -m pytest tests/test_temporal_memory.py -v`
+Run: `cd 项目根目录 && .venv/bin/python -m pytest tests/test_temporal_memory.py -v`
 Expected: PASS
 
 - [ ] **Step 5: Commit**
 
 ```bash
-cd /home/orangepi/ai-agent && git add memory/temporal_memory.py tests/test_temporal_memory.py && git commit -m "feat(memory): #18 temporal reasoning memory with timeline and as-of queries"
+cd 项目根目录 && git add memory/temporal_memory.py tests/test_temporal_memory.py && git commit -m "feat(memory): #18 temporal reasoning memory with timeline and as-of queries"
 ```
 
 ---
@@ -1944,7 +1944,7 @@ class TestReflectiveAgent:
 
 - [ ] **Step 2: Run test to verify it fails**
 
-Run: `cd /home/orangepi/ai-agent && .venv/bin/python -m pytest tests/test_reflection_store.py -v`
+Run: `cd 项目根目录 && .venv/bin/python -m pytest tests/test_reflection_store.py -v`
 Expected: FAIL — `memory.reflection_store` and `core.meta_cognition.ReflectiveAgent` not found
 
 - [ ] **Step 3: Implement reflection_store.py**
@@ -2182,18 +2182,18 @@ class ReflectiveAgent:
 
 - [ ] **Step 5: Run test to verify it passes**
 
-Run: `cd /home/orangepi/ai-agent && .venv/bin/python -m pytest tests/test_reflection_store.py -v`
+Run: `cd 项目根目录 && .venv/bin/python -m pytest tests/test_reflection_store.py -v`
 Expected: PASS
 
 - [ ] **Step 6: Verify no regression**
 
-Run: `cd /home/orangepi/ai-agent && .venv/bin/python -m py_compile memory/reflection_store.py core/meta_cognition.py`
+Run: `cd 项目根目录 && .venv/bin/python -m py_compile memory/reflection_store.py core/meta_cognition.py`
 Expected: No errors
 
 - [ ] **Step 7: Commit**
 
 ```bash
-cd /home/orangepi/ai-agent && git add memory/reflection_store.py core/meta_cognition.py tests/test_reflection_store.py && git commit -m "feat(memory): #16 self-reflection memory with reflection store and reflective agent"
+cd 项目根目录 && git add memory/reflection_store.py core/meta_cognition.py tests/test_reflection_store.py && git commit -m "feat(memory): #16 self-reflection memory with reflection store and reflective agent"
 ```
 
 ---
@@ -2205,26 +2205,26 @@ After all 7 tasks are complete, run full verification:
 - [ ] **Step 1: Run all new tests**
 
 ```bash
-cd /home/orangepi/ai-agent && .venv/bin/python -m pytest tests/test_db_migration_v13.py tests/test_hierarchical_memory.py tests/test_working_memory.py tests/test_memory_router.py tests/test_cross_session.py tests/test_temporal_memory.py tests/test_reflection_store.py -v
+cd 项目根目录 && .venv/bin/python -m pytest tests/test_db_migration_v13.py tests/test_hierarchical_memory.py tests/test_working_memory.py tests/test_memory_router.py tests/test_cross_session.py tests/test_temporal_memory.py tests/test_reflection_store.py -v
 ```
 Expected: All PASS
 
 - [ ] **Step 2: Run existing tests for regression check**
 
 ```bash
-cd /home/orangepi/ai-agent && .venv/bin/python -m pytest tests/test_context_governance.py tests/test_fluid_memory.py tests/test_memory_distiller.py tests/test_emotional_memory.py -v
+cd 项目根目录 && .venv/bin/python -m pytest tests/test_context_governance.py tests/test_fluid_memory.py tests/test_memory_distiller.py tests/test_emotional_memory.py -v
 ```
 Expected: All PASS (no regression)
 
 - [ ] **Step 3: Compile check all new/modified files**
 
 ```bash
-cd /home/orangepi/ai-agent && .venv/bin/python -m py_compile memory/hierarchical_memory.py memory/memory_router.py memory/temporal_memory.py memory/cross_session_manager.py memory/reflection_store.py agent_context.py memory/episodic_limiter.py core/meta_cognition.py db/database.py
+cd 项目根目录 && .venv/bin/python -m py_compile memory/hierarchical_memory.py memory/memory_router.py memory/temporal_memory.py memory/cross_session_manager.py memory/reflection_store.py agent_context.py memory/episodic_limiter.py core/meta_cognition.py db/database.py
 ```
 Expected: No errors
 
 - [ ] **Step 4: Final commit**
 
 ```bash
-cd /home/orangepi/ai-agent && git add -A && git commit -m "feat(memory): complete P0+P1 memory optimization (6 techniques, AMT coverage 47%→75%)"
+cd 项目根目录 && git add -A && git commit -m "feat(memory): complete P0+P1 memory optimization (6 techniques, AMT coverage 47%→75%)"
 ```

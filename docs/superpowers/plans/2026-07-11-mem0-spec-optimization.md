@@ -192,7 +192,7 @@ class TestMigrationV13:
 
 - [ ] **Step 2: Run test to verify it fails**
 
-Run: `cd /home/orangepi/ai-agent && python -m pytest tests/test_db_migration_v13.py -v`
+Run: `cd 项目根目录 && python -m pytest tests/test_db_migration_v13.py -v`
 Expected: FAIL with "column not found: user_id" or "no such table: memory_entities"
 
 - [ ] **Step 3: Write minimal implementation**
@@ -406,13 +406,13 @@ CURRENT_SCHEMA_VERSION = 13
 
 - [ ] **Step 4: Run test to verify it passes**
 
-Run: `cd /home/orangepi/ai-agent && python -m pytest tests/test_db_migration_v13.py -v`
+Run: `cd 项目根目录 && python -m pytest tests/test_db_migration_v13.py -v`
 Expected: PASS (9 tests passed)
 
 - [ ] **Step 5: Commit**
 
 ```bash
-cd /home/orangepi/ai-agent
+cd 项目根目录
 git add db/schema.sql db/database.py tests/test_db_migration_v13.py
 git commit -m "feat(db): v13 migration — mem0 SPEC schema (user_id/agent_id/is_raw + entity tables)"
 ```
@@ -587,7 +587,7 @@ class TestScopeDBIntegration:
 
 - [ ] **Step 2: Run test to verify it fails**
 
-Run: `cd /home/orangepi/ai-agent && python -m pytest tests/test_scope_isolation.py -v`
+Run: `cd 项目根目录 && python -m pytest tests/test_scope_isolation.py -v`
 Expected: FAIL with "No module named 'memory.scope'"
 
 - [ ] **Step 3: Write minimal implementation**
@@ -841,13 +841,13 @@ from typing import Any
 
 - [ ] **Step 4: Run test to verify it passes**
 
-Run: `cd /home/orangepi/ai-agent && python -m pytest tests/test_scope_isolation.py -v`
+Run: `cd 项目根目录 && python -m pytest tests/test_scope_isolation.py -v`
 Expected: PASS (10 tests passed)
 
 - [ ] **Step 5: Commit**
 
 ```bash
-cd /home/orangepi/ai-agent
+cd 项目根目录
 git add memory/scope.py db/db_memory.py tests/test_scope_isolation.py
 git commit -m "feat(scope): add Scope dataclass + scoped DB search methods"
 ```
@@ -1057,7 +1057,7 @@ class TestEntityMemoryLinksCRUD:
 
 - [ ] **Step 2: Run test to verify it fails**
 
-Run: `cd /home/orangepi/ai-agent && python -m pytest tests/test_entity_crud.py -v`
+Run: `cd 项目根目录 && python -m pytest tests/test_entity_crud.py -v`
 Expected: FAIL with "AttributeError: 'MemoryDB' object has no attribute 'insert_memory_entity'"
 
 - [ ] **Step 3: Write minimal implementation**
@@ -1296,13 +1296,13 @@ Expected: FAIL with "AttributeError: 'MemoryDB' object has no attribute 'insert_
 
 - [ ] **Step 4: Run test to verify it passes**
 
-Run: `cd /home/orangepi/ai-agent && python -m pytest tests/test_entity_crud.py -v`
+Run: `cd 项目根目录 && python -m pytest tests/test_entity_crud.py -v`
 Expected: PASS (12 tests passed)
 
 - [ ] **Step 5: Commit**
 
 ```bash
-cd /home/orangepi/ai-agent
+cd 项目根目录
 git add db/db_memory.py tests/test_entity_crud.py
 git commit -m "feat(db): add memory_entities + entity_memory_links CRUD methods"
 ```
@@ -1502,7 +1502,7 @@ class TestExtractIntegration:
 
 - [ ] **Step 2: Run test to verify it fails**
 
-Run: `cd /home/orangepi/ai-agent && python -m pytest tests/test_entity_extractor.py -v`
+Run: `cd 项目根目录 && python -m pytest tests/test_entity_extractor.py -v`
 Expected: FAIL with "No module named 'memory.entity_extractor'"
 
 - [ ] **Step 3: Write minimal implementation**
@@ -1765,13 +1765,13 @@ class EntityExtractor:
 
 - [ ] **Step 4: Run test to verify it passes**
 
-Run: `cd /home/orangepi/ai-agent && python -m pytest tests/test_entity_extractor.py -v`
+Run: `cd 项目根目录 && python -m pytest tests/test_entity_extractor.py -v`
 Expected: PASS (14 tests passed)
 
 - [ ] **Step 5: Commit**
 
 ```bash
-cd /home/orangepi/ai-agent
+cd 项目根目录
 git add memory/entity_extractor.py tests/test_entity_extractor.py
 git commit -m "feat(entity): add EntityExtractor with jieba+rule+LLM hybrid extraction"
 ```
@@ -2029,7 +2029,7 @@ class TestEntityBoost:
 
 - [ ] **Step 2: Run test to verify it fails**
 
-Run: `cd /home/orangepi/ai-agent && python -m pytest tests/test_entity_store.py -v`
+Run: `cd 项目根目录 && python -m pytest tests/test_entity_store.py -v`
 Expected: FAIL with "No module named 'memory.entity_store'"
 
 - [ ] **Step 3: Write minimal implementation**
@@ -2222,13 +2222,13 @@ class EntityStore:
 
 - [ ] **Step 4: Run test to verify it passes**
 
-Run: `cd /home/orangepi/ai-agent && python -m pytest tests/test_entity_store.py -v`
+Run: `cd 项目根目录 && python -m pytest tests/test_entity_store.py -v`
 Expected: PASS (13 tests passed)
 
 - [ ] **Step 5: Commit**
 
 ```bash
-cd /home/orangepi/ai-agent
+cd 项目根目录
 git add memory/entity_store.py tests/test_entity_store.py
 git commit -m "feat(entity): add EntityStore with link_entities + recall + Entity Boost"
 ```
@@ -2465,7 +2465,7 @@ class TestEncodeMemoryAddOnly:
 
 - [ ] **Step 2: Run test to verify it fails**
 
-Run: `cd /home/orangepi/ai-agent && python -m pytest tests/test_add_only_architecture.py -v`
+Run: `cd 项目根目录 && python -m pytest tests/test_add_only_architecture.py -v`
 Expected: FAIL with "_has_duplicate() got an unexpected keyword argument 'scope'" or "encode_memory() got an unexpected keyword argument 'scope'"
 
 - [ ] **Step 3: Write minimal implementation**
@@ -2739,13 +2739,13 @@ Expected: FAIL with "_has_duplicate() got an unexpected keyword argument 'scope'
 
 - [ ] **Step 4: Run test to verify it passes**
 
-Run: `cd /home/orangepi/ai-agent && python -m pytest tests/test_add_only_architecture.py -v`
+Run: `cd 项目根目录 && python -m pytest tests/test_add_only_architecture.py -v`
 Expected: PASS (7 tests passed)
 
 - [ ] **Step 5: Commit**
 
 ```bash
-cd /home/orangepi/ai-agent
+cd 项目根目录
 git add memory/memory_manager.py tests/test_add_only_architecture.py
 git commit -m "feat(memory): ADD-only encode_memory + scoped _has_duplicate + async entity extraction"
 ```
@@ -2968,7 +2968,7 @@ class TestFindSimilarKnowledge:
 
 - [ ] **Step 2: Run test to verify it fails**
 
-Run: `cd /home/orangepi/ai-agent && python -m pytest tests/test_distill_merge.py -v`
+Run: `cd 项目根目录 && python -m pytest tests/test_distill_merge.py -v`
 Expected: FAIL with "MemoryDistiller has no attribute 'merge_knowledge'" or "MemoryManager has no attribute '_distill_to_knowledge'"
 
 - [ ] **Step 3: Write minimal implementation**
@@ -3162,13 +3162,13 @@ Expected: FAIL with "MemoryDistiller has no attribute 'merge_knowledge'" or "Mem
 
 - [ ] **Step 4: Run test to verify it passes**
 
-Run: `cd /home/orangepi/ai-agent && python -m pytest tests/test_distill_merge.py -v`
+Run: `cd 项目根目录 && python -m pytest tests/test_distill_merge.py -v`
 Expected: PASS (9 tests passed)
 
 - [ ] **Step 5: Commit**
 
 ```bash
-cd /home/orangepi/ai-agent
+cd 项目根目录
 git add memory/memory_distiller.py memory/memory_manager.py tests/test_distill_merge.py
 git commit -m "feat(distill): add merge_knowledge + _distill_to_knowledge + _update_knowledge"
 ```
@@ -3393,7 +3393,7 @@ class TestRetrieveMemoriesHybridScoped:
 
 - [ ] **Step 2: Run test to verify it fails**
 
-Run: `cd /home/orangepi/ai-agent && python -m pytest tests/test_five_path_rrf_entity_boost.py -v`
+Run: `cd 项目根目录 && python -m pytest tests/test_five_path_rrf_entity_boost.py -v`
 Expected: FAIL with "retrieve_memories_hybrid() got an unexpected keyword argument 'scope'" or "MemoryManager has no attribute '_entity_recall'"
 
 - [ ] **Step 3: Write minimal implementation**
@@ -3694,13 +3694,13 @@ Expected: FAIL with "retrieve_memories_hybrid() got an unexpected keyword argume
 
 - [ ] **Step 4: Run test to verify it passes**
 
-Run: `cd /home/orangepi/ai-agent && python -m pytest tests/test_five_path_rrf_entity_boost.py -v`
+Run: `cd 项目根目录 && python -m pytest tests/test_five_path_rrf_entity_boost.py -v`
 Expected: PASS (7 tests passed)
 
 - [ ] **Step 5: Commit**
 
 ```bash
-cd /home/orangepi/ai-agent
+cd 项目根目录
 git add memory/memory_manager.py tests/test_five_path_rrf_entity_boost.py
 git commit -m "feat(search): five-path RRF + Entity Boost + scope filter in retrieve_memories_hybrid"
 ```
@@ -3875,7 +3875,7 @@ class TestEntityLastSeenUpdate:
 
 - [ ] **Step 2: Run test to verify it fails**
 
-Run: `cd /home/orangepi/ai-agent && python -m pytest tests/test_temporal_scope_enhancement.py -v`
+Run: `cd 项目根目录 && python -m pytest tests/test_temporal_scope_enhancement.py -v`
 Expected: FAIL with "_try_temporal_search() got an unexpected keyword argument 'scope'"
 
 - [ ] **Step 3: Write minimal implementation**
@@ -3920,13 +3920,13 @@ Expected: FAIL with "_try_temporal_search() got an unexpected keyword argument '
 
 - [ ] **Step 4: Run test to verify it passes**
 
-Run: `cd /home/orangepi/ai-agent && python -m pytest tests/test_temporal_scope_enhancement.py -v`
+Run: `cd 项目根目录 && python -m pytest tests/test_temporal_scope_enhancement.py -v`
 Expected: PASS (5 tests passed)
 
 - [ ] **Step 5: Commit**
 
 ```bash
-cd /home/orangepi/ai-agent
+cd 项目根目录
 git add memory/memory_manager.py tests/test_temporal_scope_enhancement.py
 git commit -m "feat(temporal): add scope filter to _try_temporal_search + verify last_seen update"
 ```
@@ -4192,25 +4192,25 @@ class TestEndToEndMemoryFlow:
 
 - [ ] **Step 2: Run test to verify it fails**
 
-Run: `cd /home/orangepi/ai-agent && python -m pytest tests/test_mem0_optimization_e2e.py -v`
+Run: `cd 项目根目录 && python -m pytest tests/test_mem0_optimization_e2e.py -v`
 Expected: FAIL（依赖前序任务未全部实现时部分测试失败）
 
 - [ ] **Step 3: Run full test suite to verify no regression**
 
 在前序 Task 1-9 全部实现完成后，端到端测试应自动通过（无需额外实现代码）。
 
-Run: `cd /home/orangepi/ai-agent && python -m pytest tests/test_mem0_optimization_e2e.py -v`
+Run: `cd 项目根目录 && python -m pytest tests/test_mem0_optimization_e2e.py -v`
 Expected: PASS (5 tests passed)
 
 - [ ] **Step 4: Run full regression test suite**
 
-Run: `cd /home/orangepi/ai-agent && python -m pytest tests/ -v --tb=short 2>&1 | tail -30`
+Run: `cd 项目根目录 && python -m pytest tests/ -v --tb=short 2>&1 | tail -30`
 Expected: 全量测试通过（现有 1311 + 新增 ~50 = ~1361 passed），无回归
 
 - [ ] **Step 5: Commit**
 
 ```bash
-cd /home/orangepi/ai-agent
+cd 项目根目录
 git add tests/test_mem0_optimization_e2e.py
 git commit -m "test(e2e): add end-to-end integration tests for mem0 SPEC optimization"
 ```

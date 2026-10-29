@@ -44,9 +44,9 @@ sudo systemctl restart nahida-web && journalctl -u nahida-web -f
 cd web/frontend && npm run build
 
 # Web API 冒烟验证（密码在 .env 的 WEBUI_PASSWORD）
-TOKEN=$(curl -s -X POST http://127.0.0.1:8080/api/v1/auth/login -H 'Content-Type: application/json' \
+TOKEN=$(curl -s -X POST http://127.0.0.1:8082/api/v1/auth/login -H 'Content-Type: application/json' \
   -d '{"password":"<WEBUI_PASSWORD>"}' | python3 -c "import sys,json;print(json.load(sys.stdin)['data']['token'])")
-curl -s http://127.0.0.1:8080/api/v1/agents -H "Authorization: Bearer $TOKEN"
+curl -s http://127.0.0.1:8082/api/v1/agents -H "Authorization: Bearer $TOKEN"
 
 # 数据库
 sqlite3 /mnt/usb2/nahida-data/db/agent.db ".tables"

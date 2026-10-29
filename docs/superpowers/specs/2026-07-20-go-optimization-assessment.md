@@ -1,7 +1,7 @@
 # Go 语言优化评估报告
 
 **评估日期**: 2026-07-20
-**评估对象**: `/home/orangepi/ai-agent` 项目（517 个 .py 文件，~94k 行）
+**评估对象**: `项目根目录` 项目（517 个 .py 文件，~94k 行）
 **评估方法**: 定性矩阵法（4 维度打分 + 好处/坏处/风险三栏）
 **评估目的**: 纯评估报告，识别可用 Go 语言优化的方案，不进入实现阶段
 
@@ -735,7 +735,7 @@
 
 ## 附录: 评估依据
 
-- 项目代码: `/home/orangepi/ai-agent`（commit `bdd7cac`）
+- 项目代码: `项目根目录`（commit `bdd7cac`）
 - 文件统计: 517 个 .py 文件，~94k 行
 - 依赖清单: requirements.lock（70 行）
 - 打包配置: xiaoda-agent.spec (540 行) + scripts/installer.nsi (112 行) + Dockerfile (88 行)

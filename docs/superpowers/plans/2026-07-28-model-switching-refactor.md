@@ -174,7 +174,7 @@ def test_registry_replace_table_bulk_update(fresh_registry):
 
 - [ ] **Step 2: 运行测试验证失败**
 
-Run: `cd /home/orangepi/.ai-agent/proj && python -m pytest tests/test_model_switching_refactor.py -v 2>&1 | head -30`
+Run: `cd ~/.ai-agent/proj && python -m pytest tests/test_model_switching_refactor.py -v 2>&1 | head -30`
 Expected: FAIL with `ImportError: cannot import name 'ModelRouteRegistry'`
 
 - [ ] **Step 3: 实现 ModelRouteRegistry 类**
@@ -307,13 +307,13 @@ class ModelRouteRegistry:
 
 - [ ] **Step 4: 运行测试验证通过**
 
-Run: `cd /home/orangepi/.ai-agent/proj && python -m pytest tests/test_model_switching_refactor.py -v 2>&1 | tail -20`
+Run: `cd ~/.ai-agent/proj && python -m pytest tests/test_model_switching_refactor.py -v 2>&1 | tail -20`
 Expected: 6 tests PASS
 
 - [ ] **Step 5: Commit**
 
 ```bash
-cd /home/orangepi/.ai-agent/proj
+cd ~/.ai-agent/proj
 git add model_router.py tests/test_model_switching_refactor.py
 git commit -m "feat(model_router): 新增 ModelRouteRegistry 封装路由表读写
 
@@ -360,7 +360,7 @@ def test_get_default_model_for_provider_unknown_returns_empty():
 
 - [ ] **Step 2: 运行验证失败**
 
-Run: `cd /home/orangepi/.ai-agent/proj && python -m pytest tests/test_model_switching_refactor.py::test_get_default_model_for_provider_from_metadata -v 2>&1 | tail -10`
+Run: `cd ~/.ai-agent/proj && python -m pytest tests/test_model_switching_refactor.py::test_get_default_model_for_provider_from_metadata -v 2>&1 | tail -10`
 Expected: FAIL with `ImportError: cannot import name 'get_default_model_for_provider'`
 
 - [ ] **Step 3: 实现 get_default_model_for_provider**
@@ -464,18 +464,18 @@ AGNES_TEXT_MODEL = get_default_model_for_provider("agnes")
 
 - [ ] **Step 4: 运行测试验证通过**
 
-Run: `cd /home/orangepi/.ai-agent/proj && python -m pytest tests/test_model_switching_refactor.py -v 2>&1 | tail -20`
+Run: `cd ~/.ai-agent/proj && python -m pytest tests/test_model_switching_refactor.py -v 2>&1 | tail -20`
 Expected: 所有测试 PASS
 
 - [ ] **Step 5: 验证 config.py 仍能正常导入**
 
-Run: `cd /home/orangepi/.ai-agent/proj && python -c "import config; print(config.MODEL_NAME, config.MIMO_MODEL, config.AGNES_TEXT_MODEL)"`
+Run: `cd ~/.ai-agent/proj && python -c "import config; print(config.MODEL_NAME, config.MIMO_MODEL, config.AGNES_TEXT_MODEL)"`
 Expected: 输出 `mimo-v2.5 mimo-v2.5 agnes-2.0-flash`（或对应环境变量值）
 
 - [ ] **Step 6: Commit**
 
 ```bash
-cd /home/orangepi/.ai-agent/proj
+cd ~/.ai-agent/proj
 git add config.py tests/test_model_switching_refactor.py
 git commit -m "refactor(config): 删除硬编码默认模型，改从 provider_metadata.json 读
 
@@ -534,7 +534,7 @@ def test_config_service_save_does_not_touch_route_table():
 
 - [ ] **Step 2: 运行验证失败**
 
-Run: `cd /home/orangepi/.ai-agent/proj && python -m pytest tests/test_model_switching_refactor.py::test_config_service_no_mark_startup_complete_method -v 2>&1 | tail -10`
+Run: `cd ~/.ai-agent/proj && python -m pytest tests/test_model_switching_refactor.py::test_config_service_no_mark_startup_complete_method -v 2>&1 | tail -10`
 Expected: FAIL
 
 - [ ] **Step 3: 删除 mark_startup_complete 方法**
@@ -569,13 +569,13 @@ def _save(self) -> None:
 
 - [ ] **Step 6: 运行所有相关测试**
 
-Run: `cd /home/orangepi/.ai-agent/proj && python -m pytest tests/test_model_switching_refactor.py tests/test_model_persistence_bugfix.py -v 2>&1 | tail -30`
+Run: `cd ~/.ai-agent/proj && python -m pytest tests/test_model_switching_refactor.py tests/test_model_persistence_bugfix.py -v 2>&1 | tail -30`
 Expected: 测试通过或仅因后续 task 未完成而失败
 
 - [ ] **Step 7: Commit**
 
 ```bash
-cd /home/orangepi/.ai-agent/proj
+cd ~/.ai-agent/proj
 git add web/config_service.py tests/test_model_switching_refactor.py tests/test_model_persistence_bugfix.py
 git commit -m "refactor(config_service): 删除 _save() 反向同步死代码
 
@@ -633,7 +633,7 @@ def test_set_chat_model_persists_all_synced_tasks():
 
 - [ ] **Step 2: 运行验证失败**
 
-Run: `cd /home/orangepi/.ai-agent/proj && python -m pytest tests/test_model_switching_refactor.py::test_set_chat_model_rolls_back_on_provider_not_registered -v 2>&1 | tail -15`
+Run: `cd ~/.ai-agent/proj && python -m pytest tests/test_model_switching_refactor.py::test_set_chat_model_rolls_back_on_provider_not_registered -v 2>&1 | tail -15`
 Expected: FAIL（因为旧 set_chat_model 直接改 ROUTE_TABLE，不回滚）
 
 - [ ] **Step 3: 在 ModelRouter.__init__ 中初始化 _registry**
@@ -730,13 +730,13 @@ Expected: FAIL（因为旧 set_chat_model 直接改 ROUTE_TABLE，不回滚）
 
 - [ ] **Step 5: 运行测试验证通过**
 
-Run: `cd /home/orangepi/.ai-agent/proj && python -m pytest tests/test_model_switching_refactor.py -v 2>&1 | tail -25`
+Run: `cd ~/.ai-agent/proj && python -m pytest tests/test_model_switching_refactor.py -v 2>&1 | tail -25`
 Expected: 所有新增测试 PASS
 
 - [ ] **Step 6: Commit**
 
 ```bash
-cd /home/orangepi/.ai-agent/proj
+cd ~/.ai-agent/proj
 git add model_router.py tests/test_model_switching_refactor.py
 git commit -m "refactor(model_router): set_chat_model 原子化走 Registry
 
@@ -795,7 +795,7 @@ def test_restore_chat_model_does_not_overwrite_persistence_on_failure(tmp_path, 
 
 - [ ] **Step 2: 运行验证失败**
 
-Run: `cd /home/orangepi/.ai-agent/proj && python -m pytest tests/test_model_switching_refactor.py::test_restore_chat_model_does_not_overwrite_persistence_on_failure -v 2>&1 | tail -15`
+Run: `cd ~/.ai-agent/proj && python -m pytest tests/test_model_switching_refactor.py::test_restore_chat_model_does_not_overwrite_persistence_on_failure -v 2>&1 | tail -15`
 Expected: FAIL（旧实现在 except 中可能修改持久化）
 
 - [ ] **Step 3: 重写 _restore_chat_model**
@@ -866,13 +866,13 @@ def _restore_chat_model(cfg: Any, core: Any) -> None:
 
 - [ ] **Step 4: 运行测试验证通过**
 
-Run: `cd /home/orangepi/.ai-agent/proj && python -m pytest tests/test_model_switching_refactor.py -v 2>&1 | tail -25`
+Run: `cd ~/.ai-agent/proj && python -m pytest tests/test_model_switching_refactor.py -v 2>&1 | tail -25`
 Expected: 所有测试 PASS
 
 - [ ] **Step 5: Commit**
 
 ```bash
-cd /home/orangepi/.ai-agent/proj
+cd ~/.ai-agent/proj
 git add web/server.py tests/test_model_switching_refactor.py
 git commit -m "refactor(server): _restore_chat_model 失败不覆盖持久化
 
@@ -926,7 +926,7 @@ def test_fallback_chain_does_not_pollute_route_table():
 
 - [ ] **Step 2: 运行验证失败**
 
-Run: `cd /home/orangepi/.ai-agent/proj && python -m pytest tests/test_model_switching_refactor.py::test_fallback_chain_does_not_pollute_route_table -v 2>&1 | tail -15`
+Run: `cd ~/.ai-agent/proj && python -m pytest tests/test_model_switching_refactor.py::test_fallback_chain_does_not_pollute_route_table -v 2>&1 | tail -15`
 Expected: 可能 PASS 或 FAIL，取决于旧实现是否真的污染（旧实现读 ROUTE_TABLE.get，但 _route_with_retry 不会再写回）。如果是 PASS，跳过此 task 的代码改动，仅保留测试作为防护。
 
 - [ ] **Step 3: 修改 _try_fallback_chain 用 snapshot_task**
@@ -953,13 +953,13 @@ agnes_config = self._registry.snapshot_task("chat_agnes")
 
 - [ ] **Step 4: 运行测试验证通过**
 
-Run: `cd /home/orangepi/.ai-agent/proj && python -m pytest tests/test_model_switching_refactor.py -v 2>&1 | tail -25`
+Run: `cd ~/.ai-agent/proj && python -m pytest tests/test_model_switching_refactor.py -v 2>&1 | tail -25`
 Expected: 所有测试 PASS
 
 - [ ] **Step 5: Commit**
 
 ```bash
-cd /home/orangepi/.ai-agent/proj
+cd ~/.ai-agent/proj
 git add model_router.py tests/test_model_switching_refactor.py
 git commit -m "refactor(model_router): 降级链用 registry 快照，不污染全局
 
@@ -1026,7 +1026,7 @@ def test_apply_route_overrides_cleans_dead_routes(tmp_path, monkeypatch):
 
 - [ ] **Step 2: 运行验证失败**
 
-Run: `cd /home/orangepi/.ai-agent/proj && python -m pytest tests/test_model_switching_refactor.py::test_apply_route_overrides_cleans_dead_routes -v 2>&1 | tail -15`
+Run: `cd ~/.ai-agent/proj && python -m pytest tests/test_model_switching_refactor.py::test_apply_route_overrides_cleans_dead_routes -v 2>&1 | tail -15`
 Expected: FAIL（旧实现不清理死路由）
 
 - [ ] **Step 3: 修改 _apply_route_overrides 增加死路由清理**
@@ -1083,13 +1083,13 @@ def _apply_route_overrides(cfg: Any, core: Any, ROUTE_TABLE: Any) -> None:
 
 - [ ] **Step 4: 运行测试验证通过**
 
-Run: `cd /home/orangepi/.ai-agent/proj && python -m pytest tests/test_model_switching_refactor.py -v 2>&1 | tail -25`
+Run: `cd ~/.ai-agent/proj && python -m pytest tests/test_model_switching_refactor.py -v 2>&1 | tail -25`
 Expected: 所有测试 PASS
 
 - [ ] **Step 5: Commit**
 
 ```bash
-cd /home/orangepi/.ai-agent/proj
+cd ~/.ai-agent/proj
 git add web/server.py tests/test_model_switching_refactor.py
 git commit -m "feat(server): 启动时清理持久化文件中的死路由
 
@@ -1124,7 +1124,7 @@ def test_update_route_api_uses_registry():
 
 - [ ] **Step 2: 运行验证失败**
 
-Run: `cd /home/orangepi/.ai-agent/proj && python -m pytest tests/test_model_switching_refactor.py::test_update_route_api_uses_registry -v 2>&1 | tail -10`
+Run: `cd ~/.ai-agent/proj && python -m pytest tests/test_model_switching_refactor.py::test_update_route_api_uses_registry -v 2>&1 | tail -10`
 Expected: FAIL
 
 - [ ] **Step 3: 重写 update_route 函数**
@@ -1203,13 +1203,13 @@ async def update_route(task: str, body: dict, request: Request) -> Any:
 
 - [ ] **Step 4: 运行测试验证通过**
 
-Run: `cd /home/orangepi/.ai-agent/proj && python -m pytest tests/test_model_switching_refactor.py -v 2>&1 | tail -25`
+Run: `cd ~/.ai-agent/proj && python -m pytest tests/test_model_switching_refactor.py -v 2>&1 | tail -25`
 Expected: 所有测试 PASS
 
 - [ ] **Step 5: Commit**
 
 ```bash
-cd /home/orangepi/.ai-agent/proj
+cd ~/.ai-agent/proj
 git add web/routers/models.py tests/test_model_switching_refactor.py
 git commit -m "refactor(models): update_route API 走 Registry 原子化
 
@@ -1229,7 +1229,7 @@ git commit -m "refactor(models): update_route API 走 Registry 原子化
 
 - [ ] **Step 1: 跑全量回归测试**
 
-Run: `cd /home/orangepi/.ai-agent/proj && python -m pytest tests/ -v --tb=short 2>&1 | tail -50`
+Run: `cd ~/.ai-agent/proj && python -m pytest tests/ -v --tb=short 2>&1 | tail -50`
 Expected: 可能部分旧测试因 API 变更失败，记录失败列表
 
 - [ ] **Step 2: 修复失败的现有测试**
@@ -1244,12 +1244,12 @@ Expected: 可能部分旧测试因 API 变更失败，记录失败列表
 
 - [ ] **Step 3: 验证 grep 无硬编码模型 ID**
 
-Run: `cd /home/orangepi/.ai-agent/proj && grep -rn "mimo-v2.5\|agnes-2.0-flash" --include="*.py" . | grep -v __pycache__ | grep -v "/tests/"`
+Run: `cd ~/.ai-agent/proj && grep -rn "mimo-v2.5\|agnes-2.0-flash" --include="*.py" . | grep -v __pycache__ | grep -v "/tests/"`
 Expected: 只在 `config/provider_metadata.json` 中出现（JSON 不是 .py），.py 文件中应该没有
 
 - [ ] **Step 4: 验证现有用户配置文件会被自动清理**
 
-Run: `cd /home/orangepi/.ai-agent/proj && python -c "
+Run: `cd ~/.ai-agent/proj && python -c "
 import json
 with open('/media/orangepi/KIOXIA/nahida-data/config/webui_overrides.json', 'r') as f:
     data = json.load(f)
@@ -1263,7 +1263,7 @@ Expected: 输出当前死路由列表
 - [ ] **Step 5: 最终 Commit**
 
 ```bash
-cd /home/orangepi/.ai-agent/proj
+cd ~/.ai-agent/proj
 git add tests/
 git commit -m "test: 修复重构后的现有测试
 

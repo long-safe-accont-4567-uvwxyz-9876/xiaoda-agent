@@ -1,7 +1,7 @@
 # Go 语言优化机会扫描报告
 
 > 生成日期：2026-07-20
-> 扫描范围：/home/orangepi/ai-agent 全项目（约 13.6 万行 Python 源码）
+> 扫描范围：项目根目录 全项目（约 13.6 万行 Python 源码）
 > 方法：6 个并行 agent 逐行阅读 + 量化推断
 
 ---
@@ -24,7 +24,7 @@
 
 ### 2.1 [高] asyncio.gather 工具并发调度开销
 
-- **位置**：[agent_dispatcher.py](file:///home/orangepi/ai-agent/agent_dispatcher.py#L661-L684) — `_execute_round_tool_calls`
+- **位置**：`agent_dispatcher.py:661-684` — `_execute_round_tool_calls`
 - **当前实现**：每轮工具调用都 `asyncio.gather(*[self._exec_one_tool_call(tc) for tc in extracted])` + `asyncio.wait_for(..., timeout=120)`。N=5 时创建 N 个 coroutine（每个 5-10μs）+ N 次 task 切换（30-50μs/次）+ 1 个 timeout task
 - **Go 优化**：`errgroup.WithContext` + `context.WithTimeout`，goroutine 创建 ~1μs，channel 调度 ~0.5μs
 - **好处**：单点 ~30x 提速；100 对话/s × 3 轮 × 5 工具 = 每秒节省 ~70ms CPU
@@ -33,7 +33,7 @@
 
 ### 2.2 [高] `_filtered_tools` 每次对话重建工具列表
 
-- **位置**：[agent_dispatcher.py](file:///home/orangepi/ai-agent/agent_dispatcher.py#L277-L340)
+- **位置**：`agent_dispatcher.py:277-340`
 - **当前实现**：每次 `chat()` 调用都重新 `to_openai_tools()`（~30 个工具 × 每个含 3-4 层嵌套 dict 拷贝）+ list comprehension 过滤 + 2 个 dict 字面量 append
 - **Go 优化**：预编译 `[]ToolDef` 切片，子代理配置变更时通过 `atomic.Pointer[[]ToolDef]` 原子替换
 - **好处**：~300x 提速（~30μs → ~100ns）；1000 对话/s 节省 ~30ms/s
@@ -42,7 +42,7 @@
 
 ### 2.3 [高] `BeliefRouter._gamma_sample` Python 递归采样
 
-- **位置**：[belief_router.py](file:///home/orangepi/ai-agent/belief_router.py#L40-L56)
+- **位置**：`belief_router.py:40-56`
 - **当前实现**：每次 `select_agent` 对 5 个候选 agent 各 1 次 Beta 采样（共 10 次 gamma 采样），含递归调用 + `while True` 循环 + 多次 `random.gauss` / `math.log`
 - **Go 优化**：函数内联到 `select_agent`，`math.Log` 直接编译为指令
 - **好处**：~30-50x 提速（75-150μs → ~3μs）；1000 路由/s 节省 ~75-150ms/s
@@ -51,7 +51,7 @@
 
 ### 2.4 [高] `RouteCache` 用 asyncio.Lock 保护 OrderedDict
 
-- **位置**：[task_orchestrator.py](file:///home/orangepi/ai-agent/task_orchestrator.py#L19-L69)
+- **位置**：`task_orchestrator.py:19-69`
 - **当前实现**：纯读操作（除 LRU move_to_end）用独占 `asyncio.Lock`，单次 acquire/release ~5-10μs（含 Future 对象分配 + 事件循环回调注册）；`_make_key` 还做了两次字符串规范化分配
 - **Go 优化**：`sync.RWMutex`（读锁 ~50ns、写锁 ~100ns）+ `hashicorp/golang-lru/v2` 带 TTL
 - **好处**：~100x 提速（~10μs → ~100ns）；1000 路由/s 节省 ~10ms/s
@@ -60,7 +60,7 @@
 
 ### 2.5 [中] `_normalize_parallel_targets` 每次重建 name_map
 
-- **位置**：[task_orchestrator.py](file:///home/orangepi/ai-agent/task_orchestrator.py#L285-L307)
+- **位置**：`task_orchestrator.py:285-307`
 - **当前实现**：每次并行任务执行都重建 `name_map` dict（5 agent × 3 key = 15 次插入 + 2-3 次查询）
 - **Go 优化**：预编译 `map[string]string`，agent_configs 变更时原子替换
 - **好处**：~300x 提速（~20μs → ~50ns）
@@ -69,7 +69,7 @@
 
 ### 2.6 [中] `classify_task` 嵌套关键词扫描 O(rules × keywords)
 
-- **位置**：[agent_dispatcher.py](file:///home/orangepi/ai-agent/agent_dispatcher.py#L1131-L1177)
+- **位置**：`agent_dispatcher.py:1131-1177`
 - **当前实现**：RouterEngine 失败回退路径，9 条规则 × ~6 关键词/规则 = 54 次 `kw in text_lower` 子串搜索
 - **Go 优化**：Aho-Corasick 多模式匹配器（如 `cloudflare/ahocorasick`），单次扫描文本匹配所有模式
 - **好处**：~15x 提速（~80μs → ~5μs）
@@ -78,7 +78,7 @@
 
 ### 2.7 [高] `BeliefRouter._save_to_db` 线程池 + GIL 全量写
 
-- **位置**：[belief_router.py](file:///home/orangepi/ai-agent/belief_router.py#L192-L233)
+- **位置**：`belief_router.py:192-233`
 - **当前实现**：每次 `update_belief` 都触发 `_save_to_db`，全量 INSERT 5 行 + 同步写 JSON；`beliefs_snapshot = {name: b.to_dict() ...}` 在 GIL 下分配；`run_in_executor` 丢线程池但 Python 对象访问仍受 GIL
 - **Go 优化**：`bbolt` 或 `badger` 嵌入式 KV，无 GIL；增量更新单个 agent 记录
 - **好处**：~30x 提速（3-5ms → ~100μs）；5 agent 并行场景节省 ~15-25ms/round
@@ -87,7 +87,7 @@
 
 ### 2.8 [中] `_is_simple_chat` 正则 + 逐字符迭代
 
-- **位置**：[message_processor.py](file:///home/orangepi/ai-agent/agent_core/message_processor.py#L1715-L1772)
+- **位置**：`message_processor.py:1715-1772`
 - **当前实现**：2 个 `re.search` + `sum(1 for c in user_input if '\u4e00' <= c <= '\u9fff')` 逐字符迭代（每字符 ~0.5μs，100 字符 ~50μs）+ 函数级 `import re`（每次查 sys.modules）
 - **Go 优化**：正则编译到包级变量 + `utf8.RuneCount` 汇编内联
 - **好处**：~15-20x 提速（50-80μs → 3-5μs）
@@ -96,7 +96,7 @@
 
 ### 2.9 [中] 工具结果 JSON 序列化
 
-- **位置**：[agent_dispatcher.py:472](file:///home/orangepi/ai-agent/agent_dispatcher.py#L472) + [message_processor.py:738-743](file:///home/orangepi/ai-agent/agent_core/message_processor.py#L738-L743)
+- **位置**：`agent_dispatcher.py:472:472` + `message_processor.py:738-743:738-743`
 - **当前实现**：每个工具结果都 `json.dumps(result.data, ensure_ascii=False)`，CPython json ~100-200 MB/s，1KB 结果 ~5-10μs；外加持截断字符串切片 + f-string 构造
 - **Go 优化**：`encoding/json` 或 `easyjson` 代码生成，~500-1000 MB/s
 - **好处**：~10x 提速；5 轮 × 5 工具 = 25 次序列化/请求节省 ~250-500μs
@@ -105,7 +105,7 @@
 
 ### 2.10 [低] `SynthesisNode.synthesize` f-string 拼接
 
-- **位置**：[task_orchestrator.py:825-828](file:///home/orangepi/ai-agent/task_orchestrator.py#L825-L828) + L748
+- **位置**：`task_orchestrator.py:825-828:825-828` + L748
 - **当前实现**：循环内 f-string 构造（FORMAT_VALUE + BUILD_STRING 指令）+ list comprehension + `"\n\n".join(parts)`
 - **Go 优化**：`strings.Builder` 直接 WriteString，避免中间分配
 - **好处**：~5-10x 提速（25-50μs → ~5μs）
@@ -114,7 +114,7 @@
 
 ### 2.11 [低] `_chat_loop` 循环内 `get_running_loop().time()` 重复调用
 
-- **位置**：[agent_dispatcher.py:513-581](file:///home/orangepi/ai-agent/agent_dispatcher.py#L513-L581)
+- **位置**：`agent_dispatcher.py:513-581:513-581`
 - **当前实现**：每轮循环 2-3 次调用 `asyncio.get_running_loop().time()`，每次 ~0.5μs
 - **Go 优化**：`time.Now()` 单调时钟，直接编译为 `clock_gettime` 系统调用，~50ns/次
 - **好处**：~10x 提速（循环热路径微优化）
@@ -127,7 +127,7 @@
 
 ### 3.1 [高] WebSocket 连接管理与广播
 
-- **位置**：[ws_hub.py](file:///home/orangepi/ai-agent/web/ws_hub.py#L49-L98) — `ConnectionManager`
+- **位置**：`ws_hub.py:49-98` — `ConnectionManager`
 - **当前实现**：单进程 `MAX_CONNECTIONS=32` 上限；`broadcast()` 串行 `await self.send_to(conn_id, event)`，每个连接一次事件循环调度；`asyncio.Task` 字典维护
 - **Go 优化**：`gorilla/websocket` + 每连接独立 goroutine + broadcast channel fan-out；连接数可扩到 50K+
 - **好处**：广播延迟从串行 N×send 降到并行 1×channel send；QPS 从 ~5K 提升到 ~50K+
@@ -136,7 +136,7 @@
 
 ### 3.2 [高] HTTP 路由性能
 
-- **位置**：[web/routers/](file:///home/orangepi/ai-agent/web/routers/) — chat.py / setup.py / insight.py
+- **位置**：`web/routers/` — chat.py / setup.py / insight.py
 - **当前实现**：FastAPI + Starlette 异步路由，依赖注入机制处理中间件
 - **Go 优化**：Gin 或 Echo 框架，静态编译中间件链
 - **好处**：吞吐量从 ~5K QPS 提升到 ~30K+ QPS；启动延迟降低；内存分配减少
@@ -145,7 +145,7 @@
 
 ### 3.3 [高] 限流中间件全局锁
 
-- **位置**：[web/middleware/rate_limit.py:133-154](file:///home/orangepi/ai-agent/web/middleware/rate_limit.py#L133-L154) — `TokenBucket.acquire`
+- **位置**：`web/middleware/rate_limit.py:133-154:133-154` — `TokenBucket.acquire`
 - **当前实现**：`_global_bucket` 单桶 + `asyncio.Lock`，**每个请求都抢同一把锁**，等价于把限流层串行化；含 `time.monotonic()` + 浮点运算 + 桶持久化到 SQLite
 - **Go 优化**：`golang.org/x/time/rate.Limiter`，热点路径 `Allow()` 无锁 atomic 实现
 - **好处**：QPS 从 ~5000 提升到 ~50000+（10x）；`Allow()` ~20ns/op vs Python ~800ns/op（40x）；内存 32B vs 200B
@@ -154,7 +154,7 @@
 
 ### 3.4 [中] 流式响应/SSE
 
-- **位置**：[web/routers/insight.py](file:///home/orangepi/ai-agent/web/routers/insight.py#L1-L100) + chat.py 流式 token 输出
+- **位置**：`web/routers/insight.py:1-100` + chat.py 流式 token 输出
 - **当前实现**：Python `asyncio` 实现 SSE，依赖 HTTP/1.1 流
 - **Go 优化**：`io.Reader/Writer` 接口 + `net/http` chunked 模式 + `http.Flusher`
 - **好处**：减少 HTTP 头部开销；支持更多并发流式会话；CPU 占用降低
@@ -163,7 +163,7 @@
 
 ### 3.5 [中] QQ Bot 协议解析
 
-- **位置**：[qq_bot_adapter.py](file:///home/orangepi/ai-agent/qq_bot_adapter.py#L1-L100) — 1673 行
+- **位置**：`qq_bot_adapter.py:1-100` — 1673 行
 - **当前实现**：botpy 库消息解析、心跳、重连
 - **Go 优化**：原生 Go 实现协议 + `gorilla/websocket` 连接池
 - **好处**：降低依赖版本不一致风险；启动延迟降低；连接维护更稳定
@@ -172,7 +172,7 @@
 
 ### 3.6 [中] 反向代理/SSRF 防护
 
-- **位置**：[security/ssrf_guard.py](file:///home/orangepi/ai-agent/security/ssrf_guard.py)
+- **位置**：`security/ssrf_guard.py`
 - **当前实现**：Python 自定义白名单 + URL 解析
 - **Go 优化**：`net/http` 包 + `netip.Prefix.Contains` 网段匹配
 - **好处**：更轻量的 SSRF 防护；系统级套接字解析性能更好
@@ -181,7 +181,7 @@
 
 ### 3.7 [低] 媒体任务队列
 
-- **位置**：[web/media_tasks.py](file:///home/orangepi/ai-agent/web/media_tasks.py)
+- **位置**：`web/media_tasks.py`
 - **当前实现**：Python 异步任务队列处理图片/音频
 - **Go 优化**：goroutine + channel + worker pool
 - **好处**：内存开销更低；切换更高效
@@ -194,7 +194,7 @@
 
 ### 4.1 [高] 向量相似度计算
 
-- **位置**：[memory/vector_store.py](file:///home/orangepi/ai-agent/memory/vector_store.py) — 830 行
+- **位置**：`memory/vector_store.py` — 830 行
 - **当前实现**：调用 `numpy` 计算余弦相似度和 ANN 检索；Python 层循环调用 numpy C 扩展有 GIL 切换开销
 - **Go 优化**：`gonum` 库或直接 SIMD 指令；ANN 用 `hnswlib` Go 绑定
 - **好处**：CPU 密集型计算降低 40%-60%；检索速度提升 2 倍+；运行时内存占用显著减少
@@ -203,7 +203,7 @@
 
 ### 4.2 [高] 批量数据库操作
 
-- **位置**：[db/database.py](file:///home/orangepi/ai-agent/db/database.py) (1817 行) + [db/db_memory.py](file:///home/orangepi/ai-agent/db/db_memory.py) (1391 行) + [db/db_kg_v2.py](file:///home/orangepi/ai-agent/db/db_kg_v2.py)
+- **位置**：`db/database.py` (1817 行) + `db/db_memory.py` (1391 行) + `db/db_kg_v2.py`
 - **当前实现**：Python 原生 SQLite/PostgreSQL 接口 `executemany` 或事务方式
 - **Go 优化**：`database/sql` + `sql.Tx.Prepare` + `Exec` 批量操作；连接池原生管理
 - **好处**：批量插入性能提升 30%-50%；连接池优化提升并发；减少 SQL 解析开销
@@ -212,7 +212,7 @@
 
 ### 4.3 [中] 分层缓存
 
-- **位置**：[core/tiered_cache.py](file:///home/orangepi/ai-agent/core/tiered_cache.py)
+- **位置**：`core/tiered_cache.py`
 - **当前实现**：Python `dict` + 本地磁盘缓存
 - **Go 优化**：`sync.Map` + `hashicorp/golang-lru/v2` 带 TTL
 - **好处**：缓存读写并发性能提升 20%-40%；内存使用更高效；支持过期时间
@@ -221,7 +221,7 @@
 
 ### 4.4 [高] 记忆检索算法（FSRS 调度）
 
-- **位置**：[memory/cognitive_memory.py](file:///home/orangepi/ai-agent/memory/cognitive_memory.py) + [memory/learning_manager.py](file:///home/orangepi/ai-agent/memory/learning_manager.py)
+- **位置**：`memory/cognitive_memory.py` + `memory/learning_manager.py`
 - **当前实现**：Python 实现 FSRS 调度、记忆衰减、优先级判断
 - **Go 优化**：高性能 Go 版本，纯值类型计算
 - **好处**：记忆调度响应时间提升；算法稳定可扩展
@@ -230,7 +230,7 @@
 
 ### 4.5 [高] JSON 序列化（memory_manager）
 
-- **位置**：[memory/memory_manager.py](file:///home/orangepi/ai-agent/memory/memory_manager.py) — 3233 行（全项目最大文件）
+- **位置**：`memory/memory_manager.py` — 3233 行（全项目最大文件）
 - **当前实现**：Python 内建 `json` 模块处理大量 JSON 字段
 - **Go 优化**：`encoding/json` 或 `easyjson` 代码生成
 - **好处**：JSON 序列化效率提升 50%；资源使用更少；内存布局更紧凑
@@ -239,7 +239,7 @@
 
 ### 4.6 [中] 正则/字符串处理（prompt_complexity）
 
-- **位置**：[memory/prompt_complexity.py](file:///home/orangepi/ai-agent/memory/prompt_complexity.py) — 1154 行
+- **位置**：`memory/prompt_complexity.py` — 1154 行
 - **当前实现**：Python `re` 模块处理字符串和正则匹配
 - **Go 优化**：Go `regexp` 库 + 并行处理
 - **好处**：正则匹配速度提升 30%-60%；更少字符串拷贝
@@ -248,7 +248,7 @@
 
 ### 4.7 [中] 大文件 I/O
 
-- **位置**：[memory/memory_manager.py](file:///home/orangepi/ai-agent/memory/memory_manager.py)
+- **位置**：`memory/memory_manager.py`
 - **当前实现**：Python 多文件/大文本读写
 - **Go 优化**：Go 文件处理 API + 流式读写
 - **好处**：I/O 读写延迟减少；资源开销更低；异步文件操作
@@ -257,7 +257,7 @@
 
 ### 4.8 [高] 图算法（知识图谱）
 
-- **位置**：[db/db_kg_v2.py](file:///home/orangepi/ai-agent/db/db_kg_v2.py) + memory/knowledge_graph.py
+- **位置**：`db/db_kg_v2.py` + memory/knowledge_graph.py
 - **当前实现**：Python 实现图遍历、BFS/DFS、PageRank
 - **Go 优化**：`gonum/graph` 或自定义实现
 - **好处**：图查询效率提升 50%+；运行时内存降低；支持更复杂图结构
@@ -270,7 +270,7 @@
 
 ### 5.1 [高] MCP 协议客户端
 
-- **位置**：[tool_engine/mcp_client.py](file:///home/orangepi/ai-agent/tool_engine/mcp_client.py) — 1016 行
+- **位置**：`tool_engine/mcp_client.py` — 1016 行
 - **当前实现**：Python asyncio + aiohttp 实现 JSON-RPC over stdio/SSE，事件监听 + 超时控制
 - **Go 优化**：`encoding/json` + `context` + goroutine 管理长连接
 - **好处**：降低内存占用（goroutine 更轻量）；降低延迟（无上下文切换）；高并发连接支持
@@ -279,7 +279,7 @@
 
 ### 5.2 [高] 工具并发调度器
 
-- **位置**：[tool_engine/tool_executor.py](file:///home/orangepi/ai-agent/tool_engine/tool_executor.py)
+- **位置**：`tool_engine/tool_executor.py`
 - **当前实现**：asyncio 实现并发工具调用
 - **Go 优化**：`context` + `errgroup` + `sync.WaitGroup`
 - **好处**：更强并发控制；更好错误恢复；稳定错误聚合
@@ -288,7 +288,7 @@
 
 ### 5.3 [高] 子进程管理
 
-- **位置**：[tools/file_tools_v2.py](file:///home/orangepi/ai-agent/tools/file_tools_v2.py) + [tools/code_tools_v2.py](file:///home/orangepi/ai-agent/tools/code_tools_v2.py)
+- **位置**：`tools/file_tools_v2.py` + `tools/code_tools_v2.py`
 - **当前实现**：`subprocess` 模块运行 shell 命令，处理输出和超时
 - **Go 优化**：`os/exec` 包更高效可控的子进程管理
 - **好处**：更安全子进程隔离；精确生命周期管理；优化资源清理减少僵尸进程
@@ -297,7 +297,7 @@
 
 ### 5.4 [中] 文件 I/O 和哈希计算
 
-- **位置**：[utils/text_utils.py](file:///home/orangepi/ai-agent/utils/text_utils.py) — 861 行
+- **位置**：`utils/text_utils.py` — 861 行
 - **当前实现**：`hashlib` 模块文件哈希 + 文本格式化
 - **Go 优化**：`io` + `bufio` + `crypto/sha256`
 - **好处**：大文件读写性能更高；精确缓冲和流控制；多线程兼容
@@ -306,7 +306,7 @@
 
 ### 5.5 [高] LLM 路由与熔断
 
-- **位置**：[model_router.py](file:///home/orangepi/ai-agent/model_router.py) (1309 行) + [core/circuit_breaker.py](file:///home/orangepi/ai-agent/core/circuit_breaker.py)
+- **位置**：`model_router.py` (1309 行) + `core/circuit_breaker.py`
 - **当前实现**：异步函数 + 缓存 + 超时处理路由逻辑，熔断器控制；`_mask_api_key` 每次 sha256 (line 28-37)；SSRF 校验 (line 124-131)
 - **Go 优化**：`context` + `sync` + `github.com/sony/gobreaker`
 - **好处**：更稳定熔断控制；大规模高并发；提高路由性能和资源利用率
@@ -315,7 +315,7 @@
 
 ### 5.6 [高] 凭据池管理（阻塞事件循环）
 
-- **位置**：[utils/credential_pool.py:65-127](file:///home/orangepi/ai-agent/utils/credential_pool.py#L65-L127) — `get_credential`
+- **位置**：`utils/credential_pool.py:65-127:65-127` — `get_credential`
 - **当前实现**：`threading.Lock` 保护（注释声称「不阻塞事件循环」但实际是阻塞系统调用，GIL 切换 + futex ~1-10μs）；`_use_seq` 单调计数；状态机转换（OK/DEAD/EXHAUSTED）
 - **Go 优化**：分片锁 `sync.Map` + per-provider `sync.Mutex`；游标推进用 `atomic.AddUint64`；`Credential` 改值类型 + `atomic.Pointer[Credential]` copy-on-write
 - **好处**：Go `sync.Mutex` ~50ns vs Python `threading.Lock` ~1.5μs（30x）；分片后不同 provider 完全并行；热路径 ~3μs → ~50ns
@@ -324,7 +324,7 @@
 
 ### 5.7 [中] NPU 推理引擎
 
-- **位置**：[utils/npu_inference.py](file:///home/orangepi/ai-agent/utils/npu_inference.py) — 766 行
+- **位置**：`utils/npu_inference.py` — 766 行
 - **当前实现**：Python 调用 NPU 模型推理，张量输入输出
 - **Go 优化**：Go 张量库或 CGO 与 C++ 推理库交互
 - **好处**：更高推理性能；更低资源占用；稳定推理流程
@@ -337,7 +337,7 @@
 
 ### 6.1 [高] SSRF DNS 解析阻塞事件循环
 
-- **位置**：[security/ssrf_guard.py:151-167](file:///home/orangepi/ai-agent/security/ssrf_guard.py#L151-L167) — `_resolve_all_ips`
+- **位置**：`security/ssrf_guard.py:151-167:151-167` — `_resolve_all_ips`
 - **当前实现**：`socket.getaddrinfo` 是阻塞系统调用，在 FastAPI async 上下文直接同步调用会卡住整个事件循环（单次 50-500ms）
 - **Go 优化**：`net.Resolver.LookupIPAddr(ctx, hostname)` 原生支持 context；`errgroup` 并发解析 IPv4/IPv6；LRU 带 TTL 替代 OrderedDict 永不过期
 - **好处**：DNS 解析 P99 从 ~200ms 降到 ~20ms（10x）；QPS 从 ~50 提升到 ~2000+；LRU TTL 避免 IP 漂移
@@ -346,7 +346,7 @@
 
 ### 6.2 [高] SSRF IP 网段匹配 O(N) 线性扫描
 
-- **位置**：[security/ssrf_guard.py:97-115](file:///home/orangepi/ai-agent/security/ssrf_guard.py#L97-L115) — `check_ip`
+- **位置**：`security/ssrf_guard.py:97-115:97-115` — `check_ip`
 - **当前实现**：20 个 `_BLOCKED_NETWORKS` 线性遍历，`addr in net` 调用 `ip_network.__contains__` 涉及 Python 对象拆箱
 - **Go 优化**：`netip.Prefix.Contains` 内联纯函数（~5ns/op），或 `cidranger` 位 trie（O(log N)）
 - **好处**：单次 SSRF 校验从 ~30μs 降到 ~100ns（300x）；高并发降低 GC 压力
@@ -355,7 +355,7 @@
 
 ### 6.3 [高] Token HMAC 验证 + 每请求 stat() syscall
 
-- **位置**：[web/routers/auth.py:170-194](file:///home/orangepi/ai-agent/web/routers/auth.py#L170-L194) — `_validate_token` + [128-144](file:///home/orangepi/ai-agent/web/routers/auth.py#L128-L144) — `_is_revoked`
+- **位置**：`web/routers/auth.py:170-194:170-194` — `_validate_token` + `128-144:128-144` — `_is_revoked`
 - **当前实现**：每个 API 请求都 `base64.urlsafe_b64decode` + HMAC-SHA256 + `hmac.compare_digest` + `path.stat()` syscall + JSON 解析黑名单
 - **Go 优化**：`crypto/hmac` + `hmac.New` 复用 + `hmac.Equal` 常数时间比较；`sync.Map` 内存集合 + `fsnotify` 监听文件变更；或迁到标准 JWT (HS256) `golang-jwt/jwt/v5`
 - **好处**：消除每请求 stat() syscall（~5μs/syscall，节省 ~5% CPU）；HMAC 复用 Go ~1.2μs vs Python ~3.5μs（3x）；sync.Map ~30ns vs Python set+锁；单 token 验证 ~15μs → ~2μs（7x）
@@ -364,7 +364,7 @@
 
 ### 6.4 [高] 令牌桶限流全局 asyncio.Lock 串行化
 
-- **位置**：[web/middleware/rate_limit.py:133-154](file:///home/orangepi/ai-agent/web/middleware/rate_limit.py#L133-L154) — `TokenBucket.acquire`
+- **位置**：`web/middleware/rate_limit.py:133-154:133-154` — `TokenBucket.acquire`
 - **当前实现**：`_global_bucket` 单桶 + `asyncio.Lock`，**每个请求抢同一把锁**，等价于把限流层串行化
 - **Go 优化**：`golang.org/x/time/rate.Limiter`，热点路径 `Allow()` 无锁 atomic 实现；用户桶用 `sync.Map[string]*rate.Limiter`
 - **好处**：QPS 从 ~5000 提升到 ~50000+（10x）；`Allow()` ~20ns vs Python ~800ns（40x）；内存 32B vs 200B
@@ -373,7 +373,7 @@
 
 ### 6.5 [高] 凭据池 threading.Lock 阻塞事件循环
 
-- **位置**：[utils/credential_pool.py:65-127](file:///home/orangepi/ai-agent/utils/credential_pool.py#L65-L127)
+- **位置**：`utils/credential_pool.py:65-127:65-127`
 - **当前实现**：注释声称「不阻塞事件循环」但 `threading.Lock` 是阻塞系统调用（GIL 切换 + futex ~1-10μs），高频 LLM 调用下显著累积
 - **Go 优化**：分片锁 `sync.Map` + per-provider `sync.Mutex`；游标 `atomic.AddUint64`；`atomic.Pointer[Credential]` copy-on-write
 - **好处**：Go `sync.Mutex` ~50ns vs Python ~1.5μs（30x）；分片后不同 provider 完全并行；热路径 ~3μs → ~50ns
@@ -382,7 +382,7 @@
 
 ### 6.6 [最高优先级 + 最高风险] PBKDF2 + Python 字节级 XOR
 
-- **位置**：[security/credential_vault.py:162-190](file:///home/orangepi/ai-agent/security/credential_vault.py#L162-L190) — `_derive_key` + `_keystream` + `encrypt`
+- **位置**：`security/credential_vault.py:162-190:162-190` — `_derive_key` + `_keystream` + `encrypt`
 - **当前实现**：PBKDF2 200k 迭代每次加密都跑（~200ms）；XOR 用 Python 生成器表达式逐字节处理（1KB ~500μs）；HMAC-CTR 流密码 + 独立 tag
 - **Go 优化**：`golang.org/x/crypto/pbkdf2.Key` + 进程内缓存派生 key；`crypto/cipher.XORKeyStream`（amd64 SSE2/AVX2 优化）；或直接换 AES-256-GCM（~1μs/KB）
 - **好处**：PBKDF2 单次 200ms → 60ms（3x），缓存后第二次 0ms；1KB XOR 500μs → 2μs（250x）；AES-GCM 1KB ~1μs 且自带认证标签；批量解密 1000 条凭证 200s → 5s（40x）
@@ -391,7 +391,7 @@
 
 ### 6.7 [中] 安全正则模式逐条 re.search
 
-- **位置**：[security/security.py:316-324](file:///home/orangepi/ai-agent/security/security.py#L316-L324) — `_match_patterns`
+- **位置**：`security/security.py:316-324:316-324` — `_match_patterns`
 - **当前实现**：`_PRIVACY_LEAK_PATTERNS` + `_dynamic_privacy_patterns()` 共 ~25 条，每条 `re.search` 扫全文本 = O(25N)
 - **Go 优化**：`cloudflare/ahocorasick` Aho-Corasick 自动机单次扫描 O(N) 命中所有关键词 + 复杂正则用 `regexp` 预编译；`_normalize_text` 全角转半角用查表
 - **好处**：Aho-Corasick ~100ns/KB vs Python 25 次 re.search ~25μs/KB（250x）；正则预编译 ~200ns/KB vs Python ~1.5μs/KB；`_normalize_text` 10ns/字符 vs 100ns/字符；综合 `scan_threats` ~500μs → ~5μs（100x）
@@ -400,7 +400,7 @@
 
 ### 6.8 [中] TTS 日志脱敏每次 sha256 + 正则未预编译
 
-- **位置**：[emotion/tts_engine.py:459-460](file:///home/orangepi/ai-agent/emotion/tts_engine.py#L459-L460) + [494-496](file:///home/orangepi/ai-agent/emotion/tts_engine.py#L494-L496)
+- **位置**：`emotion/tts_engine.py:459-460:459-460` + `494-496:494-496`
 - **当前实现**：每个 API key 调用 `hashlib.sha256`（~2μs）；`re.sub` 每次查内部 LRU cache
 - **Go 优化**：`crypto/sha256.Sum256` 预分配 `[32]byte` 无逃逸；正则 init 期 `MustCompile`；或用 `strings.Index` 手写状态机
 - **好处**：sha256 Go ~400ns vs Python ~2μs（5x）；正则 ~300ns/KB vs ~1.5μs/KB（5x）；手写状态机 ~50ns/KB（30x）
@@ -413,7 +413,7 @@
 
 ### 7.1 [高] 压测工具 reliability_bench.py
 
-- **位置**：[chaos/reliability_bench.py](file:///home/orangepi/ai-agent/chaos/reliability_bench.py) — 809 行
+- **位置**：`chaos/reliability_bench.py` — 809 行
 - **当前实现**：Python asyncio 实现 7 个故障注入场景 + 综合评分
 - **Go 优化**：Go `testing/benchmark` + `pprof` + `go-fuzz`
 - **好处**：启动速度 5-10x；包体积更小；pprof 便于调试
@@ -422,7 +422,7 @@
 
 ### 7.2 [高] 统计脚本 count_project_stats.py
 
-- **位置**：[scripts/count_project_stats.py](file:///home/orangepi/ai-agent/scripts/count_project_stats.py) — 564 行
+- **位置**：`scripts/count_project_stats.py` — 564 行
 - **当前实现**：遍历项目目录 + AST 解析 + 正则扫描
 - **Go 优化**：`filepath.WalkDir` + `go/ast` + Go 正则
 - **好处**：处理速度 5-10x；Go 编译后体积小（~10MB）；跨平台打包
@@ -431,7 +431,7 @@
 
 ### 7.3 [中] CI 辅助 check_version_sync.py
 
-- **位置**：[scripts/check_version_sync.py](file:///home/orangepi/ai-agent/scripts/check_version_sync.py) — 251 行
+- **位置**：`scripts/check_version_sync.py` — 251 行
 - **当前实现**：正则读取版本号 + 文件一致性检查 + --fix/--ci 模式
 - **Go 优化**：Go 文件读写 + 正则 + JSON 解析
 - **好处**：启动快；可执行文件 ~10MB；无 Python 环境依赖
@@ -440,7 +440,7 @@
 
 ### 7.4 [高] Docker 镜像构建
 
-- **位置**：[Dockerfile](file:///home/orangepi/ai-agent/Dockerfile)
+- **位置**：`Dockerfile`
 - **当前实现**：`python:3.11-slim` + pip install + PyInstaller
 - **Go 优化**：Go 二进制镜像（FROM scratch 或 alpine）
 - **好处**：镜像体积 100MB+ → 几 MB（10-50x）；启动快；无需 Python 环境
@@ -449,7 +449,7 @@
 
 ### 7.5 [中] Doctor 健康检查
 
-- **位置**：[scripts/doctor.sh](file:///home/orangepi/ai-agent/scripts/doctor.sh) — 76 行
+- **位置**：`scripts/doctor.sh` — 76 行
 - **当前实现**：Bash 脚本调用 Python 诊断
 - **Go 优化**：Go CLI 程序（如 `xiaoda-agent doctor`）
 - **好处**：启动快（无 Shell 延迟）；单一可执行文件
@@ -458,7 +458,7 @@
 
 ### 7.6 [中] 安装脚本 install-linux.sh
 
-- **位置**：[scripts/install-linux.sh](file:///home/orangepi/ai-agent/scripts/install-linux.sh) — 164 行
+- **位置**：`scripts/install-linux.sh` — 164 行
 - **当前实现**：Bash 解压 + systemd 配置
 - **Go 优化**：Go 程序处理 tar 解压 + service 创建
 - **好处**：无 Shell 依赖；可移植性强；支持 Windows 安装路径

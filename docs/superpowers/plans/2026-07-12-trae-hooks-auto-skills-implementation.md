@@ -448,7 +448,7 @@ git commit -m "test: verify hooks integration in code project"
 
 ---
 
-Plan complete and saved to `/home/orangepi/ai-agent/docs/superpowers/plans/2026-07-12-trae-hooks-auto-skills-implementation.md`.
+Plan complete and saved to `项目根目录/docs/superpowers/plans/2026-07-12-trae-hooks-auto-skills-implementation.md`.
 
 **Two execution options:**
 

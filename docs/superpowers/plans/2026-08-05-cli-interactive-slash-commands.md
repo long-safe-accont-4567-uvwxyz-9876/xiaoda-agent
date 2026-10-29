@@ -133,7 +133,7 @@ def test_list_agents_returns_empty_on_non_list(monkeypatch):
 
 - [ ] **Step 2: 运行测试验证失败**
 
-Run: `cd /home/orangepi/ai-agent && python -m pytest tests/test_cli_client_http.py -v`
+Run: `cd 项目根目录 && python -m pytest tests/test_cli_client_http.py -v`
 Expected: FAIL（`AttributeError: module 'cli_client' has no attribute 'discover_models'`）。
 
 - [ ] **Step 3: 在 cli_client.py 实现**
@@ -175,7 +175,7 @@ def list_agents(token: str, host: str | None = None, port: int | None = None,
 
 - [ ] **Step 4: 运行测试验证通过**
 
-Run: `cd /home/orangepi/ai-agent && python -m pytest tests/test_cli_client_http.py -v`
+Run: `cd 项目根目录 && python -m pytest tests/test_cli_client_http.py -v`
 Expected: PASS（4 passed）。
 
 - [ ] **Step 5: Commit**
@@ -218,7 +218,7 @@ def test_select_from_menu_empty_returns_none():
 
 - [ ] **Step 2: 运行测试验证失败**
 
-Run: `cd /home/orangepi/ai-agent && python -m pytest tests/test_cli_menu.py -v`
+Run: `cd 项目根目录 && python -m pytest tests/test_cli_menu.py -v`
 Expected: FAIL（`ModuleNotFoundError: No module named 'cli_menu'`）。
 
 - [ ] **Step 3: 创建 cli_menu.py**
@@ -321,7 +321,7 @@ def select_from_menu(title: str, options: list[MenuItem], hint: str = "") -> str
 
 - [ ] **Step 4: 运行测试验证通过**
 
-Run: `cd /home/orangepi/ai-agent && python -m pytest tests/test_cli_menu.py -v`
+Run: `cd 项目根目录 && python -m pytest tests/test_cli_menu.py -v`
 Expected: PASS（2 passed）。
 
 - [ ] **Step 5: Commit**
@@ -407,7 +407,7 @@ def test_try_expand_skips_when_arg_present(monkeypatch):
 
 - [ ] **Step 2: 运行测试验证失败**
 
-Run: `cd /home/orangepi/ai-agent && python -m pytest tests/test_cli_multistep.py -v`
+Run: `cd 项目根目录 && python -m pytest tests/test_cli_multistep.py -v`
 Expected: FAIL（`AttributeError: 'CLIInterface' object has no attribute '_menu_model'`）。
 
 - [ ] **Step 3: 在 cli.py 顶部加 prompt_toolkit 探测与导入**
@@ -646,17 +646,17 @@ class _SlashCompleter(Completer):
 
 - [ ] **Step 9: 运行测试验证通过**
 
-Run: `cd /home/orangepi/ai-agent && python -m pytest tests/test_cli_multistep.py -v`
+Run: `cd 项目根目录 && python -m pytest tests/test_cli_multistep.py -v`
 Expected: PASS（4 passed）。
 
 - [ ] **Step 10: 语法与回归检查**
 
-Run: `cd /home/orangepi/ai-agent && python -m py_compile cli.py cli_client.py cli_menu.py && python -m pytest tests/test_cli_client_http.py tests/test_cli_menu.py tests/test_cli_multistep.py -q`
+Run: `cd 项目根目录 && python -m py_compile cli.py cli_client.py cli_menu.py && python -m pytest tests/test_cli_client_http.py tests/test_cli_menu.py tests/test_cli_multistep.py -q`
 Expected: 三个测试文件全部 PASS，`py_compile` 无输出（成功）。
 
 - [ ] **Step 11: 手动验收（主进程在线）**
 
-Run: `cd /home/orangepi/ai-agent && python cli.py`
+Run: `cd 项目根目录 && python cli.py`
 Expected:
 - 输入 `/` 立即弹出命令下拉（前缀过滤），方向键/继续输入缩小范围。
 - 输入 `/` 后按 Tab 也可补全。

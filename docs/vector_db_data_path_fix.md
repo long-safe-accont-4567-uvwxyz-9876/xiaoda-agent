@@ -14,7 +14,7 @@
 
 ### 现象
 服务运行时，向量数据库（`agent.db` / `agent_vec.db`）实际读写的是**系统盘空库**
-（`/home/orangepi/ai-agent/db`），而非 U 盘上 1.1GB 的真实数据。用户自定义壁纸、
+（`项目根目录/db`），而非 U 盘上 1.1GB 的真实数据。用户自定义壁纸、
 记忆检索等全部失效。日志中有 `config.data_path_readonly path=/mnt/usb2/nahida-data/media`。
 
 ### 根因

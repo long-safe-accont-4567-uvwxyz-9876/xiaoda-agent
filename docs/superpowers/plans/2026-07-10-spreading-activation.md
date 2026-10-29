@@ -298,7 +298,7 @@ async def test_meta_get_set(concept_db):
 
 - [ ] **Step 2: Run test to verify it fails**
 
-Run: `cd /home/orangepi/ai-agent && python -m pytest tests/test_db_concept.py -v 2>&1 | head -30`
+Run: `cd 项目根目录 && python -m pytest tests/test_db_concept.py -v 2>&1 | head -30`
 Expected: FAIL with `ModuleNotFoundError: No module named 'db.db_concept'`
 
 - [ ] **Step 3: Write minimal implementation — db/db_concept.py**
@@ -471,7 +471,7 @@ class ConceptDB:
 
 - [ ] **Step 4: Run test to verify it passes**
 
-Run: `cd /home/orangepi/ai-agent && python -m pytest tests/test_db_concept.py -v`
+Run: `cd 项目根目录 && python -m pytest tests/test_db_concept.py -v`
 Expected: 10 passed
 
 - [ ] **Step 5: Add concept table DDL to schema.sql**
@@ -604,13 +604,13 @@ Add one line:
 
 - [ ] **Step 7: Verify schema compiles and tests pass**
 
-Run: `cd /home/orangepi/ai-agent && python -m pytest tests/test_db_concept.py -v && python -c "import sqlite3; c=sqlite3.connect(':memory:'); c.executescript(open('db/schema.sql').read()); print('schema OK')"`
+Run: `cd 项目根目录 && python -m pytest tests/test_db_concept.py -v && python -c "import sqlite3; c=sqlite3.connect(':memory:'); c.executescript(open('db/schema.sql').read()); print('schema OK')"`
 Expected: 10 passed + "schema OK"
 
 - [ ] **Step 8: Commit**
 
 ```bash
-cd /home/orangepi/ai-agent
+cd 项目根目录
 git add db/db_concept.py db/schema.sql db/database.py tests/test_db_concept.py
 git commit -m "feat: 概念图表 concept_nodes/edges/meta + ConceptDB CRUD"
 ```
@@ -715,7 +715,7 @@ def test_max_keys_value():
 
 - [ ] **Step 2: Run test to verify it fails**
 
-Run: `cd /home/orangepi/ai-agent && python -m pytest tests/test_key_extractor.py -v 2>&1 | head -20`
+Run: `cd 项目根目录 && python -m pytest tests/test_key_extractor.py -v 2>&1 | head -20`
 Expected: FAIL with `ModuleNotFoundError: No module named 'memory.key_extractor'`
 
 - [ ] **Step 3: Write minimal implementation**
@@ -830,13 +830,13 @@ class KeyExtractor:
 
 - [ ] **Step 4: Run test to verify it passes**
 
-Run: `cd /home/orangepi/ai-agent && python -m pytest tests/test_key_extractor.py -v`
+Run: `cd 项目根目录 && python -m pytest tests/test_key_extractor.py -v`
 Expected: 10 passed
 
 - [ ] **Step 5: Commit**
 
 ```bash
-cd /home/orangepi/ai-agent
+cd 项目根目录
 git add memory/key_extractor.py tests/test_key_extractor.py
 git commit -m "feat: KeyExtractor 关键词提取器 (jieba+停用词+归一化)"
 ```
@@ -995,7 +995,7 @@ def test_make_node_id(graph):
 
 - [ ] **Step 2: Run test to verify it fails**
 
-Run: `cd /home/orangepi/ai-agent && python -m pytest tests/test_concept_graph.py -v 2>&1 | head -20`
+Run: `cd 项目根目录 && python -m pytest tests/test_concept_graph.py -v 2>&1 | head -20`
 Expected: FAIL with `ModuleNotFoundError: No module named 'memory.concept_graph'`
 
 - [ ] **Step 3: Write minimal implementation**
@@ -1123,13 +1123,13 @@ class ConceptGraph:
 
 - [ ] **Step 4: Run test to verify it passes**
 
-Run: `cd /home/orangepi/ai-agent && python -m pytest tests/test_concept_graph.py -v`
+Run: `cd 项目根目录 && python -m pytest tests/test_concept_graph.py -v`
 Expected: 9 passed
 
 - [ ] **Step 5: Commit**
 
 ```bash
-cd /home/orangepi/ai-agent
+cd 项目根目录
 git add memory/concept_graph.py tests/test_concept_graph.py
 git commit -m "feat: ConceptGraph 概念图管理器 (remember+auto_link+lazy_migrate)"
 ```
@@ -1344,7 +1344,7 @@ def test_constants(engine):
 
 - [ ] **Step 2: Run test to verify it fails**
 
-Run: `cd /home/orangepi/ai-agent && python -m pytest tests/test_spreading_activation.py -v 2>&1 | head -20`
+Run: `cd 项目根目录 && python -m pytest tests/test_spreading_activation.py -v 2>&1 | head -20`
 Expected: FAIL with `ModuleNotFoundError: No module named 'memory.spreading_activation'`
 
 - [ ] **Step 3: Write minimal implementation**
@@ -1617,13 +1617,13 @@ class SpreadingActivationEngine:
 
 - [ ] **Step 4: Run test to verify it passes**
 
-Run: `cd /home/orangepi/ai-agent && python -m pytest tests/test_spreading_activation.py -v`
+Run: `cd 项目根目录 && python -m pytest tests/test_spreading_activation.py -v`
 Expected: 9 passed
 
 - [ ] **Step 5: Commit**
 
 ```bash
-cd /home/orangepi/ai-agent
+cd 项目根目录
 git add memory/spreading_activation.py tests/test_spreading_activation.py
 git commit -m "feat: SpreadingActivationEngine 扩散激活引擎 (三通道融合)"
 ```
@@ -1817,7 +1817,7 @@ def test_no_max_boost_attribute():
 
 - [ ] **Step 2: Run test to verify it fails**
 
-Run: `cd /home/orangepi/ai-agent && python -m pytest tests/test_fluid_memory.py -v 2>&1 | head -30`
+Run: `cd 项目根目录 && python -m pytest tests/test_fluid_memory.py -v 2>&1 | head -30`
 Expected: FAIL — 旧实现仍用 LAMBDA_DECAY，新测试检查 `not hasattr(FluidMemory, "MAX_BOOST")`
 
 - [ ] **Step 3: Write minimal implementation — replace fluid_memory.py**
@@ -1891,18 +1891,18 @@ class FluidMemory:
 
 - [ ] **Step 4: Run test to verify it passes**
 
-Run: `cd /home/orangepi/ai-agent && python -m pytest tests/test_fluid_memory.py -v`
+Run: `cd 项目根目录 && python -m pytest tests/test_fluid_memory.py -v`
 Expected: all passed
 
 - [ ] **Step 5: Run regression — check DreamConsolidator still works**
 
-Run: `cd /home/orangepi/ai-agent && python -m py_compile core/dream_consolidation.py && python -c "from core.dream_consolidation import DreamConsolidator; print('OK')"`
+Run: `cd 项目根目录 && python -m py_compile core/dream_consolidation.py && python -c "from core.dream_consolidation import DreamConsolidator; print('OK')"`
 Expected: OK (DreamConsolidator uses FluidMemory.score() which is backward-compatible since peak_weight defaults to 1.0)
 
 - [ ] **Step 6: Commit**
 
 ```bash
-cd /home/orangepi/ai-agent
+cd 项目根目录
 git add memory/fluid_memory.py tests/test_fluid_memory.py
 git commit -m "feat: FluidMemory 改造为 mind 风格 Ebbinghaus 增量模型 (移除 MAX_BOOST)"
 ```
@@ -2132,7 +2132,7 @@ def test_constants(cc):
 
 - [ ] **Step 2: Run test to verify it fails**
 
-Run: `cd /home/orangepi/ai-agent && python -m pytest tests/test_confirm_correct.py -v 2>&1 | head -20`
+Run: `cd 项目根目录 && python -m pytest tests/test_confirm_correct.py -v 2>&1 | head -20`
 Expected: FAIL with `ModuleNotFoundError: No module named 'memory.confirm_correct'`
 
 - [ ] **Step 3: Write minimal implementation**
@@ -2309,13 +2309,13 @@ class ConfirmCorrect:
 
 - [ ] **Step 4: Run test to verify it passes**
 
-Run: `cd /home/orangepi/ai-agent && python -m pytest tests/test_confirm_correct.py -v`
+Run: `cd 项目根目录 && python -m pytest tests/test_confirm_correct.py -v`
 Expected: 11 passed
 
 - [ ] **Step 5: Commit**
 
 ```bash
-cd /home/orangepi/ai-agent
+cd 项目根目录
 git add memory/confirm_correct.py tests/test_confirm_correct.py
 git commit -m "feat: ConfirmCorrect 机制 (confirm强化 + correct超驰+溯源链)"
 ```
@@ -2478,13 +2478,13 @@ The implementer should find the exact method and insertion point by searching fo
 
 - [ ] **Step 6: Run existing tests to verify no regression**
 
-Run: `cd /home/orangepi/ai-agent && python -m pytest tests/ -v -k "memory or rag or retrieval" --timeout=30 2>&1 | tail -30`
+Run: `cd 项目根目录 && python -m pytest tests/ -v -k "memory or rag or retrieval" --timeout=30 2>&1 | tail -30`
 Expected: All existing memory tests pass (spreading channel returns [] when disabled, so no impact)
 
 - [ ] **Step 7: Commit**
 
 ```bash
-cd /home/orangepi/ai-agent
+cd 项目根目录
 git add memory/memory_manager.py
 git commit -m "feat: 集成扩散激活第五路 RRF 通道 + 双写到 concept_nodes"
 ```
@@ -2574,13 +2574,13 @@ Find the tool registration mechanism (likely in `tools/__init__.py` or `tool_eng
 
 - [ ] **Step 5: Verify tools import correctly**
 
-Run: `cd /home/orangepi/ai-agent && python -c "from tools.memory_tool import confirm_memory, correct_memory; print('OK')"`
+Run: `cd 项目根目录 && python -c "from tools.memory_tool import confirm_memory, correct_memory; print('OK')"`
 Expected: OK
 
 - [ ] **Step 6: Commit**
 
 ```bash
-cd /home/orangepi/ai-agent
+cd 项目根目录
 git add tools/memory_tool.py memory/memory_manager.py
 git commit -m "feat: 暴露 confirm/correct 为 Agent 工具"
 ```
@@ -2640,13 +2640,13 @@ Check if `db_memory.py` (or wherever the episodic memory DB layer is) has `get_e
 
 - [ ] **Step 3: Verify the integration compiles**
 
-Run: `cd /home/orangepi/ai-agent && python -m py_compile memory/memory_manager.py && python -c "from memory.memory_manager import MemoryManager; print('OK')"`
+Run: `cd 项目根目录 && python -m py_compile memory/memory_manager.py && python -c "from memory.memory_manager import MemoryManager; print('OK')"`
 Expected: OK
 
 - [ ] **Step 4: Commit**
 
 ```bash
-cd /home/orangepi/ai-agent
+cd 项目根目录
 git add memory/memory_manager.py db/db_memory.py
 git commit -m "feat: 双写+懒迁移集成 (检索时自动迁移旧记忆)"
 ```
@@ -2856,18 +2856,18 @@ async def test_constants_end_to_end(system):
 
 - [ ] **Step 2: Run integration test**
 
-Run: `cd /home/orangepi/ai-agent && python -m pytest tests/test_spreading_integration.py -v`
+Run: `cd 项目根目录 && python -m pytest tests/test_spreading_integration.py -v`
 Expected: 8 passed
 
 - [ ] **Step 3: Run full test suite**
 
-Run: `cd /home/orangepi/ai-agent && python -m pytest tests/test_db_concept.py tests/test_key_extractor.py tests/test_concept_graph.py tests/test_spreading_activation.py tests/test_fluid_memory.py tests/test_confirm_correct.py tests/test_spreading_integration.py -v`
+Run: `cd 项目根目录 && python -m pytest tests/test_db_concept.py tests/test_key_extractor.py tests/test_concept_graph.py tests/test_spreading_activation.py tests/test_fluid_memory.py tests/test_confirm_correct.py tests/test_spreading_integration.py -v`
 Expected: All passed
 
 - [ ] **Step 4: Commit**
 
 ```bash
-cd /home/orangepi/ai-agent
+cd 项目根目录
 git add tests/test_spreading_integration.py
 git commit -m "test: 扩散激活记忆系统集成测试 (8个端到端场景)"
 ```
