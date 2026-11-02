@@ -646,34 +646,23 @@ jobs:
           }
 
           # Create tar.gz for auto-update (Windows 10 1803+ includes tar)
-          # 修复：runner 镜像 20261021 起，PATH 里的 tar 可能解析到 Git for Windows
-          # 自带的 GNU tar。它不支持 Windows 长路径（>260 字符），而 PyInstaller 的
-          # _internal/ 下有深层嵌套目录，会导致 tar 打包到中途失败并返回 1；同时
-          # PowerShell 7 的 native command 错误处理会吞掉 stderr，日志里只剩一句
-          # "Process completed with exit code 1"，无法定位。
-          # 改为显式使用系统自带 bsdtar（支持长路径），并捕获 stderr 便于排查。
+          # 修复（两次定位后的最终方案）：
+          # 1) runner 镜像 20261021 起，Windows 自带的 bsdtar 3.8.9 在打包本项目的
+          #    dist/xiaoda-agent（约 260MB、上万文件）时会崩溃，退出码 -1073741819
+          #    即 0xC0000005 ACCESS_VIOLATION，导致 Windows 产物无法生成；
+          # 2) PowerShell 7 的 native command 错误处理还会吞掉 tar 的 stderr，
+          #    日志里只剩一句 "Process completed with exit code 1"，无法定位。
+          # 改用 Python 标准库 tarfile（runner 自带 Python 3.11），行为稳定，且
+          # 产物结构与原 `tar -C dist xiaoda-agent` 完全一致（根目录为 xiaoda-agent/）。
           Write-Host "Creating tar.gz for auto-update..."
           $tarball = "xiaoda-agent-windows-x64-v${version}.tar.gz"
-          $tarExe = "$env:SystemRoot\System32\tar.exe"
-          if (-not (Test-Path $tarExe)) { $tarExe = "tar" }
-          Write-Host "Using tar: $tarExe"
-          $prevEAP = $ErrorActionPreference
-          $ErrorActionPreference = "Continue"
-          if (Get-Variable -Name PSNativeCommandUseErrorActionPreference -ErrorAction SilentlyContinue) {
-            $PSNativeCommandUseErrorActionPreference = $false
-          }
-          & $tarExe --version 2>&1 | Select-Object -First 1 | ForEach-Object { Write-Host $_ }
-          $tarLog = & $tarExe -czf $tarball -C dist xiaoda-agent 2>&1
-          $tarRc = $LASTEXITCODE
-          $ErrorActionPreference = $prevEAP
-          if ($tarRc -ne 0) {
-            Write-Host "##[error]tar failed with exit code $tarRc"
-            Write-Host "--- tar output (last 30 lines) ---"
-            $tarLog | Select-Object -Last 30 | ForEach-Object { Write-Host $_ }
+          python -c "import sys,tarfile; t=tarfile.open(sys.argv[1],'w:gz',compresslevel=6); t.add(sys.argv[2],arcname=sys.argv[3]); t.close()" $tarball "dist/xiaoda-agent" "xiaoda-agent"
+          if ($LASTEXITCODE -ne 0) {
+            Write-Host "##[error]tarfile packaging failed with exit code $LASTEXITCODE"
             exit 1
           }
           if (-not (Test-Path $tarball)) {
-            Write-Host "##[error]tar reported success but $tarball not found"
+            Write-Host "##[error]tarfile reported success but $tarball not found"
             exit 1
           }
           Write-Host "tar.gz created: $tarball ($([math]::Round((Get-Item $tarball).Length / 1MB, 1)) MB)"
