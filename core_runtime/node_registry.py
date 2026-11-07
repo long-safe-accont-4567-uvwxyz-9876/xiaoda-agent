@@ -208,7 +208,7 @@ NODES: list[dict[str, Any]] = [
         # 并行返回带校准概率的类型化答案（是非/选择/评分），不生成任何文字。
         # 用于替代「用 LLM 生成文字再做字符串匹配」的脆弱分类，更快（70~500ms）更稳。
         "desc": "用结构化判断替代「让大模型写答案再解析」：更快、更稳、无解析失败",
-        "api_model": "TypeSafe Jev（api.typesafe.ai）",
+        "api_model": "Jev（tokenrhythm.studio）",
         "local_model": "",
         "local_desc": "暂不支持本地部署（Jev 为云端决策模型）",
         # decision 节点只有 on / off 两态，默认 off：保持历史行为不漂移

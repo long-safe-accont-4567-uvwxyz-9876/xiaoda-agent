@@ -33,7 +33,7 @@ _FALLBACK_OPTIONAL_KEYS_META: list[dict[str, Any]] = [
     {"key": "OPENROUTER_API_KEY", "label": "OpenRouter API 密钥", "desc": "OpenRouter API 密钥", "url": "https://openrouter.ai", "url_desc": "注册 → API Keys"},
     {"key": "WOLFRAMALPHA_API_KEY", "label": "WolframAlpha 知识计算密钥", "desc": "知识计算引擎", "url": "https://products.wolframalpha.com/api/", "url_desc": "注册 → Get AppID"},
     {"key": "AGNES_API_KEY", "label": "Agnes AI 图像/视频密钥", "desc": "图片生成和视频生成的核心依赖", "url": "https://agnes-ai.cn", "url_desc": "注册 → API Keys"},
-    {"key": "JEV_API_KEY", "label": "Jev 决策模型密钥", "desc": "TypeSafe System One 决策模型（结构化判断，不生成文字）；选填，配置后在功能节点开启", "url": "https://console.typesafe.ai/settings/keys", "url_desc": "控制台 → Settings → Keys（形如 jev_…）"},
+    {"key": "JEV_API_KEY", "label": "Jev 决策模型密钥", "desc": "NeoHorse-Jev-4B 决策模型（结构化判断，不生成文字）；选填，配置后在功能节点开启", "url": "https://tokenrhythm.studio", "url_desc": "控制台 → Settings → Keys（形如 sk_…）"},
     {"key": "GITHUB_PERSONAL_ACCESS_TOKEN", "label": "GitHub 个人访问令牌", "desc": "GitHub MCP Server 所需", "url": "https://github.com/settings/tokens", "url_desc": "Generate new token"},
     {"key": "MODELSCOPE_ACCESS_TOKEN", "label": "魔搭 Access Token", "desc": "魔搭 ModelScope 免费模型发现", "url": "https://modelscope.cn", "url_desc": "注册 → 个人中心 → 访问令牌"},
 ]

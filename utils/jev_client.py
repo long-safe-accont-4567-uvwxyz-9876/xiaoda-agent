@@ -79,8 +79,10 @@ from loguru import logger
 from utils.http_pool import get_shared_client
 
 # 默认模型：jev-latest 由服务端解析到具体版本（如 jev-1.13.0）
-DEFAULT_MODEL = "jev-latest"
-DEFAULT_BASE_URL = "https://api.typesafe.ai"
+DEFAULT_MODEL = "NeoHorse-Jev-4B"
+DEFAULT_BASE_URL = "https://tokenrhythm.studio"
+# Decision endpoint path; set JEV_DECISION_PATH=/v1/systemone to roll back
+DEFAULT_DECISION_PATH = "/v1/decision"
 
 # 默认超时：官方宣称 70~500ms，留足余量；超时即降级，不等太久
 DEFAULT_TIMEOUT = 8.0
@@ -95,7 +97,7 @@ class JevBudgetExceeded(JevError):
 
 
 # 单次请求的问题数上限（防御性：官方未设硬上限，但过高会拉长输入）
-MAX_QUESTIONS = 64
+MAX_QUESTIONS = 16
 
 
 def _env(name: str, default: str = "") -> str:
@@ -145,6 +147,14 @@ def _base_url() -> str:
 
 def _api_key() -> str:
     return _env("JEV_API_KEY")
+
+
+def _decision_path() -> str:
+    """Return the decision endpoint path (default /v1/decision)."""
+    path = (_env("JEV_DECISION_PATH", DEFAULT_DECISION_PATH) or DEFAULT_DECISION_PATH).strip()
+    if not path.startswith("/"):
+        path = "/" + path
+    return path
 
 
 def _model() -> str:
@@ -270,7 +280,7 @@ async def system_one(
         return None
 
     payload = {"model": _model(), "state": state, "questions": questions}
-    url = f"{_base_url()}/v1/systemone"
+    url = f"{_base_url()}{_decision_path()}"
 
     # 预先校验可序列化：state 里混入 set/自定义对象等时，httpx 会在编码阶段
     # 抛 TypeError，混在网络异常里难以定位。这里提前检查并给出可读告警。
@@ -326,12 +336,23 @@ async def system_one(
 # ── 便捷读取（类型化答案 → 常用值）────────────────────────────────
 
 
+def _answer_kind(item: dict) -> str | None:
+    """Return the answer type, tolerating payloads without an explicit type."""
+    kind = item.get("type")
+    if isinstance(kind, str) and kind:
+        return kind
+    for candidate in ("noul", "choice", "score"):
+        if candidate in item:
+            return candidate
+    return None
+
+
 def answer_noul(answers: dict[str, dict] | None, key: str) -> float | None:
     """取 Noul 概率（0~1）。缺失/类型不符返回 None。"""
     if not answers:
         return None
     item = answers.get(key)
-    if not isinstance(item, dict) or item.get("type") != "noul":
+    if not isinstance(item, dict) or _answer_kind(item) != "noul":
         return None
     val = item.get("noul")
     return float(val) if isinstance(val, (int, float)) else None
@@ -342,7 +363,7 @@ def answer_choice(answers: dict[str, dict] | None, key: str) -> str | None:
     if not answers:
         return None
     item = answers.get(key)
-    if not isinstance(item, dict) or item.get("type") != "choice":
+    if not isinstance(item, dict) or _answer_kind(item) != "choice":
         return None
     val = item.get("choice")
     return str(val) if val is not None else None
@@ -353,7 +374,7 @@ def answer_choice_probs(answers: dict[str, dict] | None, key: str) -> dict[str, 
     if not answers:
         return {}
     item = answers.get(key)
-    if not isinstance(item, dict) or item.get("type") != "choice":
+    if not isinstance(item, dict) or _answer_kind(item) != "choice":
         return {}
     probs = item.get("probabilities")
     if not isinstance(probs, dict):
@@ -366,7 +387,7 @@ def answer_score(answers: dict[str, dict] | None, key: str) -> float | None:
     if not answers:
         return None
     item = answers.get(key)
-    if not isinstance(item, dict) or item.get("type") != "score":
+    if not isinstance(item, dict) or _answer_kind(item) != "score":
         return None
     val = item.get("score")
     return float(val) if isinstance(val, (int, float)) else None

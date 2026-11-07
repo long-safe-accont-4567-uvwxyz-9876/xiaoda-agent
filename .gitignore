@@ -121,3 +121,9 @@ vite.config.ts.timestamp-*.mjs
 
 # === EmbedCache 磁盘持久化产物（运行时生成，路径见 memory/vector_store.py）===
 embed_cache_*.npz
+
+# === JEV 迁移本地备份 / 运行期数据（不入库） ===
+*.jev-backup
+files/
+db/active_constraints.json
+db/user_profile_stats.json

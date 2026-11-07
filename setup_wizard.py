@@ -208,8 +208,8 @@ OPTIONAL_KEYS = [
                 "用于子代理路由、检索意图等快速是非/选择/评分判断，"
                 "比让大模型写答案再解析更快更稳。选填；不配置则走原有分类逻辑。"
                 "配置后需在「功能节点 → 结构化决策」开启。",
-        "url": "https://console.typesafe.ai/settings/keys",
-        "url_desc": "控制台 → Settings → Keys（密钥形如 jev_…）",
+        "url": "https://tokenrhythm.studio",
+        "url_desc": "控制台 → Settings → Keys（密钥形如 sk_…）",
     },
     {
         "key": "GITHUB_PERSONAL_ACCESS_TOKEN",

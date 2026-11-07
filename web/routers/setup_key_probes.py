@@ -9,6 +9,7 @@ test_single_key 用法不受影响。
 """
 from __future__ import annotations
 
+import os
 from types import SimpleNamespace
 
 import httpx
@@ -170,9 +171,13 @@ async def _test_jev(key_value: str) -> tuple[bool, str]:
       - 401/403：密钥无效或无权访问
       - 404：端点不可用（可能是中转网关未透传 /v1/systemone）
     """
-    url = "https://api.typesafe.ai/v1/systemone"
+    _jev_base = (os.getenv("JEV_BASE_URL") or "https://tokenrhythm.studio").rstrip("/")
+    _jev_path = (os.getenv("JEV_DECISION_PATH") or "/v1/decision").strip()
+    if not _jev_path.startswith("/"):
+        _jev_path = "/" + _jev_path
+    url = _jev_base + _jev_path
     payload = {
-        "model": "jev-latest",
+        "model": os.getenv("JEV_MODEL") or "NeoHorse-Jev-4B",
         "state": "probe",
         "questions": {"ok": {"type": "noul", "instructions": "Is this a probe?"}},
     }

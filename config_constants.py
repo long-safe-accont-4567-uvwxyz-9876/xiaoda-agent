@@ -259,7 +259,7 @@ INTENT_CLASSIFY_TIMEOUT = _safe_float(os.getenv("INTENT_CLASSIFY_TIMEOUT"), 15.0
 # JEV_MODEL：模型别名，默认 jev-latest（服务端解析到具体版本，如 jev-1.13.0）。
 # JEV_TIMEOUT：单次调用超时（秒）。官方 70~500ms，超时即降级到原路径。
 JEV_ENABLED = env_flag("JEV_ENABLED", False)
-JEV_MODEL = os.getenv("JEV_MODEL", "jev-latest")
+JEV_MODEL = os.getenv("JEV_MODEL", "NeoHorse-Jev-4B")
 JEV_TIMEOUT = _safe_float(os.getenv("JEV_TIMEOUT"), 8.0)
 
 # 低置信度门控（官方 confidence-gated routing 模式）：

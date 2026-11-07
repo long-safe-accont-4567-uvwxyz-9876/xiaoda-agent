@@ -44,7 +44,7 @@ _SCORE_LEVELS = [
 ]
 
 # 单次请求最多评多少条候选（防御性上限，避免 state 过长稀释准确率）
-MAX_CANDIDATES = 20
+MAX_CANDIDATES = 16
 
 # 每轮最多过滤掉的比例（防止误判导致上下文枯竭）
 MAX_DROP_RATIO = 0.5
