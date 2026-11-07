@@ -190,6 +190,7 @@ class ProviderService:
             old_report = self._reports.get(provider_id)
             old_client = None
             bound = False
+            binder: Any = None
             try:
                 self.credentials.write(provider_id, credential)
                 binder = getattr(self.runtime_router, "bind_builtin", None)

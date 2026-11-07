@@ -220,6 +220,7 @@ class ConversationLogMixin:
                 return result
 
             now = time.time()
+            _cleanup_failures = 0
             for row in configs:
                 table_name = row["table_name"]
                 retention_days = row["retention_days"]
@@ -251,18 +252,21 @@ class ConversationLogMixin:
                     if auto_commit:
                         try:
                             await _w_conn.commit()
-                        except (OSError, RuntimeError) as e:
+                        except (OSError, RuntimeError, sqlite3.OperationalError) as e:
                             logger.warning("database.cleanup_commit_failed table={} error={}", table_name, e)
-                except (OSError, RuntimeError) as e:
+                except (OSError, RuntimeError, sqlite3.OperationalError) as e:
                     logger.warning("database.cleanup_failed", table=table_name, error=str(e))
+                    _cleanup_failures += 1
                     result[table_name] = 0
 
             if auto_commit:
                 try:
                     await _w_conn.commit()
-                except (OSError, RuntimeError) as e:
+                except (OSError, RuntimeError, sqlite3.OperationalError) as e:
                     logger.warning("清理过期数据提交事务失败: {}", e)
 
+            if _cleanup_failures:
+                logger.warning('database.cleanup_partial_failures count={} tables_done={}', _cleanup_failures, len(result))
             _cleanup_ms = int((time.time() - _cleanup_t0) * 1000)
             if _cleanup_ms > 2000:
                 logger.warning("database.cleanup_slow elapsed_ms={}", _cleanup_ms)
