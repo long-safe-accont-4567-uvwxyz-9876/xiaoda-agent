@@ -204,7 +204,7 @@ export const api = {
     return { first_run: body.data?.first_run !== false, profile_done: body.data?.profile_done !== false }
   },
 
-  getSetupKeys: () => get<{ keys: SetupKeyInfo[] }>('/setup/keys'),
+  getSetupKeys: () => get<{ keys: SetupKeyInfo[]; default_provider?: string; provider_choices?: Array<{ id: string; label: string; key_env: string; default: boolean }> }>('/setup/keys'),
 
   testSetupKey: (keyName: string, keyValue: string, extra?: Record<string, string>) =>
     post<{ success: boolean; message: string }>('/setup/test-key', { key_name: keyName, key_value: keyValue, ...(extra ? { extra } : {}) }),

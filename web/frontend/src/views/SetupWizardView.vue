@@ -22,6 +22,20 @@ const testingAll = ref(false)
 // 输入框；仅存内存，保存成功后清空，绝不写入 localStorage
 const setupToken = ref('')
 const setupTokenRequired = ref(false)
+// 默认模型二选一（DeepSeek / MiMo）：后端 /setup/keys 返回当前值与两个选项，
+// 保存时随 body.default_provider 提交，由后端写 provider_metadata.json 并生效。
+const defaultProvider = ref('deepseek')
+const providerChoices = ref<Array<{ id: string; label: string; key_env: string; default: boolean }>>([
+  { id: 'deepseek', label: 'DeepSeek', key_env: 'DEEPSEEK_API_KEY', default: true },
+  { id: 'mimo', label: '小米 MiMo', key_env: 'MIMO_API_KEY', default: false },
+])
+const selectedProviderKeyEnv = computed(() => providerChoices.value.find(c => c.id === defaultProvider.value)?.key_env || '')
+const selectedProviderKeyMissing = computed(() => {
+  const env = selectedProviderKeyEnv.value
+  if (!env) return false
+  if ((updates.value[env] || '').trim()) return false
+  return !keys.value.some(k => k.key === env && k.configured)
+})
 
 const testStatuses = reactive<Record<string, TestStatus>>({})
 const testMessages = reactive<Record<string, string>>({})
@@ -44,6 +58,12 @@ onMounted(async () => {
   try {
     const data = await api.getSetupKeys()
     keys.value = data.keys
+    if (data.default_provider && providerChoices.value.some(c => c.id === data.default_provider)) {
+      defaultProvider.value = data.default_provider
+    }
+    if (Array.isArray(data.provider_choices) && data.provider_choices.length) {
+      providerChoices.value = data.provider_choices
+    }
     // 将已配置的密钥值同步到 updates，这样保存时会包含它们
     for (const k of data.keys) {
       if (k.configured && k.raw_value) {
@@ -263,6 +283,12 @@ async function handleSave() {
     return
   }
 
+  // 选中的默认模型 provider 必须有 Key：缺 Key 不静默通过
+  if (selectedProviderKeyMissing.value) {
+    error.value = t('setupWizard.providerKeyMissing').replace('{key}', selectedProviderKeyEnv.value)
+    return
+  }
+
   saving.value = true
   error.value = ''
   try {
@@ -283,6 +309,8 @@ async function handleSave() {
     if (setupTokenRequired.value && setupToken.value.trim()) {
       extraBody.setup_token = setupToken.value.trim()
     }
+    // 默认模型选择：后端根据它落盘 provider_metadata.json 并同步运行时
+    extraBody.default_provider = defaultProvider.value
     await api.saveSetupKeys(keysToSave, true, extraBody)
     // 保存成功：清空内存引导令牌（不落 localStorage，避免令牌常驻可被读取）
     setupToken.value = ''
@@ -352,6 +380,26 @@ async function handleSave() {
         </div>
 
         <div class="setup-body">
+          <div class="provider-choice">
+            <h2 class="section-title required-title">── {{ t('setupWizard.providerTitle') }} ──</h2>
+            <p class="provider-hint">{{ t('setupWizard.providerHint') }}</p>
+            <div class="provider-options">
+              <label
+                v-for="choice in providerChoices"
+                :key="choice.id"
+                class="provider-option"
+                :class="{ active: defaultProvider === choice.id }"
+              >
+                <input v-model="defaultProvider" type="radio" :value="choice.id" name="default-provider" />
+                <span class="provider-name">{{ choice.label }}</span>
+                <span class="provider-key">{{ choice.key_env }}</span>
+              </label>
+            </div>
+            <p v-if="selectedProviderKeyMissing" class="provider-warning">
+              {{ t('setupWizard.providerKeyMissing').replace('{key}', selectedProviderKeyEnv) }}
+            </p>
+          </div>
+
           <h2 class="section-title required-title">── {{ t('setupWizard.required') }} ──</h2>
           <KeyAccordion
             :items="requiredKeys"
@@ -758,4 +806,53 @@ async function handleSave() {
   font-size: 12px;
   opacity: 0.7;
 }
+.provider-choice {
+  margin-bottom: 12px;
+}
+
+.provider-hint {
+  font-size: 12px;
+  color: rgba(255, 255, 255, 0.55);
+  margin: 6px 0 10px;
+  line-height: 1.6;
+}
+
+.provider-options {
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.provider-option {
+  flex: 1 1 160px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 12px;
+  border: 1px solid var(--glass-border);
+  border-radius: 10px;
+  cursor: pointer;
+  transition: border-color 0.2s var(--ease-smooth), background 0.2s var(--ease-smooth);
+}
+
+.provider-option.active {
+  border-color: var(--dendro);
+  background: rgba(140, 220, 150, 0.08);
+}
+
+.provider-name {
+  font-size: 14px;
+}
+
+.provider-key {
+  font-size: 11px;
+  color: rgba(255, 255, 255, 0.4);
+}
+
+.provider-warning {
+  margin: 8px 0 0;
+  font-size: 12px;
+  color: var(--dendro);
+}
+
 </style>

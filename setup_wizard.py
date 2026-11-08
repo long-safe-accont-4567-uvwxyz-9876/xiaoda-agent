@@ -113,14 +113,24 @@ ENV_EXAMPLE_PATH = next(
     os.path.join(WIZARD_DIR, ".env.example"),
 )
 
+# 主 LLM provider 二选一（默认 DeepSeek，2026-11-08 用户要求）：
+# 不再把 MiMo 写死在必填项里，选中的 provider 的 Key 由首次运行检查动态要求。
+LLM_PROVIDER_CHOICES = (
+    {"id": "deepseek", "key_env": "DEEPSEEK_API_KEY", "label": "DeepSeek"},
+    {"id": "mimo", "key_env": "MIMO_API_KEY", "label": "小米 MiMo"},
+)
+DEFAULT_LLM_PROVIDER = "deepseek"
+
+
+def resolve_default_llm_provider(values: dict | None = None) -> str:
+    """当前默认 LLM provider（.env DEFAULT_PROVIDER > 内置默认 DeepSeek）。"""
+    vals = values or {}
+    raw = (vals.get("DEFAULT_PROVIDER") or os.getenv("DEFAULT_PROVIDER", "") or "").strip().lower()
+    known = {choice["id"] for choice in LLM_PROVIDER_CHOICES}
+    return raw if raw in known else DEFAULT_LLM_PROVIDER
+
+
 REQUIRED_KEYS = [
-    {
-        "key": "MIMO_API_KEY",
-        "label": "MiMo API 密钥",
-        "desc": "小米 MiMo 大模型 API 密钥（主 LLM + TTS + Vision）",
-        "url": "https://platform.xiaomimimo.com?ref=A54DLY",
-        "url_desc": "注册 → 控制台 → API Keys",
-    },
     {
         "key": "QQBOT_APP_ID",
         "label": "QQ Bot App ID",
@@ -145,6 +155,20 @@ REQUIRED_KEYS = [
 ]
 
 OPTIONAL_KEYS = [
+    {
+        "key": "DEEPSEEK_API_KEY",
+        "label": "DeepSeek 大模型 API 密钥（选 DeepSeek 作默认模型时必填）",
+        "desc": "DeepSeek 大模型 API 密钥（OpenAI 兼容，api.deepseek.com）",
+        "url": "https://platform.deepseek.com",
+        "url_desc": "注册 → API Keys",
+    },
+    {
+        "key": "MIMO_API_KEY",
+        "label": "MiMo API 密钥（选 MiMo 作默认模型时必填）",
+        "desc": "小米 MiMo 大模型 API 密钥（另用于 TTS/Vision）",
+        "url": "https://platform.xiaomimimo.com?ref=A54DLY",
+        "url_desc": "注册 → 控制台 → API Keys",
+    },
     {
         "key": "WEBUI_PASSWORD",
         "label": "Web UI 密码",
@@ -397,7 +421,7 @@ def _print_summary(configured: dict) -> None:
 def is_first_run() -> bool:
     """检测是否为首次运行（.env 不存在或任一必填 key 未配置）。
 
-    必填项见 REQUIRED_KEYS（MIMO_API_KEY / QQBOT_APP_ID / QQBOT_APP_SECRET /
+    必填项见 REQUIRED_KEYS（QQBOT_APP_ID / QQBOT_APP_SECRET /
     SILICONFLOW_API_KEY）。任一为空都进入首次配置，避免漏配导致主程序启动后
     报错"没有填"卡死。
 
@@ -414,6 +438,10 @@ def is_first_run() -> bool:
     for item in REQUIRED_KEYS:
         if not vals.get(item["key"], "").strip():
             return True
+    # 主 LLM 不再写死 MiMo：DeepSeek / MiMo 任一配了 Key 就算已就绪，
+    # 避免选了 DeepSeek 的部署永远停在向导，也避免存量 MiMo 部署被误判首跑。
+    if not any(vals.get(choice["key_env"], "").strip() for choice in LLM_PROVIDER_CHOICES):
+        return True
     return False
 
 

@@ -144,11 +144,11 @@ class AgentCoreBootstrapper:
                     各步骤独立容错，单个步骤失败不会阻止核心聊天。
         """
         self.health.reset()
-        from config import MIMO_API_KEY as _mimo_key
-        from utils.encrypted_credential import reveal_credential
-        _mimo_key = reveal_credential(_mimo_key)
-        if not _mimo_key or not _mimo_key.strip():
-            logger.warning("agent_core.degraded_mode reason=no_mimo_api_key")
+        from config_providers import get_default_provider_credentials
+        # 默认 provider 已从 mimo 切到 deepseek，降级判断按 provider 推导 Key 名
+        _boot_provider, _boot_key_env, _boot_key = get_default_provider_credentials()
+        if not _boot_key or not _boot_key.strip():
+            logger.warning("agent_core.degraded_mode reason=no_llm_api_key provider={} env={}", _boot_provider, _boot_key_env)
             if not reinit:
                 # 首次降级启动：基础设施与认知系统分别容错——
                 # infra 失败时 cognitive 仍可尝试（memory_manager 等组件
