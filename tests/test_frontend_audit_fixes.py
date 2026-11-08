@@ -179,7 +179,7 @@ def test_chat_stream_events_filtered_by_origin_session():
     assert "msgSessionMap.delete(msgId)" in final
     # 映射随会话加载/新建修剪，防无界增长
     session_fns = method_source(chat, "async function newSession()") \
-        + method_source(chat, "async function loadSession(sid: string) {")
+        + method_source(chat, "async function loadSession(sid: string, signal?: AbortSignal) {")
     assert session_fns.count("pruneMsgSessions()") == 2
 
 
@@ -197,7 +197,7 @@ def test_chat_terminal_cleanup_is_pending_message_scoped():
 
     for signature in (
         "async function newSession()",
-        "async function loadSession(sid: string) {",
+        "async function loadSession(sid: string, signal?: AbortSignal) {",
     ):
         switch = method_source(chat, signature)
         assert "switchSession(" in switch
@@ -394,8 +394,18 @@ def test_setup_save_captures_setup_token_required_and_resends_token():
     assert "t('setupWizard.setupTokenHint')" in view
 
 
+def _locale_source(lang: str) -> str:
+    # i18n dictionaries are split into per-domain modules; zh.ts/en.ts only aggregate them.
+    from pathlib import Path
+    root = Path(__file__).resolve().parents[1] / "web" / "frontend" / "src" / "i18n"
+    parts = [(root / (lang + ".ts")).read_text(encoding="utf-8")]
+    for path in sorted((root / lang).glob("*.ts")):
+        parts.append(path.read_text(encoding="utf-8"))
+    return "".join(parts)
+
+
 def test_setup_token_hint_mentions_secret_file():
-    zh = source("web/frontend/src/i18n/zh.ts")
+    zh = _locale_source("zh")
     assert "setup_bootstrap_secret" in zh
-    en = source("web/frontend/src/i18n/en.ts")
+    en = _locale_source("en")
     assert "setup_bootstrap_secret" in en

@@ -1,0 +1,178 @@
+/* zh locale: base domain */
+export default {
+  ok: '确定',
+  cancel: '取消',
+  save: '保存',
+  delete: '删除',
+  edit: '编辑',
+  add: '添加',
+  refresh: '刷新',
+  loading: '加载中…',
+  empty: '暂无数据',
+  success: '成功',
+  failed: '失败',
+  confirm: '确认',
+  search: '搜索',
+  close: '关闭',
+
+  // 品牌名
+  brand: 'Xiaoda Agent',
+  tagline: '「知识是智慧的种子」',
+  // 品牌署名
+  brand_signature: {
+    text: '由 飞 二创开发',
+    full: '本 Agent 由作者飞个人学习用途二创开发',
+    author: '飞',
+    byAuthor: (author: string) => `由 ${author} 二创`,
+  },
+  // 免责协议
+  disclaimer: {
+    title: '免责声明',
+    pageTitle: '免责声明',
+    readHint: '请滚动阅读完以下免责声明后方可勾选同意',
+    scrollToAgree: '请继续滚动阅读完整内容...',
+    scrolledToBottom: '已阅读完毕，可以勾选同意',
+    agree: '我已阅读并同意以上免责声明',
+    agreeButton: '我已阅读并同意',
+    mustAgree: '必须阅读并同意免责声明才能继续',
+    agreed: '已同意免责声明',
+    notAgreed: '尚未同意',
+    agreedAt: '同意时间',
+    content: '本 Agent 由作者飞个人学习用途二创开发，禁止用户生成任何违禁内容，禁止用于任何商业用途，否则一切后果与开发者无关，由用户一人承担。\n\n免责声明\n\n本项目是一个非官方的二次创作，不是原作的续作、衍生品或官方合作项目，与原作权利方没有任何隶属、授权或赞助关系。\n\n项目中用到的角色名称、形象、语音、表情素材等知识产权归原版权方所有，代码仅供个人学习研究，不用于商业目的。表情素材来自社区公开资源，如有不妥请联系我，我会立即处理。\n\n本项目基于 MIT 协议开源，第三方素材的版权和许可以各自原始项目为准。\n\n使用本软件生成的内容由用户自行承担风险——AI 会犯错，请自行核实。第三方 API 服务的可用性和隐私政策由对应服务商负责。\n\n如有任何问题或建议，欢迎 GitHub Issues 反馈。',
+  },
+  // 赞助页
+  sponsor: {
+    navTitle: '请作者喝杯小甜水',
+    title: '自愿赞助作者',
+    intro: '本项目永久免费开源，所有功能无付费门槛，赞助行为完全自愿。',
+    wechat: '微信收款码',
+    usage: '资金仅用于服务器、工具、时间等项目维护开支，无任何增值服务、特权兑换。',
+    warning: '⚠️ 警示：未成年人请勿进行转账打赏；若未成年人私自打赏，监护人可通过仓库 Issue 联系我全额原路退款。',
+    footerNote: '一杯小甜水，半日好心情',
+  },
+  // 侧边栏导航
+  nav: {
+    chat: '对话',
+    agents: 'Agent 管理',
+    models: '模型与凭证',
+    tools: 'Skills 工具',
+    mcp: 'MCP 服务',
+    workflows: '工作流',
+    plugins: '插件管理',
+    insight: '内在世界',
+    retrieval: '检索配置',
+    searchEngines: '搜索引擎',
+    schedule: '定时与问候',
+    mail: '邮箱管理',
+    media: '媒体工坊',
+    health: '测试中心',
+    dashboard: '仪表盘',
+    settings: '系统设置',
+    disclaimer: '免责声明',
+    localDeploy: '本地部署',
+    mainNavigation: '主导航',
+    openNavigation: '打开导航',
+    closeNavigation: '关闭导航',
+  },
+  // 本地部署页
+  installed: '已安装',
+  market: '市场',
+  install: '安装',
+  uninstall: '卸载',
+  update: '更新',
+  enabled: '已启用',
+  disabled: '已禁用',
+  deleted: '已删除',
+  total: '共',
+  items: '个',
+
+  // ChatView.vue
+  chatTerminal: {
+    title: (name: string) => `${name}的虚空终端`,
+    running: '运行中',
+    done: '已完成',
+    empty: '暂无工具调用记录，输入命令开始操作',
+    inputPh: '输入命令后回车执行…',
+    clear: '清屏',
+    close: '关闭',
+    newTerm: '新建终端',
+    newTermType: '选择终端类型',
+    create: '创建终端',
+    paste: '粘贴 (Ctrl+V)',
+  },
+
+  // TopBar.vue
+  topBar: {
+    thinking: '正在思考',
+    usingTool: '正在使用工具',
+    replying: '正在回复',
+    processing: '处理中',
+    connected: '已连接',
+    reconnecting: '连接中断',
+    disconnected: '已断开连接',
+    toolsCount: '个工具',
+    signature: '署名',
+  },
+
+  // PromptInput.vue
+  promptInput: {
+    inputPlaceholder: '输入消息',
+    searchWeb: '搜索互联网',
+    thinkingDeep: '深度思考中',
+    voiceFailed: '语音识别失败',
+    voiceUnsupported: '当前环境不支持语音输入（需 HTTPS 或 localhost 访问）',
+    voicePermissionDenied: '麦克风权限被拒绝，请在浏览器设置中允许',
+    voiceNoDevice: '未检测到麦克风设备',
+    voiceStartFailed: '无法开始录音',
+    removeImage: '移除图片',
+    removeDocument: '移除文档',
+    uploadImage: '上传图片',
+    uploadAttachment: '上传附件',
+    uploading: '附件上传中',
+    unsupportedFile: '不支持此文件类型',
+    uploadFailed: '附件上传失败，请重试',
+    disconnectedDraftKept: '连接已断开，草稿和附件已保留',
+    reconnect: '重新连接',
+    reconnecting: '正在重新连接',
+    search: '搜索互联网',
+    deepThink: '深度思考',
+    voiceInput: '语音输入',
+    send: '发送',
+    abort: '中断生成',
+  },
+
+  // AgentsView.vue
+  keyAccordion: {
+    required: '必填',
+    optional: '选填',
+    getUrl: '获取地址：',
+    inputPh: (key: string) => `请输入 ${key}`,
+    hide: '隐藏',
+    show: '显示',
+    testing: '测试中…',
+    test: '测试',
+    currentValue: '当前值：',
+    testPassed: '测试通过',
+    configured: '已配置',
+    configuredTip: '该密钥已在服务器配置，无需重复填写；修改时直接输入新值',
+    keepCurrent: '已配置，留空保持不变',
+  },
+
+  // RetrievalView.vue
+  slashPalette: {
+    ownerOnly: '仅主人可用',
+    commands: '斜杠命令',
+  },
+
+  // EmotionAvatar.vue
+  emotion: {
+    current: '当前情绪',
+    calm: '平静',
+  },
+  errorBoundary: {
+    title: '页面渲染出错了',
+    hint: '数据没有丢失，重新加载即可恢复。如果反复出现，请把这条提示里的错误信息发给开发者。',
+    reload: '重新加载',
+  },
+
+} as const
