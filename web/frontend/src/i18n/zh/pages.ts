@@ -424,7 +424,6 @@ export default {
     sessionSwitchFailed: '切换会话失败，已回到原会话',
     autoplayBlocked: '浏览器拦截了自动播放，点播放按钮收听',
     wsDisconnectedPending: '连接中断，未收到回复',
-    uploadTooLarge: '文件超出大小上限',
   },
   common: {
     unsavedLeaveConfirm: '当前编辑尚未保存，确定离开？',

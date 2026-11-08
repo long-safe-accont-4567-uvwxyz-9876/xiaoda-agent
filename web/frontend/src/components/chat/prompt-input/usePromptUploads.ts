@@ -2,7 +2,6 @@ import { ref, computed, onBeforeUnmount } from 'vue'
 import type { Ref } from 'vue'
 import { api } from '../../../api'
 import { classifyUpload } from './classifyUpload'
-import { checkUploadSize, humanSize } from '../../../utils/uploadLimits'
 import { t } from '../../../i18n'
 
 export interface UploadedImage {
@@ -57,16 +56,6 @@ export function usePromptUploads(statusKey: Ref<string>) {
       if (generation !== uploadGeneration) return
       uploadState.value = 'error'
       statusKey.value = 'promptInput.unsupportedFile'
-      return
-    }
-    // 审查 M2：先做前端体积预检（后端 MAX_IMAGE_SIZE=10MB / MAX_DOC_SIZE=20MB），
-    // 不然只能等整个文件传完被 400 拒绝，且错误被收敛成一句"上传失败"。
-    const sizeCheck = checkUploadSize(file.size, cls.kind === 'image' ? 'image' : 'doc')
-    if (!sizeCheck.ok) {
-      if (generation !== uploadGeneration) return
-      uploadState.value = 'error'
-      uploadErrorDetail.value = `${t('errors.uploadTooLarge')}：${humanSize(sizeCheck.limitBytes || 0)}`
-      statusKey.value = 'errors.uploadTooLarge'
       return
     }
     uploadState.value = 'uploading'

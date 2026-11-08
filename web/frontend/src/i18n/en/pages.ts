@@ -424,7 +424,6 @@ export default {
     sessionSwitchFailed: 'Failed to switch session, returned to the previous one',
     autoplayBlocked: 'The browser blocked autoplay. Press play to listen.',
     wsDisconnectedPending: 'Connection lost before a reply arrived',
-    uploadTooLarge: 'File exceeds the size limit',
   },
   common: {
     unsavedLeaveConfirm: 'You have unsaved edits. Leave anyway?',

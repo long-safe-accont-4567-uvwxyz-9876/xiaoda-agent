@@ -37,7 +37,6 @@ import {
   formatCountdown,
   pruneExpired,
 } from '../src/utils/cmdConfirm'
-import { DOC_MAX_BYTES, IMAGE_MAX_BYTES, checkUploadSize, humanSize } from '../src/utils/uploadLimits'
 import { nextFocusIndex } from '../src/utils/focusTrap'
 import { hasUnsavedChanges, leaveDecision } from '../src/utils/unsavedGuard'
 import { isAutoplayBlocked } from '../src/utils/autoplay'
@@ -206,20 +205,6 @@ test('G2: 倒计时向上取整，过期与即将超时可区分', () => {
   assert.deepEqual(pruneExpired([{ deadline: 900 }, { deadline: 2000 }], now), [{ deadline: 2000 }])
 })
 
-// ── M2 上传体积 ─────────────────────────────────────────
-test('M2: 前后端上限一致（图片 10MB / 文档 20MB）', () => {
-  assert.equal(IMAGE_MAX_BYTES, 10 * 1024 * 1024)
-  assert.equal(DOC_MAX_BYTES, 20 * 1024 * 1024)
-  assert.equal(checkUploadSize(IMAGE_MAX_BYTES, 'image').ok, true)
-  assert.deepEqual(checkUploadSize(IMAGE_MAX_BYTES + 1, 'image'),
-    { ok: false, code: 'TOO_LARGE', limitBytes: IMAGE_MAX_BYTES })
-  assert.equal(checkUploadSize(DOC_MAX_BYTES, 'doc').ok, true)
-  assert.equal(checkUploadSize(DOC_MAX_BYTES + 1, 'doc').ok, false)
-  assert.equal(checkUploadSize(-1, 'doc').ok, false)
-  assert.equal(humanSize(10 * 1024 * 1024), '10MB')
-  assert.equal(humanSize(1536 * 1024), '1.5MB')
-  assert.equal(humanSize(512 * 1024), '512KB')
-})
 
 // ── F1 焦点环 ───────────────────────────────────────────
 test('F1: Tab/Shift+Tab 在容器内循环，焦点在环外时从头尾进入', () => {
@@ -275,7 +260,7 @@ test('G1: DownloadTasksTab 不再有硬编码中文', () => {
 test('G1/G2: 新增 i18n 键中英齐备', () => {
   const keys = [
     'errors.loadFailed', 'errors.retry', 'errors.historyLoadFailed', 'errors.sessionSwitchFailed',
-    'errors.autoplayBlocked', 'errors.uploadTooLarge',
+    'errors.autoplayBlocked',
     'common.loadMore', 'common.unsavedLeaveConfirm',
     'chatHistory.loadOlder', 'chatHistory.loadingOlder', 'chatHistory.allLoaded',
     'cmdConfirm.remaining', 'cmdConfirm.expired',
