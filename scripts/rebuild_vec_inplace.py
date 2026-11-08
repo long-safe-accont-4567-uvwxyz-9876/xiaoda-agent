@@ -64,6 +64,24 @@ BATCH = 8               # 与 AdaptiveEmbeddingProvider 内部拆批一致
 CHECK_SAMPLES = 20      # 每张表自检抽样条数
 CHECK_MAX_DIST = 0.01   # 自距离阈值（float32 往返误差量级）
 YIELD_S = 0.05          # 批间让出，避免长时间独占写锁
+DEFAULT_MAX_ROWS = 5000  # 索引总行数上限（自动压缩目标 + 单次运行触发上限）
+# 压缩策略：小表与主记忆表受保护，预算优先给 memories_child_vec，
+# 超出的部分按 rowid 从旧到新删除（新数据可检索，旧数据退化为 FTS 关键词）。
+PROTECTED_TABLES = ("kg_entities_vec", "kg_relations_vec", "memories_vec")
+
+ARCHIVE_DDL = """
+CREATE TABLE IF NOT EXISTS vec_archive (
+    vec_table   TEXT NOT NULL,
+    source_id   INTEGER NOT NULL,
+    embedding   BLOB NOT NULL,
+    archived_at TEXT NOT NULL,
+    PRIMARY KEY (vec_table, source_id)
+)
+"""
+
+
+def _hot_total(conn: sqlite3.Connection) -> int:
+    return sum(int(conn.execute(f"SELECT COUNT(1) FROM {t}").fetchone()[0]) for t in TABLES)
 
 PROGRESS_DDL = """
 CREATE TABLE IF NOT EXISTS vec_rebuild_progress (
@@ -132,6 +150,76 @@ def _done_ids(conn: sqlite3.Connection, table: str) -> set[int]:
         return set()
 
 
+def _count(conn: sqlite3.Connection, table: str) -> int:
+    return int(conn.execute(f"SELECT COUNT(1) FROM {table}").fetchone()[0])
+
+
+def _plan_compress(conn: sqlite3.Connection, max_rows: int) -> list[tuple[str, int, list[int]]]:
+    """计算压缩方案：[(表名, 保留条数, 待删除 rowid 列表)]。"""
+    counts = {t: _count(conn, t) for t in TABLES}
+    total = sum(counts.values())
+    if total <= max_rows:
+        return []
+    protected = sum(counts[t] for t in PROTECTED_TABLES)
+    budget = max_rows - protected
+    if budget < 0:
+        raise SystemExit(
+            f"[error] 受保护表（{'/'.join(PROTECTED_TABLES)}）合计 {protected} 条"
+            f"已超上限 {max_rows}，拒绝压缩"
+        )
+    plan: list[tuple[str, int, list[int]]] = []
+    for table in TABLES:
+        if table in PROTECTED_TABLES:
+            continue
+        keep = max(0, min(counts[table], budget))
+        budget -= keep
+        drop = counts[table] - keep
+        if drop <= 0:
+            continue
+        rows = [
+            int(r[0])
+            for r in conn.execute(
+                f"SELECT rowid FROM {table} ORDER BY rowid DESC LIMIT -1 OFFSET ?", [keep]
+            )
+        ]
+        plan.append((table, keep, rows))
+    return plan
+
+
+def _compress(conn: sqlite3.Connection, max_rows: int, *, apply: bool) -> int:
+    """把 vec 表压到 max_rows 以内：保留 rowid 最新的行，旧的删掉并同步清理进度位点。"""
+    plan = _plan_compress(conn, max_rows)
+    if not plan:
+        print(f"[compress] 总量未超上限 {max_rows}，无需压缩", flush=True)
+        return 0
+    total_drop = sum(len(rows) for _, _, rows in plan)
+    for table, keep, rows in plan:
+        print(f"[compress] {table}: 保留最新 {keep} 条，删除 {len(rows)} 条", flush=True)
+    if not apply:
+        print(f"[compress] 预演：共将删除 {total_drop} 条（正式执行需 --apply）", flush=True)
+        return 0
+    now = time.strftime("%Y-%m-%dT%H:%M:%S")
+    for table, _keep, rows in plan:
+        for i in range(0, len(rows), 500):
+            chunk = rows[i : i + 500]
+            # 先原样搬到归档表（含 float32 向量），再从热表删除；恢复时不用重新编码。
+            conn.executemany(
+                "INSERT OR REPLACE INTO vec_archive(vec_table, source_id, embedding, archived_at)"
+                f" SELECT ?, rowid, embedding, ? FROM {table} WHERE rowid = ?",
+                [(table, now, r) for r in chunk],
+            )
+            conn.executemany(f"DELETE FROM {table} WHERE rowid = ?", [(r,) for r in chunk])
+            conn.executemany(
+                "DELETE FROM vec_rebuild_progress WHERE vec_table = ? AND source_id = ?",
+                [(table, r) for r in chunk],
+            )
+            conn.commit()
+            time.sleep(0.02)
+    now_total = sum(_count(conn, t) for t in TABLES)
+    print(f"[compress] 已删除 {total_drop} 条，四表总量现为 {now_total} 条", flush=True)
+    return total_drop
+
+
 def _report(conn: sqlite3.Connection, adb: sqlite3.Connection, tables: list[str]) -> None:
     print(f"{'表':<22}{'源':>8}{'vec':>8}{'已重建':>8}{'待重建':>8}{'缺口':>8}", flush=True)
     for table in tables:
@@ -198,7 +286,16 @@ def _parse() -> argparse.Namespace:
     p.add_argument("--vec-db", default=str(d / "db" / "agent_vec.db"))
     p.add_argument("--model-dir", default=str(d / "models" / "bge-large-zh-v1.5"))
     p.add_argument("--table", default=None, choices=sorted(TABLES), help="只处理单张表")
-    p.add_argument("--limit", type=int, default=0, help="每张表本次最多处理条数（0=不限）")
+    p.add_argument(
+        "--limit", type=int, default=DEFAULT_MAX_ROWS, help="本次运行处理行数上限（触发上限）"
+    )
+    p.add_argument(
+        "--max-rows", type=int, default=DEFAULT_MAX_ROWS, help="热区触发水位，超过即自动压缩"
+    )
+    p.add_argument("--hot-low", type=int, default=4000, help="压缩目标条数")
+    p.add_argument("--no-auto-compress", action="store_true", help="跳开跑前的自动压缩")
+    p.add_argument("--compress", action="store_true", help="只做压缩（配合 --apply 才真正删除）")
+    p.add_argument("--apply", action="store_true", help="配合 --compress 真正执行删除")
     p.add_argument("--gaps-only", action="store_true", help="只补源表有、vec 表没有的缺口行")
     p.add_argument("--time-budget", type=float, default=0.0, help="本次最多运行秒数（0=不限）")
     p.add_argument("--status", action="store_true", help="只打印进度")
@@ -217,12 +314,27 @@ def main() -> int:
     adb = _open(db)
     conn = _open(vec_db, load_vec=True)
     conn.execute(PROGRESS_DDL)
+    conn.execute(ARCHIVE_DDL)
     conn.commit()
     tables = [args.table] if args.table else list(TABLES)
 
     if args.status:
         _report(conn, adb, tables)
         return 0
+
+    if args.compress:
+        _compress(conn, args.hot_low, apply=args.apply)
+        _report(conn, adb, tables)
+        return 0
+
+    # 自动压缩：每次开跑前先把索引压到上限，保证单次运行不超过触发上限。
+    if not args.no_auto_compress:
+        hot = _hot_total(conn)
+        if hot > args.max_rows:
+            print(f"[compact] 热区 {hot} 条超触发水位 {args.max_rows}，压缩到 {args.hot_low}", flush=True)
+            _compress(conn, args.hot_low, apply=True)
+        else:
+            print(f"[compact] 热区 {hot} 条未超触发水位 {args.max_rows}，跳过", flush=True)
 
     svc = LocalEmbeddingService.bundled(model_dir)
     if not svc.load():
@@ -249,7 +361,7 @@ def main() -> int:
         rest = [i for i, _ in items if i in vec and i not in done]
         order = gap if args.gaps_only else gap + rest
         if args.limit:
-            order = order[: args.limit]
+            order = order[: max(0, args.limit - total_ok)]
         print(
             f"[plan] {table}: 缺口={len(gap)} 存量待换={len(rest)} 本次计划={len(order)}",
             flush=True,
