@@ -9,6 +9,7 @@ import type {
   TodaySummary, UsageSummary,
 } from '../api/types'
 import Tilt3D from '../components/fx/Tilt3D.vue'
+import { useVisibilityPolling } from '../composables/useVisibilityPolling'
 import * as echarts from 'echarts/core'
 import { LineChart, BarChart } from 'echarts/charts'
 import { GridComponent, TooltipComponent } from 'echarts/components'
@@ -30,7 +31,6 @@ const costChartEl = ref<HTMLElement | null>(null)
 const toolChartEl = ref<HTMLElement | null>(null)
 const costChartEmpty = ref(true)
 const toolChartEmpty = ref(true)
-let timer: ReturnType<typeof setInterval> | null = null
 let costChart: echarts.ECharts | null = null
 let toolChart: echarts.ECharts | null = null
 let chartResizeObserver: ResizeObserver | null = null
@@ -67,14 +67,9 @@ async function loadMonitorConfig() {
   } catch { /* */ }
 }
 
-function startPolling() {
-  if (timer) clearInterval(timer)
-  timer = setInterval(loadSystem, 5000)
-}
-
-function stopPolling() {
-  if (timer) { clearInterval(timer); timer = null }
-}
+// 审计 L6：后台标签页不再每 5 秒打接口，重新可见时立即补一次
+const { start: startPolling, stop: stopPolling } =
+  useVisibilityPolling(loadSystem, 5000, { autoStart: false })
 
 async function enableMonitor() {
   monitorEnabled.value = true
