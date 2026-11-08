@@ -7,6 +7,7 @@ import { NButton, NInput, NPopconfirm, NSlider, NTag } from 'naive-ui'
 import Tilt3D from '../fx/Tilt3D.vue'
 import { t } from '../../i18n'
 import type { MemoryItem } from './types'
+import { localeTag } from '../../utils/datetime'
 
 defineProps<{
   memories: MemoryItem[]
@@ -46,7 +47,7 @@ const emit = defineEmits<{
           <div class="mem-meta">
             <span>{{ '★'.repeat(Math.round((m.importance || 0) * 5)) || '☆' }}</span>
             <n-tag v-if="m.emotion_label" size="tiny" :bordered="false">{{ m.emotion_label }}</n-tag>
-            <span>{{ new Date(m.timestamp * 1000).toLocaleString('zh-CN') }}</span>
+            <span>{{ new Date(m.timestamp * 1000).toLocaleString(localeTag()) }}</span>
             <n-tag v-if="m.via === 'vector'" size="tiny" type="info" :bordered="false">{{ t('insightView.semanticHit') }}</n-tag>
           </div>
         </div>

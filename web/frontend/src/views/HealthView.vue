@@ -7,6 +7,7 @@ import { getWsClient } from '../api/ws'
 import Tilt3D from '../components/fx/Tilt3D.vue'
 import ViewTitleIcon from '../components/fx/ViewTitleIcon.vue'
 import { t, tf } from '../i18n'
+import { localeTag } from '../utils/datetime'
 
 const message = useMessage()
 const ws = getWsClient()
@@ -125,7 +126,7 @@ const stateIcon: Record<string, string> = {
       <h2 class="view-title view-title-icon"><ViewTitleIcon name="health" /> {{ t('healthView.title') }}</h2>
       <div class="header-right">
         <span v-if="lastReport?.run_at" class="last-report">
-          {{ t('healthView.lastCheck') }}：{{ new Date(lastReport.run_at * 1000).toLocaleString('zh-CN') }}
+          {{ t('healthView.lastCheck') }}：{{ new Date(lastReport.run_at * 1000).toLocaleString(localeTag()) }}
           · {{ lastReport.passed }}/{{ lastReport.total }} {{ t('healthView.pass') }}
         </span>
         <n-button secondary :loading="connectivityLoading" @click="checkConnectivity">🔗 连通性检查</n-button>

@@ -8,6 +8,7 @@ import Tilt3D from '../fx/Tilt3D.vue'
 import { renderMarkdown } from '../../utils/markdown'
 import { t } from '../../i18n'
 import type { PortraitData, PortraitHistoryEntry } from './types'
+import { localeTag } from '../../utils/datetime'
 
 defineProps<{
   portrait: PortraitData
@@ -24,7 +25,7 @@ const emit = defineEmits<{
   <div>
     <div class="portrait-head">
       <span v-if="portrait.version">{{ t('insightView.versionLabel') }} v{{ portrait.version }} ·
-        {{ new Date(Number(portrait.created_at || 0) * 1000).toLocaleString('zh-CN') }}</span>
+        {{ new Date(Number(portrait.created_at || 0) * 1000).toLocaleString(localeTag()) }}</span>
       <n-button size="small" type="primary" :loading="consolidating" @click="emit('consolidate')">
         {{ t('insightView.consolidateBtn') }}
       </n-button>
@@ -36,7 +37,7 @@ const emit = defineEmits<{
         <div v-for="h in history" :key="h.version" class="history-row">
           <n-tag size="small" :bordered="false">v{{ h.version }}</n-tag>
           <span class="history-log">{{ h.change_log || t('insightView.noDesc') }}</span>
-          <span class="history-time">{{ new Date((h.created_at ?? 0) * 1000).toLocaleString('zh-CN') }}</span>
+          <span class="history-time">{{ new Date((h.created_at ?? 0) * 1000).toLocaleString(localeTag()) }}</span>
         </div>
       </n-collapse-item>
     </n-collapse>

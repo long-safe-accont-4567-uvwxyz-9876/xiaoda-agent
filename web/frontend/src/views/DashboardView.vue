@@ -16,6 +16,7 @@ import { GridComponent, TooltipComponent } from 'echarts/components'
 import { CanvasRenderer } from 'echarts/renderers'
 import { t } from '../i18n'
 import { useLoadError } from '../composables/useLoadError'
+import { localeTag } from '../utils/datetime'
 
 echarts.use([LineChart, BarChart, GridComponent, TooltipComponent, CanvasRenderer])
 
@@ -339,7 +340,7 @@ function diskLabel(d: any): string {
         <h3>{{ t('dashboardView.recentAudit') }}</h3>
         <div class="audit-list">
           <div v-for="a in audit" :key="a.id" class="audit-row">
-            <span class="a-time mono">{{ new Date(a.timestamp * 1000).toLocaleTimeString('zh-CN') }}</span>
+            <span class="a-time mono">{{ new Date(a.timestamp * 1000).toLocaleTimeString(localeTag()) }}</span>
             <span class="a-type">{{ a.event_type }}</span>
             <span class="a-detail">{{ a.detail }}</span>
           </div>
