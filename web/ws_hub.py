@@ -628,7 +628,7 @@ async def stop_media_cleanup() -> None:
 
 def serialize_result(result: Any) -> dict:
     """ProcessResult → 可下发 JSON（媒体路径转 /media/ URL）。"""
-    return {
+    data = {
         "reply": result.reply,
         "emotion": result.emotion or "",
         "sticker_url": _publish_file(result.sticker_path, "stickers", link=False),
@@ -637,6 +637,12 @@ def serialize_result(result: Any) -> dict:
                                    for p in (result.image_paths or [])) if u],
         "video_url": _publish_file(result.video_path, "video"),
     }
+    # 降级标记（可选键）：只在确实降级时下发，未降级帧结构保持原样，
+    # 旧前端按未知键忽略，新前端据此在对话流里显示轻量提示。
+    degraded = getattr(result, "degraded", None)
+    if degraded:
+        data["degraded"] = degraded
+    return data
 
 
 async def _synthesize_speech(core: Any, agent: str, tts_text: str, emotion: str) -> str | None:

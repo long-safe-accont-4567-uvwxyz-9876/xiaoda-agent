@@ -19,7 +19,7 @@ import ModelSelector from '../components/chat/ModelSelector.vue'
 import CmdConfirmCard from '../components/workspace/CmdConfirmCard.vue'
 import JSpacePanel from '../components/jspace/JSpacePanel.vue'
 import { useWorkspaceStore } from '../stores/workspace'
-import { t } from '../i18n'
+import { t, tf } from '../i18n'
 
 defineOptions({ name: 'ChatView' })
 
@@ -362,6 +362,11 @@ const emotionColors: Record<string, string> = {
           </div>
           <span v-if="msg.streaming && !msg.content" class="cursor-blink">▌</span>
 
+          <!-- 降级提示：轻量内联，不打断阅读也不弹窗 -->
+          <div v-if="msg.role === 'assistant' && msg.degraded" class="degraded-hint">
+            {{ tf('chat.degradedHint', msg.degraded.kind || '') }}
+          </div>
+
           <!-- 生成产物区（工具产出的图/视频/语音，与表情包分离） -->
           <div v-if="msg.imageUrls?.length || msg.videoUrl || msg.audioUrl" class="artifact-block">
             <span class="artifact-label"><SumeruIcon name="palette" :size="14" variant="duo" tone="magic" interactive /> {{ t('chatView.artifacts') }}</span>
@@ -613,6 +618,15 @@ const emotionColors: Record<string, string> = {
   color: var(--wisdom);
 }
 .message-bubble.streaming { border-color: rgba(127, 214, 80, 0.35); }
+
+.degraded-hint {
+  margin-top: 6px;
+  font-size: 11px;
+  line-height: 1.4;
+  color: rgba(214, 158, 46, 0.95);
+  opacity: 0.85;
+  user-select: none;
+}
 
 /* 消息进出场（切换提示 3 秒自动淡出） */
 .msg-fade-enter-active { transition: opacity 0.3s var(--ease-smooth), transform 0.3s var(--ease-smooth); }

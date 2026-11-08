@@ -292,6 +292,7 @@ export default {
     errorOccurred: 'Error: ',
     imagePlaceholder: '📷 Image',
     agentTakeover: (name: string) => `Now handled by ${name}`,
+    degradedHint: (kind: string) => (kind ? `Degraded model reply (${kind})` : 'Degraded model reply'),
   },
 
   // Agents page

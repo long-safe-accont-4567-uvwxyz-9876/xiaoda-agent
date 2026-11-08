@@ -264,3 +264,20 @@ def test_workflow_preview_stays_put_and_reports_chat_send_failure():
     assert "message.warning(t('workflowView.chatSendFailed'))" in preview[failure_check:]
     assert "chatSendFailed:" in zh
     assert "chatSendFailed:" in en
+
+
+def test_stream_degraded_marker_forwarded_and_hinted():
+    """流式降级标记：final 帧写进消息，UI 走 i18n 轻量提示（不硬编码中文）。"""
+    chat = source("web/frontend/src/stores/chat.ts")
+    view = source("web/frontend/src/views/ChatView.vue")
+    zh = source("web/frontend/src/i18n/zh.ts")
+    en = source("web/frontend/src/i18n/en.ts")
+    # final 帧透传后端 degraded 标记（可选键，缺省为 null）
+    assert "export interface ChatDegradedMarker {" in chat
+    assert "degraded?: ChatDegradedMarker | null" in chat
+    assert "msg.degraded = (e.degraded as ChatDegradedMarker | undefined) ?? null" in chat
+    # 气泡内轻量内联提示，文案走 t/tf 而非硬编码
+    assert "tf('chat.degradedHint'" in view
+    assert 'class="degraded-hint"' in view
+    assert "degradedHint:" in zh
+    assert "degradedHint:" in en
