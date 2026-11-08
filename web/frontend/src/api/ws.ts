@@ -7,16 +7,37 @@ export type LocalAiWsEvent = WsEvent & {
   type: 'local_ai_device_updated' | 'local_ai_download_updated' | 'local_ai_instance_updated'
 }
 
+/**
+ * 心跳时序（审计 P1-7）。
+ *
+ * 服务端每 30s 下发 {"type":"ping"}，10s 内收不到 pong 就关连接（web/ws_hub.py）。
+ * 客户端这边原来只"发"心跳、从不校验回应：连接处于半开状态（NAT 超时、链路
+ * 静默丢包、服务端进程卡死但 socket 未 FIN）时，socket.readyState 仍是 OPEN，
+ * 状态灯一直绿着，用户发的消息全部石沉大海，直到手动刷新页面。
+ *
+ * 现在的判定：每次下行链路都算"活着"（任何帧都能证明半开已结束），
+ * 主动 ping 之后 60s 内没有任何下行帧 → 判定连接已死 → 主动重建。
+ * 60s = 2.4 个 ping 周期：容忍单次丢包与浏览器后台节流，又能在 1 分钟内
+ * 把假绿揪出来。重连复用既有指数退避（1s→2s→…→30s 封顶），不会造成重连风暴。
+ */
+export const HEARTBEAT_PING_INTERVAL_MS = 25_000
+export const HEARTBEAT_ACK_TIMEOUT_MS = 60_000
+
 export class WsClient {
   private ws: WebSocket | null = null
   private reconnectAttempts = 0
   private maxReconnectDelay = 30000
   private listeners: Map<string, Set<(data: WsEvent) => void>> = new Map()
   private heartbeatInterval: ReturnType<typeof setInterval> | null = null
+  private heartbeatWatchdog: ReturnType<typeof setInterval> | null = null
   private reconnectTimer: ReturnType<typeof setTimeout> | null = null
   private _unauthorized = false
   private _intentionalDisconnect = false
   private _reconnecting = false
+  /** 首个"发出后尚未收到任何下行帧"的 ping 时间；0 = 无未决 ping */
+  private pingPendingSince = 0
+  /** 已针对当前 socket 判定过心跳超时（防重复重建） */
+  private heartbeatDead = false
   public connected = false
 
   constructor(private url: string) {}
@@ -35,6 +56,8 @@ export class WsClient {
     this._unauthorized = false
     this._intentionalDisconnect = false
     this._reconnecting = false
+    this.heartbeatDead = false
+    this.pingPendingSince = 0
     this.reconnectAttempts = 0
     if (this.reconnectTimer) { clearTimeout(this.reconnectTimer); this.reconnectTimer = null }
     // 关闭可能残留的旧 socket：置空 handler 防旧 onclose 触发重连竞态
@@ -84,6 +107,8 @@ export class WsClient {
 
     socket.onmessage = (event) => {
       if (stale()) return
+      // 任何下行帧都证明链路活着：清掉未决 ping（P1-7）
+      this.pingPendingSince = 0
       try {
         const data = JSON.parse(event.data) as WsEvent
         // Token 失效：服务端发送 UNAUTHORIZED 错误后关闭连接
@@ -135,6 +160,7 @@ export class WsClient {
 
   disconnect() {
     this.stopHeartbeat()
+    this.heartbeatDead = false
     if (this.reconnectTimer) { clearTimeout(this.reconnectTimer); this.reconnectTimer = null }
     this._intentionalDisconnect = true
     this._reconnecting = false
@@ -194,9 +220,12 @@ export class WsClient {
 
   private startHeartbeat() {
     this.stopHeartbeat()
-    this.heartbeatInterval = setInterval(() => {
-      this.send({ type: 'ping' })
-    }, 25000)
+    this.heartbeatDead = false
+    this.pingPendingSince = 0
+    this.heartbeatInterval = setInterval(() => this.sendHeartbeatPing(), HEARTBEAT_PING_INTERVAL_MS)
+    // 看门狗比 ping 密集：判定延迟上限取决于它，而不是 ping 周期
+    this.heartbeatWatchdog = setInterval(() => this.checkHeartbeat(), 10_000)
+    document.addEventListener('visibilitychange', this.onHeartbeatVisibility)
   }
 
   private stopHeartbeat() {
@@ -204,6 +233,59 @@ export class WsClient {
       clearInterval(this.heartbeatInterval)
       this.heartbeatInterval = null
     }
+    if (this.heartbeatWatchdog) {
+      clearInterval(this.heartbeatWatchdog)
+      this.heartbeatWatchdog = null
+    }
+    document.removeEventListener('visibilitychange', this.onHeartbeatVisibility)
+    this.pingPendingSince = 0
+  }
+
+  /** 页面回到前台：后台节流期间的时间不算超时，并立刻补一次探活 */
+  private onHeartbeatVisibility = () => {
+    if (document.hidden) return
+    this.pingPendingSince = 0
+    this.sendHeartbeatPing()
+  }
+
+  private sendHeartbeatPing() {
+    // 后台标签页的定时器会被浏览器节流，此时的"沉默"不代表链路已死，
+    // 记下时间点即可，等回到前台由 onHeartbeatVisibility 重置
+    if (document.hidden) return
+    if (this.pingPendingSince === 0) this.pingPendingSince = Date.now()
+    this.send({ type: 'ping' })
+  }
+
+  private checkHeartbeat() {
+    if (!this.connected || document.hidden) return
+    if (this.pingPendingSince === 0) return
+    if (Date.now() - this.pingPendingSince < HEARTBEAT_ACK_TIMEOUT_MS) return
+    const socket = this.ws
+    if (!socket) return
+    this.handleHeartbeatTimeout(socket)
+  }
+
+  /**
+   * 半开连接：socket 仍报 OPEN，但下行已死。
+   * 不能只 close() 等 onclose —— 半开场景下 onclose 可能永远不来，
+   * 所以这里主动走一遍断开语义并复用既有退避重连。
+   */
+  private handleHeartbeatTimeout(socket: WebSocket) {
+    if (this.ws !== socket || this.heartbeatDead) return
+    this.heartbeatDead = true
+    this.stopHeartbeat()
+    this.connected = false
+    this._reconnecting = true
+    this.ws = null
+    // 摘掉处理器：旧 socket 迟到的任何事件都不得影响新连接
+    socket.onopen = null
+    socket.onmessage = null
+    socket.onclose = null
+    socket.onerror = null
+    try { socket.close() } catch { /* 已断开 */ }
+    // 先更新重连态再发事件（与 onclose 路径同序，状态灯才会转黄）
+    this.emit({ type: 'ws_disconnected' })
+    this.scheduleReconnect()
   }
 
   private scheduleReconnect() {

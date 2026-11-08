@@ -4,6 +4,7 @@ import { NButton, NTag, NSpin, NResult, NPopconfirm, useMessage } from 'naive-ui
 import { get, post } from '../api'
 import { t } from '../i18n'
 import Tilt3D from './fx/Tilt3D.vue'
+import { useVisibilityPolling } from '../composables/useVisibilityPolling'
 
 /**
  * 微信 Bot 连接面板
@@ -48,8 +49,7 @@ const qrcodeUrl = ref('')
 const qrcodeId = ref('')
 const errorMsg = ref('')
 
-// 轮询定时器与连续失败计数（网络抖动时不刷屏报错）
-let pollTimer: ReturnType<typeof setInterval> | null = null
+// 连续失败计数（网络抖动时不刷屏报错）
 let pollFailCount = 0
 // 轮询在途标记：防止慢响应时 setInterval 触发重叠轮询、乱序覆盖状态
 let pollInFlight = false
@@ -113,18 +113,19 @@ onUnmounted(() => {
 
 // ── 轮询控制 ──────────────────────────────────────────────
 function stopPolling() {
-  if (pollTimer !== null) {
-    clearInterval(pollTimer)
-    pollTimer = null
-  }
+  poller.stop()
   pollFailCount = 0
-  pollInFlight = false
 }
 
 function startPolling() {
-  stopPolling()
-  pollTimer = setInterval(pollStatus, POLL_INTERVAL)
+  poller.stop()
+  pollFailCount = 0
+  poller.start()
 }
+
+// 审计 P1-5：扫码状态轮询改为可见性感知（后台不轮询，回到前台先补一次）。
+// 在途保护仍由 pollStatus 内的 pollInFlight 守卫负责，dedupe 只是额外一层。
+const poller = useVisibilityPolling(pollStatus, POLL_INTERVAL, { autoStart: false, dedupe: true })
 
 // ── 状态检查（页面加载时） ────────────────────────────────
 async function checkStatus() {

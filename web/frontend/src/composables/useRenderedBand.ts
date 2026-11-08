@@ -124,6 +124,28 @@ export function useRenderedBand(
     return true
   }
 
+  /**
+   * 尾部增量重测（审计 P1-4）。
+   *
+   * 流式期间每 250ms 触发一次重采样，而增长只发生在"最后一行"：前面行的
+   * top 完全不受影响，只需重读最后一行的几何。原来每次都把全部行
+   * getBoundingClientRect 一遍（1000 行 = 1000 次强制同步布局），
+   * 这里把它压成 1 次。
+   *
+   * 返回 false 表示缓存与 DOM 已经不一致（首次测量、删除行、重建），
+   * 调用方退回全量 measure()。
+   */
+  function resampleTail(): boolean {
+    const el = containerRef.value
+    if (!el) return false
+    const rows = el.querySelectorAll(ROW_SELECTOR)
+    const n = rows.length
+    if (n === 0 || n !== itemCount.value || heights.length !== n) return false
+    const rect = rows[n - 1].getBoundingClientRect()
+    if (Math.abs(rect.height - heights[n - 1]) > 0.5) heights[n - 1] = rect.height
+    return true
+  }
+
   function apply() {
     rafId = 0
     const el = containerRef.value
@@ -149,6 +171,10 @@ export function useRenderedBand(
       }
       dirty = false
       retryCount = 0
+    } else if (!resampleTail()) {
+      // 缓存与 DOM 不一致：退回全量重测
+      if (!measure()) return
+      dirty = false
     }
     const vpHeight = el.clientHeight
     const [first, last] = computeBandRange(tops, heights, el.scrollTop, vpHeight, vpHeight * margin)
@@ -180,7 +206,9 @@ export function useRenderedBand(
     window.addEventListener('resize', onResize)
     if (resampleMs > 0) {
       resampleId = setInterval(() => {
-        if (!options.resampleActive || options.resampleActive()) refresh(true)
+        // 非强制：走 resampleTail 的增量路径（只读最后一行），
+        // 不要每 250ms 对全部行做一次 getBoundingClientRect
+        if (!options.resampleActive || options.resampleActive()) refresh(false)
       }, resampleMs)
     }
   })

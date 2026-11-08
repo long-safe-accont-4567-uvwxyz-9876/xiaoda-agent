@@ -1574,4 +1574,10 @@ export default {
     current: '当前情绪',
     calm: '平静',
   },
+  errorBoundary: {
+    title: '页面渲染出错了',
+    hint: '数据没有丢失，重新加载即可恢复。如果反复出现，请把这条提示里的错误信息发给开发者。',
+    reload: '重新加载',
+  },
+
 } as const

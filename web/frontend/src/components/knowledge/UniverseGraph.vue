@@ -43,11 +43,20 @@ const props = withDefaults(defineProps<{
   depth?: number
   autoLoad?: boolean
   enableBloom?: boolean
+  /**
+   * 弹窗是否可见（审计 P0-3）。模态用 display-directive="show" 时关闭
+   * 只是 display:none——组件不卸载，rAF 循环、弹簧、涟漪、生长动画全都
+   * 继续跑；WebGL 上下文与 Bloom 后处理链的显存也一直占着。
+   * 显式传 visible 后：关闭即 suspend（停帧循环，保留场景以便秒开），
+   * 组件真正卸载时才 shutdown（完整 dispose）。
+   */
+  visible?: boolean
 }>(), {
   entity: '',
   depth: 1,
   autoLoad: true,
   enableBloom: true,
+  visible: true,
 })
 
 const emit = defineEmits<{ close: [] }>()
@@ -491,10 +500,25 @@ onMounted(() => {
 })
 
 function onVisibility() {
-  if (!engine) return
-  if (document.hidden) engine.pauseAnimation()
-  else engine.resumeAnimation()
+  if (!engine || !props.visible) return
+  // 页面隐藏：停帧循环（原来只 pause 渲染，tree.update/弹簧/涟漪仍在跑）
+  if (document.hidden) engine.suspend()
+  else engine.resume()
 }
+
+/**
+ * 弹窗关闭 → 停掉一切持续开销（审计 P0-3）。
+ * 不直接 shutdown：保留场景与 WebGL 上下文，重新打开是秒开而不是黑屏
+ * 重建；组件卸载（路由切走 / v-if 移除）时才走 onBeforeUnmount 的完整析构。
+ */
+watch(() => props.visible, (visible) => {
+  if (destroyed || !engine) return
+  if (visible) {
+    engine.resume()
+  } else {
+    engine.suspend()
+  }
+})
 
 // 全屏体验：ESC 关闭
 function onKeydown(e: KeyboardEvent) {

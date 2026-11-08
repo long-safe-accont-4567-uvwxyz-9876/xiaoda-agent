@@ -75,6 +75,23 @@ function pushMessage(messages: Ref<Message[]>, msg: Message) {
   }
 }
 
+/**
+ * 按流式 msg_id 查找对应消息（审计 P1-4）。
+ *
+ * 热路径（每个 text_delta 一帧）原来是一次 O(n) 的 Array.find：1000 条消息
+ * 时每条 delta 都要扫一遍整个列表。流式回复必然是"最后一条"，所以先看尾部，
+ * 命中即 O(1)；非流式场景（工具事件补挂到中间某条）再退回线性查找。
+ * 刻意不维护 id → 对象 的 Map：messages 会被 slice/splice 原地替换，
+ * 额外索引一旦漏同步就是"幽灵消息"，尾部快路径没有这个风险。
+ */
+function findAssistantMessage(messages: Ref<Message[]>, msgId: string): Message | undefined {
+  const id = `a-${msgId}`
+  const list = messages.value
+  const tail = list[list.length - 1]
+  if (tail && tail.id === id) return tail
+  return list.find(m => m.id === id)
+}
+
 export const useChatStore = defineStore('chat', () => {
   const messages = ref<Message[]>([])
   let loadSessionGeneration = 0
@@ -201,7 +218,7 @@ export const useChatStore = defineStore('chat', () => {
       console.debug('[chat] 丢弃旧会话迟到流式事件', msgId)
       return
     }
-    let msg = messages.value.find(m => m.id === `a-${msgId}`)
+    let msg = findAssistantMessage(messages, msgId)
     if (!msg) {
       msg = {
         id: `a-${msgId}`, role: 'assistant', content: '',
@@ -229,7 +246,7 @@ export const useChatStore = defineStore('chat', () => {
       console.debug('[chat] 丢弃旧会话迟到工具事件', msgId)
       return
     }
-    let msg = messages.value.find(m => m.id === `a-${msgId}`)
+    let msg = findAssistantMessage(messages, msgId)
     if (!msg) {
       msg = {
         id: `a-${msgId}`, role: 'assistant', content: '',
@@ -272,7 +289,7 @@ export const useChatStore = defineStore('chat', () => {
       if (msgId === pendingMsgId.value) clearProcessing(msgId)
       return
     }
-    let msg = messages.value.find(m => m.id === `a-${msgId}`)
+    let msg = findAssistantMessage(messages, msgId)
     if (!msg) {
       msg = { id: `a-${msgId}`, role: 'assistant', content: '', timestamp: Date.now() }
       pushMessage(messages, msg)
@@ -298,7 +315,7 @@ export const useChatStore = defineStore('chat', () => {
   const onAudioReady = (e: WsEvent) => {
     const msgId = e.msg_id as string
     if (!msgId || !inCurrentSession(msgId)) return
-    const msg = messages.value.find(m => m.id === `a-${msgId}`)
+    const msg = findAssistantMessage(messages, msgId)
     if (msg) {
       msg.audioUrl = (e.audio_url as string) || undefined
       msg.audioPending = false
@@ -476,12 +493,14 @@ export const useChatStore = defineStore('chat', () => {
     clearMarkdownCache()
   }
 
-  async function loadSession(sid: string) {
+  async function loadSession(sid: string, signal?: AbortSignal) {
     const generation = ++loadSessionGeneration
     pruneMsgSessions()
     switchSession(sid)
     ws.send({ type: 'set_session', session_id: sid })
-    const history = await api.getMessages(sid)
+    // signal：调用组件卸载/切页时取消在途历史请求（P1-6）。取消后由调用方
+    // 用 isAbortError() 静默处理；generation 守卫仍负责跨会话正确性。
+    const history = await api.getMessages(sid, 0, 50, signal)
     if (generation !== loadSessionGeneration || sessionId.value !== sid) return
     clearMarkdownCache()
     messages.value = history.map(h => ({
