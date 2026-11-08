@@ -1,0 +1,1 @@
+function t(n){return Array.from(n||"").length}function r(n){return(n||"").trim()}function s(n){return t(r(n))>=8}function e(n){return t(r(n))>=6}function N(n){const o=r(n),i=t(o);return i>=1&&i<=200}export{N as a,e as b,s as i};
