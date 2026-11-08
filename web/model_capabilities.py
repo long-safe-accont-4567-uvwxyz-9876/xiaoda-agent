@@ -36,8 +36,9 @@ def _candidate_paths() -> list[Path]:
         from config_paths import get_config_dir
 
         paths.append(get_config_dir() / _MODEL_CAPABILITIES_FILENAME)
-    except Exception:
-        pass  # 配置目录解析失败不阻塞，继续尝试打包目录
+    except (ImportError, OSError, RuntimeError, ValueError) as e:
+        # 配置目录解析失败不阻塞，继续尝试打包目录（审计 L4：原来静默 pass）
+        logger.debug("model_capabilities.config_dir_failed error={}", str(e)[:120])
     paths.append(Path(__file__).resolve().parent.parent / "config" / _MODEL_CAPABILITIES_FILENAME)
     return paths
 
