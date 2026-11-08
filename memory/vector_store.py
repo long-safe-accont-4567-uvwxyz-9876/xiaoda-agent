@@ -347,8 +347,19 @@ class VectorStore:
 
         例: data/embed_cache_BAAI_bge-m3.npz。模型升级（维度变化）时文件名不同，
         旧缓存自然失效，不会出现维度不匹配。
+
+        审计 M3：本地模式下 <code>self._embed_model</code> 只是逻辑名（如 bge-m3），
+        真正决定向量空间的是 <code>LOCAL_EMBED_MODEL_DIR</code>。原实现只按逻辑名
+        命名，换成本地目录里同维度的另一个模型时会静默复用旧向量（检索结果错但
+        不报错）。这里把本地模型目录名并入文件名：非本地模式目录为空，文件名
+        与旧版完全一致（无迁移成本）；本地模式换目录即换文件。
         """
         _model_slug = self._embed_model.replace("/", "_").replace(":", "_")
+        _local_dir = str(getattr(self, "_local_model_dir", "") or "").strip()
+        if _local_dir:
+            _local_slug = Path(_local_dir).name.replace("/", "_").replace(":", "_")
+            if _local_slug:
+                _model_slug = f"{_model_slug}__{_local_slug}"
         _base = Path(self._db_path).parent
         try:
             _base.mkdir(parents=True, exist_ok=True)
