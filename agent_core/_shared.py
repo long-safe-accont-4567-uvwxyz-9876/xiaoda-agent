@@ -14,6 +14,30 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+# Unified 'all sub-agents failed' message for collaborative dispatch.
+# Extracted from the historical literal so user-visible text never drifts.
+ALL_SUB_AGENTS_FAILED_MSG = "\uff08\u6240\u6709\u5b50\u4ee3\u7406\u90fd\u65e0\u6cd5\u5b8c\u6210\u4efb\u52a1\uff09"
+
+
+@dataclass(frozen=True)
+class DelegationOutcome:
+    """Structured result of one sub-agent delegation.
+
+    ok: dispatch-level success (agent resolved, dispatch returned without error)
+    reply: always the user-visible text, including dispatch-failure text
+    degraded: text-level degradation (is_degraded_reply), e.g. TIRED_MSG
+    """
+
+    ok: bool
+    reply: str
+    agent: str = ''
+    degraded: bool = False
+
+    def usable(self) -> bool:
+        """True only when this may be treated as a real sub-agent answer."""
+        return self.ok and not self.degraded and bool(self.reply and self.reply.strip())
+
+
 # ── 模块级常量 ─────────────────────────────────────────────────
 DEGRADED_REPLY = "嗯……人家现在有点不太舒服，等会儿再聊好不好？"
 
@@ -88,6 +112,11 @@ _DEGRADED_PHRASES: tuple[str, ...] = (
     "敏感内容被过滤",
     "正在查资料",
 )
+
+
+# Sub-agent dispatch-degradation text: TIRED_MSG is normally prefixed with a
+# display name, so match its distinctive tail with a substring check.
+_DEGRADED_PHRASES = _DEGRADED_PHRASES + (TIRED_MSG.split('...')[-1],)
 
 
 def is_degraded_reply(reply: str) -> bool:
