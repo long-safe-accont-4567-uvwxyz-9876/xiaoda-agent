@@ -493,7 +493,26 @@ class DatabaseManager(LegacyMigrationMixin, DDLMixin, ConversationLogMixin, Life
         if not any(normalized.startswith(p) for p in self._READONLY_PREFIXES):
             logger.error("db.fetch_all.blocked_write_sql", sql=sql[:120])
             raise ValueError(f"fetch_all 仅允许只读查询(SELECT/PRAGMA)，收到：{normalized[:30]}")
-        rows = await self._conn.execute_fetchall(sql, params)
+        # 审计 M1：只读 SELECT 走只读连接池（8 条），不再全部排队在同一条
+        # 主连接上。此前 _read_pool 只在记忆检索路径使用，Web/UI 的通用读入口
+        # 仍打主连接——一条 aiosqlite 连接一个专属线程，读写串行（实测进程内
+        # 12 条 _connection_worker_thread，池子开着却没被读请求用到）。
+        # 边界：
+        #   - PRAGMA 可能改变连接状态（journal_mode/synchronous 等），留主连接；
+        #   - 写事务体内（_write_tx_active=True）读必须看见未提交数据，留主连接；
+        #   - 只读连接失败（旧快照/锁/连接断开）回退主连接，不改变可用性。
+        conn = self._conn
+        if normalized.startswith("SELECT") and not self._write_tx_active.get():
+            conn = self.get_read_conn() or self._conn
+        try:
+            rows = await conn.execute_fetchall(sql, params)
+        except (OSError, RuntimeError, aiosqlite.Error, ValueError) as e:
+            if conn is self._conn:
+                raise
+            logger.warning(
+                "db.fetch_all.read_pool_failed_fallback error={} sql={}",
+                str(e)[:200], sql[:120])
+            rows = await self._conn.execute_fetchall(sql, params)
         try:
             return [dict(r) for r in rows]
         except (TypeError, ValueError) as e:
@@ -503,7 +522,7 @@ class DatabaseManager(LegacyMigrationMixin, DDLMixin, ConversationLogMixin, Life
             # 常见于 __new__ 构造的最小实例或测试用裸 aiosqlite.connect（未设 row_factory）。
             # 修复方式：connect 后设置 conn.row_factory = aiosqlite.Row；
             #           或改用 _conn.execute_fetchall 直接按索引 row[0]/row[1] 取值。
-            _rf = getattr(self._conn, "row_factory", None)
+            _rf = getattr(conn, "row_factory", None)
             _first = rows[0] if rows else None
             logger.error(
                 "db.fetch_all.row_to_dict_failed",
@@ -512,7 +531,7 @@ class DatabaseManager(LegacyMigrationMixin, DDLMixin, ConversationLogMixin, Life
                 row_type=type(_first).__name__ if _first is not None else "none",
                 sample_row=repr(_first)[:200] if _first is not None else "",
                 sql=sql[:120],
-                hint="请确认 self._conn.row_factory = aiosqlite.Row；裸连接请改用 _conn.execute_fetchall 按索引取值",
+                hint="请确认 conn.row_factory = aiosqlite.Row；裸连接请改用 execute_fetchall 按索引取值",
             )
             raise
 
