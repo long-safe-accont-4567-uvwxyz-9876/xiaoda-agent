@@ -17,6 +17,7 @@ import type { Lang } from '../i18n'
 import Tilt3D from '../components/fx/Tilt3D.vue'
 import WeChatConnectPanel from '../components/WeChatConnectPanel.vue'
 import { sound } from '../utils/sound'
+import { useUnsavedGuard } from '../composables/useUnsavedGuard'
 
 const message = useMessage()
 const ui = useUiStore()
@@ -52,6 +53,18 @@ const sharedPlatformOptions = [
   { label: t('settings.sharedContextQq'), value: 'qq' },
   { label: t('settings.sharedContextWechat'), value: 'wechat' },
 ]
+
+// 审查 C2：改密弹窗里的输入与未提交的命令行原先点侧栏/刷新就静默丢失。
+// 脏值判定交给纯函数模块，这里只负责接线（含 beforeunload）。
+// 审查 C2：改密弹窗里的输入与未提交的命令行原先点侧栏/刷新就静默丢失。
+// 脏值判定交给纯函数模块，这里只负责接线（含 beforeunload）。
+useUnsavedGuard({
+  isDirty: () => Boolean(
+    changePwdOld.value || changePwdAnswer.value || changePwdNew.value ||
+    changePwdNewQuestion.value || changePwdNewAnswer.value || newCmd.value,
+  ),
+  confirmLeave: async () => window.confirm(t('common.unsavedLeaveConfirm')),
+})
 
 onMounted(async () => {
   await ui.loadRemote()

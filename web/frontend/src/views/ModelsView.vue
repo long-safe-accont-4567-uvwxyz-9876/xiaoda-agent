@@ -13,6 +13,7 @@ import ProviderWizard from '../components/models/ProviderWizard.vue'
 import { useProvidersStore } from '../stores/providers'
 import { useStaggerEntrance } from '../composables/useStaggerEntrance'
 import { t } from '../i18n'
+import { useUnsavedGuard } from '../composables/useUnsavedGuard'
 import Tilt3D from '../components/fx/Tilt3D.vue'
 import * as echarts from 'echarts/core'
 import { BarChart } from 'echarts/charts'
@@ -101,6 +102,13 @@ onBeforeUnmount(() => {
   usageChartResizeObserver?.disconnect(); usageChartResizeObserver = null
   usageChart?.dispose(); usageChart = null
   if (_tempSaveTimer) clearTimeout(_tempSaveTimer)
+})
+
+// 审查 C2：Key 弹窗里已输入但未保存的内容，离开页面即静默丢失
+// 审查 C2：Key 弹窗里已输入但未保存的内容，离开页面即静默丢失
+useUnsavedGuard({
+  isDirty: () => Boolean(showKeyModal.value && keyValue.value),
+  confirmLeave: async () => window.confirm(t('common.unsavedLeaveConfirm')),
 })
 
 async function loadAll() {

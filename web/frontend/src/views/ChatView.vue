@@ -5,7 +5,7 @@ import { NDrawer, NDrawerContent, NButton, NPopconfirm, useMessage } from 'naive
 import { useChatStore } from '../stores/chat'
 import type { ChatRequestSnapshot } from '../stores/chat'
 import { useUiStore } from '../stores/ui'
-import { api, exportSessionDownload } from '../api'
+import { api, exportSessionDownload, get } from '../api'
 import { getWsClient } from '../api/ws'
 import { renderMarkdown } from '../utils/markdown'
 import { replaceAgentNames } from '../utils/agentNames'
@@ -94,9 +94,33 @@ function onCmdConfirmRequest(data: any) {
   }
 }
 
+/**
+ * 审查 G2：命令确认请求只在 WS 在线时送达，刷新页面后卡片就永久消失，而后端仍在
+ * 等这次确认直到超时。挂载后按当前会话捞一次未决请求，补回卡片。
+ */
+async function recoverPendingConfirm() {
+  if (!chat.sessionId || ws.pendingCmdConfirm) return
+  try {
+    const data = await get<{ requests: Array<{ request_id: string; command: string; session_id: string; expires_in: number }> }>(
+      `/workspace/pending_confirmations?session_id=${encodeURIComponent(chat.sessionId)}`)
+    const rows = (data?.requests || []).filter(r => r.expires_in > 0)
+    if (!rows.length) return
+    const first = rows[0]
+    ws.pendingCmdConfirm = {
+      request_id: first.request_id,
+      command: first.command,
+      session_id: first.session_id,
+      deadline: Date.now() + first.expires_in * 1000,
+    }
+  } catch (error) {
+    console.warn('[chat] pending_confirmations', error)
+  }
+}
+
 onMounted(async () => {
   document.addEventListener('keydown', onGlobalKeydown)
   getWsClient().on('cmd_confirm_request', onCmdConfirmRequest)
+  void recoverPendingConfirm()
   try {
     // 后端命令名自带 "/" 前缀，统一去掉，避免拼接成 "//cmd"
     const raw = await api.getCommands()

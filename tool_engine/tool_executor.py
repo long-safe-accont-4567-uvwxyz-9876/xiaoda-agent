@@ -131,7 +131,8 @@ class ToolExecutor:
         # 登记发起会话到决策记录（confirm_cmd 身份校验依据）
         try:
             from web.routers.workspace import register_cmd_decision_scope
-            register_cmd_decision_scope(req_id, session_id)
+            register_cmd_decision_scope(
+                req_id, session_id, command=cmd[:200])
         except (ImportError, RuntimeError, ValueError) as _e:
             logger.debug("tool_executor.cmd_scope_register_failed", error=str(_e))
         logger.info("tool_executor.needs_confirmation",

@@ -2,6 +2,8 @@ import { ref, computed, onBeforeUnmount } from 'vue'
 import type { Ref } from 'vue'
 import { api } from '../../../api'
 import { classifyUpload } from './classifyUpload'
+import { checkUploadSize, humanSize } from '../../../utils/uploadLimits'
+import { t } from '../../../i18n'
 
 export interface UploadedImage {
   url: string
@@ -21,6 +23,8 @@ export function usePromptUploads(statusKey: Ref<string>) {
   const imagePreviewUrl = ref('')
   const uploadState = ref<'idle' | 'uploading' | 'error'>('idle')
   const showLightbox = ref(false)
+  // 审查 M2：服务端返回的具体原因（413、类型不支持等）不再被丢弃
+  const uploadErrorDetail = ref('')
   let uploadGeneration = 0
   let imagePreviewGeneration: number | null = null
 
@@ -55,6 +59,16 @@ export function usePromptUploads(statusKey: Ref<string>) {
       statusKey.value = 'promptInput.unsupportedFile'
       return
     }
+    // 审查 M2：先做前端体积预检（后端 MAX_IMAGE_SIZE=10MB / MAX_DOC_SIZE=20MB），
+    // 不然只能等整个文件传完被 400 拒绝，且错误被收敛成一句"上传失败"。
+    const sizeCheck = checkUploadSize(file.size, cls.kind === 'image' ? 'image' : 'doc')
+    if (!sizeCheck.ok) {
+      if (generation !== uploadGeneration) return
+      uploadState.value = 'error'
+      uploadErrorDetail.value = `${t('errors.uploadTooLarge')}：${humanSize(sizeCheck.limitBytes || 0)}`
+      statusKey.value = 'errors.uploadTooLarge'
+      return
+    }
     uploadState.value = 'uploading'
     statusKey.value = ''
     try {
@@ -73,12 +87,14 @@ export function usePromptUploads(statusKey: Ref<string>) {
         uploadedDoc.value = result
       }
       uploadState.value = 'idle'
-    } catch {
+    } catch (error) {
       if (generation !== uploadGeneration) return
       if (imagePreviewGeneration === generation) clearImagePreview()
       uploadedImage.value = null
       uploadedDoc.value = null
       uploadState.value = 'error'
+      // 审查 M2：把服务端原因透出（原先任何异常都收敛成一句"上传失败"）
+      uploadErrorDetail.value = error instanceof Error && error.message ? error.message : ''
       statusKey.value = 'promptInput.uploadFailed'
     }
   }
@@ -120,6 +136,7 @@ export function usePromptUploads(statusKey: Ref<string>) {
     uploadedDoc,
     imagePreviewUrl,
     uploadState,
+    uploadErrorDetail,
     showLightbox,
     hasAttachment,
     uploadFile,

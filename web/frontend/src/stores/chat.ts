@@ -171,6 +171,14 @@ export const useChatStore = defineStore('chat', () => {
     wsConnected.value = false
     wsReconnecting.value = ws.reconnecting
     if (isProcessing.value) {
+      // 审查 B3：断线时原先只是把思考态清空，用户看到"回复凭空消失"却没有任何
+      // 说明。这里在消息流里落一条本地系统消息，标明未收到回复。
+      pushMessage(messages, {
+        id: `sys-ws-${Date.now()}`,
+        role: 'system',
+        content: t('errors.wsDisconnectedPending'),
+        timestamp: Date.now(),
+      })
       isProcessing.value = false
       currentStage.value = ''
       statusText.value = ''
