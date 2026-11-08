@@ -10,8 +10,11 @@ import { useStaggerEntrance } from '../composables/useStaggerEntrance'
 import { t, tf } from '../i18n'
 import Tilt3D from '../components/fx/Tilt3D.vue'
 import ViewTitleIcon from '../components/fx/ViewTitleIcon.vue'
+import LoadErrorBar from '../components/common/LoadErrorBar.vue'
+import { useLoadError } from '../composables/useLoadError'
 
 const message = useMessage()
+const { loadError: toolsLimitsError, fail: failLimits } = useLoadError()
 const tools = ref<any[]>([])
 const search = ref('')
 const categoryFilter = ref<string | null>(null)
@@ -49,7 +52,10 @@ async function load() {
 async function loadLimits() {
   try {
     toolLimits.value = await get<any>('/tools/limits')
-  } catch { /* 静默 */ }
+  } catch (error) {
+    // 审查 C1：上限拉取失败原先完全静默，界面照旧渲染成“未设限制”
+    failLimits(error)
+  }
 }
 
 async function testTool(name: string) {
@@ -309,6 +315,8 @@ async function testSkill(item: any) {
 
 <template>
   <div class="tools-view">
+    <LoadErrorBar v-if="toolsLimitsError"
+                  :message="toolsLimitsError" @retry="loadLimits" />
     <div class="view-header">
       <h2 class="view-title view-title-icon"><ViewTitleIcon name="tools" /> {{ t('toolsView.title') }}</h2>
       <span class="count">{{ t('toolsView.total') }} {{ tools.length }} {{ t('toolsView.toolsUnit') }}</span>
