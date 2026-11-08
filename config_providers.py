@@ -334,6 +334,18 @@ def get_builtin_providers() -> frozenset[str]:
 MIMO_MODEL = get_default_model_for_provider("mimo")
 
 
+def get_default_provider_credentials() -> tuple[str, str, str]:
+    """返回默认 provider 的 (provider, api_key_env, key_value)。
+
+    2026-11-08：默认 provider 从 mimo 切到 deepseek 后，启动降级判断
+    不能再写死 MIMO_API_KEY；这里按 catalog 里的环境别名推导，不 import
+    config（防循环依赖），Key 仅用于「是否已配置」判断。
+    """
+    provider = get_default_provider() or "deepseek"
+    env_name = get_provider_config(provider).get("api_key_env", "") or f"{provider.upper()}_API_KEY"
+    return provider, env_name, os.getenv(env_name, "")
+
+
 # ── Provider 配置映射（base_url / api_key_env）──
 # 子代理注册时根据 provider 自动选择正确的连接参数
 def get_provider_config(provider: str) -> dict:

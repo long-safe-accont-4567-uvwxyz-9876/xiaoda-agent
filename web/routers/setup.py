@@ -17,6 +17,7 @@ from loguru import logger
 from config import CONFIG_DIR, get_base_url_for_provider
 from security.recovery_qa import MIN_ANSWER_LEN
 from utils.atomic_write import _restrict_file_permissions_windows, atomic_write
+from web.routers import setup_default_provider as _default_provider
 from web.routers.auth import _get_client_ip, _is_private_ip, get_current_user
 from web.schemas import Envelope
 
@@ -437,7 +438,11 @@ async def get_keys() -> Any:
 
     keys = _build_key_list(REQUIRED_KEYS, current, required=True)
     keys.extend(_build_key_list(OPTIONAL_KEYS, current, required=False))
-    return Envelope(data={"keys": keys})
+    return Envelope(data={
+        "keys": keys,
+        "default_provider": _default_provider.get_current_default_provider(),
+        "provider_choices": _default_provider.describe_provider_choices(),
+    })
 
 
 _TIMEOUT = 10.0
@@ -558,6 +563,10 @@ async def save_keys(body: dict) -> Any:
             if test_error is not None:
                 return test_error
 
+        _provider_choice_error = _default_provider.validate_default_provider_choice(body, updates)
+        if _provider_choice_error is not None:
+            return _provider_choice_error
+
         _qq_old = {k: os.getenv(k, "") for k in _QQ_CRED_KEYS}
 
         provider_snapshots = await _auto_register_providers(updates)
@@ -574,6 +583,9 @@ async def save_keys(body: dict) -> Any:
         await _reload_env_and_cache(updates, ENV_PATH)
         _reset_credential_pool(updates)
         _update_config_and_refresh_clients(updates)
+        # 默认模型选择写入用户 provider_metadata.json 并同步运行时
+        # （DEFAULT_PROVIDER / MODEL_NAME / models.chat_model）。
+        _default_provider.apply_default_provider_choice(body, updates)
 
         _qq_changed = _detect_qq_credential_change(updates, _qq_old)
         _reinit_tasks.append(asyncio.create_task(_reinit_and_maybe_restart_qq(_qq_changed)))

@@ -94,8 +94,10 @@ WEB_TEST_BASELINES: dict[str, int] = {
     # 2026-09-24 上调 1562/1561 → 1567/1566（+5）：路由表区分「最大输入/最大输出」
     # 说明，新增 maxInputCol/maxInputHint/maxOutputCol/maxOutputHint/autoPlaceholder
     # 五个 i18n key。i18n 键必须集中在本文件，无法外置到子模块（键表本身就是本体）。
-    "web/frontend/src/i18n/zh.ts": 1567,
-    "web/frontend/src/i18n/en.ts": 1566,
+    # 2026-11-08 上调（协议 b：必要增长）：引导页默认模型二选一新增三条文案
+    # （providerTitle/providerHint/providerKeyMissing），i18n 是 UI 文案唯一落点。
+    "web/frontend/src/i18n/zh.ts": 1570,
+    "web/frontend/src/i18n/en.ts": 1569,
     "web/frontend/src/views/ChatView.vue": 988,
     "web/frontend/src/views/RetrievalView.vue": 915,
     "tests/test_local_ai_device_registry.py": 2260,
