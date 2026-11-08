@@ -530,6 +530,16 @@ class ProviderService:
                 # 避免用户配置主模型时的临时记录把内置端点改坏。
                 for field in ("base_url", "protocol", "format", "chat_path", "models_path"):
                     record.pop(field, None)
+                # 端点从 catalog 回填：catalog 是内置 provider 身份的单一事实源。
+                # 上面 pop 之后记录里已没有 base_url，_definition 会以
+                # "base_url must be an http(s) URL" 失败（每次启动的
+                # provider_service.restore_definition_failed id=agnes/mimo）。
+                # 选回填而不是在 _definition 里对内建豁免校验：校验强度保持统一，
+                # 自定义 provider 缺 base_url 仍然照旧被拒。
+                record["base_url"] = catalog_definition.endpoint.base_url
+                record["protocol"] = catalog_definition.protocol.value
+                record["chat_path"] = catalog_definition.endpoint.chat_path
+                record["models_path"] = catalog_definition.endpoint.models_path
             try:
                 definition = self._definition(dict(record, id=provider_id))
             except Exception as error:
@@ -628,6 +638,10 @@ class ProviderService:
                 required=bool(auth_raw.get("required", default_required)),
             ),
             capabilities=capabilities,
+            # builtin 必须随记录回放：_record 已持久化该字段，若在此丢弃，
+            # _restore_custom_definitions 里 `if definition.builtin` 的短路失效，
+            # 内置 provider 恢复成功后会被当成自定义 provider 再挂一条 runtime client。
+            builtin=bool(draft.get("builtin", False)),
             default_model=str(draft.get("default_model", "") or ""),
             max_tokens_cap=draft.get("max_tokens_cap"),
             metadata={
