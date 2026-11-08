@@ -6,6 +6,7 @@ from collections.abc import Callable
 from dataclasses import replace
 from datetime import datetime, timezone
 from inspect import isawaitable
+from pathlib import Path
 from typing import Any
 from uuid import uuid4
 
@@ -137,6 +138,7 @@ class InstanceManager:
             installed = await self._model_registry.get(model_id)
             if installed is None:
                 raise ModelNotFoundError(f"model not found: {model_id!r}")
+            _ensure_model_dir_usable(model_id, getattr(installed, "directory", ""))
             catalog = await self._catalog_model(installed)
             # recommend() 内部触发设备 scan（subprocess + onnxruntime 会话创建），
             # 是重同步操作，必须在线程池执行避免阻塞事件循环
@@ -759,3 +761,29 @@ __all__ = [
     "InstanceManager",
     "InstanceNotFoundError",
 ]
+
+
+
+def _ensure_model_dir_usable(model_id: str, directory: str) -> None:
+    """启动前校验模型目录与 tokenizer 可读，失效时抛出带 id 与路径的明确错误。
+
+    背景：installed_models.directory 是安装时写入的绝对路径，外置盘换挂载点后
+    会变成悬空路径。此前只有底层一句 "runtime failed to start model"，看不出
+    是哪个目录失效，上层还会静默降级到内置 bge-small（512 维），把向量索引
+    的维度带偏。这里改成启动前显式校验并报错。
+    """
+    if not directory:
+        raise RuntimeError(f"model directory is empty: id={model_id!r}")
+    root = Path(directory)
+    if not root.is_dir():
+        raise RuntimeError(f"model directory does not exist: id={model_id!r} path={directory}")
+    tokenizer = root / "tokenizer.json"
+    if not tokenizer.is_file():
+        raise RuntimeError(f"tokenizer.json missing: id={model_id!r} path={str(tokenizer)}")
+    try:
+        with tokenizer.open("rb") as handle:
+            handle.read(1)
+    except OSError as exc:
+        raise RuntimeError(
+            f"tokenizer.json unreadable: id={model_id!r} path={str(tokenizer)} error={exc}"
+        ) from exc
