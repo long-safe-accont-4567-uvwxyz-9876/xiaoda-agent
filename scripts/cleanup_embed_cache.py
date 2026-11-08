@@ -17,16 +17,16 @@ import argparse
 import sys
 from pathlib import Path
 
+import config  # 与运行期同源，避免脚本自己拼路径
+from memory.vector_store import (
+    _default_embed_model,
+    _default_local_model_dir,
+    embed_cache_filename,
+)
+
 
 def _resolve_targets(data_dir: str) -> tuple[Path, str]:
     """返回 (缓存目录, 当前身份的文件名)。"""
-    import config  # 延迟导入：--help 不应拉起整个配置
-    from memory.vector_store import (
-        _default_embed_model,
-        _default_local_model_dir,
-        embed_cache_filename,
-    )
-
     base = Path(data_dir) if data_dir else Path(getattr(config, "DATA_DIR", "data"))
     model = getattr(config, "EMBED_MODEL", "") or _default_embed_model()
     local_dir = getattr(config, "LOCAL_EMBED_MODEL_DIR", "") or _default_local_model_dir()
