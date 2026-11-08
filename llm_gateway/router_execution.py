@@ -71,6 +71,45 @@ from utils.error_classifier import FailoverReason, RecoveryAction
 from utils.llm_cleanup import merge_continuation
 from utils.metrics import metrics
 
+# 审计 M4（剩余处）：per-provider 信号量的排队上限（秒）。原实现
+# `async with semaphore` 在并发打满时无限期排队，请求既不超时也不报错，
+# 表现为"卡住"；这里给排队设上界，且排队时间计入该请求的超时预算。
+# 0 或负数 = 不设上界（退回旧行为）。
+DEFAULT_PROVIDER_QUEUE_TIMEOUT_S = 20.0
+
+
+def _provider_queue_budget() -> float:
+    """读 LLM_PROVIDER_QUEUE_TIMEOUT_S（非法值回落默认）。"""
+    raw = os.environ.get("LLM_PROVIDER_QUEUE_TIMEOUT_S")
+    if raw is None or raw == "":
+        return DEFAULT_PROVIDER_QUEUE_TIMEOUT_S
+    try:
+        return float(raw)
+    except (TypeError, ValueError):
+        logger.warning("llm.provider_queue_timeout_invalid raw={}", raw)
+        return DEFAULT_PROVIDER_QUEUE_TIMEOUT_S
+
+
+@contextlib.asynccontextmanager
+async def _bounded_provider_slot(sem: asyncio.Semaphore,
+                                 budget: float | None) -> AsyncIterator[float]:
+    """有界排队获取 per-provider 并发槽，yield 已排队秒数。
+
+    budget 为 None / <=0 时不设上界（旧行为）；超时抛 asyncio.TimeoutError，
+    由上层既有异常处理链路降级。释放放在 finally，取消/异常都不泄漏槽位。
+    """
+    loop = asyncio.get_running_loop()
+    started = loop.time()
+    if budget is not None and budget > 0:
+        await asyncio.wait_for(sem.acquire(), timeout=budget)
+    else:
+        await sem.acquire()
+    waited = loop.time() - started
+    try:
+        yield waited
+    finally:
+        sem.release()
+
 # 重试次数常量：随执行链一并搬入（model_router 顶部同名 re-export，见模块 docstring）
 MAX_RETRIES = 1
 
@@ -165,7 +204,14 @@ class ExecutionMixin:
                 # 不同 provider 之间不互斥。
                 # 注意：不复用 _create_completion，因为其信号量仅覆盖 create；
                 #       chat_stream 需在流消费期间也占用信号量（限制并发流数量）。
-                async with self._get_provider_call_semaphore(provider):
+                async with _bounded_provider_slot(
+                    self._get_provider_call_semaphore(provider),
+                    _provider_queue_budget(),
+                ) as _queue_waited:
+                    # 排队时间计入本请求超时预算：并发打满时产物是"更早降级"
+                    # 而不是"排队 20s 再等满一个 timeout"
+                    if timeout is not None:
+                        timeout = max(1.0, timeout - _queue_waited)
                     stream = await asyncio.wait_for(
                         client.chat.completions.create(**kwargs),
                         timeout=timeout,
