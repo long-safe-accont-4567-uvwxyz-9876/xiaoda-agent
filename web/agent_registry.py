@@ -19,6 +19,7 @@ from loguru import logger
 
 # frozen 模式下使用用户目录（~/.ai-agent/data/config/agents/），避免写入 _MEIPASS 只读目录
 from config import _FALLBACK_BASE, AGENTS_CONFIG_DIR, DEFAULT_PROVIDER, MEDIA_DIR, get_agent_display_name
+from llm_gateway.provider_probe import ProviderProbeError, probe_provider_model, provider_client_ready
 
 
 def _resolve_personality_path(pf: str) -> str | None:
@@ -900,13 +901,27 @@ class AgentRegistry:
         # 解析 provider 信息（可能抛 ValueError）
         base_url, api_key_env = self._resolve_provider_info(provider)
 
-        # 热重载：创建新 client 并原子替换，不重新探活
+        # 2026-11-08（中等-3/4）：切换前必须探活，内置 provider 也不例外。
+        # 旧实现直接放行并回 success，但既没建 client 也没发请求。
+        try:
+            probe = await probe_provider_model(provider, model_id, base_url, api_key_env)
+        except ProviderProbeError as exc:
+            raise ValueError(f"模型不可用，未切换：{exc}") from None
+
+        # 热重载：物化该 provider 的客户端并原子替换字段（失败不落任何字段）
         ok = await agent.reload_model_config(provider, model_id, base_url, api_key_env)
         if not ok:
             raise ValueError(f"模型热重载失败（检查 {api_key_env} 是否配置）")
 
+        if not provider_client_ready(getattr(agent, "_router", None), provider):
+            raise ValueError(f"切换后 router 上仍没有 {provider} 的客户端，未生效")
+
         # 持久化到 config/agents/{name}.json
         self._save_config(agent.config)
-        logger.info("agent_registry.model_set name={} provider={} model={}",
-                    name, provider, model_id)
-        return self._serialize(agent.config, enabled=name not in self._disabled)
+        logger.info("agent_registry.model_set name={} provider={} model={} probe={}",
+                    name, provider, model_id, probe.get("probe"))
+        data = self._serialize(agent.config, enabled=name not in self._disabled)
+        # 让调用方看到「确实重建了 client、确实探活了」，不再只看 success。
+        data["client_rebuilt"] = True
+        data["probe"] = probe
+        return data

@@ -18,12 +18,9 @@ from typing import TYPE_CHECKING, Any
 
 from loguru import logger
 
-from config import DEFAULT_PROVIDER as _DEFAULT_PROVIDER
-from config import MODEL_NAME as _MODEL_NAME
-from config import PRO_MODEL_NAME as _PRO_MODEL
 from config import _ensure_workspace_template, get_agent_display_name
-from config import get_provider_config as _get_provider_config
 from core.background_tasks import BackgroundTaskManager, _spawn
+from llm_gateway.agent_target import resolve_agent_target as _resolve_target
 
 if TYPE_CHECKING:
     from agent_core import AgentCore
@@ -746,8 +743,9 @@ class AgentCoreBootstrapper:
             _agents_dir = Path(__file__).resolve().parent.parent / "config" / "agents"
 
         core = self.core
-        _prov_cfg = _get_provider_config(_DEFAULT_PROVIDER)
-        _agent_model = _PRO_MODEL or _MODEL_NAME
+        # 2026-11-08（中等-7）：默认 provider/model 运行期读取，不在 import 时冻结。
+        _default_provider = _cfg_mod.DEFAULT_PROVIDER
+        _agent_model = _cfg_mod.PRO_MODEL_NAME or _cfg_mod.MODEL_NAME
 
         # P0 修复（2026-08-04 实证）：启动时从 config/agents/{name}.json 读取持久化的
         # provider/model/base_url/api_key_env，否则硬编码 _DEFAULT_PROVIDER 会覆盖
@@ -775,26 +773,19 @@ class AgentCoreBootstrapper:
                     _persisted_cache[_name] = {}
             return _persisted_cache[_name]
 
-        def _resolve_base_url(_p: dict) -> str:
-            if _p.get("base_url"):
-                return _p["base_url"]
-            # provider 变更后自动解析 base_url/api_key_env，与 update() 逻辑一致
-            _prov = _p.get("provider") or _DEFAULT_PROVIDER
-            try:
-                _cfg = _get_provider_config(_prov)
-                return _cfg["base_url"]
-            except (KeyError, ValueError):
-                return _prov_cfg["base_url"]
+        def _resolve_agent_target(_p: dict, _label: str):
+            """provider/model/base_url/api_key_env 同源解析（中等-5/6）。
 
-        def _resolve_api_key_env(_p: dict) -> str:
-            if _p.get("api_key_env"):
-                return _p["api_key_env"]
-            _prov = _p.get("provider") or _DEFAULT_PROVIDER
-            try:
-                _cfg = _get_provider_config(_prov)
-                return _cfg["api_key_env"]
-            except (KeyError, ValueError):
-                return _prov_cfg["api_key_env"]
+            旧实现 model 缺省取默认 provider 的模型、base_url 又单独回退，
+            能拼出 provider/model/base_url 互不匹配的元组；这里统一交给
+            resolver，任一环节无法确定就整体回退默认三元组并写日志。
+            """
+            return _resolve_target(
+                _p,
+                default_provider=_default_provider,
+                default_model=_agent_model,
+                source=f"bootstrap:{_label}",
+            )
 
         # P0 修复（2026-08-04）：确保 nahida-data 的 personality 文件有完整内容。
         # 运行时 _load_personality（agent_dispatcher.py:194）直接读 agent.config.personality_file
@@ -855,16 +846,17 @@ class AgentCoreBootstrapper:
         for spec in builtin_specs:
             name = spec["name"]
             persisted = _load_persisted(name)
+            _target = _resolve_agent_target(persisted, name)
             await core.dispatcher.register(SubAgentConfig(
                 name=name,
                 display_name=get_agent_display_name(name),
-                provider=persisted.get("provider") or _DEFAULT_PROVIDER,
-                model=persisted.get("model") or _agent_model,
+                provider=_target.provider,
+                model=_target.model,
                 personality_file=_ensure_personality_file(name),
                 voice_ref=spec.get("voice_ref"),
                 excluded_tools=set(spec.get("excluded_tools", ())),
-                base_url=_resolve_base_url(persisted),
-                api_key_env=_resolve_api_key_env(persisted),
+                base_url=_target.base_url,
+                api_key_env=_target.api_key_env,
                 capabilities=list(spec.get("capabilities", [])),
                 route_description=spec.get("route_description", ""),
                 mcp_servers=list(spec.get("mcp_servers", [])),

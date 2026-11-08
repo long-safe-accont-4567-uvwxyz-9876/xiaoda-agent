@@ -29,7 +29,6 @@ from types import SimpleNamespace
 import openai as _openai_mod
 from loguru import logger
 
-from config import DEFAULT_PROVIDER as _CFG_DEFAULT_PROVIDER
 from config import FREE_EMERGENCY_FALLBACK
 from core.app_exception import LLMError
 from model_router_config import (
@@ -37,6 +36,7 @@ from model_router_config import (
     get_cross_provider_tier,
     get_fallback_tier,
 )
+from llm_gateway.agent_target import runtime_default_provider as _runtime_default_provider
 from model_router_registry import FALLBACK_ROUTE
 from utils.free_model_backend import DEFAULT_FREE_MODEL
 
@@ -169,7 +169,7 @@ class FallbackChainMixin:
         try:
             # Task 6: 通过 registry 快照读取，避免降级链污染全局 ROUTE_TABLE
             _orig_entry = self._registry.get_task(task_type) or {}
-            _original_provider = _orig_entry.get("client", _CFG_DEFAULT_PROVIDER)
+            _original_provider = _orig_entry.get("client", _runtime_default_provider())
             _original_model = _orig_entry.get("model", "")
         except Exception:
             logger.warning("router.fallback_original_provider_lookup_failed", exc_info=True)
@@ -235,8 +235,8 @@ class FallbackChainMixin:
             while fallback_type:
                 # Task 6: 用 registry 快照（深拷贝），降级期间修改不影响全局 ROUTE_TABLE
                 fallback_config = self._registry.snapshot_task(fallback_type)
-                fallback_provider = (fallback_config.get("client", _CFG_DEFAULT_PROVIDER)
-                                     if fallback_config else _CFG_DEFAULT_PROVIDER)
+                fallback_provider = (fallback_config.get("client", _runtime_default_provider())
+                                     if fallback_config else _runtime_default_provider())
                 # 用户硬约束（2026-08-04）：禁止自动切换模型/provider。
                 # 跨 provider fallback 只会叠加延迟并违背用户意图，故全部跳过。
                 if fallback_provider != _original_provider:
@@ -277,7 +277,7 @@ class FallbackChainMixin:
                         "same_provider_task_chain",
                         original_provider=_original_provider,
                         original_model=_original_model,
-                        to_provider=fallback_config.get("client", _CFG_DEFAULT_PROVIDER),
+                        to_provider=fallback_config.get("client", _runtime_default_provider()),
                         to_model=fallback_config.get("model", ""),
                         source="fallback_route",
                         detail=f"{task_type}->{fallback_type}")

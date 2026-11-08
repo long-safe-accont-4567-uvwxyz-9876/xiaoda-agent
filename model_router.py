@@ -9,7 +9,7 @@ from loguru import logger
 from openai import AsyncOpenAI
 
 from config import AGNES_BASE_URL, AGNES_TEXT_MODEL, PROMPT_CACHING_ENABLED
-from config import DEFAULT_PROVIDER as _CFG_DEFAULT_PROVIDER
+from config import DEFAULT_PROVIDER as _CFG_INITIAL_PROVIDER
 from config import FLASH_MODEL_NAME as _CFG_FLASH_MODEL
 from config import MODEL_NAME as _CFG_MODEL_NAME
 from config import get_builtin_providers as _get_builtin_providers
@@ -20,6 +20,7 @@ from core.error_codes import ErrorCodeEnum
 from db.db_analytics import AnalyticsDB
 from llm_gateway.client_lifecycle import ClientLifecycleMixin, _ssrf_check  # noqa: F401,E402
 from llm_gateway.fallback_chain import FallbackChainMixin  # noqa: E402
+from llm_gateway.route_defaults import runtime_default_provider
 
 # ── Phase 6 拆分：流式执行链块抽为 llm_gateway/router_execution.ExecutionMixin ──
 # 方法体逐字节搬移；MAX_RETRIES 随链搬入；此处同名 re-export 保持
@@ -99,10 +100,10 @@ CHAT_MAX_TOKENS = 65535
 #                     仅供本地计算历史预算 / 保留轮数；**不发给 API**，也没有
 #                     任何 API 参数能调它。留空(None)时按 provider 自动推导。
 ROUTE_TABLE = {
-    "chat": {"model": _CFG_MODEL_NAME, "max_tokens": CHAT_MAX_TOKENS, "client": _CFG_DEFAULT_PROVIDER, "thinking": {"type": "disabled"}},
-    "emotion_analysis": {"model": _CFG_FLASH_MODEL or _CFG_MODEL_NAME, "max_tokens": 1024, "client": _CFG_DEFAULT_PROVIDER, "thinking": {"type": "disabled"}},
-    "tool_result_wrap": {"model": _CFG_FLASH_MODEL or _CFG_MODEL_NAME, "max_tokens": 2048, "client": _CFG_DEFAULT_PROVIDER, "thinking": {"type": "disabled"}},
-    "memory_encoding": {"model": _CFG_FLASH_MODEL or _CFG_MODEL_NAME, "max_tokens": DEFAULT_MAX_TOKENS, "client": _CFG_DEFAULT_PROVIDER, "thinking": {"type": "disabled"}},
+    "chat": {"model": _CFG_MODEL_NAME, "max_tokens": CHAT_MAX_TOKENS, "client": _CFG_INITIAL_PROVIDER, "thinking": {"type": "disabled"}},
+    "emotion_analysis": {"model": _CFG_FLASH_MODEL or _CFG_MODEL_NAME, "max_tokens": 1024, "client": _CFG_INITIAL_PROVIDER, "thinking": {"type": "disabled"}},
+    "tool_result_wrap": {"model": _CFG_FLASH_MODEL or _CFG_MODEL_NAME, "max_tokens": 2048, "client": _CFG_INITIAL_PROVIDER, "thinking": {"type": "disabled"}},
+    "memory_encoding": {"model": _CFG_FLASH_MODEL or _CFG_MODEL_NAME, "max_tokens": DEFAULT_MAX_TOKENS, "client": _CFG_INITIAL_PROVIDER, "thinking": {"type": "disabled"}},
     "chat_agnes": {"model": AGNES_TEXT_MODEL, "max_tokens": CHAT_MAX_TOKENS, "client": "agnes", "thinking": {"type": "disabled"},
                    "presence_penalty": 0.3, "frequency_penalty": 0.0},
 }
@@ -196,7 +197,7 @@ class ModelRouter(ExecutionMixin, CostTrackingMixin, ClientLifecycleMixin, Fallb
         self._client = AsyncOpenAI(api_key=_mimo_key, base_url=_mimo_url) if _mimo_key else None
         self._db = db
         # 默认偏好跟随 DEFAULT_PROVIDER（默认 mimo，但通过 provider_metadata.json 表达）
-        self._model_preference = _CFG_DEFAULT_PROVIDER
+        self._model_preference = runtime_default_provider()
         self._cost_buffer: list[dict] = []
         self._cost_flush_threshold = 3
         self._last_cache_warning = 0.0
@@ -480,7 +481,7 @@ class ModelRouter(ExecutionMixin, CostTrackingMixin, ClientLifecycleMixin, Fallb
     def get_current_chat_model(self) -> dict:
         if self._current_chat_model is not None:
             return self._current_chat_model
-        return {"provider": _CFG_DEFAULT_PROVIDER, "model_id": ROUTE_TABLE.get("chat", {}).get("model", _CFG_MODEL_NAME)}
+        return {"provider": runtime_default_provider(), "model_id": ROUTE_TABLE.get("chat", {}).get("model", _CFG_MODEL_NAME)}
 
     def get_max_tokens_for_task(self, task_type: str = "chat") -> int:
         """获取指定 task_type 的 **最大输出**（max_tokens，发给 API 的参数）。
@@ -506,7 +507,7 @@ class ModelRouter(ExecutionMixin, CostTrackingMixin, ClientLifecycleMixin, Fallb
             explicit = 0
         if explicit > 0:
             return explicit
-        provider = cfg.get("client") or _CFG_DEFAULT_PROVIDER
+        provider = cfg.get("client") or runtime_default_provider()
         try:
             return get_context_window_for_provider(provider, default=0)
         except (ImportError, OSError, ValueError):

@@ -48,10 +48,10 @@ from typing import Any
 import openai as _openai_mod  # 用于 openai.APIError 异常捕获
 from loguru import logger
 
-from config import DEFAULT_PROVIDER as _CFG_DEFAULT_PROVIDER
 from config_providers import get_provider_capability as _get_provider_capability
 from core.app_exception import LLMError
 from core.error_codes import ErrorCodeEnum
+from llm_gateway.agent_target import runtime_default_provider as _runtime_default_provider
 from llm_gateway.router_metrics import _reasoning_content_var
 from llm_gateway.stream_protocol import (
     ModelStreamEvent,
@@ -124,7 +124,7 @@ class ExecutionMixin:
         config = self._registry.get_task_ref(task_type) or self._registry.get_task_ref("chat") or {}
         model = config["model"]
         mt = max_tokens or config.get("max_tokens", DEFAULT_MAX_TOKENS)
-        provider = config.get("client", _CFG_DEFAULT_PROVIDER)
+        provider = config.get("client", _runtime_default_provider())
         timeout = self.TASK_TIMEOUTS.get(task_type, 30)
 
         if provider == _LOCAL_ORT_PROVIDER:
@@ -248,7 +248,7 @@ class ExecutionMixin:
         config = self._registry.get_task_ref(task_type) or self._registry.get_task_ref("chat") or {}
         model = config["model"]
         mt = max_tokens or config.get("max_tokens", DEFAULT_MAX_TOKENS)
-        provider = config.get("client", _CFG_DEFAULT_PROVIDER)
+        provider = config.get("client", _runtime_default_provider())
         timeout = self.TASK_TIMEOUTS.get(task_type, 30)
 
         if provider == _LOCAL_ORT_PROVIDER:
@@ -1021,7 +1021,7 @@ class ExecutionMixin:
         """带重试的路由调用：客户端选择 → 构建 kwargs → 调用 API → 处理响应/异常。"""
         model = config["model"]
         last_error = None
-        provider = config.get("client", _CFG_DEFAULT_PROVIDER)
+        provider = config.get("client", _runtime_default_provider())
 
         if provider == _LOCAL_ORT_PROVIDER:
             chunks = []
@@ -1081,7 +1081,7 @@ class ExecutionMixin:
         # 统一走 registry 入口（语义一致；registry._table 即 ROUTE_TABLE，性能无差异）
         config = self._registry.get_task_ref(task_type) or self._registry.get_task_ref("chat") or {}
         model = config["model"]
-        provider = config.get("client", _CFG_DEFAULT_PROVIDER)
+        provider = config.get("client", _runtime_default_provider())
         mt = max_tokens or config.get("max_tokens", DEFAULT_MAX_TOKENS)
         timeout = self.TASK_TIMEOUTS.get(task_type, 30)
 

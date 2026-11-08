@@ -198,8 +198,20 @@ def set_default_provider(provider: str) -> None:
     同时更新模块级变量 DEFAULT_PROVIDER，使所有 import 了该变量的模块
     在下次读取时获得最新值。
     """
-    global DEFAULT_PROVIDER
+    global DEFAULT_PROVIDER, MODEL_NAME
     DEFAULT_PROVIDER = provider.strip().lower()
+    # 2026-11-08（中等-7）：旧实现只改 DEFAULT_PROVIDER，MODEL_NAME 还是旧 provider
+    # 的模型名，于是「默认 provider 换了、默认模型没换」。这里按新 provider 重新派生；
+    # 但 .env 显式指定 MODEL_NAME 时尊重用户设置，不被覆盖。
+    if not _MODEL_NAME_FROM_ENV:
+        MODEL_NAME = get_default_model_for_provider(DEFAULT_PROVIDER) or MODEL_NAME
+    # 2026-11-08（中等-7）：仍是出厂值的路由项跟着新的默认 provider/model 走
+    try:
+        from llm_gateway.route_defaults import refresh_route_defaults
+
+        refresh_route_defaults()
+    except ImportError:  # 启动极早期（llm_gateway 未就绪）时跳过
+        pass
 
 # ── Provider → 默认模型映射 ──
 # 当 MODEL_NAME 未在 .env 中显式设置时，根据 DEFAULT_PROVIDER 从
@@ -208,6 +220,9 @@ if os.getenv("MODEL_NAME"):
     MODEL_NAME = os.getenv("MODEL_NAME")
 else:
     MODEL_NAME = get_default_model_for_provider(DEFAULT_PROVIDER)
+
+# MODEL_NAME 是否由 .env 显式指定：决定 set_default_provider 能否重新派生它。
+_MODEL_NAME_FROM_ENV = bool(os.getenv("MODEL_NAME"))
 PRO_MODEL_NAME = os.getenv("PRO_MODEL_NAME", "")
 FLASH_MODEL_NAME = os.getenv("FLASH_MODEL_NAME", "")
 

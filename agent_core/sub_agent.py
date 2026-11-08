@@ -29,6 +29,7 @@ from config_providers import get_provider_capability
 from core.message import AgentMessage
 from emotion.emoji_config import get_status_msg
 from emotion.tts_engine import TTSEngine
+from llm_gateway.provider_probe import ProviderProbeError, materialize_provider_client
 from security.instruction_hierarchy import (
     InstructionLevel,
     format_instruction,
@@ -236,15 +237,26 @@ class SubAgent:
 
     async def reload_model_config(self, provider: str, model: str,
                                   base_url: str, api_key_env: str) -> bool:
-        """热重载模型配置：用新配置创建客户端并原子替换，不重新运行启动探活。
+        """热重载模型配置：先物化新 provider 的客户端，再原子替换字段。
 
-        用于一键切换子 Agent 模型时避免服务重启。
+        2026-11-08（中等-3/4）：旧实现只改写 config 四个字段、清掉降级标记就
+        返回 True，既不重建 client 也不发请求，接口回 success 无法证明切换生效。
+        现在先 materialize_provider_client，失败则不落任何字段（不留半更新），
+        探活由调用方（agent_registry.set_agent_model）在变更前完成。
         """
         if self._router is None:
             logger.warning("sub_agent.reload_failed",
                            name=self.config.name,
                            reason="router_unavailable",
                            api_key_env=api_key_env)
+            return False
+        try:
+            materialize_provider_client(self._router, provider, base_url, api_key_env)
+        except ProviderProbeError as exc:
+            logger.warning("sub_agent.reload_failed",
+                           name=self.config.name,
+                           reason=str(exc),
+                           provider=provider)
             return False
         self.config.provider = provider
         self.config.model = model
