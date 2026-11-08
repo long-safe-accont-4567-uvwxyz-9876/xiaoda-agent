@@ -5,11 +5,14 @@ import asyncio
 import json
 import os
 import shutil
+import sqlite3
 import subprocess
 import time
+from pathlib import Path
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi.responses import JSONResponse
 from loguru import logger
 
 from web.routers.auth import get_current_user
@@ -382,3 +385,117 @@ def _collect_proc_net_metrics(psutil: Any) -> dict:
     except Exception:
         logger.exception("health._collect_proc_net_metrics.unexpected_error")
     return data
+
+
+# ── 真实 /health 探活（无认证、O(1)、供外部探针高频调用）──────────────────
+# 背景：/health 与 /healthz 此前没有注册任何路由，请求会落到 web/server.py 中
+# 挂载在 "/" 的 NoCacheHTMLStaticFiles（SPA fallback），返回 200 + index.html，
+# 依赖全挂时探针依然是绿的。本 router 挂在 app 根（不带 /api/v1 前缀），并在
+# web/server.py::_register_routes 内先于 static mount 注册以保证路由优先级。
+#
+# 开销约束：每次探测只做一次 SELECT 1、一次文件可写性检查、一次内存态读取。
+# 不取写锁（真写事务会与对话写路径争用 _write_tx_lock，反而制造假故障），
+# 不做 KNN 检索。整体硬超时 1.5s，超时按不健康上报。
+probe_router = APIRouter(tags=["health"], include_in_schema=False)
+
+_HEALTH_PROBE_TIMEOUT = 1.5
+
+
+async def _probe_database(core):
+    """数据库探测：连接存活（真实查询）+ 数据库文件可写性。"""
+    t0 = time.perf_counter()
+    db = getattr(core, "db", None) if core is not None else None
+    if db is None:
+        return {"ok": False, "error": "database not initialized", "latency_ms": 0}
+    try:
+        await db.fetch_one("SELECT 1 AS ok")
+    except (OSError, RuntimeError, ValueError, sqlite3.Error) as e:
+        return {
+            "ok": False,
+            "error": "%s: %s" % (type(e).__name__, str(e)[:120]),
+            "latency_ms": int((time.perf_counter() - t0) * 1000),
+        }
+    writable = None
+    raw_path = getattr(db, "db_path", None)
+    if raw_path:
+        try:
+            db_path = Path(str(raw_path))
+            # WAL 模式下还要能写 -wal/-shm，因此目录可写性一并检查
+            writable = os.access(str(db_path), os.W_OK) and os.access(
+                str(db_path.parent), os.W_OK
+            )
+        except (OSError, TypeError, ValueError):
+            writable = None
+    return {
+        "ok": writable is not False,
+        "writable": writable,
+        "latency_ms": int((time.perf_counter() - t0) * 1000),
+    }
+
+
+def _probe_embedding(core):
+    """嵌入引擎探测：只读内存态（MemoryManager.vec.embed_engine_status）。"""
+    t0 = time.perf_counter()
+    memory = getattr(core, "memory", None) if core is not None else None
+    vector_store = getattr(memory, "vec", None) if memory is not None else None
+    if vector_store is None:
+        return {
+            "ok": False,
+            "ready": False,
+            "error": "vector store not initialized",
+            "latency_ms": 0,
+        }
+    try:
+        status = vector_store.embed_engine_status()
+    except (OSError, RuntimeError, ValueError, AttributeError) as e:
+        return {
+            "ok": False,
+            "ready": False,
+            "error": "%s: %s" % (type(e).__name__, str(e)[:120]),
+            "latency_ms": int((time.perf_counter() - t0) * 1000),
+        }
+    mode = status.get("mode")
+    ready = bool(status.get("engine_running"))
+    # local 模式看本地引擎是否就绪；remote 模式看 API key 是否配置
+    ok = ready if mode == "local" else bool(status.get("api_configured"))
+    return {
+        "ok": ok,
+        "ready": ready,
+        "mode": mode,
+        "backend": status.get("backend"),
+        "dimensions": status.get("dimensions"),
+        "latency_ms": int((time.perf_counter() - t0) * 1000),
+    }
+
+
+async def _guarded(factory):
+    """带硬超时与异常兜底的依赖探测，永不向探针抛异常。"""
+    try:
+        return await asyncio.wait_for(factory(), timeout=_HEALTH_PROBE_TIMEOUT)
+    except asyncio.TimeoutError:
+        return {"ok": False, "error": "timeout after %ss" % _HEALTH_PROBE_TIMEOUT}
+    except (OSError, RuntimeError, ValueError, AttributeError, sqlite3.Error) as e:
+        return {"ok": False, "error": "%s: %s" % (type(e).__name__, str(e)[:120])}
+
+
+@probe_router.get("/health")
+@probe_router.get("/healthz", include_in_schema=False)
+async def health_probe(request: Request) -> JSONResponse:
+    """真实健康探针：依赖正常 200，任一依赖异常 503（响应体始终是 JSON）。"""
+    started = time.perf_counter()
+    core = getattr(request.app.state, "core", None)
+    database, embedding = await asyncio.gather(
+        _guarded(lambda: _probe_database(core)),
+        _guarded(lambda: asyncio.to_thread(_probe_embedding, core)),
+    )
+    healthy = bool(database.get("ok")) and bool(embedding.get("ok"))
+    payload = {
+        "status": "ok" if healthy else "unhealthy",
+        "checks": {"database": database, "embedding": embedding},
+        "elapsed_ms": int((time.perf_counter() - started) * 1000),
+    }
+    return JSONResponse(
+        status_code=200 if healthy else 503,
+        content=payload,
+        headers={"Cache-Control": "no-store"},
+    )

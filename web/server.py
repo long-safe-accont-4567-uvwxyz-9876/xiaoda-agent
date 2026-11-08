@@ -1187,6 +1187,7 @@ def _register_routes(app: FastAPI) -> None:
     from web.routers.agents import router as agents_router
     from web.routers.auth import router as auth_router
     from web.routers.chat import router as chat_router
+    from web.routers.health import probe_router as health_probe_router
     from web.routers.health import router as health_router
     from web.routers.insight import router as insight_router
     from web.routers.jspace import router as jspace_router
@@ -1223,6 +1224,10 @@ def _register_routes(app: FastAPI) -> None:
               retrieval_router, search_engines_router, jspace_router,
               system_public_router, wechat_public_router):
         app.include_router(r, prefix="/api/v1")
+
+    # 真实探活必须先于 _mount_static_files 的 "/" SPA 兜底注册，否则
+    # /health 会被 index.html 吞成 200 假绿。无认证、无 /api/v1 前缀。
+    app.include_router(health_probe_router)
 
     from web.ws_hub import router as ws_router
     app.include_router(ws_router)
