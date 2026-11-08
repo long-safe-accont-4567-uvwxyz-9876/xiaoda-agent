@@ -84,8 +84,8 @@ export function createVisibilityPoller(
 
   function start(): void {
     clearTimer()
-    if (isHidden()) return
-    timer = setInterval(run, intervalMs)
+    // 订阅必须无条件建立：挂载时页面就在后台（后台标签页打开链接）也得能
+    // 在回到前台时恢复，否则"停表"就变成"永不再跑"。
     if (!unsubscribe) {
       unsubscribe = subscribe(() => {
         if (isHidden()) {
@@ -97,6 +97,8 @@ export function createVisibilityPoller(
         }
       })
     }
+    if (isHidden()) return
+    timer = setInterval(run, intervalMs)
   }
 
   function stop(): void {
