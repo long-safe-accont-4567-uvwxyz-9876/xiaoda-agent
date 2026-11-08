@@ -20,7 +20,7 @@ from core.error_codes import ErrorCodeEnum
 from db.db_analytics import AnalyticsDB
 from llm_gateway.client_lifecycle import ClientLifecycleMixin, _ssrf_check  # noqa: F401,E402
 from llm_gateway.fallback_chain import FallbackChainMixin  # noqa: E402
-from llm_gateway.route_defaults import runtime_default_provider
+from llm_gateway.route_defaults import install_route_table, runtime_default_provider
 
 # ── Phase 6 拆分：流式执行链块抽为 llm_gateway/router_execution.ExecutionMixin ──
 # 方法体逐字节搬移；MAX_RETRIES 随链搬入；此处同名 re-export 保持
@@ -107,6 +107,11 @@ ROUTE_TABLE = {
     "chat_agnes": {"model": AGNES_TEXT_MODEL, "max_tokens": CHAT_MAX_TOKENS, "client": "agnes", "thinking": {"type": "disabled"},
                    "presence_penalty": 0.3, "frequency_penalty": 0.0},
 }
+
+# 出厂快照必须在这里取：lifespan 的 _apply_route_overrides / _restore_chat_model
+# 与运行期 set_default_provider 都会改写 ROUTE_TABLE，惰性快照会把 WebUI 覆盖
+# 当成出厂值（中等-7 收尾，2026-11-08）。
+install_route_table(ROUTE_TABLE)
 
 # ── 兜底矩阵注入（严重-2，2026-11-08）────────────────────────────────
 # ROUTE_TABLE 定义后立即派生 task → provider → 同家兜底档 矩阵，注入

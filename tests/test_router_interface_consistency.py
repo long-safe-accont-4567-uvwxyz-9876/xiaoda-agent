@@ -8,6 +8,8 @@
 from __future__ import annotations
 
 import pathlib
+import subprocess
+import sys
 import types
 
 import pytest
@@ -22,7 +24,11 @@ from llm_gateway.provider_probe import (
     materialize_provider_client,
     provider_client_ready,
 )
-from llm_gateway.route_defaults import refresh_route_defaults
+from llm_gateway.route_defaults import (
+    factory_snapshot,
+    install_route_table,
+    refresh_route_defaults,
+)
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 
@@ -284,3 +290,62 @@ def test_bootstrap_uses_shared_resolver():
     assert "resolve_agent_target" in text
     assert 'persisted.get("model") or _agent_model' not in text
     assert "_resolve_base_url(persisted)" not in text
+
+
+# ── 中等-7 收尾（2026-11-08）：出厂快照必须在 import 期从代码常量取得 ──────
+
+
+def test_factory_snapshot_holds_code_defaults_after_webui_override(monkeypatch):
+    """WebUI 覆盖写进 ROUTE_TABLE 之后，出厂快照仍等于代码里的默认值。"""
+    snapshot = factory_snapshot()
+    entry = model_router.ROUTE_TABLE["chat"]
+    monkeypatch.setitem(entry, "client", "webui-override-provider")
+    monkeypatch.setitem(entry, "model", "webui-override-model")
+    assert snapshot["chat"] == {
+        "client": model_router._CFG_INITIAL_PROVIDER,
+        "model": model_router._CFG_MODEL_NAME,
+    }
+    # 快照覆盖全部路由项，且是副本：表被改写后重新取快照仍是出厂值
+    assert set(snapshot) == set(model_router.ROUTE_TABLE)
+    assert entry["model"] == "webui-override-model"
+    assert factory_snapshot()["chat"]["model"] != "webui-override-model"
+
+
+def test_refresh_keeps_user_modified_route(monkeypatch):
+    """改过的路由项刷新后不被默认 provider 覆盖；没改过的项跟着默认走。"""
+    snapshot = factory_snapshot()
+    table = {
+        "chat": {"client": "user-provider", "model": "user-model"},
+        "emotion_analysis": dict(snapshot["emotion_analysis"]),
+    }
+    install_route_table(table, snapshot)
+    try:
+        target = _other_builtin_provider() or "mimo"
+        monkeypatch.setattr(
+            "llm_gateway.route_defaults.runtime_default_provider", lambda: target
+        )
+        changed = refresh_route_defaults()
+        assert table["chat"] == {"client": "user-provider", "model": "user-model"}
+        assert table["emotion_analysis"]["client"] == target
+        assert table["emotion_analysis"]["model"] == get_default_model_for_provider(target)
+        assert changed == 1
+    finally:
+        install_route_table(model_router.ROUTE_TABLE, snapshot)
+
+
+def test_factory_snapshot_installed_at_import_time():
+    """快照必须在 ROUTE_TABLE 定义处安装，不能退回首次 refresh 惰性安装。"""
+    code = (
+        "import model_router\n"
+        "from llm_gateway import route_defaults\n"
+        "print('TASKS', len(route_defaults.factory_snapshot()))\n"
+    )
+    proc = subprocess.run(
+        [sys.executable, "-c", code],
+        cwd=ROOT,
+        capture_output=True,
+        text=True,
+        timeout=300,
+    )
+    assert proc.returncode == 0, proc.stderr
+    assert "TASKS 5" in proc.stdout
