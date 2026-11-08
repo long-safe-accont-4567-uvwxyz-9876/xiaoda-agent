@@ -1,5 +1,6 @@
 import { createApp } from 'vue'
 import { loginLocationWithRedirect } from './utils/sessionRedirect'
+import { ensureStorageSchema } from './utils/storageSchema'
 import { createPinia } from 'pinia'
 import { createRouter, createWebHashHistory } from 'vue-router'
 import App from './App.vue'
@@ -45,6 +46,10 @@ router.onError((error, to) => {
     console.error('[router]', error)
   }
 })
+
+// 审查 D1：键值全是裸标量且没有版本号，改类型后老用户会读到旧值。启动时按
+// STORAGE_SPEC 校验一遍，类型不符的直接丢弃（回到默认值）并写回新版本号。
+ensureStorageSchema(localStorage)
 
 const app = createApp(App)
 // 全局错误边界（审计 P0-1）：组件渲染/生命周期里抛出的错误统一记录，

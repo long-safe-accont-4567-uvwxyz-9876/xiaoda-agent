@@ -23,7 +23,8 @@ export const useWorkspaceStore = defineStore('workspace', () => {
     reason: string
   }>>([])
   /** 待确认的命令请求（由工具 needs_confirmation 状态触发） */
-  const pendingCmdConfirm = ref<{ request_id: string; command: string; session_id: string } | null>(null)
+  // 审查 G2：补 deadline——卡片据此显示倒计时，过期后禁用按钮
+  const pendingCmdConfirm = ref<{ request_id: string; command: string; session_id: string; deadline: number } | null>(null)
   /** 已授权目录列表（localStorage 持久化：曾授权且未在设置页撤销的目录）
    *  选这些目录时直接切换，不再弹授权确认。后端 confirm 总会重新授权，故前端记录即可。 */
   const authorizedDirs = ref<string[]>(JSON.parse(localStorage.getItem('ws.authorizedDirs') || '[]'))

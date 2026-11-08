@@ -6,6 +6,7 @@ import { api } from '../api'
 import { useAgentsStore } from './agents'
 import { t, tf } from '../i18n'
 import { clearMarkdownCache } from '../utils/markdown'
+import { mergeOlderPage, olderCursorSeconds, pageExhausted, rollbackSessionId } from '../utils/chatHistory'
 
 export interface ToolCall {
   id: string
@@ -465,6 +466,7 @@ export const useChatStore = defineStore('chat', () => {
     if (generation !== loadSessionGeneration) return
     switchSession(data.session_id)
     ws.send({ type: 'set_session', session_id: data.session_id })
+    historyHasMore.value = false
     messages.value = []
     clearMarkdownCache()
   }
@@ -493,30 +495,80 @@ export const useChatStore = defineStore('chat', () => {
     clearMarkdownCache()
   }
 
-  async function loadSession(sid: string, signal?: AbortSignal) {
-    const generation = ++loadSessionGeneration
-    pruneMsgSessions()
-    switchSession(sid)
-    ws.send({ type: 'set_session', session_id: sid })
-    // signal：调用组件卸载/切页时取消在途历史请求（P1-6）。取消后由调用方
-    // 用 isAbortError() 静默处理；generation 守卫仍负责跨会话正确性。
-    const history = await api.getMessages(sid, 0, 50, signal)
-    if (generation !== loadSessionGeneration || sessionId.value !== sid) return
-    clearMarkdownCache()
-    messages.value = history.map(h => ({
+  // ── 历史分页（审查 B1）与切换回滚（审查 B2）──────────────────
+  const HISTORY_PAGE_SIZE = 50
+  const historyHasMore = ref(false)
+  const historyLoading = ref(false)
+  type HistoryRow = Awaited<ReturnType<typeof api.getMessages>>[number]
+
+  function toMessage(h: HistoryRow) {
+    return {
       id: `h-${h.id}`,
       role: h.role as Message['role'],
       content: h.content,
       emotion: h.emotion || undefined,
       timestamp: h.timestamp * 1000,
       request: (h.request_context as Message['request']) || undefined,
-    }))
+    }
+  }
+
+  /**
+   * 往前翻一页更早的消息（审查 B1）。
+   * 后端 /sessions/{id}/messages 早就支持 before（秒级时间游标）与 limit≤200，
+   * 原先前端只调一次 limit=50，长会话的早期消息永远够不着。返回新增条数。
+   */
+  async function loadOlder(): Promise<number> {
+    if (historyLoading.value || !historyHasMore.value) return 0
+    const sid = sessionId.value
+    const before = olderCursorSeconds(messages.value[0]?.timestamp || 0)
+    if (!sid || !before) return 0
+    const generation = loadSessionGeneration
+    historyLoading.value = true
+    try {
+      const page = await api.getMessages(sid, before, HISTORY_PAGE_SIZE)
+      if (generation !== loadSessionGeneration || sessionId.value !== sid) return 0
+      const sizeBefore = messages.value.length
+      messages.value = mergeOlderPage(messages.value, page.map(toMessage))
+      historyHasMore.value = !pageExhausted(page.length, HISTORY_PAGE_SIZE)
+      return messages.value.length - sizeBefore
+    } finally {
+      historyLoading.value = false
+    }
+  }
+
+  async function loadSession(sid: string, signal?: AbortSignal) {
+    const generation = ++loadSessionGeneration
+    const previousSessionId = sessionId.value
+    pruneMsgSessions()
+    switchSession(sid)
+    ws.send({ type: 'set_session', session_id: sid })
+    // signal：调用组件卸载/切页时取消在途历史请求（P1-6）。取消后由调用方
+    // 用 isAbortError() 静默处理；generation 守卫仍负责跨会话正确性。
+    let history: HistoryRow[]
+    try {
+      history = await api.getMessages(sid, 0, HISTORY_PAGE_SIZE, signal)
+    } catch (error) {
+      // 审查 B2：先把 session 切过去再拉历史，失败若不回滚，界面标题已是新会话
+      // 而消息仍是旧会话的。只有"仍是最近一次切换"才回滚，迟到的旧请求不得顶掉
+      // 用户刚切过去的新会话。
+      const restore = rollbackSessionId(previousSessionId, sid, generation, loadSessionGeneration)
+      if (restore) {
+        sessionId.value = restore
+        ws.send({ type: 'set_session', session_id: restore })
+      }
+      throw error
+    }
+    if (generation !== loadSessionGeneration || sessionId.value !== sid) return
+    historyHasMore.value = !pageExhausted(history.length, HISTORY_PAGE_SIZE)
+    clearMarkdownCache()
+    messages.value = history.map(toMessage)
   }
 
   return {
     messages, currentAgent, sessionId, isProcessing, currentStage, statusText,
     wsConnected, wsReconnecting, lastEmotion, greetingPing,
     sendMessage, retryMessage, abort, setAgent, newSession, loadSession,
+    loadOlder, historyHasMore, historyLoading,
     deleteMessage, retryLast, clearMessages, cleanup,
   }
 })

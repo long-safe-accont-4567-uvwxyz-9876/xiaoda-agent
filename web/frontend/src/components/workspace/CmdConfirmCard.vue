@@ -1,9 +1,11 @@
 <script setup lang="ts">
-import { ref } from 'vue'
+import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
 import { NButton } from 'naive-ui'
 import { useWorkspaceStore } from '../../stores/workspace'
 import { useMessage } from 'naive-ui'
 import { t } from '../../i18n'
+import { confirmPhase, confirmRemainingMs, formatCountdown } from '../../utils/cmdConfirm'
+import type { ConfirmPhase } from '../../utils/cmdConfirm'
 import { sound } from '../../utils/sound'
 
 /**
@@ -24,8 +26,29 @@ const message = useMessage()
 const deciding = ref(false)
 const decided = ref<'deny' | 'allow_once' | 'allow' | null>(null)
 
+// 审查 G2：后端 CMD_CONFIRM_TIMEOUT=60s 到点即按失败返回，而卡片原先既不显示
+// 剩余时间、也没有过期态——用户只能盲点，刷新后卡片直接消失。
+const now = ref(Date.now())
+let timer: ReturnType<typeof setInterval> | null = null
+const deadline = computed(() => (ws.pendingCmdConfirm?.request_id === props.requestId ? ws.pendingCmdConfirm.deadline : 0))
+const remaining = computed(() => confirmRemainingMs(deadline.value, now.value))
+const countdown = computed(() => formatCountdown(remaining.value))
+const phase = computed<ConfirmPhase>(() => confirmPhase(remaining.value))
+
+onMounted(() => {
+  timer = setInterval(() => { now.value = Date.now() }, 1000)
+})
+onBeforeUnmount(() => {
+  if (timer) clearInterval(timer)
+  timer = null
+})
+
 async function decide(d: 'deny' | 'allow_once' | 'allow', addToWhitelist: boolean) {
   if (deciding.value || decided.value) return
+  if (phase.value === 'expired') {
+    message.warning(t('cmdConfirm.expired'))
+    return
+  }
   deciding.value = true
   decided.value = d
   sound.play('toggle')
@@ -51,6 +74,10 @@ async function decide(d: 'deny' | 'allow_once' | 'allow', addToWhitelist: boolea
     <div class="cmd-body">
       <code class="cmd-code">{{ command }}</code>
       <p class="cmd-hint">{{ t('settings.cmdConfirmHint') }}</p>
+      <p v-if="phase !== 'expired'" class="cmd-countdown">
+        {{ t('cmdConfirm.remaining') }} {{ countdown }}
+      </p>
+      <p v-else class="cmd-countdown expired">{{ t('cmdConfirm.expired') }}</p>
     </div>
     <div v-if="!decided" class="cmd-actions">
       <NButton size="small" :loading="deciding" @click="decide('deny', false)">

@@ -13,6 +13,7 @@ import { useRenderedBand, escapeHtmlText } from '../composables/useRenderedBand'
 import { useAutoScroll } from '../composables/useAutoScroll'
 import { useAbortableRequests } from '../composables/useAbortableRequests'
 import { isAbortError } from '../utils/abortRegistry'
+import { formatDateTime, formatTime } from '../utils/datetime'
 import { reportError } from '../utils/errorLog'
 import ToolCallCard from '../components/chat/ToolCallCard.vue'
 import ChatTerminal from '../components/chat/ChatTerminal.vue'
@@ -82,6 +83,8 @@ function onCmdConfirmRequest(data: any) {
       request_id: data.request_id,
       command: data.command,
       session_id: data.session_id || '',
+      // 审查 G2：带上截止时间，卡片据此显示倒计时（后端 CMD_CONFIRM_TIMEOUT=60s）
+      deadline: Date.now() + 60_000,
     }
     nextTick(() => {
       const el = messagesEl.value
@@ -338,6 +341,16 @@ function resend(msg: { id: string }) {
   }
 }
 
+async function loadOlderMessages() {
+  try {
+    const added = await chat.loadOlder()
+    if (!added) message.info(t('chatHistory.allLoaded'))
+  } catch (e) {
+    const detail = e instanceof Error && e.message ? '：' + e.message : ''
+    message.error(t('errors.historyLoadFailed') + detail)
+  }
+}
+
 function clearAll() {
   if (loadingSessionId.value) return  // 加载进行中禁止清空，避免与 loadSession 竞态
   chat.clearMessages()
@@ -348,7 +361,8 @@ function onModelChange(_provider: string, _modelId: string) {
 }
 
 function fmtTime(ts: number): string {
-  return new Date(ts).toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' })
+  // 审查 E1：原先写死 zh-CN，英文界面下时间仍是中文格式
+  return formatTime(ts)
 }
 
 // 17 类情绪标签（与 emotion_enum / emotion_simple / sticker 物理目录对齐）
@@ -391,6 +405,14 @@ const emotionColors: Record<string, string> = {
         <div class="chat-row-error-title">⚠ {{ t('errorBoundary.title') }}</div>
         <div class="chat-row-error-detail">{{ listError }}</div>
         <button class="chat-row-error-btn" @click="recoverFromListError">{{ t('chatView.clear') }}</button>
+      </div>
+
+      <div v-if="chat.historyHasMore" style="text-align: center; margin: 10px 0">
+        <button
+          :disabled="chat.historyLoading"
+          style="padding: 3px 14px; border-radius: 999px; border: 1px solid rgba(127,214,80,.35); background: rgba(127,214,80,.08); color: #bfe3a8; font-size: 12px; cursor: pointer"
+          @click="loadOlderMessages"
+        >{{ chat.historyLoading ? t('chatHistory.loadingOlder') : t('chatHistory.loadOlder') }}</button>
       </div>
 
       <div v-if="chat.messages.length === 0" class="empty-state">
@@ -521,7 +543,7 @@ const emotionColors: Record<string, string> = {
               {{ replaceAgentNames(s.title || s.session_id) }}
             </div>
             <div class="session-meta">
-              <span>{{ s.message_count }} {{ t('chatView.messages') }} · {{ new Date(s.updated_at * 1000).toLocaleString('zh-CN') }}</span>
+              <span>{{ s.message_count }} {{ t('chatView.messages') }} · {{ formatDateTime(s.updated_at * 1000) }}</span>
               <n-popconfirm @positive-click.stop="removeSession(s.session_id)">
                 <template #trigger>
                   <button class="footer-btn" @click.stop><SumeruIcon name="trash" :size="13" variant="duo" tone="del" interactive /></button>
