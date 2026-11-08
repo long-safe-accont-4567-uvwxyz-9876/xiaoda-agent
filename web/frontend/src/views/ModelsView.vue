@@ -27,6 +27,18 @@ const providersStore = useProvidersStore()
 const providers = computed(() => providersStore.providers)
 const routes = ref<Record<string, ModelRouteInfo>>({})
 const fallback = ref<Record<string, string>>({})
+// 2026-11-08（严重-2）：兜底表已升级为 task → provider → 同家兜底档 矩阵。
+// 只展示一条写死的 chat → chat_agnes 会让非 agnes 主模型看起来「有兜底」
+// 其实不生效，所以这里按当前 provider 展示它真正能用的那一档。
+const fallbackMatrix = ref<Record<string, Record<string, { model: string; provider: string; source: string }>>>({})
+const crossProviderFallback = ref(false)
+const currentChatProvider = computed(() => routes.value['chat']?.provider || '')
+const currentFallbackTier = computed(() => {
+  const tiers = fallbackMatrix.value['chat'] || {}
+  const provider = currentChatProvider.value
+  const tier = provider ? tiers[provider] : undefined
+  return tier ? { provider: tier.provider || provider, model: tier.model, source: tier.source } : null
+})
 const credentials = ref<CredentialStatus[]>([])
 const usage = ref<UsageSummary>({ days: 0, series: [], total: {} })
 const providerWizardOpen = ref(false)
@@ -97,13 +109,20 @@ async function loadAll() {
     // 页面先用核心数据渲染，discover 到货后单独更新（stale-while-revalidate 下通常 <20ms）
     const [p, r, c, u] = await Promise.all([
       providersStore.loadProviders(),
-      get<{ routes: Record<string, ModelRouteInfo>; fallback: Record<string, string> }>('/models/routes'),
+      get<{
+        routes: Record<string, ModelRouteInfo>
+        fallback: Record<string, string>
+        fallback_matrix: Record<string, Record<string, { model: string; provider: string; source: string }>>
+        cross_provider_fallback_enabled: boolean
+      }>('/models/routes'),
       get<CredentialStatus[]>('/models/credentials/status'),
       get<UsageSummary>('/models/usage?days=7'),
     ])
     void p
     routes.value = r.routes
     fallback.value = r.fallback
+    fallbackMatrix.value = r.fallback_matrix || {}
+    crossProviderFallback.value = r.cross_provider_fallback_enabled === true
     credentials.value = c
     usage.value = u
     renderChart()
@@ -552,6 +571,13 @@ async function moveProvider(pid: string, dir: -1 | 1) {
           <span v-if="i > 0" class="chain-sep"> ｜ </span>
           <span class="mono">{{ from }} → {{ to }}</span>
         </template>
+      </div>
+      <div class="fallback-chain">
+        {{ t('modelsView.fallbackTier') }}
+        <span v-if="currentFallbackTier" class="mono">{{ currentChatProvider }} → {{ currentFallbackTier.model }} ({{ currentFallbackTier.source }})</span>
+        <span v-else class="mono">{{ t('modelsView.fallbackTierNone') }}</span>
+        <span class="chain-sep"> · </span>
+        {{ t('modelsView.crossProvider') }}<span class="mono">{{ crossProviderFallback ? t('modelsView.crossProviderOn') : t('modelsView.crossProviderOff') }}</span>
       </div>
     </section>
     </Tilt3D>

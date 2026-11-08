@@ -30,7 +30,7 @@
       "builtin": true,
       "supports_model_discovery": true,
       "default_text_models": [
-        "agnes-2.0-flash",
+        "agnes-2.5-flash",
         "agnes-2.0-pro",
         "agnes-2.0-flash-thinking"
       ],
@@ -182,6 +182,10 @@
       "context_window": 32768
     }
   },
+  "_fallback_policy": {
+    "_comment": "兜底策略开关（严重-2，2026-11-08）：cross_provider_enabled=false 表示禁止自动跨家切换（保持 2026-08-04 用户硬约束）；环境变量 CROSS_PROVIDER_FALLBACK_POLICY优先于此文件。",
+    "cross_provider_enabled": false
+  },
   "_cross_provider_fallback": {
     "_comment": "主 provider 故障时的跨 provider 兜底映射（替代 model_router.py 中硬编码的 _CROSS_PROVIDER_MAP）",
     "agnes": {
@@ -190,7 +194,7 @@
     },
     "mimo": {
       "fallback_provider": "agnes",
-      "fallback_model": "agnes-2.0-flash"
+      "fallback_model": "agnes-2.5-flash"
     },
     "ollama": {
       "fallback_provider": "mimo",

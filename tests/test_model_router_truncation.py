@@ -255,7 +255,11 @@ async def test_cross_provider_fallback_disabled():
     跨 provider——日常失败不乱切；但链路彻底死亡时，允许走**紧急免费车道**
     （硅基流动 GLM-4-9B-0414）作为最后退路，替代直接失败。
 
-    验证：mimo 失败 → 中间环节全跳过 → 仅触发一次 chat_free（紧急车道）。
+    2026-11-08（严重-2）语义更新：mimo 有自己的**同家兜底档**（matrix: chat×mimo =
+    mimo/mimo-v2.5），会先试一次 chat_mimo；跨家白名单默认关闭，同家档失败后才落到
+    紧急免费车道。
+
+    验证：mimo 失败 → 先试同家档 chat_mimo → 跨家仍禁止 → chat_free（紧急车道）。
     """
     from model_router import ModelRouter
 
@@ -299,12 +303,13 @@ async def test_cross_provider_fallback_disabled():
         original_max_tokens=32768,
     )
 
-    # 验证：中间环节（agnes/自定义）全被跳过；仅紧急免费车道触发一次
+    # 验证（2026-11-08 严重-2 更新）：先试同家兜底档 chat_mimo（mimo 有同家档）；
+    # 跨家白名单默认关闭（不允许自动切到 agnes），同家档失败后才走紧急免费车道。
     assert result == "free-ok", f"紧急免费车道应兜底成功，实际: {result!r}"
-    assert received_calls == ["chat_free"], (
-        f"应只触发紧急免费车道一次，实际: {received_calls}"
+    assert received_calls == ["chat_mimo", "chat_free"], (
+        f"应先试同家兜底档再走紧急免费车道，实际: {received_calls}"
     )
-    print("✅ 中间环节禁止跨 provider；紧急免费车道正常收尾")
+    print("✅ 同家兜底档优先、跨家仍禁止；紧急免费车道正常收尾")
 
 
 @pytest.mark.asyncio
@@ -338,7 +343,7 @@ async def test_emergency_free_fallback_disabled():
 
     async def _mock_route_with_retry(task_type, *args, **kwargs):
         received_calls.append(task_type)
-        return "should-not-happen"
+        raise RuntimeError("tier also failed")
 
     router._route_with_retry = _mock_route_with_retry
 
@@ -350,9 +355,14 @@ async def test_emergency_free_fallback_disabled():
             original_max_tokens=32768,
         )
 
-    assert result is None, "开关关闭时紧急车道不应触发"
-    assert len(received_calls) == 0, f"不应有任何降级调用，实际: {received_calls}"
-    print("✅ FREE_EMERGENCY_FALLBACK=false：紧急车道关闭，完全回到旧语义")
+    # 2026-11-08（严重-2）：同家兜底档与免费车道是两个独立开关。
+    # FREE_EMERGENCY_FALLBACK=false 只关掉最后的免费车道，同家档照常执行。
+    assert result is None, "免费车道关闭且同家档失败时应返回 None"
+    assert received_calls == ["chat_mimo"], (
+        f"只应尝试同家兜底档，实际: {received_calls}"
+    )
+    assert "chat_free" not in received_calls, "开关关闭时不应进入免费车道"
+    print("✅ FREE_EMERGENCY_FALLBACK=false：免费车道关闭，同家兜底档独立生效")
 
 
 @pytest.mark.asyncio

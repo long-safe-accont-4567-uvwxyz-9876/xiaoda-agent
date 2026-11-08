@@ -275,7 +275,7 @@ class MainPathMixin:
                 _clean_for_memory = self.sticker_manager.strip_emotion_tag(reply)
                 await self.context.add_message("assistant", _clean_for_memory, reasoning_content=rc)
                 # L5 修复: 捕获本次回复使用的模型名，透传到 conversation_logs.model_used
-                _model_used = self.router.get_current_chat_model().get("model_id", "")
+                _model_used = _resolve_model_used_for_log(self.router)
                 self._bg_task_manager.run_background_tasks(
                     user_input, _clean_for_memory, user_id, source, emotion, tool_results,
                     session_id=session_id, model_used=_model_used,
@@ -283,7 +283,7 @@ class MainPathMixin:
                     user_context_token=getattr(ctx, "user_context_token", None),
                 )
         elif not is_degraded_reply(reply):
-            _model_used = self.router.get_current_chat_model().get("model_id", "")
+            _model_used = _resolve_model_used_for_log(self.router)
             self._bg_task_manager.log_conversation_only(
                 user_input, reply, user_id, source, emotion,
                 session_id=session_id, model_used=_model_used,
@@ -835,3 +835,24 @@ class MainPathMixin:
                     logger.debug("agent.flash_fallback: {}", e)
                     reply = DEGRADED_REPLY
         return reply, tool_results
+
+
+def _resolve_model_used_for_log(router) -> str:
+    """落库 conversation_logs.model_used 的取值（严重-2 + 轻微-15，2026-11-08）。
+
+    旧实现无条件写 `router.get_current_chat_model()["model_id"]`，于是降级回复
+    （同家兜底档 / 跨家白名单 / 免费 9B 车道）在库里全记成主模型，无法追溯
+    「这条回复到底是谁生成的」。现在优先问 router 要真实模型 + 降级标记：
+    降级时形如 "siliconflow/THUDM/GLM-4-9B-0414 (degraded:free_lane)"，
+    未降级时保持旧语义（当前主 chat 模型 id），向后兼容。
+    """
+    resolver = getattr(router, "get_model_used_for_log", None)
+    if callable(resolver):
+        try:
+            return resolver()
+        except (AttributeError, KeyError, TypeError):
+            pass
+    try:
+        return router.get_current_chat_model().get("model_id", "")
+    except (AttributeError, KeyError, TypeError):
+        return ""

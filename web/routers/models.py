@@ -260,7 +260,12 @@ async def list_routes(request: Request) -> Any:
     context_window 为 None 时表示「自动」，由 provider 推导（见
     context_window_effective，前端用作输入框 placeholder）。
     """
-    from model_router import FALLBACK_ROUTE, ROUTE_TABLE
+    from model_router import (
+        CROSS_PROVIDER_FALLBACK_POLICY,
+        FALLBACK_ROUTE,
+        ROUTE_TABLE,
+        get_fallback_matrix,
+    )
     routes = {}
     for task, c in ROUTE_TABLE.items():
         provider = c.get("client", get_default_provider())
@@ -277,7 +282,25 @@ async def list_routes(request: Request) -> Any:
             "thinking": bool(c.get("thinking") and c["thinking"].get("type") == "enabled"),
             "timeout": _router_of(request).TASK_TIMEOUTS.get(task),
         }
-    return Envelope(data={"routes": routes, "fallback": dict(FALLBACK_ROUTE)})
+    # 2026-11-08（严重-2）：前端需要看到「当前 provider 到底有没有可用的同家兜底档」，
+    # 而不是只看到一条写死的 chat → chat_agnes（看着有兜底、其实对非 agnes 不生效）。
+    _matrix = get_fallback_matrix()
+    return Envelope(data={
+        "routes": routes,
+        "fallback": dict(FALLBACK_ROUTE),
+        "fallback_matrix": {
+            _task: {
+                _provider: {
+                    "model": _tier.get("model", ""),
+                    "provider": _tier.get("client", _provider),
+                    "source": _tier.get("source", ""),
+                }
+                for _provider, _tier in _tiers.items()
+            }
+            for _task, _tiers in _matrix.items()
+        },
+        "cross_provider_fallback_enabled": CROSS_PROVIDER_FALLBACK_POLICY,
+    })
 
 
 @router.put("/models/routes/{task}", response_model=Envelope[dict])

@@ -42,6 +42,7 @@ from model_router_config import (  # noqa: F401,E402
     _OLLAMA_MODEL_MAP,
     _PROVIDER_CAPS_FROM_FILE,
     _PROVIDER_METADATA,
+    CROSS_PROVIDER_FALLBACK_POLICY,
     MIMO_API_KEY,
     MIMO_BASE_URL,
     MIMO_MODEL,
@@ -62,6 +63,12 @@ from model_router_config import (  # noqa: F401,E402
     _ollama_model_map_from_env,
     _ollama_model_map_from_file,
     _resolve_provider_key,
+    build_fallback_matrix,
+    get_cross_provider_tier,
+    get_fallback_matrix,
+    get_fallback_tier,
+    load_cross_provider_fallback_policy,
+    set_fallback_matrix,
     translate_model_for_provider,
 )
 
@@ -99,6 +106,12 @@ ROUTE_TABLE = {
     "chat_agnes": {"model": AGNES_TEXT_MODEL, "max_tokens": CHAT_MAX_TOKENS, "client": "agnes", "thinking": {"type": "disabled"},
                    "presence_penalty": 0.3, "frequency_penalty": 0.0},
 }
+
+# ── 兜底矩阵注入（严重-2，2026-11-08）────────────────────────────────
+# ROUTE_TABLE 定义后立即派生 task → provider → 同家兜底档 矩阵，注入
+# model_router_config 的模块级矩阵，供 llm_gateway/fallback_chain 读取
+# （fallback_chain 不得反向 import model_router，故用注入而非反向依赖）。
+set_fallback_matrix(build_fallback_matrix(ROUTE_TABLE, FALLBACK_ROUTE))
 
 # 模型偏好 label 表（默认 provider 展示用）。
 # 已废弃的 mimo-pro/mimo-flash/mimo-mini 预设已被移除——模型切换统一走动态
@@ -732,6 +745,9 @@ class ModelRouter(ExecutionMixin, CostTrackingMixin, ClientLifecycleMixin, Fallb
 
         if _is_bg_llm and _current_task is not None:
             self._active_bg_llm_tasks.add(_current_task)
+
+        # 降级标记按请求重置：上一轮的降级不能串到本轮 model_used
+        self.clear_last_degrade()
 
         self._cache_stats["total_calls"] += 1
         extra_headers = self._apply_caching_headers(extra_headers)
