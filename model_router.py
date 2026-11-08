@@ -640,40 +640,6 @@ class ModelRouter(ExecutionMixin, CostTrackingMixin, ClientLifecycleMixin, Fallb
         extra_headers.setdefault("anthropic-beta", "prompt-caching-2024-07-31")
         return extra_headers
 
-    def _is_client_configured(self, provider: str) -> bool:
-        """检查指定 provider 的客户端是否已配置（有 API key 且有 base_url）。
-
-        D12: 降级链在调用前用此方法判断目标客户端是否可用，避免向未初始化
-        的客户端发起无意义调用导致兜底失效。
-        """
-        if provider == "mimo":
-            return self._client is not None
-        if provider == "agnes":
-            # 同时检查 _agnes_client 和 _custom_clients["agnes"]
-            # 根因：用户通过 WebUI 添加 agnes 时，客户端注册到 _custom_clients["agnes"]，
-            # 但旧实现只检查 _agnes_client，导致 fallback 链跳过 agnes。
-            return (self._agnes_client is not None
-                    or self.has_custom_client("agnes"))
-        return self.has_custom_client(provider)
-
-    def bind_builtin(self, provider: str, client: Any) -> Any:
-        if provider == "mimo":
-            old_client = self._client
-            self._client = client
-            return old_client
-        if provider == "agnes":
-            old_client = self._agnes_client
-            self._agnes_client = client
-            return old_client
-        raise ValueError(f"unsupported builtin provider: {provider}")
-
-    def get_builtin_client(self, provider: str) -> Any:
-        if provider == "mimo":
-            return self._client
-        if provider == "agnes":
-            return self._agnes_client
-        raise ValueError(f"unsupported builtin provider: {provider}")
-
     async def route(self, task_type: str, messages: list[dict],
                     temperature: float = 0.7, max_tokens: int | None = None,
                     stream: bool = False,

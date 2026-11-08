@@ -511,3 +511,54 @@ class ClientLifecycleMixin:
                            provider=provider)
             return None
         return build_client(fmt, _base_url, api_key)
+
+    def _is_client_configured(self, provider: str) -> bool:
+        """provider 是否有可用客户端（D12 兜底前置判断）。
+
+        2026-11-08 合并：mimo/agnes 仍看既有字段；其他内置 provider 由 catalog
+        凭据或 _builtin_clients 缓存判定，避免兜底矩阵有同家档却被当成未配置。
+        """
+        if provider == "mimo":
+            return self._client is not None
+        if provider == "agnes":
+            return (self._agnes_client is not None
+                    or self.has_custom_client("agnes"))
+        if self.has_custom_client(provider):
+            return True
+        return self._builtin_provider_configured(provider)
+
+    def _builtin_provider_configured(self, provider: str) -> bool:
+        """其他内置 provider 是否凭 catalog 凭据就能建出客户端。"""
+        if provider not in _get_builtin_providers():
+            return False
+        if self._get_builtin_client(provider) is not None:
+            return True
+        api_key, base_url = self._resolve_builtin_endpoint(provider)
+        return bool(api_key) and bool(base_url)
+
+    def bind_builtin(self, provider: str, client: Any) -> Any:
+        """登记内置 provider 客户端：mimo/agnes 走既有字段，其余进共享缓存。"""
+        if provider == "mimo":
+            old_client = self._client
+            self._client = client
+            return old_client
+        if provider == "agnes":
+            old_client = self._agnes_client
+            self._agnes_client = client
+            return old_client
+        if provider not in _get_builtin_providers():
+            raise ValueError(f"unsupported builtin provider: {provider}")
+        cache = self._builtin_client_cache()
+        old_client = cache.get(provider)
+        cache[provider] = client
+        return old_client
+
+    def get_builtin_client(self, provider: str) -> Any:
+        """读内置 provider 客户端；其他内置 provider 未创建时返回 None。"""
+        if provider == "mimo":
+            return self._client
+        if provider == "agnes":
+            return self._agnes_client
+        if provider not in _get_builtin_providers():
+            raise ValueError(f"unsupported builtin provider: {provider}")
+        return self._get_builtin_client(provider)
