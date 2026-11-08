@@ -28,7 +28,7 @@ const setupTokenRequired = ref(false)
 const defaultProvider = ref('deepseek')
 const providerChoices = ref<Array<{ id: string; label: string; key_env: string; default: boolean }>>([
   { id: 'deepseek', label: 'DeepSeek', key_env: 'DEEPSEEK_API_KEY', default: true },
-  { id: 'mimo', label: '小米 MiMo', key_env: 'MIMO_API_KEY', default: false },
+  { id: 'mimo', label: 'MiMo', key_env: 'MIMO_API_KEY', default: false },
 ])
 const selectedProviderKeyEnv = computed(() => providerChoices.value.find(c => c.id === defaultProvider.value)?.key_env || '')
 const selectedProviderKeyMissing = computed(() => {
