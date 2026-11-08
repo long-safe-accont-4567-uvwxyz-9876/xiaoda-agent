@@ -15,6 +15,12 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
+from agent_core._shared import (
+    ALL_SUB_AGENTS_FAILED_MSG,
+    TIRED_MSG,
+    DelegationOutcome,
+    is_degraded_reply,
+)
 from agent_core.sub_agent_manager import SubAgentManagerMixin
 from agent_core.subagents import SubAgentInvocationResult
 
@@ -39,12 +45,12 @@ class FakeSubAgentManager:
         return self.dispatch_results.get(name, f"[{name}的回复] " + "x" * 30)
 
     async def _ensemble_agents(self, agents, task):
-        tasks = [self.delegate_to_agent(a, task, mode="single") for a in agents]
-        results = await asyncio.gather(*tasks, return_exceptions=True)
-        valid = [r for r in results if isinstance(r, str) and len(r) > 20]
-        if not valid:
-            return "（所有子代理都无法完成任务）"
-        return max(valid, key=len)
+        return await SubAgentManagerMixin._ensemble_agents(self, agents, task)
+
+    async def delegate_to_agent_outcome(self, name, task, mode="single", verifier=""):
+        reply = await self.delegate_to_agent(name, task, mode=mode, verifier=verifier)
+        return DelegationOutcome(ok=bool(reply and reply.strip()), reply=reply, agent=name,
+                                 degraded=is_degraded_reply(reply))
 
     async def _retry_fallback(self, agents, task):
         for agent_name in agents:
@@ -90,34 +96,90 @@ def manager():
 # ============================================================
 
 @pytest.mark.asyncio
-async def test_ensemble_picks_longest(manager):
-    """集成模式应选最长的结果"""
-    manager.dispatch_results = {
-        "xiaoke": "[xiaoke] 短结果",
-        "xiaolang": "[xiaolang] 这是一个比较长的结果，包含了更多的分析和细节内容" * 3,
-        "xiaolian": "[xiaolian] 中等长度的结果" * 5,
-    }
-    result = await manager._ensemble_agents(["xiaoke", "xiaolang", "xiaolian"], "test task")
-    assert "xiaolang" in result  # xiaolang 的结果最长
+async def test_ensemble_all_fail_returns_unified_message():
+    mgr = SubAgentManagerMixin.__new__(SubAgentManagerMixin)
+
+    async def _fail(name, task, mode="single", verifier=""):
+        return DelegationOutcome(ok=False, reply="XiaoLang" + TIRED_MSG, agent=name, degraded=True)
+
+    mgr.delegate_to_agent_outcome = _fail
+    result = await mgr._ensemble_agents(["xiaoke", "xiaolang"], "test task")
+    assert result == ALL_SUB_AGENTS_FAILED_MSG
+    assert TIRED_MSG not in result
 
 
 @pytest.mark.asyncio
-async def test_ensemble_all_fail(manager):
-    """所有 agent 都失败时返回兜底文本"""
-    manager.dispatch_results = {"xiaoke": "短", "xiaolang": ""}
-    result = await manager._ensemble_agents(["xiaoke", "xiaolang"], "test")
-    assert "无法完成" in result
+async def test_ensemble_success_beats_longer_failure_text():
+    mgr = SubAgentManagerMixin.__new__(SubAgentManagerMixin)
+    ok_reply = "OK-" + ("a" * 40)
+    fail_reply = ("XiaoLang" + TIRED_MSG) * 5
+    assert len(fail_reply) > len(ok_reply)
+
+    async def _mixed(name, task, mode="single", verifier=""):
+        if name == "xiaoke":
+            return DelegationOutcome(ok=True, reply=ok_reply, agent=name)
+        return DelegationOutcome(ok=False, reply=fail_reply, agent=name, degraded=True)
+
+    mgr.delegate_to_agent_outcome = _mixed
+    assert await mgr._ensemble_agents(["xiaoke", "xiaolang"], "t") == ok_reply
 
 
 @pytest.mark.asyncio
-async def test_ensemble_partial_failure(manager):
-    """部分 agent 失败时仍能返回有效结果"""
-    manager.dispatch_results = {
-        "xiaoke": "[xiaoke] 有效的完整结果内容" * 5,
-        "xiaolang": "x",  # 太短, 被过滤
-    }
-    result = await manager._ensemble_agents(["xiaoke", "xiaolang"], "test")
-    assert "xiaoke" in result
+async def test_ensemble_filters_degraded_text_even_when_ok_flag_set():
+    mgr = SubAgentManagerMixin.__new__(SubAgentManagerMixin)
+
+    async def _stub(name, task, mode="single", verifier=""):
+        if name == "xiaoke":
+            text = "XiaoKe" + TIRED_MSG
+            return DelegationOutcome(ok=True, reply=text, agent=name, degraded=is_degraded_reply(text))
+        return DelegationOutcome(ok=True, reply="real answer body", agent=name)
+
+    mgr.delegate_to_agent_outcome = _stub
+    assert await mgr._ensemble_agents(["xiaoke", "xiaolang"], "t") == "real answer body"
+
+
+def test_outcome_from_reply_marks_tired_as_degraded():
+    outcome = SubAgentManagerMixin._outcome_from_reply("xiaolang", "XiaoLang" + TIRED_MSG)
+    assert outcome.ok is True
+    assert outcome.degraded is True
+    assert outcome.usable() is False
+    assert is_degraded_reply(TIRED_MSG) is True
+    assert is_degraded_reply("XiaoLi" + TIRED_MSG) is True
+    assert is_degraded_reply("Here is a normal analysis of transformer losses.") is False
+
+
+@pytest.mark.asyncio
+async def test_pipe_does_not_feed_failure_text_downstream():
+    mgr = SubAgentManagerMixin.__new__(SubAgentManagerMixin)
+    seen = {}
+
+    async def _stub(name, task, mode="single", verifier=""):
+        seen[name] = task
+        if name == "xiaoke":
+            return DelegationOutcome(ok=False, reply="XiaoKe" + TIRED_MSG, agent=name, degraded=True)
+        return DelegationOutcome(ok=True, reply="final answer body", agent=name)
+
+    mgr.delegate_to_agent_outcome = _stub
+    result = await mgr._sequential_pipe(["xiaoke", "xiaolang"], "original task")
+    assert result == "final answer body"
+    assert TIRED_MSG not in seen["xiaolang"]
+    assert "original task" in seen["xiaolang"]
+
+
+@pytest.mark.asyncio
+async def test_pipe_all_fail_returns_last_visible_reply():
+    mgr = SubAgentManagerMixin.__new__(SubAgentManagerMixin)
+    seen = []
+
+    async def _fail(name, task, mode="single", verifier=""):
+        seen.append(task)
+        return DelegationOutcome(ok=False, reply="X" + TIRED_MSG, agent=name, degraded=True)
+
+    mgr.delegate_to_agent_outcome = _fail
+    result = await mgr._sequential_pipe(["xiaoke", "xiaolang"], "original task")
+    assert result == "X" + TIRED_MSG
+    assert len(seen) == 2
+    assert TIRED_MSG not in seen[1]
 
 
 # ============================================================

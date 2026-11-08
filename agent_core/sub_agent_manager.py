@@ -12,9 +12,11 @@ from typing import Any
 from loguru import logger
 
 from agent_core._shared import (
+    ALL_SUB_AGENTS_FAILED_MSG,
     PARALLEL_WALL_TIMEOUT_S,
     SUB_AGENT_DISPATCH_TIMEOUT_S,
     TIRED_MSG,
+    DelegationOutcome,
     ProcessResult,
     RequestContext,
     _current_request_ctx,
@@ -639,61 +641,82 @@ class SubAgentManagerMixin:
             audio_path=audio_path, tts_pending=tts_pending, tts_text=tts_text,
         )
 
+
     async def delegate_to_agent(self, name: str, task: str,
-                                 mode: str = "single", verifier: str = "") -> str:
-        """通用子代理委托（delegate_task 工具的执行端）。
+                                 mode: str = 'single', verifier: str = '') -> str:
+        """Delegate to sub-agents and return the user-visible reply text.
 
-        Args:
-            name: 目标子代理标识名（pipe 模式下用逗号分隔多个，如 "xiaolian,xiaoke"）
-            task: 任务描述
-            mode: 操作模式 — single(默认) / generate_verify(生成+验证) / pipe(顺序管道)
-            verifier: 当 mode=generate_verify 时，指定验证子代理名
+        The structured success/failure flag comes from
+        delegate_to_agent_outcome; this wrapper keeps the historical str API.
         """
-        # pipe 模式：顺序管道，前一个的输出作为后一个的输入
-        if mode == "pipe" and "," in name:
-            agents = [a.strip().lower() for a in name.split(",") if a.strip()]
-            if len(agents) >= 2:
-                return await self._sequential_pipe(agents, task)
+        outcome = await self.delegate_to_agent_outcome(
+            name, task, mode=mode, verifier=verifier)
+        return outcome.reply
 
-        # I8: 3 种新协作模式
-        if "," in name:
-            agents = [a.strip().lower() for a in name.split(",") if a.strip()]
-            if len(agents) >= 2:
-                if mode == "ensemble":
-                    return await self._ensemble_agents(agents, task)
-                if mode == "retry_fallback":
-                    return await self._retry_fallback(agents, task)
-                if mode == "debate":
-                    return await self._debate_agents(agents, verifier, task)
+    async def delegate_to_agent_outcome(self, name: str, task: str,
+                                        mode: str = 'single',
+                                        verifier: str = '') -> DelegationOutcome:
+        """Like delegate_to_agent but keeps the structured outcome.
 
-        if name == "xiaoli":
-            return await self.delegate_to_xiaoli(task)
+        Collaborative modes (ensemble / pipe) use outcome.usable() to tell a
+        real sub-agent answer apart from dispatch-failure text such as
+        TIRED_MSG, so failure text is never chosen as the best result nor fed
+        downstream as prior analysis.
+        """
+        # pipe mode: previous output feeds the next agent
+        if mode == 'pipe' and ',' in name:
+            agents = [a.strip().lower() for a in name.split(',') if a.strip()]
+            if len(agents) >= 2:
+                return self._outcome_from_reply('', await self._sequential_pipe(agents, task))
+
+        # I8 collaborative modes
+        if ',' in name:
+            agents = [a.strip().lower() for a in name.split(',') if a.strip()]
+            if len(agents) >= 2:
+                if mode == 'ensemble':
+                    return self._outcome_from_reply('', await self._ensemble_agents(agents, task))
+                if mode == 'retry_fallback':
+                    return self._outcome_from_reply('', await self._retry_fallback(agents, task))
+                if mode == 'debate':
+                    return self._outcome_from_reply(
+                        '', await self._debate_agents(agents, verifier, task))
+
+        if name == 'xiaoli':
+            return self._outcome_from_reply('xiaoli', await self.delegate_to_xiaoli(task))
         _ctx = _current_request_ctx.get()
         agent = self.dispatcher.get_agent(name)
         if not agent:
-            return f"（找不到名为 {name} 的子代理）"
-        # A2A 共享黑板：委托前读取已有产出，避免重复工作（黑板为 None 时跳过）
-        bb = getattr(self.context, "shared_blackboard", None)
-        task_key = self._bb_task_key(name, task, user_id=_ctx.user_id if _ctx else "")
+            return DelegationOutcome(ok=False, reply=f"\uff08\u627e\u4e0d\u5230\u540d\u4e3a {name} \u7684\u5b50\u4ee3\u7406\uff09", agent=name)
+        # A2A shared blackboard: reuse prior output instead of duplicating work
+        bb = getattr(self.context, 'shared_blackboard', None)
+        task_key = self._bb_task_key(name, task, user_id=_ctx.user_id if _ctx else '')
         cached = await self._read_blackboard_cache(name, task, bb, task_key)
         if cached is not None:
-            return cached
+            return self._outcome_from_reply(name, cached)
         context = self._build_sub_agent_context(task_hint=task)
         result, _duration = await self._dispatch_and_record(name, task, context, _ctx, agent)
-        # I7: 记录子 Agent 工作履历 (供路由器智能调度)
+        # I7: record sub-agent work history for the router
         try:
             from core.agent_work_record import get_work_recorder
             get_work_recorder().record(
                 name, task_type=mode, success=result is not None,
                 duration=_duration)
         except Exception as e:
-            logger.debug("sub_agent.work_record_failed", error=str(e))
+            logger.debug('sub_agent.work_record_failed', error=str(e))
         if result is None:
-            return f"{agent.config.display_name}{TIRED_MSG}"
-
+            return DelegationOutcome(
+                ok=False, reply=f'{agent.config.display_name}{TIRED_MSG}', agent=name)
         result = await self._verify_result(name, task, result, mode, verifier)
         await self._write_blackboard_cache(bb, task_key, result, name)
-        return result
+        return self._outcome_from_reply(name, result)
+
+    @staticmethod
+    def _outcome_from_reply(agent: str, reply: str) -> DelegationOutcome:
+        """Wrap a plain reply into a structured outcome."""
+        text = reply if isinstance(reply, str) else ''
+        ok = bool(text.strip())
+        degraded = is_degraded_reply(text) if text else True
+        return DelegationOutcome(ok=ok, reply=text, agent=agent, degraded=degraded)
 
     async def _read_blackboard_cache(self, name: str, task: str, bb: Any, task_key: str) -> str | None:
         """A2A 共享黑板读取已有产出；命中返回缓存，未命中/失败返回 None。"""
@@ -884,49 +907,75 @@ class SubAgentManagerMixin:
             return f"{generated}\n\n【{verifier}审查反馈】{verify_result}"
         return generated
 
-    async def _sequential_pipe(self, agents: list[str], task: str) -> str:
-        """顺序管道：前一个子代理的输出作为后一个的输入（借鉴 Trae Pattern 2）。
 
-        agents[0] 的输入是 task，agents[1] 的输入是 task + agents[0] 的输出，
-        依此类推。最终返回最后一个子代理的输出。
+    async def _sequential_pipe(self, agents: list[str], task: str) -> str:
+        """Sequential pipeline: previous output feeds the next agent.
+
+        A failed step (structured failure or degradation text such as the
+        TIRED_MSG consolation line) is never passed downstream as prior
+        analysis; the next agent just reworks the original task. When every
+        step fails the last visible reply is returned (unchanged user-facing
+        wording).
         """
         current_input = task
+        have_prefix = True
+        last_reply = ''
         for i, agent_name in enumerate(agents):
             if i == 0:
                 pipe_task = task
-            else:
+            elif have_prefix:
                 pipe_task = (
                     f"基于以下前置分析结果，继续完成任务：\n\n"
                     f"原始任务：{task}\n\n"
                     f"前置结果：{current_input}\n\n"
                     f"请基于以上信息继续分析并给出你的专业判断。"
                 )
-            result = await self.delegate_to_agent(agent_name, pipe_task, mode="single")
-            current_input = result
-            logger.debug("agent.pipe_step step={} agent={} result_len={}",
-                         i + 1, agent_name, len(result))
-        return current_input
-
-    # ============================================================
-    # I8: 3 种新协作模式
-    # ============================================================
+            else:
+                pipe_task = (
+                    f'{task}\n\n'
+                    f'(the previous pipeline step produced no usable result: '
+                    f'complete the original task independently, '
+                    f'do not assume any prior analysis)'
+                )
+            outcome = await self.delegate_to_agent_outcome(
+                agent_name, pipe_task, mode='single')
+            last_reply = outcome.reply
+            have_prefix = outcome.usable()
+            current_input = outcome.reply if have_prefix else ''
+            logger.debug('agent.pipe_step step={} agent={} ok={} result_len={}',
+                         i + 1, agent_name, have_prefix, len(outcome.reply))
+        return current_input or last_reply
 
     async def _ensemble_agents(self, agents: list[str], task: str) -> str:
-        """集成模式：多 agent 并行解决同一任务，选最全面的结果。
+        """Ensemble: several agents try the same task, best REAL success wins.
 
-        借鉴 Trae Pattern 4 (ensemble) — 多个 agent 独立尝试，取最优。
-        适用于创意任务、问题解决等有多种有效路径的场景。
+        Candidates are filtered by the structured DelegationOutcome flag (with
+        is_degraded_reply as a text-level guard), so a dispatch-failure message
+        is never selected. Reply length is only a tie-breaker among successes.
         """
-        tasks = [self.delegate_to_agent(a, task, mode="single") for a in agents]
+        tasks = [self.delegate_to_agent_outcome(a, task, mode='single') for a in agents]
         results = await asyncio.gather(*tasks, return_exceptions=True)
-        valid = [r for r in results if isinstance(r, str) and len(r) > 20]
-        if not valid:
-            return "（所有子代理都无法完成任务）"
-        # 启发式：选最长的结果（通常最全面），无需额外 LLM 调用
-        best = max(valid, key=len)
-        logger.info("agent.ensemble_done agents={} best_len={}",
-                    len(agents), len(best))
-        return best
+        usable: list[DelegationOutcome] = []
+        failed = 0
+        for agent_name, res in zip(agents, results):
+            if isinstance(res, BaseException):
+                failed += 1
+                logger.info('agent.ensemble_worker_failed agent={} error={}',
+                            agent_name, str(res)[:200])
+                continue
+            outcome = res if isinstance(res, DelegationOutcome) else \
+                self._outcome_from_reply(agent_name, res if isinstance(res, str) else '')
+            if not outcome.usable():
+                failed += 1
+                continue
+            usable.append(outcome)
+        if not usable:
+            logger.info('agent.ensemble_all_failed agents={} failed={}', len(agents), failed)
+            return ALL_SUB_AGENTS_FAILED_MSG
+        best = max(usable, key=lambda o: len(o.reply))
+        logger.info('agent.ensemble_done agents={} usable={} failed={} best_agent={} best_len={}',
+                    len(agents), len(usable), failed, best.agent, len(best.reply))
+        return best.reply
 
     async def _retry_fallback(self, agents: list[str], task: str) -> str:
         """重试降级：按优先级依次尝试，仅返回首个结构化成功结果。"""
