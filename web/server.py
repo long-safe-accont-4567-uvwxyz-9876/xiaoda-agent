@@ -665,7 +665,9 @@ async def lifespan(app: FastAPI) -> AsyncIterator[Any]:
         from core.background_tasks import _spawn as _spawn_bg
         _instances = getattr(core, "local_ai_instances", None)
         if _instances is not None:
-            app.state.local_ai_health_task = _spawn_bg(_local_ai_health_loop(_instances))
+            # 常驻 while True 循环：声明 long_running，避免每轮都刷 bg.task_slow
+            app.state.local_ai_health_task = _spawn_bg(
+                _local_ai_health_loop(_instances), long_running=True)
     except (ImportError, RuntimeError, OSError) as e:
         logger.warning("webui.local_ai_health_loop_start_failed error={}", str(e))
 
