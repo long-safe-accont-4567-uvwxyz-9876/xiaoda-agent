@@ -57,6 +57,14 @@ _DEFAULT_EXEMPT_PATHS = frozenset({
     "/ws", "/favicon.ico", "/",
 })
 
+# 健康探针豁免只对只读方法生效：/health 无认证、又不在限流桶内，若把 POST/PUT
+# 一并放行，等于给一条无认证通道彻底摘掉限流。探针一律是 GET/HEAD，收紧到只读
+# 方法不影响任何真实用法，也不会给探测端点加认证（外部探针必须能匿名访问）。
+_HEALTH_EXEMPT_PATHS = frozenset({
+    "/health", "/healthz", "/health/self", "/api/v1/health", "/api/health",
+})
+_EXEMPT_READ_METHODS = frozenset({"GET", "HEAD"})
+
 # ── localhost 主机名集合 ──
 _LOCALHOST_HOSTS = frozenset({"127.0.0.1", "::1", "localhost", "0:0:0:0:0:0:0:1"})
 
@@ -225,7 +233,12 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
         # VULN-28: login 端点独立严格限流（默认 10/min，可信主机不豁免）
         self._login_limit = float(login_limit if login_limit is not None
                                   else os.environ.get("RATE_LIMIT_LOGIN", "10"))
-        self._exempt_paths = set(exempt_paths) if exempt_paths else set(_DEFAULT_EXEMPT_PATHS)
+        # 归一化尾部斜杠：/health 与 /health/ 必须视为同一路径，否则探针配了
+        # 尾斜杠时 307 跳转的请求与被跳转的请求都会计入 60/min 用户桶。
+        self._exempt_paths = (
+            {(p.rstrip("/") or "/") for p in exempt_paths}
+            if exempt_paths else set(_DEFAULT_EXEMPT_PATHS)
+        )
         # 额外白名单 host (测试/运维可追加, 精确匹配)
         self._whitelist = set(whitelist) if whitelist else set()
         # VULN-28: 可信网段（默认仅回环；内网段需 RATE_LIMIT_TRUSTED_NETWORKS 显式配置）
@@ -436,6 +449,20 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
             return False
         return any(addr in net for net in self._trusted_networks)
 
+    def _is_exempt_path(self, path: str, method: str = "GET") -> bool:
+        """豁免路径匹配：归一化尾部斜杠，使 /health 与 /health/ 等价。
+
+        FastAPI 对 /health/ 走 307 跳转到 /health；若这里精确匹配，跳转请求与
+        跳转后的请求都会计入 60/min 用户桶，探针反而把自己打成 429。健康探针
+        额外只放行只读方法（GET/HEAD），写请求仍按普通桶限流。
+        """
+        normalized = path.rstrip("/") or "/"
+        if normalized not in self._exempt_paths:
+            return False
+        if normalized in _HEALTH_EXEMPT_PATHS:
+            return method.upper() in _EXEMPT_READ_METHODS
+        return True
+
     # ── 主分发逻辑 ──
 
     async def dispatch(self, request: Request, call_next: Any) -> Any:
@@ -445,7 +472,7 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
         # 滥用面；SPA 一次加载会并发请求几十个 chunk，若计入用户桶会瞬间耗尽
         # 60/min 导致整页 429 崩溃。媒体鉴权由 media_auth 单独负责，不受影响。
         if (
-            path in self._exempt_paths
+            self._is_exempt_path(path, request.method)
             or path.startswith("/ws")
             or path.startswith("/assets/")
             or path.startswith("/media/")

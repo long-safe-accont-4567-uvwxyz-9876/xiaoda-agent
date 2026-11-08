@@ -7,6 +7,7 @@ import os
 import shutil
 import sqlite3
 import subprocess
+import tempfile
 import time
 from pathlib import Path
 from typing import Any
@@ -393,109 +394,200 @@ def _collect_proc_net_metrics(psutil: Any) -> dict:
 # 依赖全挂时探针依然是绿的。本 router 挂在 app 根（不带 /api/v1 前缀），并在
 # web/server.py::_register_routes 内先于 static mount 注册以保证路由优先级。
 #
-# 开销约束：每次探测只做一次 SELECT 1、一次文件可写性检查、一次内存态读取。
-# 不取写锁（真写事务会与对话写路径争用 _write_tx_lock，反而制造假故障），
-# 不做 KNN 检索。整体硬超时 1.5s，超时按不健康上报。
+# 三态语义（探针契约）：
+#   ok        → HTTP 200, status="ok"        全部依赖健康
+#   degraded  → HTTP 200, status="degraded"  依赖降级但仍可服务（嵌入引擎未就绪、
+#                                            检索退化为 FTS 关键词、可写性未判定）
+#   unhealthy → HTTP 503, status="unhealthy" 服务级故障（数据库不可用、探测超时/异常）
+# 为什么降级不返回 503：外部探针（反代、uptime 监控、k8s）只会读状态码，
+# 把「检索还能降级到关键词」报成 503，等于让它们把还能聊天的服务当宕机重启。
+#
+# 开销约束：每次探测只做一次 SELECT 1、一次可写性检查（真实临时文件，60s 缓存）、
+# 一次内存态读取。不取写锁（真写事务会与对话写路径争用 _write_tx_lock，反而制造
+# 假故障），不做 KNN 检索。整体硬超时 1.5s，超时按不健康上报。
 probe_router = APIRouter(tags=["health"], include_in_schema=False)
 
 _HEALTH_PROBE_TIMEOUT = 1.5
 
+# 可写性用真实创建/删除临时文件验证：os.access(W_OK) 在 root 身份下恒真（只看
+# 权限位），只读挂载也可能被权限位掩盖，唯一可靠的判据是实际写一次。但匿名探针
+# 若按秒级频率打过来，每次都建文件会放大写压力，所以结果按目录缓存 60s。
+_WRITE_PROBE_TTL = 60.0
+_write_probe_cache: dict[str, tuple[float, dict]] = {}
 
-async def _probe_database(core):
-    """数据库探测：连接存活（真实查询）+ 数据库文件可写性。"""
+
+def _check(state: str, reason: str | None = None, **extra: Any) -> dict:
+    """构造单项检查结果：state 是三态判据，ok 只是 state == "ok" 的便利字段。"""
+    result: dict = {"state": state, "ok": state == "ok"}
+    if reason:
+        result["reason"] = reason
+    result.update(extra)
+    return result
+
+
+def _probe_db_writability(db: Any) -> dict:
+    """数据库目录可写性：真实写入探针 + 60s 缓存。
+
+    state：writable / unwritable / skipped（取不到 db.db_path 时）。
+    skipped 不算 ok：拿不到路径说明 DB 封装的隐式契约破了，这一项无法证伪，
+    上报为 degraded 让人看得见，但不至于把服务判死。
+    """
+    raw_path = getattr(db, "db_path", None)
+    if not raw_path:
+        return {"state": "skipped", "writable": None, "source": "db.db_path",
+                "detail": "db.db_path unavailable"}
+    try:
+        target_dir = Path(str(raw_path)).parent
+    except (OSError, TypeError, ValueError) as e:
+        return {"state": "skipped", "writable": None, "source": "db.db_path",
+                "detail": "%s: %s" % (type(e).__name__, str(e)[:80])}
+    key = str(target_dir)
+    now = time.monotonic()
+    cached = _write_probe_cache.get(key)
+    if cached is not None and now - cached[0] < _WRITE_PROBE_TTL:
+        return dict(cached[1])
+    tmp_name = None
+    result: dict
+    try:
+        fd, tmp_name = tempfile.mkstemp(prefix=".health-w-", suffix=".tmp",
+                                        dir=str(target_dir))
+        try:
+            os.write(fd, b"1")
+        finally:
+            os.close(fd)
+        result = {"state": "writable", "writable": True, "source": "tempfile",
+                  "detail": key}
+    except (OSError, TypeError, ValueError) as e:
+        result = {"state": "unwritable", "writable": False, "source": "tempfile",
+                  "detail": "%s: %s" % (type(e).__name__, str(e)[:120])}
+    finally:
+        if tmp_name:
+            try:
+                os.unlink(tmp_name)
+            except OSError:
+                pass
+    _write_probe_cache[key] = (now, dict(result))
+    return result
+
+
+async def _probe_database(core: Any) -> dict:
+    """数据库探测：连接存活（真实查询）+ 数据库文件可写性。
+
+    连接层异常 = unhealthy（读写会话/记忆全废，属服务级故障）；
+    可写性确认失败 = unhealthy；可写性无法判定 = degraded。
+    """
     t0 = time.perf_counter()
     db = getattr(core, "db", None) if core is not None else None
     if db is None:
-        return {"ok": False, "error": "database not initialized", "latency_ms": 0}
+        return _check("unhealthy", "database not initialized", latency_ms=0)
     try:
         await db.fetch_one("SELECT 1 AS ok")
-    except (OSError, RuntimeError, ValueError, sqlite3.Error) as e:
-        return {
-            "ok": False,
-            "error": "%s: %s" % (type(e).__name__, str(e)[:120]),
-            "latency_ms": int((time.perf_counter() - t0) * 1000),
-        }
-    writable = None
-    raw_path = getattr(db, "db_path", None)
-    if raw_path:
-        try:
-            db_path = Path(str(raw_path))
-            # WAL 模式下还要能写 -wal/-shm，因此目录可写性一并检查
-            writable = os.access(str(db_path), os.W_OK) and os.access(
-                str(db_path.parent), os.W_OK
-            )
-        except (OSError, TypeError, ValueError):
-            writable = None
-    return {
-        "ok": writable is not False,
-        "writable": writable,
+    except (OSError, RuntimeError, ValueError, TypeError, sqlite3.Error) as e:
+        # 白名单外的东西由 _guarded 兜成 unhealthy JSON，不会漏成 500 纯文本
+        return _check("unhealthy", "%s: %s" % (type(e).__name__, str(e)[:120]),
+                      latency_ms=int((time.perf_counter() - t0) * 1000))
+    writability = _probe_db_writability(db)
+    base = {
+        "writable": writability.get("writable"),
+        "writable_state": writability.get("state"),
+        "writable_source": writability.get("source"),
         "latency_ms": int((time.perf_counter() - t0) * 1000),
     }
+    if writability.get("state") == "unwritable":
+        return _check("unhealthy",
+                      "database not writable: %s" % writability.get("detail"), **base)
+    if writability.get("state") == "skipped":
+        return _check("degraded",
+                      "writability check skipped: %s" % writability.get("detail"), **base)
+    return _check("ok", None, **base)
 
 
-def _probe_embedding(core):
-    """嵌入引擎探测：只读内存态（MemoryManager.vec.embed_engine_status）。"""
+def _probe_embedding(core: Any) -> dict:
+    """嵌入引擎探测：只读内存态（MemoryManager.vec.embed_engine_status）。
+
+    嵌入/检索属功能面：引擎未就绪、API key 未配置、向量库缺失都只降级为
+    degraded（HTTP 200）——此时服务仍能对话，只是检索退化到关键词。
+    """
     t0 = time.perf_counter()
     memory = getattr(core, "memory", None) if core is not None else None
     vector_store = getattr(memory, "vec", None) if memory is not None else None
     if vector_store is None:
-        return {
-            "ok": False,
-            "ready": False,
-            "error": "vector store not initialized",
-            "latency_ms": 0,
-        }
+        return _check("degraded", "vector store not initialized", ready=False,
+                      latency_ms=0)
     try:
         status = vector_store.embed_engine_status()
-    except (OSError, RuntimeError, ValueError, AttributeError) as e:
-        return {
-            "ok": False,
-            "ready": False,
-            "error": "%s: %s" % (type(e).__name__, str(e)[:120]),
-            "latency_ms": int((time.perf_counter() - t0) * 1000),
-        }
+    except (OSError, RuntimeError, ValueError, AttributeError, TypeError) as e:
+        return _check("degraded", "%s: %s" % (type(e).__name__, str(e)[:120]),
+                      ready=False, latency_ms=int((time.perf_counter() - t0) * 1000))
     mode = status.get("mode")
     ready = bool(status.get("engine_running"))
-    # local 模式看本地引擎是否就绪；remote 模式看 API key 是否配置
-    ok = ready if mode == "local" else bool(status.get("api_configured"))
-    return {
-        "ok": ok,
+    api_configured = bool(status.get("api_configured"))
+    detail = {
         "ready": ready,
         "mode": mode,
         "backend": status.get("backend"),
         "dimensions": status.get("dimensions"),
         "latency_ms": int((time.perf_counter() - t0) * 1000),
     }
+    if mode == "local":
+        if ready:
+            return _check("ok", None, **detail)
+        return _check("degraded", "local embedding engine not ready", **detail)
+    if api_configured:
+        return _check("ok", None, **detail)
+    return _check("degraded", "embedding api key not configured", **detail)
 
 
-async def _guarded(factory):
-    """带硬超时与异常兜底的依赖探测，永不向探针抛异常。"""
+async def _guarded(name: str, factory: Any) -> dict:
+    """带硬超时与异常兜底的依赖探测：任何异常都必须变成 JSON，不得漏成 500。"""
     try:
-        return await asyncio.wait_for(factory(), timeout=_HEALTH_PROBE_TIMEOUT)
+        result = await asyncio.wait_for(factory(), timeout=_HEALTH_PROBE_TIMEOUT)
     except asyncio.TimeoutError:
-        return {"ok": False, "error": "timeout after %ss" % _HEALTH_PROBE_TIMEOUT}
-    except (OSError, RuntimeError, ValueError, AttributeError, sqlite3.Error) as e:
-        return {"ok": False, "error": "%s: %s" % (type(e).__name__, str(e)[:120])}
+        return _check("unhealthy",
+                      "timeout after %ss" % _HEALTH_PROBE_TIMEOUT)
+    except Exception as e:  # noqa: BLE001 - 白名单会漏 TypeError/自定义异常
+        logger.warning("health.probe_failed check={} error={}", name,
+                       type(e).__name__)
+        return _check("unhealthy", "%s: %s" % (type(e).__name__, str(e)[:120]))
+    if not isinstance(result, dict):
+        return _check("unhealthy", "probe returned %s" % type(result).__name__)
+    if "state" not in result:
+        result = dict(result)
+        result["state"] = "ok" if result.get("ok") else "unhealthy"
+        result.setdefault("ok", result["state"] == "ok")
+    return result
 
 
 @probe_router.get("/health")
 @probe_router.get("/healthz", include_in_schema=False)
 async def health_probe(request: Request) -> JSONResponse:
-    """真实健康探针：依赖正常 200，任一依赖异常 503（响应体始终是 JSON）。"""
+    """真实健康探针：三态（ok / degraded / unhealthy），响应体恒为 JSON。"""
     started = time.perf_counter()
     core = getattr(request.app.state, "core", None)
     database, embedding = await asyncio.gather(
-        _guarded(lambda: _probe_database(core)),
-        _guarded(lambda: asyncio.to_thread(_probe_embedding, core)),
+        _guarded("database", lambda: _probe_database(core)),
+        _guarded("embedding", lambda: asyncio.to_thread(_probe_embedding, core)),
     )
-    healthy = bool(database.get("ok")) and bool(embedding.get("ok"))
+    checks = {"database": database, "embedding": embedding}
+    states = [check.get("state") for check in checks.values()]
+    if "unhealthy" in states:
+        status, status_code = "unhealthy", 503
+    elif "degraded" in states:
+        status, status_code = "degraded", 200
+    else:
+        status, status_code = "ok", 200
     payload = {
-        "status": "ok" if healthy else "unhealthy",
-        "checks": {"database": database, "embedding": embedding},
+        "status": status,
+        "healthy": status == "ok",
+        "reasons": [
+            "%s: %s" % (name, check.get("reason"))
+            for name, check in checks.items() if check.get("reason")
+        ],
+        "checks": checks,
         "elapsed_ms": int((time.perf_counter() - started) * 1000),
     }
     return JSONResponse(
-        status_code=200 if healthy else 503,
+        status_code=status_code,
         content=payload,
         headers={"Cache-Control": "no-store"},
     )
