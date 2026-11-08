@@ -31,12 +31,12 @@ from loguru import logger
 
 from config import FREE_EMERGENCY_FALLBACK
 from core.app_exception import LLMError
+from llm_gateway.agent_target import runtime_default_provider as _runtime_default_provider
 from model_router_config import (
     CROSS_PROVIDER_FALLBACK_POLICY,
     get_cross_provider_tier,
     get_fallback_tier,
 )
-from llm_gateway.agent_target import runtime_default_provider as _runtime_default_provider
 from model_router_registry import FALLBACK_ROUTE
 from utils.free_model_backend import DEFAULT_FREE_MODEL
 
@@ -171,7 +171,7 @@ class FallbackChainMixin:
             _orig_entry = self._registry.get_task(task_type) or {}
             _original_provider = _orig_entry.get("client", _runtime_default_provider())
             _original_model = _orig_entry.get("model", "")
-        except Exception:
+        except (KeyError, TypeError, ValueError, RuntimeError, OSError):
             logger.warning("router.fallback_original_provider_lookup_failed", exc_info=True)
 
         _tier_attempted = False
