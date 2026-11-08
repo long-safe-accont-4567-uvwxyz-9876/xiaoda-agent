@@ -1,5 +1,6 @@
 import asyncio
 import contextlib
+import os
 import sys
 from contextvars import ContextVar
 from pathlib import Path
@@ -128,18 +129,35 @@ class DatabaseManager(LegacyMigrationMixin, DDLMixin, ConversationLogMixin, Life
             logger.debug(event, exc_info=True)
 
     def _ensure_writable_dir(self) -> None:
-        """只读文件系统检测：SQLite 在只读目录上打开不报错，但后续写入失败，提前探测。"""
+        """只读文件系统检测：SQLite 在只读目录上打开不报错，但后续写入失败，提前探测。
+
+        审计 L2：原实现每次都写一个 <code>.db_write_probe</code> 再删（外置盘/SD 卡上
+        多出两次元数据写入，每次 DatabaseManager 初始化都付）。改为先读挂载标志
+        （statvfs 的 ST_RDONLY 位）+ 目录权限（os.access），两者都判不出时
+        才落探针兜底——正常情况下零写入。
+        """
+        _db_dir = self.db_path.parent
+        _ro_flag = getattr(os, "ST_RDONLY", 1)
         try:
-            _db_dir = self.db_path.parent
-            _probe_file = _db_dir / ".db_write_probe"
-            _probe_file.write_text("probe", encoding="utf-8")
-            _probe_file.unlink(missing_ok=True)
-        except (OSError, PermissionError) as e:
-            logger.critical("database.readonly_fs db_path={} error={}", self.db_path, e)
+            _vfs = os.statvfs(str(_db_dir))
+        except OSError as e:
+            logger.critical("database.statvfs_failed db_path={} error={}", self.db_path, e)
             raise OSError(
                 f"数据库目录不可写: {self.db_path.parent}. "
                 f"请检查文件系统权限或卸载/重新挂载外置存储。"
             ) from e
+        _reason = ""
+        if _vfs.f_flag & _ro_flag:
+            _reason = "挂载点只读(ST_RDONLY)"
+        elif not os.access(str(_db_dir), os.W_OK | os.X_OK):
+            _reason = "目录不可写(os.access)"
+        if _reason:
+            logger.critical("database.readonly_fs db_path={} reason={}",
+                            self.db_path, _reason)
+            raise OSError(
+                f"数据库目录不可写: {self.db_path.parent}（{_reason}）. "
+                f"请检查文件系统权限或卸载/重新挂载外置存储。"
+            )
 
     async def _init_readonly_conn(self) -> None:
         """初始化独立只读连接（供 restore_from_db 使用）；失败回退主连接，不阻断启动。"""
