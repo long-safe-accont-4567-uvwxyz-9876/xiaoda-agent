@@ -158,7 +158,10 @@ def _line_count(rel: str) -> int:
 #       WAL 守护任务接入(a833ca4d/457dd118)；zh/en i18n 1536→1562/1535→1561
 #       —— GSAP 编排批次文案扩充(b1e5db3b 等)；
 ALLOWLIST_BASELINES: dict[str, int] = {
-    "memory/vector_store.py": 1750,
+    # 2026-11-08 fix/audit-defects-perf 中等 M3：_embed_cache_path 纳入本地
+    # 模型目录身份（同维度换模型不再静默复用旧向量），+11 行注释与分支，
+    # 基线 1750→1761。
+    "memory/vector_store.py": 1761,
     "web/server.py": 1424,
     "agent_context.py": 1345,
     # 2026-08-29 审计修复 Task 1（setup 引导 token 鉴权 + recovery_qa 接线）+112 行
@@ -181,7 +184,9 @@ ALLOWLIST_BASELINES: dict[str, int] = {
     # 2026-09-03 上调（协议 b）：重试降级走 SubAgentInvocation 调度器 +32
     # 2026-11-08 上调（协议 b）：合并 69020832 的 DelegationOutcome/
     # ensemble usable() 过滤与 _sequential_pipe 语义（+49，待专项拆分）
-    "agent_core/sub_agent_manager.py": 1222,
+    # 2026-11-08 fix/audit-defects-perf 低 L4：进度回传失败补 debug 日志，
+    # +1 行，基线 1222→1223。
+    "agent_core/sub_agent_manager.py": 1223,
     # 2026-08-29 审计修复 Task 4（agent_core 管线六项修复）：
     #   sub_agent.py 1036→1161 —— 工具结果 EXTERNAL 消毒助手（Fix3）、
     #     截断 JSON 修复真正生效（Fix4）、MCP 作用域过滤 helpers
@@ -194,7 +199,9 @@ ALLOWLIST_BASELINES: dict[str, int] = {
     "agent_core/sub_agent.py": 1188,
     "tools/_builtin_manifest.py": 1001,
     "web/routers/insight.py": 937,
-    "core/background_tasks.py": 1018,
+    # 2026-11-08 fix/audit-defects-perf 中等 M5：_spawn 新增 long_running 声明
+    # （长驻循环不再每轮刷 bg.task_slow），+7 行常量与形参注释，基线 1018→1025。
+    "core/background_tasks.py": 1025,
     # 2026-11-08 fix/router-interface-consistency：set_agent_model 切前探活 + 切后校验
     # client、响应带 client_rebuilt/probe（新增 15 行），基线 912→927
     "web/agent_registry.py": 927,
