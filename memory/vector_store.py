@@ -87,12 +87,16 @@ class EmbedCache:
     - 加载/保存失败静默降级为空缓存/跳过写盘，不影响主流程
     """
 
-    def __init__(self, max_size: int = 256, persist_path: str = "") -> None:
+    def __init__(self, max_size: int = 256, persist_path: str = "",
+                 identity: str = "") -> None:
         """初始化嵌入缓存。
 
         persist_path: 磁盘缓存文件路径，为空则纯内存缓存（不持久化）。
+        identity: 向量空间身份（模型名 + 本地模型目录）；与磁盘里记录的不一致
+            时整体失效，避免换了模型还命中旧向量（审计 M3 遗留）。
         """
         self._cache: OrderedDict[str, list[float]] = OrderedDict()
+        self._identity = identity
         self._max_size = max_size
         self._hits = 0
         self._misses = 0
@@ -116,6 +120,26 @@ class EmbedCache:
                 data = np.load(self._persist_path, allow_pickle=False)
                 keys = data["keys"]
                 vecs = data["vecs"]
+                # 审计 M3 遗留：身份/形状守卫。换了嵌入模型或本地模型目录时，
+                # 旧缓存必须整体失效——否则会静默把别的向量空间的行当命中，
+                # 检索结果错但不报错（比慢更难查）。
+                stored = ""
+                if "identity" in getattr(data, "files", ()):
+                    _id = data["identity"]
+                    stored = str(_id[0]) if len(_id) else ""
+                if stored and self._identity and stored != self._identity:
+                    logger.warning(
+                        "embed_cache.identity_mismatch path={} stored={} current={}",
+                        self._persist_path, stored, self._identity)
+                    self._cache.clear()
+                    return
+                if getattr(vecs, "ndim", 0) != 2 or len(keys) != vecs.shape[0]:
+                    logger.warning(
+                        "embed_cache.shape_invalid path={} keys={} vecs_shape={}",
+                        self._persist_path, len(keys),
+                        getattr(vecs, "shape", None))
+                    self._cache.clear()
+                    return
                 # 整矩阵一次 C 层 tolist()：N 行 × 512 维从 N 次行级转换收敛为
                 # 1 次（npz 的 vecs 恒为 float32 ndarray，tolist 逐元素提升为
                 # Python float，与旧逐行 v.tolist() 值语义逐位一致）
@@ -145,6 +169,7 @@ class EmbedCache:
                 buf = io.BytesIO()
                 np.savez(
                     buf,
+                    identity=np.array([self._identity]),
                     keys=np.array(list(self._cache.keys())),
                     vecs=np.array(list(self._cache.values()), dtype=np.float32),
                 )
@@ -250,6 +275,21 @@ def _default_embed_model() -> str:
     return _EMBED_MODEL_DEFAULT_CACHE
 
 
+def embed_cache_filename(embed_model: str, local_model_dir: str = "") -> str:
+    """embedding 缓存文件名（与 VectorStore._embed_cache_path 同源）。
+
+    审计 M3 遗留：清理脚本与运行期必须用同一套命名规则，否则会把在用的
+    缓存当孤儿删掉。本地目录非空时并入目录名（换模型即换文件）。
+    """
+    slug = (embed_model or "").replace("/", "_").replace(":", "_")
+    local_dir = str(local_model_dir or "").strip()
+    if local_dir:
+        local_slug = Path(local_dir).name.replace("/", "_").replace(":", "_")
+        if local_slug:
+            slug = f"{slug}__{local_slug}"
+    return f"embed_cache_{slug}.npz"
+
+
 class VectorStore:
     """基于 SQLite-vec 的向量存储，支持嵌入、写入、删除和相似度搜索。"""
 
@@ -291,7 +331,10 @@ class VectorStore:
         self._lock = threading.Lock()
         self._embed_client = None
         self._vec_conn = None
-        self._cache = EmbedCache(max_size=512, persist_path=self._embed_cache_path())
+        _cache_path = self._embed_cache_path()
+        self._cache = EmbedCache(
+            max_size=512, persist_path=_cache_path,
+            identity=Path(_cache_path).name if _cache_path else "")
         # numpy 内存暴力索引（可选，VECTOR_BRUTE_ENABLED=1 启用）：
         # BLAS 点积精确暴力 KNN（与 sqlite-vec 同 L2 度量，结果 100% 一致），
         # 13761×512 仅 23MB 常驻内存，4.5ms/次（SQLite 暴力 33.5ms）。
@@ -354,18 +397,13 @@ class VectorStore:
         不报错）。这里把本地模型目录名并入文件名：非本地模式目录为空，文件名
         与旧版完全一致（无迁移成本）；本地模式换目录即换文件。
         """
-        _model_slug = self._embed_model.replace("/", "_").replace(":", "_")
-        _local_dir = str(getattr(self, "_local_model_dir", "") or "").strip()
-        if _local_dir:
-            _local_slug = Path(_local_dir).name.replace("/", "_").replace(":", "_")
-            if _local_slug:
-                _model_slug = f"{_model_slug}__{_local_slug}"
         _base = Path(self._db_path).parent
         try:
             _base.mkdir(parents=True, exist_ok=True)
         except OSError:
             return ""
-        return str(_base / f"embed_cache_{_model_slug}.npz")
+        return str(_base / embed_cache_filename(
+            self._embed_model, getattr(self, "_local_model_dir", "")))
 
     # ── embedding 引擎构建 / 热切换（WebUI 本地部署页）──────────
 
