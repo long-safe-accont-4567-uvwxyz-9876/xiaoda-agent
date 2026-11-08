@@ -9,6 +9,7 @@ This is a governance layer beneath retrieval; it does not replace RAG.
 from __future__ import annotations
 
 import hashlib
+import sqlite3
 import time
 import uuid
 from typing import Any
@@ -202,7 +203,12 @@ class ContextGovernance:
         if not memories:
             return 0
         now = time.time()
-        inserted = 0
+        sql = (
+            "INSERT INTO context_audit_log "
+            "(response_id, memory_id, content_hash, version, score, source, rank, retrieved_at) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?)"
+        )
+        rows: list[tuple] = []
         for rank, mem in enumerate(memories):
             mem_id = mem.get("id")
             if mem_id is None:
@@ -212,17 +218,28 @@ class ContextGovernance:
             score = float(mem.get("final_score", mem.get("rerank_score",
                           mem.get("rrf_score", mem.get("score", 0.0)))) or 0.0)
             source = mem.get("source_label", "retrieval")
+            rows.append((response_id, mem_id, content_hash, version, score, source, rank, now))
+
+        # 审计 M2：原实现逐条 await execute（每条一次 aiosqlite 线程往返，
+        # 一次响应注入 N 条记忆就是 N 次往返）。改为一次 executemany；
+        # 整批失败（含个别坏行）时回退逐条写并记 debug，保持"坏行不影响
+        # 其余审计记录"的既有语义。
+        inserted = 0
+        if rows:
             try:
-                await self._conn.execute(
-                    "INSERT INTO context_audit_log "
-                    "(response_id, memory_id, content_hash, version, score, source, rank, retrieved_at) "
-                    "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-                    (response_id, mem_id, content_hash, version, score, source, rank, now),
-                )
-                inserted += 1
-            except Exception as e:
-                logger.debug("governance.audit_insert_failed",
-                             memory_id=mem_id, error=str(e))
+                await self._conn.executemany(sql, rows)
+                inserted = len(rows)
+            except (sqlite3.Error, OSError, ValueError, TypeError) as e:
+                logger.debug("governance.audit_batch_failed", error=str(e),
+                             rows=len(rows))
+                inserted = 0
+                for row in rows:
+                    try:
+                        await self._conn.execute(sql, row)
+                        inserted += 1
+                    except (sqlite3.Error, OSError, ValueError, TypeError) as row_error:
+                        logger.debug("governance.audit_insert_failed",
+                                     memory_id=row[1], error=str(row_error))
         if inserted and auto_commit:
             await self._conn.commit()
         return inserted
