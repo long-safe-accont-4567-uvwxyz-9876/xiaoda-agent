@@ -18,8 +18,10 @@
 from __future__ import annotations
 
 import asyncio
+import atexit
 import json
 import os
+import threading
 import time
 from dataclasses import dataclass, field
 from enum import IntEnum
@@ -298,17 +300,90 @@ class XPSystem:
             ...
     """
 
-    def __init__(self, data_dir: Path | None = None) -> None:
+    # 审计 H2：落盘合并窗口（秒）。热路径 add_chat_xp 原本每条消息一次
+    # json.dumps(indent=2) + mkstemp + fsync + os.replace 全量重写
+    # （生产 449,049 字节 / 33 用户，序列化实测 32.0ms，热读 6.9-7.7ms），
+    # 写放大与闪存磨损都压在这条链上。改为「标记脏 + 合并延迟落盘」，
+    # debounce 与 core/mental_state.py 的 300ms 对齐；进程退出前由 atexit
+    # flush 兜底，原子写语义（tmp + fsync + replace）保持不变。
+    DEFAULT_FLUSH_INTERVAL = 0.3
+
+    def __init__(self, data_dir: Path | None = None,
+                 flush_interval: float | None = None) -> None:
         """初始化 XP 系统
 
         Args:
             data_dir: 持久化目录, 默认为 config.DATA_DIR
+            flush_interval: 落盘合并窗口(秒)。None 取环境变量
+                XP_FLUSH_INTERVAL_SEC, 再回落 DEFAULT_FLUSH_INTERVAL；
+                0 表示每次变更立即落盘(旧行为, 测试/排障用)。
         """
         self._state_path = (Path(data_dir) if data_dir else Path(DATA_DIR)) / "xp_state.json"
         self._states: dict[str, XPState] = {}
         # F6: 缓存上限 — 最多 500 个用户状态，超出时淘汰最久未活跃的
         self._max_states = 500
+        if flush_interval is None:
+            try:
+                flush_interval = float(os.getenv("XP_FLUSH_INTERVAL_SEC", ""))
+            except ValueError:
+                flush_interval = self.DEFAULT_FLUSH_INTERVAL
+        # 状态字典会在 to_thread 的工作线程里被读改，加 RLock 串行化
+        self._lock = threading.RLock()
+        self._flush_interval = max(0.0, float(flush_interval))
+        self._dirty_users: set[str] = set()
+        self._flush_timer: threading.Timer | None = None
+        self._write_count = 0
         self._load()
+        atexit.register(self.flush)
+
+    # ── 落盘调度（审计 H2）─────────────────────────────────
+
+    def _mark_dirty(self, user_id: str) -> None:
+        """标记某用户状态已变更并按合并窗口延迟落盘（热路径入口，不写盘）。"""
+        with self._lock:
+            self._dirty_users.add(user_id)
+            if self._flush_interval <= 0:
+                self._flush_locked()
+                return
+            if self._flush_timer is None or not self._flush_timer.is_alive():
+                timer = threading.Timer(self._flush_interval, self._on_flush_timer)
+                timer.daemon = True
+                self._flush_timer = timer
+                timer.start()
+
+    def _on_flush_timer(self) -> None:
+        with self._lock:
+            self._flush_timer = None
+            try:
+                self._flush_locked()
+            except (OSError, ValueError, RuntimeError, TypeError) as e:
+                logger.warning("XPSystem.flush_failed: {}", e)
+
+    def flush(self) -> None:
+        """立即落盘未合并的变更（进程退出 / 关停 / 测试断言前调用）。"""
+        with self._lock:
+            if self._flush_timer is not None:
+                self._flush_timer.cancel()
+                self._flush_timer = None
+            self._flush_locked()
+
+    def _flush_locked(self) -> None:
+        """把脏状态原子写盘（调用方需持有 self._lock）。"""
+        if not self._dirty_users:
+            return
+        self._dirty_users.clear()
+        self._save()
+
+    @property
+    def pending_users(self) -> set[str]:
+        """尚未落盘的用户集合（测试/观测用）。"""
+        with self._lock:
+            return set(self._dirty_users)
+
+    @property
+    def write_count(self) -> int:
+        """累计实际写盘次数（测试/观测用）。"""
+        return self._write_count
 
     # ── 持久化 ──────────────────────────────────────────────
 
@@ -339,6 +414,7 @@ class XPSystem:
             "updated_at": time.time(),
         }
         try:
+            self._write_count += 1
             if atomic_json_write is not None:
                 atomic_json_write(
                     self._state_path, data,
@@ -357,19 +433,20 @@ class XPSystem:
 
     def get_state(self, user_id: str) -> XPState:
         """获取用户 XP 状态 (不存在则创建)"""
-        if user_id not in self._states:
-            # F6: 超出上限时淘汰最久未活跃的用户
-            if len(self._states) >= self._max_states:
-                self._evict_oldest()
-            now = time.time()
-            self._states[user_id] = XPState(
-                user_id=user_id,
-                xp=0,
-                level=XPLevel.LV1_STRANGER,
-                first_seen_at=now,
-            )
-            self._save()
-        return self._states[user_id]
+        with self._lock:
+            if user_id not in self._states:
+                # F6: 超出上限时淘汰最久未活跃的用户
+                if len(self._states) >= self._max_states:
+                    self._evict_oldest()
+                now = time.time()
+                self._states[user_id] = XPState(
+                    user_id=user_id,
+                    xp=0,
+                    level=XPLevel.LV1_STRANGER,
+                    first_seen_at=now,
+                )
+                self._mark_dirty(user_id)
+            return self._states[user_id]
 
     def _evict_oldest(self) -> None:
         """F6: 淘汰最久未活跃的用户状态（按 last_chat_at 排序，淘汰最久未活跃的 10%）"""
@@ -405,19 +482,23 @@ class XPSystem:
         if amount <= 0:
             return self.get_state(user_id), False
 
-        state = self.get_state(user_id)
-        old_level = state.level
-        state.xp += amount
-        state.level = self._compute_level(state.xp)
-        state.history.append(XPHistoryEntry(
-            timestamp=time.time(),
-            amount=amount,
-            source=source,
-            description=description,
-        ))
-        state.last_chat_at = state.history[-1].timestamp
-        leveled_up = self._check_levelup(state, old_level)
-        self._save()
+        # 读改写整体持锁：add_chat_xp 会从 to_thread 工作线程并发进入，
+        # 原实现裸 `state.xp += amount` 在多线程下会丢增量。
+        with self._lock:
+            state = self.get_state(user_id)
+            old_level = state.level
+            state.xp += amount
+            state.level = self._compute_level(state.xp)
+            state.history.append(XPHistoryEntry(
+                timestamp=time.time(),
+                amount=amount,
+                source=source,
+                description=description,
+            ))
+            state.last_chat_at = state.history[-1].timestamp
+            leveled_up = self._check_levelup(state, old_level)
+            # 审计 H2：热路径只标记脏，合并延迟落盘（原为每条消息全量重写 449KB）
+            self._mark_dirty(user_id)
         return state, leveled_up
 
     def add_chat_xp(self, user_id: str, message_length: int) -> tuple[XPState, bool]:
@@ -456,20 +537,21 @@ class XPSystem:
 
     def add_daily_login_xp(self, user_id: str) -> tuple[XPState, bool]:
         """每日首次登录 +5 XP (同一天只触发一次)"""
-        state = self.get_state(user_id)
-        today = time.strftime("%Y-%m-%d", time.localtime())
-        if state.last_daily_login_date == today:
-            return state, False
-        # 用 add_xp 实际加经验 (会更新 last_chat_at 并保存)
-        new_state, leveled_up = self.add_xp(
-            user_id, XP_AMOUNTS[XPSource.DAILY_LOGIN],
-            XPSource.DAILY_LOGIN,
-            description=f"daily login ({today})",
-        )
-        # 标记当日已领取 (add_xp 内部已保存, 这里再保存一次确保 last_daily_login_date 落盘)
-        new_state.last_daily_login_date = today
-        self._save()
-        return new_state, leveled_up
+        with self._lock:
+            state = self.get_state(user_id)
+            today = time.strftime("%Y-%m-%d", time.localtime())
+            if state.last_daily_login_date == today:
+                return state, False
+            # 用 add_xp 实际加经验 (会更新 last_chat_at 并保存)
+            new_state, leveled_up = self.add_xp(
+                user_id, XP_AMOUNTS[XPSource.DAILY_LOGIN],
+                XPSource.DAILY_LOGIN,
+                description=f"daily login ({today})",
+            )
+            # 标记当日已领取 (add_xp 内部已标记脏, 这里再标记一次确保 last_daily_login_date 落盘)
+            new_state.last_daily_login_date = today
+            self._mark_dirty(user_id)
+            return new_state, leveled_up
 
     # ── 等级计算 ────────────────────────────────────────────
 

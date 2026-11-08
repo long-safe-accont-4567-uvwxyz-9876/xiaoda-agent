@@ -212,6 +212,9 @@ def test_persistence(tmp_path):
     state1 = sys1.get_state("u1")
     assert state1.xp == 105
 
+    # 审计 H2：落盘改为合并延迟写（300ms debounce），断言磁盘状态前先 flush
+    sys1.flush()
+
     # 状态文件应已存在
     assert sys1._state_path.exists()
 
