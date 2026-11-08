@@ -49,8 +49,11 @@ from web.proxy_headers import resolve_client_ip as _resolve_client_ip
 _WRITE_METHODS = frozenset({"POST", "PUT", "DELETE", "PATCH"})
 
 # ── 不限流的路径: 健康检查 / WebSocket / favicon / 根入口 ──
+# 探针必须免限流：外部监控按秒级频率请求，若计入用户桶（60/min）会把
+# 健康检查本身打成 429，制造“服务挂了”的假告警。/health 与 /healthz 是
+# web/routers/health.py 里 O(1) 只读探针，无放大风险。
 _DEFAULT_EXEMPT_PATHS = frozenset({
-    "/health", "/health/self", "/api/v1/health", "/api/health",
+    "/health", "/healthz", "/health/self", "/api/v1/health", "/api/health",
     "/ws", "/favicon.ico", "/",
 })
 
