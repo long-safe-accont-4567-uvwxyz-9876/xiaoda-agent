@@ -6,6 +6,7 @@ import { routes } from './routes'
 import { useAuthStore } from './stores/auth'
 import i18n from './i18n'
 import { loadAgentNames } from './utils/agentNames'
+import { reportError } from './utils/errorLog'
 
 const pinia = createPinia()
 const router = createRouter({
@@ -44,6 +45,12 @@ router.onError((error, to) => {
 })
 
 const app = createApp(App)
+// 全局错误边界（审计 P0-1）：组件渲染/生命周期里抛出的错误统一记录，
+// 不再让一条脏消息把整页打白。错误详情只进 console 与环形缓冲，
+// 界面上由 App.vue / ChatView 的 onErrorCaptured 给可读占位。
+app.config.errorHandler = (err, instance, info) => {
+  reportError(err, info, instance)
+}
 app.use(pinia)
 app.use(router)
 app.use(i18n)

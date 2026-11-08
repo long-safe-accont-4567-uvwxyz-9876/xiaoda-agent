@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, nextTick, watch, onMounted, onBeforeUnmount, onDeactivated, computed, inject, reactive } from 'vue'
+import { ref, nextTick, watch, onMounted, onBeforeUnmount, onDeactivated, onErrorCaptured, computed, inject, reactive } from 'vue'
 import type { Ref } from 'vue'
 import { NDrawer, NDrawerContent, NButton, NPopconfirm, useMessage } from 'naive-ui'
 import { useChatStore } from '../stores/chat'
@@ -10,6 +10,10 @@ import { getWsClient } from '../api/ws'
 import { renderMarkdown } from '../utils/markdown'
 import { replaceAgentNames } from '../utils/agentNames'
 import { useRenderedBand, escapeHtmlText } from '../composables/useRenderedBand'
+import { useAutoScroll } from '../composables/useAutoScroll'
+import { useAbortableRequests } from '../composables/useAbortableRequests'
+import { isAbortError } from '../utils/abortRegistry'
+import { reportError } from '../utils/errorLog'
 import ToolCallCard from '../components/chat/ToolCallCard.vue'
 import ChatTerminal from '../components/chat/ChatTerminal.vue'
 import SlashPalette from '../components/chat/SlashPalette.vue'
@@ -19,7 +23,7 @@ import ModelSelector from '../components/chat/ModelSelector.vue'
 import CmdConfirmCard from '../components/workspace/CmdConfirmCard.vue'
 import JSpacePanel from '../components/jspace/JSpacePanel.vue'
 import { useWorkspaceStore } from '../stores/workspace'
-import { t, tf } from '../i18n'
+import { t, tf, state as i18nState } from '../i18n'
 
 defineOptions({ name: 'ChatView' })
 
@@ -108,16 +112,28 @@ onDeactivated(() => {
   playingUrl.value = ''
 })
 
-watch(() => chat.messages.length, () => {
-  const el = messagesEl.value
-  if (!el) return
-  // 仅在用户位于底部附近时自动滚动，避免打断上翻阅读
-  const distanceFromBottom = el.scrollHeight - el.scrollTop - el.clientHeight
-  if (distanceFromBottom > 100) return
-  // 流式期间用 auto（即时跟随），非流式时用 smooth
-  const isStreaming = chat.messages.some(m => m.streaming)
-  el.scrollTo({ top: el.scrollHeight, behavior: isStreaming ? 'auto' : 'smooth' })
-}, { flush: 'post' })  // post：等 DOM 更新后再读取 scrollHeight 并滚动
+// 自动跟随底部（审计 P0-2）：
+// 原实现只 watch messages.length，而流式回复是"同一条消息 content 增长"，
+// length 不变 —— 首帧之后视口就再也不动。这里改成同时感知条数与最后一条的
+// 内容长度；是否真的滚动由 useAutoScroll 的跟随意图决定（用户上滑看历史时
+// 不抢滚动，滚回底部附近自动恢复）。
+const autoScroll = useAutoScroll(messagesEl)
+watch(
+  () => {
+    const list = chat.messages
+    const tail = list[list.length - 1]
+    return `${list.length}:${tail?.content.length ?? 0}`
+  },
+  () => {
+    const tail = chat.messages[chat.messages.length - 1]
+    autoScroll.handleContentGrow(!!tail?.streaming)
+  },
+  { flush: 'post' },  // post：等 DOM 更新后再读取 scrollHeight 并滚动
+)
+// 用户自己发消息 → 无条件恢复跟随（否则上滑状态下发送后看不到自己的消息）
+function resumeFollow() {
+  autoScroll.forceFollow(true)
+}
 
 // Render markdown only near the viewport; off-band rows keep cheap escaped text.
 // Streaming content is periodically remeasured, and list changes invalidate geometry.
@@ -177,14 +193,46 @@ function play(url: string) {
   audioEl.play().catch(() => { playingUrl.value = '' })
 }
 
+// 组件级在途请求登记（审计 P1-6）：卸载/失活即取消，
+// 避免切页后慢请求回来继续播放音频或回写状态。
+const abortable = useAbortableRequests()
+
 async function speak(msg: { content: string; audioUrl?: string }) {
   if (msg.audioUrl) { play(msg.audioUrl); return }
   try {
-    const r = await api.tts(msg.content.slice(0, 300))
+    const r = await api.tts(msg.content.slice(0, 300), undefined, undefined, abortable.create())
     play(r.audio_url)
   } catch (e: any) {
-    message.error(e.message || t('chatView.ttsFailed'))
+    if (isAbortError(e)) return
+    message.error(e?.message || t('chatView.ttsFailed'))
   }
+}
+
+/**
+ * 行级 markdown 渲染兜底（审计 P0-1）：脏数据/异常语法让 renderMarkdown 抛错时，
+ * 只把这一行降级成纯文本，不牵连整页。错误进全局缓冲，界面上不显示堆栈。
+ */
+function renderRowMarkdown(content: string): string {
+  const text = replaceAgentNames(content)
+  try {
+    return renderMarkdown(text)
+  } catch (err) {
+    reportError(err, 'renderMarkdown')
+    return escapeHtmlText(text)
+  }
+}
+
+// 列表级错误边界（审计 P0-1）：任何一行渲染期抛出的错误都在这里被接住，
+// 退化成可恢复的占位（清空消息列表即可继续用），而不是整页白屏。
+const listError = ref('')
+onErrorCaptured((err, _instance, info) => {
+  reportError(err, info)
+  listError.value = err instanceof Error ? err.message : String(err)
+  return false
+})
+function recoverFromListError() {
+  listError.value = ''
+  chat.clearMessages()
 }
 
 function handleSend() {
@@ -210,6 +258,7 @@ function handlePromptSend(request: ChatRequestSnapshot) {
     return
   }
   inputText.value = ''
+  resumeFollow()
   promptInputRef.value?.clearSubmittedDraft()
   // 发送特效
   const rect = promptInputRef.value?.textareaRef?.getBoundingClientRect()
@@ -239,17 +288,23 @@ function autoGrow() {
 
 async function openSessions() {
   showSessions.value = true
-  try { sessions.value = await api.getSessions() } catch (e: any) { message.error(e.message) }
+  try {
+    sessions.value = await api.getSessions(abortable.create())
+  } catch (e: any) {
+    if (isAbortError(e)) return
+    message.error(e.message)
+  }
 }
 
 async function switchSession(sid: string) {
   if (loadingSessionId.value) return  // 防止重复点击
   loadingSessionId.value = sid
   try {
-    await chat.loadSession(sid)
+    await chat.loadSession(sid, abortable.create())
     showSessions.value = false
-  } catch (e: any) { message.error(e.message) }
-  finally { loadingSessionId.value = '' }
+  } catch (e: any) {
+    if (!isAbortError(e)) message.error(e.message)
+  } finally { loadingSessionId.value = '' }
 }
 
 async function removeSession(sid: string) {
@@ -332,13 +387,24 @@ const emotionColors: Record<string, string> = {
     </div>
 
     <div class="messages-area" ref="messagesEl">
+      <div v-if="listError" class="chat-row-error" role="alert">
+        <div class="chat-row-error-title">⚠ {{ t('errorBoundary.title') }}</div>
+        <div class="chat-row-error-detail">{{ listError }}</div>
+        <button class="chat-row-error-btn" @click="recoverFromListError">{{ t('chatView.clear') }}</button>
+      </div>
+
       <div v-if="chat.messages.length === 0" class="empty-state">
         <div class="empty-icon">🌿</div>
         <p>{{ t('chatView.emptyPlaceholder') }}</p>
       </div>
 
-      <transition-group name="msg-fade">
-      <div v-for="(msg, index) in chat.messages" :key="msg.id" class="message-row" :class="msg.role">
+      <transition-group v-else name="msg-fade">
+      <!-- v-memo（审计 P1-4）：流式 delta 只改最后一条的 content，父组件渲染
+           函数却要为 1000 行重建 vnode。memo 命中时 Vue 直接复用上次的 vnode
+           （patch 阶段 n1 === n2 直接返回），每帧成本从 O(行数) 降到 O(1)。
+           依赖必须覆盖该行模板里读到的每一个响应式值，漏一个就会渲染陈旧。 -->
+      <div v-for="(msg, index) in chat.messages" :key="msg.id" class="message-row" :class="msg.role"
+           v-memo="[msg.id, msg.content, msg.role, msg.streaming, msg.emotion, msg.toolCalls, msg.toolCalls?.length, msg.imageUrl, msg.imageUrls, msg.videoUrl, msg.audioUrl, msg.stickerUrl, msg.degraded, msg.timestamp, inBand(index), playingUrl, imgSettled.size, i18nState.lang]">
         <div class="message-bubble glass-panel" :class="[msg.role, msg.streaming ? 'streaming' : '']">
           <div v-if="msg.role === 'assistant' && msg.emotion" class="emotion-dot"
                :style="{ background: emotionColors[msg.emotion] || '#9ca3af' }"
@@ -351,7 +417,7 @@ const emotionColors: Record<string, string> = {
           <div v-if="msg.role === 'assistant' && msg.streaming" class="message-content md-body streaming-text">{{ replaceAgentNames(msg.content) }}</div>
           <div v-else-if="msg.role === 'assistant'" class="message-content md-body"
                :class="{ 'band-off': !inBand(index) }"
-               v-html="inBand(index) ? renderMarkdown(replaceAgentNames(msg.content)) : escapeHtmlText(replaceAgentNames(msg.content))"></div>
+               v-html="inBand(index) ? renderRowMarkdown(msg.content) : escapeHtmlText(replaceAgentNames(msg.content))"></div>
           <div v-else class="message-content plain">
             {{ msg.content }}
             <img v-if="msg.imageUrl" :src="msg.imageUrl" class="user-upload-img"
@@ -997,5 +1063,36 @@ const emotionColors: Record<string, string> = {
     flex-basis: 20vw;
     max-width: 20vw;
   }
+}
+
+/* 列表级错误占位（审计 P0-1） */
+.chat-row-error {
+  margin: 12px 16px;
+  padding: 14px 16px;
+  border-radius: 12px;
+  border: 1px solid rgba(248, 113, 113, .35);
+  background: rgba(248, 113, 113, .08);
+  color: var(--moon, #e8f0e0);
+  font-size: 13px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.chat-row-error-title { font-weight: 600; }
+.chat-row-error-detail {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 11px;
+  opacity: .75;
+  word-break: break-word;
+}
+.chat-row-error-btn {
+  align-self: flex-start;
+  padding: 5px 14px;
+  border-radius: 999px;
+  border: 1px solid var(--glass-border, rgba(255,255,255,.2));
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+  font-size: 12px;
 }
 </style>

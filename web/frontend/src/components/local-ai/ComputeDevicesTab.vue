@@ -1,5 +1,6 @@
 <script setup lang="ts">
-import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
+import { computed, ref } from 'vue'
+import { useVisibilityPolling } from '../../composables/useVisibilityPolling'
 import { NButton, NEmpty, NProgress, NTag, NSelect, NModal, NTabs, NTabPane, NSpin, useMessage } from 'naive-ui'
 import { useLocalAiStore, type LocalDeployStatus } from '../../stores/localAi'
 
@@ -133,20 +134,14 @@ const loadPct = (device: { kind: string; stats?: { usage_pct?: number | null; ut
 }
 
 const lastUpdated = ref<string | null>(null)
-let timer: ReturnType<typeof setInterval> | null = null
 async function refreshStats() {
   try {
     await store.refreshDevices()
     lastUpdated.value = new Date().toLocaleTimeString('zh-CN', { hour12: false })
   } catch { /* 轮询失败静默，下次重试 */ }
 }
-onMounted(() => {
-  refreshStats()
-  timer = setInterval(refreshStats, 5000)
-})
-onBeforeUnmount(() => {
-  if (timer) clearInterval(timer)
-})
+// 审计 L6：页面隐藏时停表，可见时立即刷新后恢复 5 秒节奏
+useVisibilityPolling(refreshStats, 5000)
 
 async function rescan() {
   try { await store.rescan(); await refreshStats(); message.success('算力设备已重新扫描') } catch (error) { message.error(error instanceof Error ? error.message : String(error)) }

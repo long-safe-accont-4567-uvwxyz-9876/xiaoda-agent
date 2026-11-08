@@ -796,8 +796,9 @@ class SubAgentManagerMixin:
             if base_cb is not None:
                 try:
                     await base_cb(msg)
-                except Exception:  # noqa: BLE001 —— 原通道展示失败不影响执行
-                    pass
+                except Exception as e:  # noqa: BLE001 —— 原通道展示失败不影响执行
+                    # 审计 L4：进度回传失败原先是静默 pass，线上看不到原通道断流
+                    logger.debug("sub_agent.progress_callback_failed error={}", str(e)[:120])
 
         class _CtxShim:
             """透传原 ctx 关键字段 + 替换 status_callback 的轻量壳。"""

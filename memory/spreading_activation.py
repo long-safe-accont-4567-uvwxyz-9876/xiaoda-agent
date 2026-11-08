@@ -132,7 +132,13 @@ class SpreadingActivationEngine:
             self._rust_edges_version = None
             logger.info("memory.rust_index_built nodes={}", self._rust_index.size)
         except Exception as e:  # noqa: BLE001
-            logger.debug("memory.rust_index_build_failed error={}", str(e)[:120])
+            # 审计 L3：构建失败会让整条检索永久回落 Python 实现（显著更慢），
+            # 原来只记 debug 线上完全看不到。首次失败升 warning，之后降回 debug 防刷屏。
+            if not getattr(self, "_rust_index_warned", False):
+                self._rust_index_warned = True
+                logger.warning("memory.rust_index_build_failed error={}", str(e)[:200])
+            else:
+                logger.debug("memory.rust_index_build_failed error={}", str(e)[:120])
             self._rust_index = None
         return self._rust_index
 

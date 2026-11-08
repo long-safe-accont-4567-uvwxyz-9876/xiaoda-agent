@@ -66,6 +66,15 @@ def discard_cmd_decision_scope(request_id: str) -> None:
     _pending_cmd_decisions.pop(request_id, None)
 
 
+def _authorized_at_iso() -> str:
+    """审计 L1：授权时间必须带时区偏移。
+
+    原实现用 naive <code>datetime.now().isoformat()</code>，前端按本地时区解析，
+    跨时区/夏令时下授权时间会偏。
+    """
+    return datetime.now().astimezone().isoformat()
+
+
 def _persist_workspace(cwd: str, authorized_at: str = "") -> None:
     """持久化工作目录授权状态到 config（同步，best-effort）"""
     try:
@@ -114,7 +123,9 @@ async def confirm_workspace(body: ConfirmBody):
         raise HTTPException(status_code=400, detail=f"路径不存在或不是目录：{body.path}")
     pm = get_permission_manager()
     pm.set_cwd(body.path)
-    authorized_at = datetime.now().isoformat()
+    # 审计 L1：naive datetime 序列化后前端按本地时区解析，跨时区/夏令时下
+    # 授权时间会偏；带 offset 的 aware ISO 串可直接被 JS Date 解析。
+    authorized_at = _authorized_at_iso()
     _persist_workspace(body.path, authorized_at)
     logger.info("workspace.authorized", path=body.path)
     return Envelope(data={

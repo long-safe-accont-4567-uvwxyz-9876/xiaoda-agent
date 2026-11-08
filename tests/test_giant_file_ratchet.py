@@ -85,7 +85,10 @@ BASELINES: dict[str, int] = {
     "qq_bot_adapter.py": 2176,
     "wechat_bot_adapter.py": 1591,
     # 2026-11-08 上调（协议 b）：serialize_result 仅在降级时下发 degraded 键（+6）
-    "web/ws_hub.py": 1238,
+    # 2026-11-08 fix/audit-defects-perf 高危 H1：子 agent 路径的 get_xp_system()
+    # 移到 to_thread 的 lambda 内求值（避免循环线程同步读盘），+3 行注释与缩进，
+    # 基线 1238→1241。
+    "web/ws_hub.py": 1241,
     "web/ws_terminal.py": 590,
     "prompt_builder/_prompt_scene.py": 783,
     "prompt_builder/_prompt_assembly.py": 661,
@@ -155,7 +158,12 @@ def _line_count(rel: str) -> int:
 #       WAL 守护任务接入(a833ca4d/457dd118)；zh/en i18n 1536→1562/1535→1561
 #       —— GSAP 编排批次文案扩充(b1e5db3b 等)；
 ALLOWLIST_BASELINES: dict[str, int] = {
-    "memory/vector_store.py": 1750,
+    # 2026-11-08 fix/audit-defects-perf 中等 M3：_embed_cache_path 纳入本地
+    # 模型目录身份（同维度换模型不再静默复用旧向量），+11 行注释与分支，
+    # 基线 1750→1761。
+    # 2026-11-08 fix/audit-defects-perf 中等 M3（遗留）：EmbedCache 身份 +
+    # 形状守卫 + embed_cache_filename 单一来源，1761→1799 行。
+    "memory/vector_store.py": 1799,
     "web/server.py": 1424,
     "agent_context.py": 1345,
     # 2026-08-29 审计修复 Task 1（setup 引导 token 鉴权 + recovery_qa 接线）+112 行
@@ -170,7 +178,10 @@ ALLOWLIST_BASELINES: dict[str, int] = {
     "db/db_memory_reconciliation.py": 1102,
     # 2026-09-03 上调（协议 b）：流式 EOF stream_incomplete 收口 +7
     # 2026-11-08 上调（协议 b）：四个 turn_end 出口附带 degraded 标记（+4）
-    "llm_gateway/router_execution.py": 1112,
+    # 2026-11-08 fix/audit-defects-perf 中等 M4（剩余处）：有界排队 +
+    # 排队计入超时预算（_bounded_provider_slot / _provider_queue_budget），
+    # 1108→1164 行。
+    "llm_gateway/router_execution.py": 1164,
     # 2026-09-03 上调（协议 b）：connect 取消时 _stop_after_cancel 清理 +26
     "tool_engine/mcp_client.py": 1116,
     "memory/retrieval/pipeline.py": 1084,
@@ -178,7 +189,9 @@ ALLOWLIST_BASELINES: dict[str, int] = {
     # 2026-09-03 上调（协议 b）：重试降级走 SubAgentInvocation 调度器 +32
     # 2026-11-08 上调（协议 b）：合并 69020832 的 DelegationOutcome/
     # ensemble usable() 过滤与 _sequential_pipe 语义（+49，待专项拆分）
-    "agent_core/sub_agent_manager.py": 1222,
+    # 2026-11-08 fix/audit-defects-perf 低 L4：进度回传失败补 debug 日志，
+    # +1 行，基线 1222→1223。
+    "agent_core/sub_agent_manager.py": 1223,
     # 2026-08-29 审计修复 Task 4（agent_core 管线六项修复）：
     #   sub_agent.py 1036→1161 —— 工具结果 EXTERNAL 消毒助手（Fix3）、
     #     截断 JSON 修复真正生效（Fix4）、MCP 作用域过滤 helpers
@@ -191,7 +204,9 @@ ALLOWLIST_BASELINES: dict[str, int] = {
     "agent_core/sub_agent.py": 1188,
     "tools/_builtin_manifest.py": 1001,
     "web/routers/insight.py": 937,
-    "core/background_tasks.py": 1018,
+    # 2026-11-08 fix/audit-defects-perf 中等 M5：_spawn 新增 long_running 声明
+    # （长驻循环不再每轮刷 bg.task_slow），+7 行常量与形参注释，基线 1018→1025。
+    "core/background_tasks.py": 1025,
     # 2026-11-08 fix/router-interface-consistency：set_agent_model 切前探活 + 切后校验
     # client、响应带 client_rebuilt/probe（新增 15 行），基线 912→927
     "web/agent_registry.py": 927,

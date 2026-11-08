@@ -119,15 +119,18 @@ function handleUnauthorized() {
   if (!location.hash.includes('login')) location.hash = '#/login'
 }
 
-export const get = <T>(path: string) => request<T>(path)
-export const post = <T = void>(path: string, body?: unknown, confirm = false) =>
-  request<T>(path, { method: 'POST', body: body !== undefined ? JSON.stringify(body) : undefined }, confirm)
-export const put = <T = void>(path: string, body?: unknown, confirm = false) =>
-  request<T>(path, { method: 'PUT', body: JSON.stringify(body ?? {}) }, confirm)
-export const patch = <T = void>(path: string, body?: unknown, extraHeaders?: Record<string, string>) =>
-  request<T>(path, { method: 'PATCH', body: JSON.stringify(body ?? {}) }, false, extraHeaders)
-export const del = <T = void>(path: string, confirm = false) =>
-  request<T>(path, { method: 'DELETE' }, confirm)
+// 取消支持（审计 P1-6）：调用方传入组件级 AbortSignal，切页/切会话时统一取消，
+// 避免慢请求返回后回写已经不在视图里的状态。signal 省略时行为与旧版完全一致。
+export const get = <T>(path: string, signal?: AbortSignal) =>
+  request<T>(path, signal ? { signal } : undefined)
+export const post = <T = void>(path: string, body?: unknown, confirm = false, signal?: AbortSignal) =>
+  request<T>(path, { method: 'POST', body: body !== undefined ? JSON.stringify(body) : undefined, signal }, confirm)
+export const put = <T = void>(path: string, body?: unknown, confirm = false, signal?: AbortSignal) =>
+  request<T>(path, { method: 'PUT', body: JSON.stringify(body ?? {}), signal }, confirm)
+export const patch = <T = void>(path: string, body?: unknown, extraHeaders?: Record<string, string>, signal?: AbortSignal) =>
+  request<T>(path, { method: 'PATCH', body: JSON.stringify(body ?? {}), signal }, false, extraHeaders)
+export const del = <T = void>(path: string, confirm = false, signal?: AbortSignal) =>
+  request<T>(path, { method: 'DELETE', signal }, confirm)
 
 /** 通用文件上传（FormData POST），统一 token 注入、错误处理与滑动续签消费 */
 async function uploadFile<T>(url: string, formData: FormData, errorMsg = 'Upload failed'): Promise<T> {
@@ -175,11 +178,11 @@ export const api = {
   }) => post<{ token: string; expires_at: number }>('/auth/change-password', body),
 
   getStatus: () => get<SystemStatus>('/system/status'),
-  getSessions: () => get<SessionInfo[]>('/sessions'),
+  getSessions: (signal?: AbortSignal) => get<SessionInfo[]>('/sessions', signal),
   createSession: () => post<{ session_id: string }>('/sessions'),
   deleteSession: (id: string) => del(`/sessions/${id}`, true),
-  getMessages: (sessionId: string, before = 0, limit = 50) =>
-    get<ChatMessageItem[]>(`/sessions/${sessionId}/messages?before=${before}&limit=${limit}`),
+  getMessages: (sessionId: string, before = 0, limit = 50, signal?: AbortSignal) =>
+    get<ChatMessageItem[]>(`/sessions/${sessionId}/messages?before=${before}&limit=${limit}`, signal),
   getCommands: () => get<Array<{ name: string; description: string; owner_only: boolean }>>('/commands'),
   testModelRoute: (route: string) => post<{ ok: boolean; error?: string }>('/health/test/llm', { route }),
 
@@ -188,8 +191,8 @@ export const api = {
   setAgentModel: (name: string, provider: string, model_id: string) =>
     post<{ name: string; model: string }>(`/agents/${name}/model`, { provider, model_id }),
 
-  tts: (text: string, voice?: string, style?: string) =>
-    post<{ audio_url: string; cached: boolean }>('/media/tts', { text, voice, style }),
+  tts: (text: string, voice?: string, style?: string, signal?: AbortSignal) =>
+    post<{ audio_url: string; cached: boolean }>('/media/tts', { text, voice, style }, false, signal),
 
   uploadVoiceRef: (agent: string, formData: FormData) =>
     uploadFile<{ voice_ref: string }>(`/media/tts/voices/${agent}`, formData),

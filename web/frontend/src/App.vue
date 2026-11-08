@@ -1,11 +1,12 @@
 <script setup lang="ts">
-import { onMounted, ref, provide, onBeforeUnmount } from 'vue'
+import { onMounted, ref, provide, onBeforeUnmount, onErrorCaptured } from 'vue'
 import { NConfigProvider, NMessageProvider, NDialogProvider, darkTheme } from 'naive-ui'
 import type { GlobalThemeOverrides } from 'naive-ui'
 import { useAuthStore } from './stores/auth'
 import { useUiStore } from './stores/ui'
 import { useRouter } from 'vue-router'
 import { api } from './api'
+import { reportError, type ErrorRecord } from './utils/errorLog'
 import { t } from './i18n'
 import { sound } from './utils/sound'
 import GrassParticles from './components/fx/GrassParticles.vue'
@@ -34,6 +35,18 @@ async function checkSignature() {
       }
     })
   } catch { /* 静默失败 */ }
+}
+
+// 根级错误边界（审计 P0-1）：任何未被下层捕获的渲染错误退化为
+// 一屏可读的提示 + 重载按钮，而不是纯白页面（白屏时用户连"出错了"
+// 都不知道，只能强杀应用）。
+const fatalError = ref<ErrorRecord | null>(null)
+onErrorCaptured((err, instance, info) => {
+  fatalError.value = reportError(err, info, instance)
+  return false
+})
+function reloadApp() {
+  location.reload()
 }
 
 function onVisibilityChange() {
@@ -258,6 +271,13 @@ const themeOverrides: GlobalThemeOverrides = {
         <GrassParticles ref="particlesRef" />
         <DendroCursor />
         <div v-if="booting" class="boot-loading">🌿</div>
+        <div v-else-if="fatalError" class="app-error-fallback" role="alert">
+          <div class="app-error-icon">🌿</div>
+          <h2>{{ t('errorBoundary.title') }}</h2>
+          <p class="app-error-detail">{{ fatalError.message }}</p>
+          <p class="app-error-hint">{{ t('errorBoundary.hint') }}</p>
+          <button class="app-error-reload" @click="reloadApp">{{ t('errorBoundary.reload') }}</button>
+        </div>
         <router-view v-else v-slot="{ Component }">
           <transition name="leaf-page" mode="out-in">
             <component :is="Component" />
@@ -396,4 +416,39 @@ body.low-gpu .leaf-page-leave-to {
   0%, 100% { opacity: 0.6; transform: scale(1); }
   50% { opacity: 1; transform: scale(1.1); }
 }
+
+/* 根级错误边界占位（审计 P0-1） */
+.app-error-fallback {
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  padding: 32px;
+  text-align: center;
+  color: var(--moon, #e8f0e0);
+}
+.app-error-fallback .app-error-icon { font-size: 40px; }
+.app-error-fallback h2 { font-size: 18px; font-weight: 600; margin: 0; }
+.app-error-fallback .app-error-detail {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 12px;
+  opacity: 0.75;
+  max-width: 60ch;
+  word-break: break-word;
+  margin: 0;
+}
+.app-error-fallback .app-error-hint { font-size: 13px; opacity: 0.7; margin: 0; }
+.app-error-fallback .app-error-reload {
+  margin-top: 8px;
+  padding: 8px 20px;
+  border-radius: 999px;
+  border: 1px solid var(--glass-border, rgba(255,255,255,.2));
+  background: var(--glass-bg, rgba(255,255,255,.08));
+  color: inherit;
+  cursor: pointer;
+  font-size: 13px;
+}
+.app-error-fallback .app-error-reload:hover { background: rgba(255,255,255,.16); }
 </style>

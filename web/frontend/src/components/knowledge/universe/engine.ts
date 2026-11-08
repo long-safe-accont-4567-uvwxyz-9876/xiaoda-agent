@@ -92,6 +92,10 @@ export interface UniverseEngine {
   applyResize(): void
   pauseAnimation(): void
   resumeAnimation(): void
+  /** 弹窗隐藏：停 rAF + 暂停渲染循环，保留场景与 GPU 资源（P0-3） */
+  suspend(): void
+  /** 弹窗重新可见：恢复渲染循环（suspend 的逆操作） */
+  resume(): void
   shutdown(): void
 }
 
@@ -813,6 +817,57 @@ export function createUniverseEngine(
     if (bloomPass) bloomPass.setSize(Math.max(320, Math.floor(w / 2)), Math.max(240, Math.floor(h / 2)))
   }
 
+  /**
+   * 释放后处理链（审计 P0-3）。
+   *
+   * 原实现只是 `composer = null; bloomPass = null`——引用被丢掉，但
+   * UnrealBloomPass 自己持有的多个 WebGLRenderTarget（半分辨率 mip 链）
+   * 与 EffectComposer 的两张全屏 RT 从未 dispose。每次开合 3D 图谱都新建
+   * 一套，显存只增不减；真机上表现为"开合几次后变卡/黑屏（context lost）"。
+   *
+   * 顺序：先从 composer 摘掉 pass（避免 composer.dispose 再回头引用），
+   * 再逐层 dispose，最后丢弃引用。任何一步缺失都不会抛错（销毁期容错）。
+   */
+  function disposePostProcessing(): void {
+    if (bloomPass) {
+      try { composer?.removePass(bloomPass) } catch { /* composer 可能已析构 */ }
+      try { bloomPass.dispose() } catch { /* 已释放 */ }
+      bloomPass = null
+    }
+    if (composer) {
+      const c = composer as unknown as {
+        dispose?: () => void
+        renderTarget1?: { dispose?: () => void }
+        renderTarget2?: { dispose?: () => void }
+      }
+      // three 的 EffectComposer.dispose() 只覆盖自身 RT 与 copyPass，
+      // 这里再兜底显式释放两张全屏 RT（不同版本行为不一致）
+      try { c.renderTarget1?.dispose?.() } catch { /* 已释放 */ }
+      try { c.renderTarget2?.dispose?.() } catch { /* 已释放 */ }
+      try { c.dispose?.() } catch { /* 已释放 */ }
+      composer = null
+    }
+  }
+
+  /**
+   * 暂停渲染循环（审计 P0-3）：弹窗被 display:none 隐藏时，rAF 循环
+   * 仍在每帧跑 tree.update / 弹簧 / 涟漪 / 生长动画——用户看不见，CPU 照烧。
+   * 与 shutdown 的区别：suspend 保留场景与 GPU 资源，重新可见时 resume 即可。
+   */
+  function suspend(): void {
+    if (starRAF) {
+      cancelAnimationFrame(starRAF)
+      starRAF = 0
+    }
+    instance?.pauseAnimation()
+  }
+
+  function resume(): void {
+    if (!instance) return
+    instance.resumeAnimation()
+    if (alive) startStarLoop()
+  }
+
   function pauseAnimation(): void {
     if (!instance) return
     instance.pauseAnimation()
@@ -855,12 +910,13 @@ export function createUniverseEngine(
       starScene = null
     }
     starLayers = []
+    // 后处理链必须在渲染器析构前释放：_destructor 会连带销毁 renderer，
+    // 之后再 dispose RT 只会得到"已释放"的空操作，显存泄漏就留在这里
+    disposePostProcessing()
     if (instance) {
       instance._destructor()
       instance = null
     }
-    composer = null
-    bloomPass = null
     neighborsCache = new Map()
     liveNodes = null
     draggedId = null
@@ -889,6 +945,8 @@ export function createUniverseEngine(
     applyResize,
     pauseAnimation,
     resumeAnimation,
+    suspend,
+    resume,
     shutdown,
   }
 }

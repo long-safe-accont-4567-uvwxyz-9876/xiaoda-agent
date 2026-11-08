@@ -304,7 +304,7 @@ onBeforeUnmount(() => {
       display-directive="show"
       style="width:100vw;height:100vh;max-width:none;max-height:none"
     >
-      <UniverseGraph :entity="entity" :depth="depth" @close="showUniverse = false" />
+      <UniverseGraph :entity="entity" :depth="depth" :visible="showUniverse" @close="showUniverse = false" />
     </n-modal>
   </div>
 </template>

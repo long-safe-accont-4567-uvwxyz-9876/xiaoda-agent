@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { ref, nextTick, onMounted, onUnmounted, watch } from 'vue'
+import { useVisibilityPolling } from '../composables/useVisibilityPolling'
 import SumeruIcon from '../components/fx/SumeruIcon.vue'
 import { useRouter } from 'vue-router'
 import {
@@ -313,33 +314,37 @@ async function openRuns(wfId: string, wfName: string) {
   }
 }
 
-// 运行弹窗自动轮询：存在非终态 run 时每 2.5s 刷新，全部结束后停止
-let runsPollTimer: ReturnType<typeof setInterval> | null = null
-
+// 运行弹窗自动轮询：存在非终态 run 时每 2.5s 刷新，全部结束后停止。
+// 审计 P1-5：改走 useVisibilityPolling —— 弹窗开着但标签页在后台时停表
+// （2.5s 一个请求，一晚上就是上万次）；dedupe 保证慢响应时不叠加请求，
+// 否则两次响应乱序回来会用旧列表覆盖新列表。
 function hasQueuedRuns(): boolean {
   return runsList.value.some(r =>
     ['queued', 'running', 'waiting_input', 'paused', 'cancelling'].includes(r.status))
 }
 
-function stopRunsPolling() {
-  if (runsPollTimer) { clearInterval(runsPollTimer); runsPollTimer = null }
+async function refreshRuns() {
+  if (!runsWfId.value) return
+  try {
+    runsList.value = await api.listWorkflowRuns(runsWfId.value)
+    // waiting_input 的 run 同步拉审批单（新进入等待的 run 补卡）
+    for (const run of runsList.value) {
+      if (run.status === 'waiting_input' && !reviewsMap.value[run.run_id]) {
+        await loadReviews(run.run_id)
+      }
+    }
+    if (!hasQueuedRuns()) runsPoller.stop()
+  } catch { runsPoller.stop() }
 }
 
+const runsPoller = useVisibilityPolling(refreshRuns, 2500, { autoStart: false, dedupe: true })
+
+function stopRunsPolling() { runsPoller.stop() }
+
 function startRunsPollingIfActive() {
-  stopRunsPolling()
+  runsPoller.stop()
   if (!hasQueuedRuns() || !runsWfId.value) return
-  runsPollTimer = setInterval(async () => {
-    try {
-      runsList.value = await api.listWorkflowRuns(runsWfId.value)
-      // waiting_input 的 run 同步拉审批单（新进入等待的 run 补卡）
-      for (const run of runsList.value) {
-        if (run.status === 'waiting_input' && !reviewsMap.value[run.run_id]) {
-          await loadReviews(run.run_id)
-        }
-      }
-      if (!hasQueuedRuns()) stopRunsPolling()
-    } catch { stopRunsPolling() }
-  }, 2500)
+  runsPoller.start()
 }
 
 watch(() => showRunsModal.value, v => { if (!v) stopRunsPolling() })

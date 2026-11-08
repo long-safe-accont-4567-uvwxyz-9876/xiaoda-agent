@@ -13,6 +13,7 @@ import asyncio
 import json
 import os
 import random
+import sqlite3
 import time
 from datetime import datetime
 from pathlib import Path
@@ -141,6 +142,22 @@ class GreetingScheduler:
                 async with self._deferred_lock:
                     self._deferred.extend(still_deferred)
 
+        # 审计 M2（剩余处）：抽签结果先攒批，循环结束统一 executemany 落盘。
+        # 原实现每条 random 计划都单条 await execute（tick 内 N 次往返 + N 次写锁），
+        # 且 fire() 抛错时已抽签的行不会落盘。攒批后无论正常结束还是异常，
+        # 都在 finally 里整批写一次。
+        pending_draw: list[tuple[Any, ...]] = []
+        try:
+            await self._run_due_rows(
+                rows, today=today, now_min=now_min, weekday=weekday,
+                max_per_day=max_per_day, fired=fired, pending_draw=pending_draw)
+        finally:
+            await self._flush_draw_updates(pending_draw)
+
+    async def _run_due_rows(self, rows: Any, *, today: str, now_min: int,
+                            weekday: int, max_per_day: int, fired: set,
+                            pending_draw: list[tuple[Any, ...]]) -> None:
+        """遍历到期计划并触发；抽签结果只追加到 pending_draw，不直接写库。"""
         for row in rows:
             sid = row["id"]
             try:
@@ -162,9 +179,7 @@ class GreetingScheduler:
                 # 当日未抽签则抽签
                 if row["drawn_date"] != today:
                     times = self._draw_random_times(row)
-                    await self.core.db.execute(
-                        "UPDATE greeting_schedules SET next_fire_times=?, drawn_date=? WHERE id=?",
-                        (json.dumps(times), today, sid))
+                    pending_draw.append((json.dumps(times), today, sid))
                     row = dict(row)
                     row["next_fire_times"] = json.dumps(times)
                 try:
@@ -190,6 +205,18 @@ class GreetingScheduler:
                 logger.info("greeting.deferred_dnd schedule_id={}", sid)
                 continue
             await self.fire(dict(row), reason=row["type"])
+
+    async def _flush_draw_updates(self, pending_draw: list[tuple[Any, ...]]) -> None:
+        """把本轮抽签结果一次写回；失败只告警（下个 tick 会重新抽签）。"""
+        if not pending_draw:
+            return
+        try:
+            await self.core.db.executemany(
+                "UPDATE greeting_schedules SET next_fire_times=?, drawn_date=? WHERE id=?",
+                pending_draw)
+        except (sqlite3.Error, OSError, RuntimeError) as e:
+            logger.warning("greeting.draw_persist_failed rows={} error={}",
+                           len(pending_draw), str(e)[:200])
 
     def _draw_random_times(self, row: dict) -> list[int]:
         try:

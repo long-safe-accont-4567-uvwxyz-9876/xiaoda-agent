@@ -9,6 +9,7 @@ import {
   type IntentFactorResult, type JSpaceConfig,
 } from '../../api'
 import { t } from '../../i18n'
+import { useVisibilityPolling } from '../../composables/useVisibilityPolling'
 
 const POLL_INTERVAL_MS = 3000
 
@@ -47,8 +48,6 @@ const filteredSignals = computed(() => {
   return signals.value.filter(s => s.signal_type === selectedSignalType.value)
 })
 const selectedSignalType = ref('')
-
-let pollTimer: ReturnType<typeof setInterval> | null = null
 
 async function loadAll() {
   loading.value = true
@@ -93,20 +92,25 @@ async function saveConfig() {
   }
 }
 
+// 审计 P1-5：标签页不可见时停表（原先 3s 两个接口，后台照样打）。
+// dedupe 防慢响应叠加：两次响应乱序回来会把较旧的信号列表写回。
+async function pollOnce() {
+  const [sig, st] = await Promise.all([
+    jspaceGetSignals('', 100).catch(() => null),
+    jspaceGetStatus().catch(() => null),
+  ])
+  if (sig && 'entries' in (sig as object)) signals.value = (sig as any).entries
+  if (st) status.value = st
+}
+
+const poller = useVisibilityPolling(pollOnce, POLL_INTERVAL_MS, { autoStart: false, dedupe: true })
+
 function startPolling() {
-  stopPolling()
-  pollTimer = setInterval(() => {
-    jspaceGetSignals('', 100)
-      .then(r => { if (r && 'entries' in (r as object)) signals.value = (r as any).entries })
-      .catch(() => {})
-    jspaceGetStatus()
-      .then(r => { if (r) status.value = r })
-      .catch(() => {})
-  }, POLL_INTERVAL_MS)
+  poller.start()
 }
 
 function stopPolling() {
-  if (pollTimer) { clearInterval(pollTimer); pollTimer = null }
+  poller.stop()
 }
 
 onMounted(() => { loadAll(); startPolling() })

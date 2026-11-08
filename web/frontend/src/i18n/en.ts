@@ -1573,4 +1573,10 @@ export default {
     current: 'Current emotion',
     calm: 'Calm',
   },
+  errorBoundary: {
+    title: 'This page failed to render',
+    hint: 'Your data is safe — reloading usually fixes it. If it keeps happening, send the error message above to the developer.',
+    reload: 'Reload',
+  },
+
 } as const

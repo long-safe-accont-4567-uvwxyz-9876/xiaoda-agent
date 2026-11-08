@@ -337,12 +337,13 @@ class SessionStoreMixin:
         )
 
         # 复制所有条目
-        for entry in entries:
-            entry_json = json.dumps(entry, ensure_ascii=False)
-            await self._conn.execute(
+        # 审计 M2：原实现逐条 await execute（N 条 = N 次 aiosqlite 线程往返，
+        # 长会话 fork 时线性放大），改为一次 executemany，最后统一 commit。
+        if entries:
+            await self._conn.executemany(
                 """INSERT INTO session_entries (session_id, entry_json, created_at)
                    VALUES (?, ?, ?)""",
-                (new_id, entry_json, now),
+                [(new_id, json.dumps(entry, ensure_ascii=False), now) for entry in entries],
             )
 
         # 复制摘要

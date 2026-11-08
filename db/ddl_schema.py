@@ -302,6 +302,10 @@ class DDLMixin:
         await self._conn.execute("""CREATE INDEX IF NOT EXISTS idx_concept_node_valid ON concept_nodes(valid_to)""")
         await self._conn.execute("""CREATE INDEX IF NOT EXISTS idx_concept_edge_source ON concept_edges(source_id)""")
         await self._conn.execute("""CREATE INDEX IF NOT EXISTS idx_concept_edge_target ON concept_edges(target_id)""")
+        # 审计 H3：get_edge_snapshot 支持 weight 下限过滤（扩散激活按强度收窄），
+        # 无索引时该过滤要全表扫 1,001,111 行。幂等 DDL，服务下次启动自动建；
+        # 1M 行单列索引一次性构建成本（生产实测约 1-2s / 约 23MB），无需迁移脚本。
+        await self._conn.execute("""CREATE INDEX IF NOT EXISTS idx_concept_edge_weight ON concept_edges(weight)""")
 
     async def _create_indexes(self) -> None:
         """Phase 3: 创建所有索引（含依赖迁移列的索引）。"""

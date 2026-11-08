@@ -6,6 +6,7 @@ import re
 from typing import ClassVar
 
 import jieba
+from loguru import logger
 
 # 停用词表（与项目现有 _TOPIC_STOPWORDS 保持一致 + 扩展）
 _STOPWORDS = {
@@ -69,15 +70,15 @@ def _get_key_stopwords() -> set[str]:
             raw = getattr(_cfg, "KEY_EXTRACTOR_ROLE_WORDS", None)
             if isinstance(raw, (list, tuple, set)):
                 extra.update(str(w).strip().lower() for w in raw if str(w).strip())
-        except Exception:
-            pass
+        except (ImportError, AttributeError, TypeError, ValueError) as _e:
+            logger.debug("key_extractor.role_words_failed error={}", str(_e)[:120])
         try:
             from config import get_agent_display_name
             display = get_agent_display_name("xiaoda")
             if display and display.strip():
                 extra.add(display.strip().lower())
-        except Exception:
-            pass
+        except (ImportError, AttributeError, TypeError, ValueError) as _e:
+            logger.debug("key_extractor.display_name_failed error={}", str(_e)[:120])
         _dynamic_stopwords = _STOPWORDS | extra
     return _dynamic_stopwords
 

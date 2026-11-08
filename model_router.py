@@ -170,6 +170,19 @@ def _derive_custom_provider_default_models() -> dict[str, str]:
 MAX_PROVIDER_CONCURRENCY = 3
 
 
+def provider_concurrency_limit(provider: str) -> int:
+    """provider 并发上限（审计 M4）：读 LLM_PROVIDER_CONCURRENCY_<P>，未配置回落默认。"""
+    _raw = os.environ.get(
+        "LLM_PROVIDER_CONCURRENCY_" + "".join(
+            c if c.isalnum() else "_" for c in provider).upper())
+    try:
+        return max(1, int(_raw)) if _raw else MAX_PROVIDER_CONCURRENCY
+    except (TypeError, ValueError):
+        logger.warning("model_router.provider_concurrency_invalid provider={} raw={}",
+                       provider, _raw)
+        return MAX_PROVIDER_CONCURRENCY
+
+
 class ModelRouter(ExecutionMixin, CostTrackingMixin, ClientLifecycleMixin, FallbackChainMixin):
     """模型路由器，按任务类型选择模型/Provider 并处理重试与凭证轮换。"""
 
@@ -295,7 +308,7 @@ class ModelRouter(ExecutionMixin, CostTrackingMixin, ClientLifecycleMixin, Fallb
             semaphores = {}
             self._provider_semaphores = semaphores
         return semaphores.setdefault(
-            provider, asyncio.Semaphore(MAX_PROVIDER_CONCURRENCY))
+            provider, asyncio.Semaphore(provider_concurrency_limit(provider)))
 
     def _get_custom_clients_lock(self) -> threading.Lock:
         """返回保护 _custom_clients 的统一锁，按需创建。

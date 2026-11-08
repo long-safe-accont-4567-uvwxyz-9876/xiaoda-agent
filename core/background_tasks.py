@@ -63,7 +63,13 @@ def _on_bg_task_done(task: asyncio.Task) -> None:
         logger.warning("bg.task_failed error={} task={}", str(exc), task.get_name())
 
 
-def _spawn(coro: Any, timeout: float | None = None,
+# 审计 M5：长驻循环（如 _local_ai_health_loop 的 while True）必然超过该阈值，
+# 每轮都会刷一条 bg.task_slow，把真正的慢任务埋掉。调用方用 long_running=True
+# 明确声明"这是常驻循环"，此时只记 debug 不告警。
+SLOW_TASK_THRESHOLD_S = 30.0
+
+
+def _spawn(coro: Any, timeout: float | None = None, long_running: bool = False,
            owner: BackgroundTaskManager | None = None) -> asyncio.Task | None:
     """创建 fire-and-forget 后台任务，自动从 _bg_tasks 中移除已完成的任务。
 
@@ -110,10 +116,11 @@ def _spawn(coro: Any, timeout: float | None = None,
                 # reset 必然失败——此时放弃恢复即可，变量随上下文一起销毁。
                 pass
             elapsed = time.time() - start_time
-            if elapsed > 30:
+            if elapsed > SLOW_TASK_THRESHOLD_S and not long_running:
                 logger.warning("bg.task_slow name={} elapsed={:.1f}s", task_name, elapsed)
             else:
-                logger.debug("bg.task_done name={} elapsed={:.1f}s", task_name, elapsed)
+                logger.debug("bg.task_done name={} elapsed={:.1f}s long_running={}",
+                             task_name, elapsed, long_running)
 
     try:
         loop = asyncio.get_running_loop()

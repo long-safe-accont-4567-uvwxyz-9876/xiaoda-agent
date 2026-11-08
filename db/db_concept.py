@@ -235,29 +235,69 @@ class ConceptDB:
             rows = await cur.fetchall()
             return {row["target_id"]: dict(row) for row in rows}
 
-    async def get_edge_snapshot(self) -> dict[str, dict[str, float]]:
-        """一次取回全部概念边（{source_id: {target_id: weight}}）。
+    async def get_edge_snapshot(
+        self,
+        *,
+        min_weight: float | None = None,
+        relation: str | None = None,
+        chunk_size: int = 20000,
+    ) -> dict[str, dict[str, float]]:
+        """取回概念边（{source_id: {target_id: weight}}），支持过滤与分块流式读取。
 
         扩散激活在稠密图（实测 2381 节点 / 100 万边）逐节点或按 hop 批量
         取边都要反复拉回巨量行；SpreadingActivationEngine 把整图快照缓存
         在内存，写入路径经 clear_cache() 失效重建。
-        """
-        async with self._conn.execute(
-            "SELECT source_id, target_id, weight FROM concept_edges"
-        ) as cur:
-            rows = await cur.fetchall()
-        # 100 万行的 dict 组装是纯 CPU 密集（首载实测 3-4s），且 aiosqlite 仅
-        # 负责取行、组装回到事件循环线程执行——移线程池避免冻结主线程
-        # （检索方通常有 10-45s 的超时预算，但冻结事件循环是全服务级事故）。
-        def _build_snapshot() -> dict[str, dict[str, float]]:
-            result: dict[str, dict[str, float]] = {}
-            for row in rows:
-                result.setdefault(row["source_id"], {})[
-                    row["target_id"]
-                ] = float(row["weight"])
-            return result
 
-        return await asyncio.to_thread(_build_snapshot)
+        审计 H3（2026-11-08 只读实测）：concept_edges 1,001,111 行 / 161.8MB
+        占整库 78%，原实现 `SELECT ... FROM concept_edges` 无 WHERE 全表
+        fetchall()，把 100 万行一次性搬进 Python 列表再组装（代码注释自述
+        首载 3-4s，实测全扫 176.9ms/次），内存峰值=全部行对象。改为：
+        - 可选 WHERE 过滤（weight 下限 / relation），调用方可按需收窄；
+          索引见 db/ddl_schema.py 的 idx_concept_edge_weight（幂等 DDL，
+          下次启动自动建，无需单独迁移脚本）；
+        - fetchmany 分块流式组装，逐块释放行对象，事件循环在块间可调度；
+        - 保留整图快照语义（调用方需要稠密图）。
+
+        Args:
+            min_weight: 只取 weight >= 该值的边（None = 不过滤）
+            relation: 只取该 relation 的边（None = 不过滤）
+            chunk_size: 每次 fetchmany 的行数（<=0 时退化为单次 fetchall）
+        """
+        where: list[str] = []
+        params: list[object] = []
+        if min_weight is not None:
+            where.append("weight >= ?")
+            params.append(float(min_weight))
+        if relation is not None:
+            where.append("relation = ?")
+            params.append(str(relation))
+        sql = "SELECT source_id, target_id, weight FROM concept_edges"
+        if where:
+            sql += " WHERE " + " AND ".join(where)
+
+        # 组装是纯 CPU 密集：按列下标取值（row_factory 可能是 Row 也可能是 tuple），
+        # 分块进行，块之间让出事件循环。
+        def _merge(result: dict[str, dict[str, float]], rows: object) -> int:
+            count = 0
+            for row in rows:  # type: ignore[union-attr]
+                result.setdefault(row[0], {})[row[1]] = float(row[2])
+                count += 1
+            return count
+
+        result: dict[str, dict[str, float]] = {}
+        total = 0
+        async with self._conn.execute(sql, tuple(params)) as cur:
+            if chunk_size <= 0:
+                total = await asyncio.to_thread(_merge, result, await cur.fetchall())
+            else:
+                while True:
+                    rows = await cur.fetchmany(chunk_size)
+                    if not rows:
+                        break
+                    total += await asyncio.to_thread(_merge, result, rows)
+        logger.debug("concept.edge_snapshot rows={} sources={} min_weight={} relation={}",
+                     total, len(result), min_weight, relation)
+        return result
 
     async def update_edge(self, source_id: str, target_id: str,
                            weight: float | None = None,
