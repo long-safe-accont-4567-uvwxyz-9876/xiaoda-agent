@@ -96,8 +96,10 @@ WEB_TEST_BASELINES: dict[str, int] = {
     # 五个 i18n key。i18n 键必须集中在本文件，无法外置到子模块（键表本身就是本体）。
     # 2026-11-08 上调（协议 b：必要增长）：引导页默认模型二选一新增三条文案
     # （providerTitle/providerHint/providerKeyMissing），i18n 是 UI 文案唯一落点。
-    "web/frontend/src/i18n/zh.ts": 1570,
-    "web/frontend/src/i18n/en.ts": 1569,
+    # 2026-11-08 上调（协议 b）：合并 fc8e5fdb 兜底矩阵文案 +5 键
+    "web/frontend/src/i18n/zh.ts": 1575,
+    # 2026-11-08 上调（协议 b）：同上（en 同步 +5 键）
+    "web/frontend/src/i18n/en.ts": 1574,
     "web/frontend/src/views/ChatView.vue": 988,
     "web/frontend/src/views/RetrievalView.vue": 915,
     "tests/test_local_ai_device_registry.py": 2260,
@@ -169,7 +171,9 @@ ALLOWLIST_BASELINES: dict[str, int] = {
     "memory/retrieval/pipeline.py": 1084,
     "ilink_client.py": 1039,
     # 2026-09-03 上调（协议 b）：重试降级走 SubAgentInvocation 调度器 +32
-    "agent_core/sub_agent_manager.py": 1173,
+    # 2026-11-08 上调（协议 b）：合并 69020832 的 DelegationOutcome/
+    # ensemble usable() 过滤与 _sequential_pipe 语义（+49，待专项拆分）
+    "agent_core/sub_agent_manager.py": 1222,
     # 2026-08-29 审计修复 Task 4（agent_core 管线六项修复）：
     #   sub_agent.py 1036→1161 —— 工具结果 EXTERNAL 消毒助手（Fix3）、
     #     截断 JSON 修复真正生效（Fix4）、MCP 作用域过滤 helpers
