@@ -70,3 +70,23 @@ async def test_zero_budget_means_unbounded():
     async with _bounded_provider_slot(sem, 0) as waited:
         assert waited >= 0.0
     assert sem._value == 1
+
+
+@pytest.mark.asyncio
+async def test_async_context_manager_slot_supported():
+    """回归：生产实现返回 Semaphore，但测试替身只给 async CM（M4 改动的兼容面）。"""
+    import contextlib
+
+    state = {"entered": 0, "exited": 0}
+
+    @contextlib.asynccontextmanager
+    async def _slot_cm():
+        state["entered"] += 1
+        try:
+            yield
+        finally:
+            state["exited"] += 1
+
+    async with _bounded_provider_slot(_slot_cm(), 1.0) as waited:
+        assert waited >= 0.0
+    assert state == {"entered": 1, "exited": 1}

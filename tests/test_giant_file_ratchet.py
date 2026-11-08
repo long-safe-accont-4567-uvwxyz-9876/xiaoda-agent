@@ -180,8 +180,8 @@ ALLOWLIST_BASELINES: dict[str, int] = {
     # 2026-11-08 上调（协议 b）：四个 turn_end 出口附带 degraded 标记（+4）
     # 2026-11-08 fix/audit-defects-perf 中等 M4（剩余处）：有界排队 +
     # 排队计入超时预算（_bounded_provider_slot / _provider_queue_budget），
-    # 1108→1159 行。
-    "llm_gateway/router_execution.py": 1159,
+    # 1108→1164 行。
+    "llm_gateway/router_execution.py": 1164,
     # 2026-09-03 上调（协议 b）：connect 取消时 _stop_after_cancel 清理 +26
     "tool_engine/mcp_client.py": 1116,
     "memory/retrieval/pipeline.py": 1084,

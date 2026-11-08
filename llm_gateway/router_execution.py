@@ -91,24 +91,30 @@ def _provider_queue_budget() -> float:
 
 
 @contextlib.asynccontextmanager
-async def _bounded_provider_slot(sem: asyncio.Semaphore,
+async def _bounded_provider_slot(slot: Any,
                                  budget: float | None) -> AsyncIterator[float]:
     """有界排队获取 per-provider 并发槽，yield 已排队秒数。
+
+    slot 有两种合法形态：生产实现返回的 asyncio.Semaphore（acquire/release），
+    以及测试替身常见的「async 上下文管理器」。后者无法施加排队上界，直接进入。
 
     budget 为 None / <=0 时不设上界（旧行为）；超时抛 asyncio.TimeoutError，
     由上层既有异常处理链路降级。释放放在 finally，取消/异常都不泄漏槽位。
     """
     loop = asyncio.get_running_loop()
     started = loop.time()
-    if budget is not None and budget > 0:
-        await asyncio.wait_for(sem.acquire(), timeout=budget)
-    else:
-        await sem.acquire()
-    waited = loop.time() - started
-    try:
-        yield waited
-    finally:
-        sem.release()
+    if hasattr(slot, "acquire") and hasattr(slot, "release"):
+        if budget is not None and budget > 0:
+            await asyncio.wait_for(slot.acquire(), timeout=budget)
+        else:
+            await slot.acquire()
+        try:
+            yield loop.time() - started
+        finally:
+            slot.release()
+        return
+    async with slot:  # 测试替身：只保证互斥，不承诺排队上界
+        yield loop.time() - started
 
 # 重试次数常量：随执行链一并搬入（model_router 顶部同名 re-export，见模块 docstring）
 MAX_RETRIES = 1
