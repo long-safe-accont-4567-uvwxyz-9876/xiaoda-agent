@@ -311,3 +311,154 @@ def _load_cross_provider_map() -> dict[str, tuple[str, str]]:
     return _apply_env_cross_provider_fallback(_cross_provider_map_from_file())
 
 _CROSS_PROVIDER_MAP: dict[str, tuple[str, str]] = _load_cross_provider_map()
+
+
+# ── 兜底矩阵：task → provider → 同家兜底档（严重-2 + 轻微-15，2026-11-08）─────
+# 旧设计只有 FALLBACK_ROUTE 一条 task 链（chat → chat_agnes），跨 provider 又被
+# 硬性禁止，导致主模型不是 agnes 时没有任何「同家兜底」可走，直接掉进硅基流动
+# 免费 9B 车道且不留痕迹（用户只看到「能用但变差」）。
+#
+# 新设计：
+#   - 为声明过降级链的 task（FALLBACK_ROUTE 的 key）派生
+#     matrix[task][provider] = 该 provider 的同家兜底档；
+#   - 档位取值优先级：
+#       1. 路由表里已存在的同家 task（如 chat + agnes → chat_agnes），
+#          完全保留 agnes/agnes-2.5-flash 现网兜底行为；
+#       2. provider_metadata.providers[provider].default_model
+#          （deepseek → deepseek-chat、mimo → mimo-v2.5 …），
+#          让每个 provider 都有自己的同家档。
+#   - 跨家只在 _CROSS_PROVIDER_MAP 白名单内、且 CROSS_PROVIDER_FALLBACK_POLICY
+#     显式打开时才允许（默认关闭，保持 2026-08-04「禁止自动跨家切换」约束）。
+#
+# 本模块是叶子模块（不得 import model_router，见 tests/test_model_router_config.py
+# 契约），矩阵由 model_router 在 ROUTE_TABLE 定义后调用 set_fallback_matrix() 注入。
+
+_TRUTHY_STRINGS = frozenset({"1", "true", "yes", "on", "y", "t"})
+
+
+def _as_bool(value: object, default: bool = False) -> bool:
+    """宽松真值解析（环境变量 / JSON 布尔）。"""
+    if isinstance(value, bool):
+        return value
+    if value is None:
+        return default
+    return str(value).strip().lower() in _TRUTHY_STRINGS
+
+
+def _cross_provider_policy_from_file() -> bool | None:
+    """从 provider_metadata.json 的 _fallback_policy.cross_provider_enabled 取值。"""
+    meta = _PROVIDER_METADATA if isinstance(_PROVIDER_METADATA, dict) else {}
+    policy = meta.get("_fallback_policy")
+    if isinstance(policy, dict) and "cross_provider_enabled" in policy:
+        return _as_bool(policy.get("cross_provider_enabled"), False)
+    return None
+
+
+def load_cross_provider_fallback_policy() -> bool:
+    """CROSS_PROVIDER_FALLBACK_POLICY 开关：env > provider_metadata.json > False。
+
+    默认 False（关闭）= 保持 2026-08-04「禁止自动跨家切换」的用户硬约束。
+    """
+    env = os.getenv("CROSS_PROVIDER_FALLBACK_POLICY", "").strip()
+    if env:
+        return _as_bool(env, False)
+    from_file = _cross_provider_policy_from_file()
+    return from_file if from_file is not None else False
+
+
+CROSS_PROVIDER_FALLBACK_POLICY: bool = load_cross_provider_fallback_policy()
+
+
+def _provider_default_model(provider: str, providers: dict | None = None) -> str:
+    """取某 provider 的 default_model（同家兜底档候选）。"""
+    _providers = providers
+    if not isinstance(_providers, dict):
+        _providers = (_PROVIDER_CAPS_FROM_FILE
+                      if isinstance(_PROVIDER_CAPS_FROM_FILE, dict) else {})
+    meta = _providers.get(provider, {})
+    if isinstance(meta, dict):
+        return str(meta.get("default_model", "") or "")
+    return ""
+
+
+def build_fallback_matrix(route_table: dict, fallback_route: dict | None = None,
+                          provider_metadata: dict | None = None) -> dict[str, dict[str, dict]]:
+    """派生 task → provider → 同家兜底档 矩阵。
+
+    只为「声明过降级链的 task」建矩阵（fallback_route 的 key，当前仅 chat），
+    其余 task 继续走旧的 FALLBACK_ROUTE task 链，行为不变。
+
+    Args:
+        route_table: 路由表（model_router.ROUTE_TABLE）
+        fallback_route: 降级链表（model_router_registry.FALLBACK_ROUTE）
+        provider_metadata: provider 元数据（默认用本模块加载的 _PROVIDER_METADATA）
+
+    Returns:
+        {task: {provider: {"client":…, "model":…, "task":…, "source":…}}}
+    """
+    _route = route_table if isinstance(route_table, dict) else {}
+    _chain = fallback_route if isinstance(fallback_route, dict) else {}
+    meta = provider_metadata if isinstance(provider_metadata, dict) else _PROVIDER_METADATA
+    providers = meta.get("providers", {}) if isinstance(meta, dict) else {}
+    if not isinstance(providers, dict):
+        providers = {}
+    matrix: dict[str, dict[str, dict]] = {}
+    for task in _chain:
+        tiers: dict[str, dict] = {}
+        for provider in providers:
+            explicit_task = f"{task}_{provider}"
+            explicit = _route.get(explicit_task)
+            if isinstance(explicit, dict) and explicit.get("client") == provider:
+                tier = dict(explicit)
+                tier["task"] = explicit_task
+                tier["source"] = "route_table"
+                tiers[provider] = tier
+                continue
+            default_model = _provider_default_model(provider, providers)
+            if not default_model:
+                continue
+            tiers[provider] = {
+                "client": provider,
+                "model": default_model,
+                "task": explicit_task,
+                "source": "provider_metadata",
+            }
+        if tiers:
+            matrix[task] = tiers
+    return matrix
+
+
+FALLBACK_MATRIX: dict[str, dict[str, dict]] = {}
+
+
+def set_fallback_matrix(matrix: dict) -> None:
+    """注入兜底矩阵（由 model_router 在 ROUTE_TABLE 定义后调用）。"""
+    global FALLBACK_MATRIX
+    FALLBACK_MATRIX = matrix if isinstance(matrix, dict) else {}
+
+
+def get_fallback_matrix() -> dict:
+    """取当前兜底矩阵（只读语义；调用方不要原地改）。"""
+    return FALLBACK_MATRIX
+
+
+def get_fallback_tier(task: str, provider: str) -> dict | None:
+    """取 task × provider 的同家兜底档；没有则 None（调用方回落到旧 task 链）。"""
+    if not provider:
+        return None
+    tiers = FALLBACK_MATRIX.get(task)
+    if not isinstance(tiers, dict):
+        return None
+    tier = tiers.get(provider)
+    return dict(tier) if isinstance(tier, dict) else None
+
+
+def get_cross_provider_tier(provider: str) -> tuple[str, str] | None:
+    """取白名单 _CROSS_PROVIDER_MAP 里的跨家兜底档 (provider, model)；无则 None。"""
+    entry = _CROSS_PROVIDER_MAP.get(provider) if isinstance(_CROSS_PROVIDER_MAP, dict) else None
+    if not entry:
+        return None
+    fb_provider, fb_model = entry
+    if not fb_provider or not fb_model:
+        return None
+    return (fb_provider, fb_model)
