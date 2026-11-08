@@ -498,7 +498,7 @@ def _validate_webui_password(body: dict, updates: dict) -> tuple[str, str, str]:
             "code": "RECOVERY_INVALID",
             "message": "找回问题长度需在 1~200 个字符之间",
         })
-    # 最小长度复用 security/recovery_qa.MIN_ANSWER_LEN，防止两处校验漂移
+    # 最小长度复用 security/credential_text.MIN_ANSWER_LEN，防止两处校验漂移
     if len(recovery_answer) < MIN_ANSWER_LEN:
         raise HTTPException(400, detail={
             "code": "RECOVERY_INVALID",
