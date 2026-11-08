@@ -1,4 +1,5 @@
 import { createApp } from 'vue'
+import { loginLocationWithRedirect } from './utils/sessionRedirect'
 import { createPinia } from 'pinia'
 import { createRouter, createWebHashHistory } from 'vue-router'
 import App from './App.vue'
@@ -20,7 +21,8 @@ router.beforeEach((to, _from, next) => {
     const auth = useAuthStore()
     if (!auth.isLoggedIn) {
       // 未登录时跳转登录页
-      next({ name: 'login' })
+      // 审查 A2：把访问目标带进登录页，登录后回到原页面而不是首页
+      next(loginLocationWithRedirect(to.fullPath))
       return
     }
   }

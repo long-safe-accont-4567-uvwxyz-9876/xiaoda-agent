@@ -1,4 +1,5 @@
 import { t } from '../i18n'
+import { resolveRedirectTarget } from '../utils/sessionRedirect'
 import type {
   AgentInfo, AgentPermissions, ChatMessageItem,
   IntentFactorResult, JSpaceConfig, JSpaceDirection, JSpaceInterventions,
@@ -116,7 +117,11 @@ function consumeAuthRenewal(res: Response): void {
 /** 401 统一清理路径：清除本地 token 并引导到登录页（request/uploadFile 共用） */
 function handleUnauthorized() {
   localStorage.removeItem('token')
-  if (!location.hash.includes('login')) location.hash = '#/login'
+  // 审查 A2：401 清理同样要留住当前路由，否则深链用户回来必落首页
+  if (!location.hash.includes('login')) {
+    const current = location.hash.replace(/^#/, '') || '/'
+    location.hash = `#/login?redirect=${encodeURIComponent(resolveRedirectTarget(current))}`
+  }
 }
 
 // 取消支持（审计 P1-6）：调用方传入组件级 AbortSignal，切页/切会话时统一取消，
