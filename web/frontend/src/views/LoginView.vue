@@ -9,6 +9,7 @@ import Tilt3D from '../components/fx/Tilt3D.vue'
 import DendroEmblem from '../components/fx/DendroEmblem.vue'
 import { wallpaperKind } from '../utils/wallpaper'
 import { t } from '../i18n'
+import { isPasswordValid } from '../utils/credentialInput'
 
 const DEFAULT_BG = '/assets/webui_background.jpg'
 // 须弥深绿基色：壁纸与默认图全部加载失败时仍保证非空背景（字段机白屏修复）
@@ -177,7 +178,7 @@ async function submitRecover() {
     recoverError.value = t('login.recoverAnswerRequired')
     return
   }
-  if ((recoverNewPassword.value || '').length < 8) {
+  if (!isPasswordValid(recoverNewPassword.value)) {
     recoverError.value = t('login.recoverPasswordTooShort')
     return
   }

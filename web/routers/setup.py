@@ -15,7 +15,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 from loguru import logger
 
 from config import CONFIG_DIR, get_base_url_for_provider
-from security.recovery_qa import MIN_ANSWER_LEN
+from security.credential_text import MAX_QUESTION_LEN, MIN_ANSWER_LEN, MIN_PASSWORD_LEN
 from utils.atomic_write import _restrict_file_permissions_windows, atomic_write
 from web.routers import setup_default_provider as _default_provider
 from web.routers.auth import _get_client_ip, _is_private_ip, get_current_user
@@ -488,22 +488,22 @@ def _validate_webui_password(body: dict, updates: dict) -> tuple[str, str, str]:
     recovery_answer = str(body.get("recovery_answer") or "").strip()
     if not webui_password:
         return webui_password, recovery_question, recovery_answer
-    if len(webui_password) < 8:
+    if len(webui_password) < MIN_PASSWORD_LEN:
         raise HTTPException(400, detail={
             "code": "WEAK_PASSWORD",
-            "message": "WebUI 密码至少需要 8 位",
+            "message": f"WebUI 密码至少需要 {MIN_PASSWORD_LEN} 位",
         })
     if not recovery_question or not recovery_answer:
         raise HTTPException(400, detail={
             "code": "RECOVERY_REQUIRED",
             "message": "密码与找回问题必须同时设置",
         })
-    if len(recovery_question) > 200:
+    if len(recovery_question) > MAX_QUESTION_LEN:
         raise HTTPException(400, detail={
             "code": "RECOVERY_INVALID",
             "message": "找回问题长度需在 1~200 个字符之间",
         })
-    # 最小长度复用 security/recovery_qa.MIN_ANSWER_LEN，防止两处校验漂移
+    # 最小长度复用 security/credential_text.MIN_ANSWER_LEN，防止两处校验漂移
     if len(recovery_answer) < MIN_ANSWER_LEN:
         raise HTTPException(400, detail={
             "code": "RECOVERY_INVALID",

@@ -20,6 +20,7 @@ from typing import Any
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from loguru import logger
 
+from security.credential_text import MIN_PASSWORD_LEN, constant_time_equal
 from web.proxy_headers import resolve_client_ip
 from web.schemas import ChangePasswordRequest, Envelope, LoginRequest, LoginResponse, RecoverRequest
 
@@ -489,7 +490,8 @@ async def login(req: LoginRequest, request: Request, response: Response = None) 
     # 首次登录尝试即告警，无论成败）
     _warn_weak_password(password)
 
-    if not hmac.compare_digest(req.password, password):
+    # 中文/全角密码同样可比：constant_time_equal 内部按 UTF-8 编码后比对
+    if not constant_time_equal(req.password, password):
         # VULN-28: 失败审计（含来源 IP，供异常检测/事后追溯）
         logger.warning("auth.login_failed ip={} fails_next={}", client_ip,
                        _rate_limit.get(client_ip, (0, 0))[0] + 1)
@@ -513,7 +515,7 @@ async def login(req: LoginRequest, request: Request, response: Response = None) 
     return Envelope(data=LoginResponse(token=token, expires_at=expiry))
 
 
-_MIN_PASSWORD_LEN = 8
+_MIN_PASSWORD_LEN = MIN_PASSWORD_LEN  # 单一来源：security/credential_text
 _warned_weak_password = False
 
 
@@ -667,7 +669,7 @@ async def change_password(req: ChangePasswordRequest, user_id: str = Depends(get
     client_ip = _get_client_ip(request) if request is not None else "unknown"
 
     # 当前密码校验：未设置过密码时允许空 old_password
-    if current_password and not hmac.compare_digest(req.old_password or "", current_password):
+    if current_password and not constant_time_equal(req.old_password or "", current_password):
         logger.warning("auth.change_password_old_mismatch ip={}", client_ip)
         raise HTTPException(403, "旧密码错误")
 

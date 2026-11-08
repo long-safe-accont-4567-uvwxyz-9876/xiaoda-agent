@@ -8,6 +8,7 @@ import { api, getSetupVersion } from '../api'
 import { useAuthStore } from '../stores/auth'
 import { t } from '../i18n'
 import Tilt3D from '../components/fx/Tilt3D.vue'
+import { isAnswerValid, isPasswordValid, isQuestionValid } from '../utils/credentialInput'
 
 const router = useRouter()
 const authStore = useAuthStore()
@@ -224,10 +225,10 @@ const needsPassword = computed(() =>
   !webuiPasswordConfigured.value || modifiedKeys.has('WEBUI_PASSWORD'))
 
 const passwordComplete = computed(() =>
-  !needsPassword.value || (webuiPassword.value || '').trim().length >= 8)
+  !needsPassword.value || isPasswordValid(webuiPassword.value))
 
 const recoveryComplete = computed(() => !needsPassword.value ||
-  (recoveryQuestion.value.trim().length > 0 && recoveryAnswer.value.trim().length >= 2))
+  (isQuestionValid(recoveryQuestion.value) && isAnswerValid(recoveryAnswer.value)))
 
 function handlePasswordInput(value: string) {
   webuiPassword.value = value
