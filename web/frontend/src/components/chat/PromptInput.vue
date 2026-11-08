@@ -53,6 +53,7 @@ const {
   uploadedImage, uploadedDoc, imagePreviewUrl, uploadState,
   hasAttachment: uploadHasAttachment, showLightbox,
   uploadFile, removeImage, removeDoc, openLightbox, closeLightbox, resetAttachments,
+  uploadErrorDetail,
 } = usePromptUploads(statusKey)
 
 const {
@@ -80,6 +81,10 @@ const canSend = computed(() =>
 const statusText = computed(() => {
   if (uploadState.value === 'uploading') return t('promptInput.uploading')
   if (!props.connected) return t('promptInput.disconnectedDraftKept')
+  // 审查 M2：上传失败要显示服务端给出的具体原因，而不是只有一句“上传失败”
+  if (statusKey.value === 'promptInput.uploadFailed' && uploadErrorDetail.value) {
+    return `${t('promptInput.uploadFailed')}：${uploadErrorDetail.value}`
+  }
   return statusKey.value ? t(statusKey.value) : ''
 })
 

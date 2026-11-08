@@ -2,7 +2,6 @@ import { ref, computed, onBeforeUnmount } from 'vue'
 import type { Ref } from 'vue'
 import { api } from '../../../api'
 import { classifyUpload } from './classifyUpload'
-import { t } from '../../../i18n'
 
 export interface UploadedImage {
   url: string
@@ -48,6 +47,7 @@ export function usePromptUploads(statusKey: Ref<string>) {
 
   async function uploadFile(file: File) {
     const generation = nextUploadGeneration()
+    uploadErrorDetail.value = ''
     // P0 修复（Task 1.9）：一键包含所有文件 — 自动检测类型并路由
     // 图片 → vision API（uploadImage），文档 → document_reader 工具（uploadDoc）
     // 用户要求"不要添加组件，一键包含所有文件"

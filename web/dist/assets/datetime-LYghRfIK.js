@@ -1,0 +1,1 @@
+import{i as a}from"./index-Sm5cFK0n.js";function n(t=a()){return t==="en"?"en-US":"zh-CN"}function o(t,e=n()){return new Date(t).toLocaleString(e)}function r(t,e=n()){return new Date(t).toLocaleTimeString(e,{hour:"2-digit",minute:"2-digit"})}export{r as a,o as f,n as l};
