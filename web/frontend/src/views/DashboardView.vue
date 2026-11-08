@@ -15,6 +15,7 @@ import { LineChart, BarChart } from 'echarts/charts'
 import { GridComponent, TooltipComponent } from 'echarts/components'
 import { CanvasRenderer } from 'echarts/renderers'
 import { t } from '../i18n'
+import { useLoadError } from '../composables/useLoadError'
 
 echarts.use([LineChart, BarChart, GridComponent, TooltipComponent, CanvasRenderer])
 
@@ -60,11 +61,24 @@ function observeChartSizes() {
   if (toolChartEl.value) chartResizeObserver.observe(toolChartEl.value)
 }
 
+// 审查 C1：数据拉取失败原先全部是静默 catch，图表空着不解释原因，用户与运维
+// 都分不清“确实没数据”与“接口挂了”。这里统一落到 dashError，并首次失败弹一次
+// 可见提示（轮询场景不重复骚扰）。
+const { loadError: dashError, fail: failLoad } = useLoadError('errors.dashboardLoadFailed')
+let dashWarned = false
+function reportLoadError(error: unknown) {
+  failLoad(error)
+  if (!dashWarned && dashError.value) {
+    dashWarned = true
+    message.error(dashError.value)
+  }
+}
+
 async function loadMonitorConfig() {
   try {
     const cfg = await get<SystemConfig>('/system/config')
     monitorEnabled.value = !!cfg?.dashboard?.system_monitor_enabled
-  } catch { /* */ }
+  } catch (e) { reportLoadError(e) }
 }
 
 // 审计 L6：后台标签页不再每 5 秒打接口，重新可见时立即补一次
@@ -75,7 +89,7 @@ async function enableMonitor() {
   monitorEnabled.value = true
   try {
     await put('/system/config', { path: 'dashboard.system_monitor_enabled', value: true })
-  } catch { /* */ }
+  } catch (e) { reportLoadError(e) }
   await loadSystem()
   startPolling()
 }
@@ -86,7 +100,7 @@ async function disableMonitor() {
   system.value = {}
   try {
     await put('/system/config', { path: 'dashboard.system_monitor_enabled', value: false })
-  } catch { /* */ }
+  } catch (e) { reportLoadError(e) }
 }
 
 async function loadAll() {
@@ -167,7 +181,7 @@ async function renderToolChart() {
                axisLabel: { color: '#f2f7ee', fontSize: 10, fontFamily: 'JetBrains Mono' } },
       series: [{ type: 'bar', color: '#e8d5a3', data: top.map(t => t[1]), barWidth: 12 }],
     })
-  } catch { /* */ }
+  } catch (e) { reportLoadError(e) }
 }
 
 function pct(used: number, total: number): number {

@@ -14,6 +14,7 @@ import { useAutoScroll } from '../composables/useAutoScroll'
 import { useAbortableRequests } from '../composables/useAbortableRequests'
 import { isAbortError } from '../utils/abortRegistry'
 import { formatDateTime, formatTime } from '../utils/datetime'
+import { isAutoplayBlocked } from '../utils/autoplay'
 import { reportError } from '../utils/errorLog'
 import ToolCallCard from '../components/chat/ToolCallCard.vue'
 import ChatTerminal from '../components/chat/ChatTerminal.vue'
@@ -193,7 +194,12 @@ function play(url: string) {
   playingUrl.value = url
   audioEl.onended = () => { playingUrl.value = '' }
   audioEl.onerror = () => { playingUrl.value = '' }
-  audioEl.play().catch(() => { playingUrl.value = '' })
+  // 审查 M4：未与页面交互前浏览器会拒绝播放，原先只清播放态、不给任何提示，
+  // 用户以为什么都没发生。拦截时给一次可见提示。
+  audioEl.play().catch((error: unknown) => {
+    playingUrl.value = ''
+    if (isAutoplayBlocked(error)) message.warning(t('errors.autoplayBlocked'))
+  })
 }
 
 // 组件级在途请求登记（审计 P1-6）：卸载/失活即取消，

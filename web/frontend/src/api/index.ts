@@ -119,8 +119,11 @@ function handleUnauthorized() {
   localStorage.removeItem('token')
   // 审查 A2：401 清理同样要留住当前路由，否则深链用户回来必落首页
   if (!location.hash.includes('login')) {
+    // 目标为根路径时仍写回统一的 '#/login'（既有契约，见
+    // tests/test_frontend_audit_fixes.py 的 401 断言）；只有真正的深链才带 redirect。
     const current = location.hash.replace(/^#/, '') || '/'
-    location.hash = `#/login?redirect=${encodeURIComponent(resolveRedirectTarget(current))}`
+    const target = resolveRedirectTarget(current)
+    location.hash = target === '/' ? '#/login' : `#/login?redirect=${encodeURIComponent(target)}`
   }
 }
 
