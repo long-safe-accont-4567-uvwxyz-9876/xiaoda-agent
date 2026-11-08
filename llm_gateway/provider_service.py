@@ -526,6 +526,27 @@ class ProviderService:
                 catalog_definition = None
             if catalog_definition is not None and catalog_definition.builtin:
                 record = dict(record, builtin=True)
+                # 端点/协议先判存在性再回填：catalog 内置定义缺 endpoint 时，
+                # 直接取 catalog_definition.endpoint.base_url 会抛 AttributeError，
+                # 被下面的 except 吞成 provider_service.restore_definition_failed，
+                # 把「catalog 端点缺失」伪装成「恢复记录非法」。这里单独告警并跳过。
+                endpoint = getattr(catalog_definition, "endpoint", None)
+                base_url = str(getattr(endpoint, "base_url", "") or "").strip()
+                protocol = getattr(catalog_definition, "protocol", None)
+                missing_fields = []
+                if endpoint is None:
+                    missing_fields.append("endpoint")
+                elif not base_url:
+                    missing_fields.append("endpoint.base_url")
+                if protocol is None:
+                    missing_fields.append("protocol")
+                if missing_fields:
+                    logger.warning(
+                        "provider_service.restore_missing_endpoint id={} missing={}",
+                        provider_id,
+                        ",".join(missing_fields),
+                    )
+                    continue
                 # 内置 provider 不回放用户记录中的 base_url/protocol 覆盖，
                 # 避免用户配置主模型时的临时记录把内置端点改坏。
                 for field in ("base_url", "protocol", "format", "chat_path", "models_path"):
@@ -536,7 +557,7 @@ class ProviderService:
                 # provider_service.restore_definition_failed id=agnes/mimo）。
                 # 选回填而不是在 _definition 里对内建豁免校验：校验强度保持统一，
                 # 自定义 provider 缺 base_url 仍然照旧被拒。
-                record["base_url"] = catalog_definition.endpoint.base_url
+                record["base_url"] = base_url
                 record["protocol"] = catalog_definition.protocol.value
                 record["chat_path"] = catalog_definition.endpoint.chat_path
                 record["models_path"] = catalog_definition.endpoint.models_path
