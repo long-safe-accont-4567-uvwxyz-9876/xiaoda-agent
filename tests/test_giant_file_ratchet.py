@@ -161,7 +161,9 @@ ALLOWLIST_BASELINES: dict[str, int] = {
     # 2026-11-08 fix/audit-defects-perf 中等 M3：_embed_cache_path 纳入本地
     # 模型目录身份（同维度换模型不再静默复用旧向量），+11 行注释与分支，
     # 基线 1750→1761。
-    "memory/vector_store.py": 1761,
+    # 2026-11-08 fix/audit-defects-perf 中等 M3（遗留）：EmbedCache 身份 +
+    # 形状守卫 + embed_cache_filename 单一来源，1761→1799 行。
+    "memory/vector_store.py": 1799,
     "web/server.py": 1424,
     "agent_context.py": 1345,
     # 2026-08-29 审计修复 Task 1（setup 引导 token 鉴权 + recovery_qa 接线）+112 行
@@ -176,7 +178,10 @@ ALLOWLIST_BASELINES: dict[str, int] = {
     "db/db_memory_reconciliation.py": 1102,
     # 2026-09-03 上调（协议 b）：流式 EOF stream_incomplete 收口 +7
     # 2026-11-08 上调（协议 b）：四个 turn_end 出口附带 degraded 标记（+4）
-    "llm_gateway/router_execution.py": 1112,
+    # 2026-11-08 fix/audit-defects-perf 中等 M4（剩余处）：有界排队 +
+    # 排队计入超时预算（_bounded_provider_slot / _provider_queue_budget），
+    # 1108→1159 行。
+    "llm_gateway/router_execution.py": 1159,
     # 2026-09-03 上调（协议 b）：connect 取消时 _stop_after_cancel 清理 +26
     "tool_engine/mcp_client.py": 1116,
     "memory/retrieval/pipeline.py": 1084,
