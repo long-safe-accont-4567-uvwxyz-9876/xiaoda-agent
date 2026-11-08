@@ -29,6 +29,7 @@ from config_providers import get_provider_capability
 from core.message import AgentMessage
 from emotion.emoji_config import get_status_msg
 from emotion.tts_engine import TTSEngine
+from llm_gateway.provider_probe import ProviderProbeError, materialize_provider_client
 from security.instruction_hierarchy import (
     InstructionLevel,
     format_instruction,
@@ -249,10 +250,6 @@ class SubAgent:
                            reason="router_unavailable",
                            api_key_env=api_key_env)
             return False
-        from llm_gateway.provider_probe import (
-            ProviderProbeError,
-            materialize_provider_client,
-        )
         try:
             materialize_provider_client(self._router, provider, base_url, api_key_env)
         except ProviderProbeError as exc:

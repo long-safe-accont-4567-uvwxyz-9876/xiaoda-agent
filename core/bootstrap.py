@@ -20,6 +20,7 @@ from loguru import logger
 
 from config import _ensure_workspace_template, get_agent_display_name
 from core.background_tasks import BackgroundTaskManager, _spawn
+from llm_gateway.agent_target import resolve_agent_target as _resolve_target
 
 if TYPE_CHECKING:
     from agent_core import AgentCore
@@ -771,8 +772,6 @@ class AgentCoreBootstrapper:
                     logger.debug("bootstrap.agent_persist_load_failed name={}", _name, exc_info=True)
                     _persisted_cache[_name] = {}
             return _persisted_cache[_name]
-
-        from llm_gateway.agent_target import resolve_agent_target as _resolve_target
 
         def _resolve_agent_target(_p: dict, _label: str):
             """provider/model/base_url/api_key_env 同源解析（中等-5/6）。

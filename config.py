@@ -205,6 +205,13 @@ def set_default_provider(provider: str) -> None:
     # 但 .env 显式指定 MODEL_NAME 时尊重用户设置，不被覆盖。
     if not _MODEL_NAME_FROM_ENV:
         MODEL_NAME = get_default_model_for_provider(DEFAULT_PROVIDER) or MODEL_NAME
+    # 2026-11-08（中等-7）：仍是出厂值的路由项跟着新的默认 provider/model 走
+    try:
+        from llm_gateway.route_defaults import refresh_route_defaults
+
+        refresh_route_defaults()
+    except ImportError:  # 启动极早期（llm_gateway 未就绪）时跳过
+        pass
 
 # ── Provider → 默认模型映射 ──
 # 当 MODEL_NAME 未在 .env 中显式设置时，根据 DEFAULT_PROVIDER 从

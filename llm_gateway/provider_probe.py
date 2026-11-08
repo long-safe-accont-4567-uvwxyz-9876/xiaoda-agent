@@ -15,9 +15,15 @@ success 无法证明切换生效，切换后的真实请求还可能落到别的
 """
 from __future__ import annotations
 
+import os
 from typing import Any
 
+import httpx
 from loguru import logger
+from openai import AsyncOpenAI, OpenAIError
+
+from config import get_builtin_providers
+from utils.env_reader import read_env_key
 
 PING_PROMPT = "ping"
 DEFAULT_PROBE_TIMEOUT = 8.0
@@ -31,18 +37,12 @@ def _read_key(api_key_env: str) -> str:
     if not api_key_env:
         return ""
     try:
-        from utils.env_reader import read_env_key
-
         return str(read_env_key(api_key_env) or "")
     except (ImportError, OSError, KeyError, ValueError):
-        import os
-
         return os.getenv(api_key_env, "") or ""
 
 
 def _build_client(base_url: str, api_key: str) -> Any:
-    from openai import AsyncOpenAI
-
     return AsyncOpenAI(api_key=api_key, base_url=base_url, max_retries=0)
 
 
@@ -86,8 +86,6 @@ def materialize_provider_client(
     if not base_url:
         raise ProviderProbeError(f"provider {provider} 缺少 base_url")
 
-    from config import get_builtin_providers
-
     if provider in get_builtin_providers():
         try:
             existing = router.get_builtin_client(provider)
@@ -113,9 +111,6 @@ def materialize_provider_client(
 
 
 async def _chat_ping(base_url: str, api_key: str, model: str, timeout: float) -> dict:
-    import httpx
-    from openai import OpenAIError
-
     probe_errors = (OpenAIError, httpx.HTTPError, ValueError, TypeError, KeyError)
     client = _build_client(base_url, api_key)
     try:
@@ -166,8 +161,6 @@ async def probe_provider_model(
     api_key = _read_key(api_key_env)
     if not api_key:
         raise ProviderProbeError(f"缺少 API Key（{api_key_env or '未配置环境变量名'}）")
-
-    import httpx
 
     url = base_url.rstrip("/") + "/models"
     try:

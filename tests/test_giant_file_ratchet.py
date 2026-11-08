@@ -177,11 +177,15 @@ ALLOWLIST_BASELINES: dict[str, int] = {
     #     (_last_tool_results/pop_last_tool_results, Fix6 媒体提取配套)；
     #   sub_agent_manager.py 1131→1141 —— 直接 dispatch 路径媒体提取接入
     #     ProcessResult（Fix6）。
-    "agent_core/sub_agent.py": 1177,
+    # 2026-11-08 fix/router-interface-consistency：reload_model_config 先物化 client
+    # 再改字段（新增 11 行错误处理与日志），基线 1177→1188
+    "agent_core/sub_agent.py": 1188,
     "tools/_builtin_manifest.py": 1001,
     "web/routers/insight.py": 937,
     "core/background_tasks.py": 1018,
-    "web/agent_registry.py": 912,
+    # 2026-11-08 fix/router-interface-consistency：set_agent_model 切前探活 + 切后校验
+    # client、响应带 client_rebuilt/probe（新增 15 行），基线 912→927
+    "web/agent_registry.py": 927,
     "web/routers/local_deploy.py": 919,
     "cli.py": 909,
 }

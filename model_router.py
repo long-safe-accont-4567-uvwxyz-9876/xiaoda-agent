@@ -9,9 +9,6 @@ from loguru import logger
 from openai import AsyncOpenAI
 
 from config import AGNES_BASE_URL, AGNES_TEXT_MODEL, PROMPT_CACHING_ENABLED
-
-# 2026-11-08（中等-7）：仅用于首次构建 ROUTE_TABLE 快照；运行期一律走
-# _runtime_default_provider()，不要在 import 时冻结默认 provider。
 from config import DEFAULT_PROVIDER as _CFG_INITIAL_PROVIDER
 from config import FLASH_MODEL_NAME as _CFG_FLASH_MODEL
 from config import MODEL_NAME as _CFG_MODEL_NAME
@@ -23,6 +20,7 @@ from core.error_codes import ErrorCodeEnum
 from db.db_analytics import AnalyticsDB
 from llm_gateway.client_lifecycle import ClientLifecycleMixin, _ssrf_check  # noqa: F401,E402
 from llm_gateway.fallback_chain import FallbackChainMixin  # noqa: E402
+from llm_gateway.route_defaults import runtime_default_provider
 
 # ── Phase 6 拆分：流式执行链块抽为 llm_gateway/router_execution.ExecutionMixin ──
 # 方法体逐字节搬移；MAX_RETRIES 随链搬入；此处同名 re-export 保持
@@ -102,49 +100,6 @@ ROUTE_TABLE = {
     "chat_agnes": {"model": AGNES_TEXT_MODEL, "max_tokens": CHAT_MAX_TOKENS, "client": "agnes", "thinking": {"type": "disabled"},
                    "presence_penalty": 0.3, "frequency_penalty": 0.0},
 }
-
-# 出厂默认快照（2026-11-08，中等-7）：ROUTE_TABLE 在 import 时按当时的默认
-# provider/model 构建；运行期改默认值后由 refresh_route_defaults() 把仍是出厂
-# 值的项同步过去，用户显式改过的路由不动。
-_INITIAL_ROUTE_SNAPSHOT = {
-    _task: {"client": _cfg.get("client"), "model": _cfg.get("model")}
-    for _task, _cfg in ROUTE_TABLE.items()
-}
-
-
-def _runtime_default_provider() -> str:
-    """运行期读取默认 provider（不在 import 时冻结成常量）。"""
-    from llm_gateway.agent_target import runtime_default_provider
-
-    return runtime_default_provider()
-
-
-def refresh_route_defaults() -> int:
-    """把仍是出厂默认值的路由项同步到当前默认 provider/model。
-
-    只重写「当前值 == 出厂快照」的项，用户/WebUI 显式改过的路由保留。
-    返回被改写的 task 数。
-    """
-    from config import get_default_model_for_provider
-
-    provider = _runtime_default_provider()
-    if not provider:
-        return 0
-    model = str(get_default_model_for_provider(provider) or "")
-    changed = 0
-    for task, snap in _INITIAL_ROUTE_SNAPSHOT.items():
-        entry = ROUTE_TABLE.get(task)
-        if not entry:
-            continue
-        if entry.get("client") != snap["client"] or entry.get("model") != snap["model"]:
-            continue
-        entry["client"] = provider
-        if model:
-            entry["model"] = model
-        changed += 1
-    if changed:
-        logger.info("router.route_defaults_refreshed provider={} tasks={}", provider, changed)
-    return changed
 
 
 # 模型偏好 label 表（默认 provider 展示用）。
@@ -230,7 +185,7 @@ class ModelRouter(ExecutionMixin, CostTrackingMixin, ClientLifecycleMixin, Fallb
         self._client = AsyncOpenAI(api_key=_mimo_key, base_url=_mimo_url) if _mimo_key else None
         self._db = db
         # 默认偏好跟随 DEFAULT_PROVIDER（默认 mimo，但通过 provider_metadata.json 表达）
-        self._model_preference = _runtime_default_provider()
+        self._model_preference = runtime_default_provider()
         self._cost_buffer: list[dict] = []
         self._cost_flush_threshold = 3
         self._last_cache_warning = 0.0
@@ -479,8 +434,6 @@ class ModelRouter(ExecutionMixin, CostTrackingMixin, ClientLifecycleMixin, Fallb
         # Step 5: 所有 task 成功后才发布 DEFAULT_PROVIDER
         # （之前未改，失败无需回滚；放在这里保证 routes 与 provider 同步切换）
         _set_default_provider(provider)
-        # 中等-7：出厂默认路由项跟着新的默认 provider/model 走（显式改过的不动）
-        refresh_route_defaults()
 
         # Step 6: 同步 chat_model 字段到 ConfigService（WebUI 显示用）
         # CodeRabbit#1 修复：chat_model 写入失败时回滚 Step 4 的所有 task + DEFAULT_PROVIDER
@@ -516,7 +469,7 @@ class ModelRouter(ExecutionMixin, CostTrackingMixin, ClientLifecycleMixin, Fallb
     def get_current_chat_model(self) -> dict:
         if self._current_chat_model is not None:
             return self._current_chat_model
-        return {"provider": _runtime_default_provider(), "model_id": ROUTE_TABLE.get("chat", {}).get("model", _CFG_MODEL_NAME)}
+        return {"provider": runtime_default_provider(), "model_id": ROUTE_TABLE.get("chat", {}).get("model", _CFG_MODEL_NAME)}
 
     def get_max_tokens_for_task(self, task_type: str = "chat") -> int:
         """获取指定 task_type 的 **最大输出**（max_tokens，发给 API 的参数）。
@@ -542,7 +495,7 @@ class ModelRouter(ExecutionMixin, CostTrackingMixin, ClientLifecycleMixin, Fallb
             explicit = 0
         if explicit > 0:
             return explicit
-        provider = cfg.get("client") or _runtime_default_provider()
+        provider = cfg.get("client") or runtime_default_provider()
         try:
             return get_context_window_for_provider(provider, default=0)
         except (ImportError, OSError, ValueError):

@@ -20,6 +20,9 @@ from typing import Any
 
 from loguru import logger
 
+import config as _config_mod
+from config import get_default_model_for_provider, get_provider_catalog
+
 
 @dataclass(frozen=True)
 class AgentTarget:
@@ -47,14 +50,10 @@ class AgentTarget:
 
 def runtime_default_provider() -> str:
     """运行期读取默认 provider（不在 import 时冻结成常量）。"""
-    import config as _config_mod
-
     return str(_config_mod.DEFAULT_PROVIDER or "").strip().lower()
 
 
 def _catalog():
-    from config import get_provider_catalog
-
     return get_provider_catalog()
 
 
@@ -124,8 +123,6 @@ def provider_known(provider: str) -> bool:
 
 
 def default_model_for(provider: str, fallback: str = "") -> str:
-    from config import get_default_model_for_provider
-
     model = str(get_default_model_for_provider(provider) or "").strip()
     return model or fallback
 

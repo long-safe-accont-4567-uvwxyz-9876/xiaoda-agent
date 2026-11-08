@@ -19,6 +19,7 @@ from loguru import logger
 
 # frozen 模式下使用用户目录（~/.ai-agent/data/config/agents/），避免写入 _MEIPASS 只读目录
 from config import _FALLBACK_BASE, AGENTS_CONFIG_DIR, DEFAULT_PROVIDER, MEDIA_DIR, get_agent_display_name
+from llm_gateway.provider_probe import ProviderProbeError, probe_provider_model, provider_client_ready
 
 
 def _resolve_personality_path(pf: str) -> str | None:
@@ -902,11 +903,6 @@ class AgentRegistry:
 
         # 2026-11-08（中等-3/4）：切换前必须探活，内置 provider 也不例外。
         # 旧实现直接放行并回 success，但既没建 client 也没发请求。
-        from llm_gateway.provider_probe import (
-            ProviderProbeError,
-            probe_provider_model,
-            provider_client_ready,
-        )
         try:
             probe = await probe_provider_model(provider, model_id, base_url, api_key_env)
         except ProviderProbeError as exc:

@@ -22,6 +22,7 @@ from llm_gateway.provider_probe import (
     materialize_provider_client,
     provider_client_ready,
 )
+from llm_gateway.route_defaults import refresh_route_defaults
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 
@@ -98,6 +99,7 @@ async def test_switch_fails_loudly_when_probe_fails(monkeypatch):
         raise ProviderProbeError("凭证被拒（HTTP 401）")
 
     monkeypatch.setattr(provider_probe, "probe_provider_model", _boom)
+    monkeypatch.setattr("web.agent_registry.probe_provider_model", _boom)
 
     with pytest.raises(ValueError) as exc:
         await AgentRegistry.set_agent_model(stub, "xiaolang", "deepseek", "deepseek-chat")
@@ -123,6 +125,7 @@ async def test_switch_success_rebuilds_client(monkeypatch):
         return {"probe": "models", "status": 200}
 
     monkeypatch.setattr(provider_probe, "probe_provider_model", _ok)
+    monkeypatch.setattr("web.agent_registry.probe_provider_model", _ok)
 
     data = await AgentRegistry.set_agent_model(stub, "xiaolang", "deepseek", "deepseek-chat")
     assert data["client_rebuilt"] is True
@@ -241,7 +244,7 @@ def test_set_default_provider_syncs_model_name(monkeypatch):
         assert config.DEFAULT_PROVIDER == "mimo"
         assert config.MODEL_NAME == (get_default_model_for_provider("mimo") or old_model)
         assert runtime_default_provider() == "mimo"
-        assert model_router._runtime_default_provider() == "mimo"
+        assert runtime_default_provider() == "mimo"
     finally:
         config.set_default_provider(old_provider)
         config.MODEL_NAME = old_model
@@ -253,13 +256,13 @@ def test_refresh_route_defaults_follows_runtime_provider(monkeypatch):
     try:
         target_provider = _other_builtin_provider() or "mimo"
         config.set_default_provider(target_provider)
-        model_router.refresh_route_defaults()
+        refresh_route_defaults()
         chat = model_router.ROUTE_TABLE["chat"]
         assert chat["client"] == target_provider
         assert chat["model"] == get_default_model_for_provider(target_provider)
     finally:
         config.set_default_provider(old_provider)
-        model_router.refresh_route_defaults()
+        refresh_route_defaults()
 
 
 def test_no_import_time_frozen_default_provider():
