@@ -235,6 +235,15 @@ class MainPathMixin:
                                      is_master: Any, _pre_picked_sticker: Any,
                                      force_voice: Any, trace: Any, session_id: Any) -> ProcessResult:
         """主路径阶段4+5：媒体提取、隐私扫描、人格校验、上下文记录、情绪标签、语音构建。返回 ProcessResult。"""
+        # 降级标记快照：必须在 _resolve_model_used_for_log() 之前取，
+        # 后者走 consume_last_degrade() 会把标记清空。
+        _degraded_marker = None
+        _degrade_getter = getattr(self.router, "get_last_degrade", None)
+        if callable(_degrade_getter):
+            try:
+                _degraded_marker = _degrade_getter()
+            except (AttributeError, KeyError, TypeError):
+                _degraded_marker = None
         # 媒体提取与隐私扫描
         media_image_paths, media_video_path, reply = await self._extract_media_from_tool_results(
             tool_results, reply)
@@ -345,7 +354,8 @@ class MainPathMixin:
 
         return ProcessResult(reply=clean_reply, emotion=emotion_label, sticker_path=sticker_path,
                              audio_path=audio_path, tool_results=tool_results, image_paths=media_image_paths,
-                             video_path=media_video_path, tts_pending=tts_pending, tts_text=tts_text)
+                             video_path=media_video_path, tts_pending=tts_pending, tts_text=tts_text,
+                             degraded=_degraded_marker)
 
     async def _retrieve_main_memories(
         self,

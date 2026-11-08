@@ -18,6 +18,15 @@ export interface ToolCall {
   index: number
 }
 
+/** 降级标记（后端 final 帧的 degraded 字段，来源 fallback_chain._mark_degraded） */
+export interface ChatDegradedMarker {
+  kind?: string
+  from_provider?: string
+  from_model?: string
+  to_provider?: string
+  to_model?: string
+}
+
 export interface Message {
   id: string
   role: 'user' | 'assistant' | 'system'
@@ -34,6 +43,8 @@ export interface Message {
   timestamp: number
   imageUrl?: string  // 用户上传的图片 URL（用于气泡内显示预览）
   request?: ChatRequestSnapshot
+  /** 本轮是否降级产生；null/缺省即未降级（旧后端不发该键） */
+  degraded?: ChatDegradedMarker | null
 }
 
 export interface ChatAttachmentSnapshot {
@@ -274,6 +285,8 @@ export const useChatStore = defineStore('chat', () => {
     msg.imageUrls = (e.image_urls as string[]) || []
     msg.videoUrl = (e.video_url as string) || undefined
     msg.agent = e.agent as string
+    // 降级标记（可选键）：旧后端不下发时保持 undefined，UI 不显示提示
+    msg.degraded = (e.degraded as ChatDegradedMarker | undefined) ?? null
     msg.streaming = false
     if (msg.emotion) lastEmotion.value = msg.emotion
     clearProcessing(msgId)

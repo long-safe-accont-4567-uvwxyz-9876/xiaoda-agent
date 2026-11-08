@@ -293,6 +293,7 @@ export default {
     errorOccurred: '出错了：',
     imagePlaceholder: '📷 图片',
     agentTakeover: (name: string) => `现在由 ${name} 接管对话`,
+    degradedHint: (kind: string) => (kind ? `本次回复由降级模型生成（${kind}）` : '本次回复由降级模型生成'),
   },
 
   // Agent 管理页

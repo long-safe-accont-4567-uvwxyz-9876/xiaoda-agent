@@ -34,6 +34,7 @@ class StreamingMixin:
         provider = ""
         model = ""
         used_fallback = False
+        degraded = None
         try:
             async for event in self.router.chat_stream_events(
                 messages, task_type=task_type, turn=turn, **kwargs,
@@ -56,6 +57,7 @@ class StreamingMixin:
                 elif event.kind == "turn_end":
                     tool_calls = event.tool_calls
                     finish_reason = event.finish_reason
+                    degraded = event.degraded or degraded
         except Exception:
             if raw_parts or tool_calls:
                 raise
@@ -71,6 +73,7 @@ class StreamingMixin:
             model=model,
             used_fallback=used_fallback,
             turn=turn,
+            degraded=degraded,
         )
 
     async def _stream_llm_response(self, messages: list, status_callback: Any=None,

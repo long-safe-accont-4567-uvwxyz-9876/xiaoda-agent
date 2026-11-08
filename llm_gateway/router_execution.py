@@ -262,6 +262,7 @@ class ExecutionMixin:
             yield ModelStreamEvent(
                 kind="turn_end", turn=turn, finish_reason="stop",
                 provider=provider, model=model,
+                degraded=self.get_last_degrade(),
             )
             return
 
@@ -341,6 +342,7 @@ class ExecutionMixin:
                     kind="turn_end", turn=turn, tool_calls=tool_calls,
                     finish_reason=normalized_finish,
                     provider=provider, model=model,
+                    degraded=self.get_last_degrade(),
                 )
                 return
             except (RuntimeError, OSError, KeyError, ValueError, _openai_mod.APIError,
@@ -419,6 +421,7 @@ class ExecutionMixin:
             yield ModelStreamEvent(
                 kind="turn_end", turn=turn, finish_reason="stop",
                 provider=provider, model=model, fallback=True,
+                degraded=self.get_last_degrade(),
             )
             return
         if result is not None and hasattr(result, "__aiter__"):
@@ -457,6 +460,7 @@ class ExecutionMixin:
                 kind="turn_end", turn=turn, tool_calls=tool_calls,
                 finish_reason=normalized_finish, provider=provider,
                 model=fallback_model, fallback=True,
+                degraded=self.get_last_degrade(),
             )
             return
         raise LLMError(

@@ -84,7 +84,8 @@ ROOT = Path(__file__).resolve().parents[1]
 BASELINES: dict[str, int] = {
     "qq_bot_adapter.py": 2176,
     "wechat_bot_adapter.py": 1591,
-    "web/ws_hub.py": 1232,
+    # 2026-11-08 上调（协议 b）：serialize_result 仅在降级时下发 degraded 键（+6）
+    "web/ws_hub.py": 1238,
     "web/ws_terminal.py": 590,
     "prompt_builder/_prompt_scene.py": 783,
     "prompt_builder/_prompt_assembly.py": 661,
@@ -97,10 +98,13 @@ WEB_TEST_BASELINES: dict[str, int] = {
     # 2026-11-08 上调（协议 b：必要增长）：引导页默认模型二选一新增三条文案
     # （providerTitle/providerHint/providerKeyMissing），i18n 是 UI 文案唯一落点。
     # 2026-11-08 上调（协议 b）：合并 fc8e5fdb 兜底矩阵文案 +5 键
-    "web/frontend/src/i18n/zh.ts": 1575,
+    # 2026-11-08 上调（协议 b：必要增长）：流式降级提示新增 chat.degradedHint
+    "web/frontend/src/i18n/zh.ts": 1576,
     # 2026-11-08 上调（协议 b）：同上（en 同步 +5 键）
-    "web/frontend/src/i18n/en.ts": 1574,
-    "web/frontend/src/views/ChatView.vue": 988,
+    # 2026-11-08 上调（协议 b）：en 同步新增 chat.degradedHint
+    "web/frontend/src/i18n/en.ts": 1575,
+    # 2026-11-08 上调（协议 b）：降级提示模板 + .degraded-hint 样式（+12）
+    "web/frontend/src/views/ChatView.vue": 1000,
     "web/frontend/src/views/RetrievalView.vue": 915,
     "tests/test_local_ai_device_registry.py": 2260,
     # 2026-09-03 上调（协议 b）：传输层 aclose 测试收口 +33（见 BASELINES 记录）
@@ -165,7 +169,8 @@ ALLOWLIST_BASELINES: dict[str, int] = {
     "memory/_memory_encoder.py": 1134,
     "db/db_memory_reconciliation.py": 1102,
     # 2026-09-03 上调（协议 b）：流式 EOF stream_incomplete 收口 +7
-    "llm_gateway/router_execution.py": 1108,
+    # 2026-11-08 上调（协议 b）：四个 turn_end 出口附带 degraded 标记（+4）
+    "llm_gateway/router_execution.py": 1112,
     # 2026-09-03 上调（协议 b）：connect 取消时 _stop_after_cancel 清理 +26
     "tool_engine/mcp_client.py": 1116,
     "memory/retrieval/pipeline.py": 1084,

@@ -194,6 +194,9 @@ class ProcessResult:
     tts_text: str = ""
     # 并行调度异常归一化：当子代理执行抛出异常时，记录原始错误文本（空串表示成功）
     error: str = ""
+    # 降级标记（fallback_chain 的 kind 记录）；None 表示本轮未降级。
+    # 可选字段：序列化侧仅在非空时下发，旧调用方与旧前端不受影响。
+    degraded: dict[str, Any] | None = None
 
 
 @dataclass

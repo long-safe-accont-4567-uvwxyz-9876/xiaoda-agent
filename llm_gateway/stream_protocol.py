@@ -84,6 +84,10 @@ class ModelStreamEvent:
     provider: str = ""
     model: str = ""
     fallback: bool = False
+    # 降级标记：fallback_chain._mark_degraded() 产出的结构化记录
+    # （{"degraded": True, "kind": ..., "from_provider": ..., "to_provider": ...}）。
+    # 未降级为 None；带默认值，旧构造方与旧事件流不带该键时行为完全不变。
+    degraded: dict[str, object] | None = None
 
 
 @dataclass(frozen=True)
@@ -96,6 +100,8 @@ class StreamTurnResult:
     model: str
     used_fallback: bool
     turn: int = 0
+    # 本轺降级标记（None = 未降级），供调用方透传给前端；缺省不影响旧构造。
+    degraded: dict[str, object] | None = None
 
 
 _FINISH_REASON_ALIASES = {
