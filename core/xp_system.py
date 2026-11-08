@@ -368,11 +368,18 @@ class XPSystem:
             self._flush_locked()
 
     def _flush_locked(self) -> None:
-        """把脏状态原子写盘（调用方需持有 self._lock）。"""
+        """把脏状态原子写盘（调用方需持有 self._lock）。
+
+        审查修复：先写盘、成功后才清脏标记。原实现先 clear() 再 _save()，
+        写盘失败（磁盘满 / 只读挂载）时脏标记已被清空，这批增量要等到下一次
+        变更才会重写——退出前恰好失败就是静默丢失。
+        """
         if not self._dirty_users:
             return
-        self._dirty_users.clear()
+        snapshot = set(self._dirty_users)
         self._save()
+        # 写成功才清；失败时保留标记，下一个合并窗口重试
+        self._dirty_users -= snapshot
 
     @property
     def pending_users(self) -> set[str]:
