@@ -190,6 +190,12 @@ class ClientLifecycleMixin:
         _old_clients: list = []
         if old_mimo is not None and old_mimo is not self._client:
             _old_clients.append(old_mimo)
+        # 内置 provider 独立客户端（deepseek 等）随新 Key 失效：否则 Setup 保存的新 Key
+        # 不会生效，请求会继续用建缓存时的旧凭据（旧客户端一并关闭，防连接泄漏）。
+        _builtin_clients = getattr(self, "_builtin_clients", None)
+        if isinstance(_builtin_clients, dict):
+            _old_clients.extend(_builtin_clients.values())
+            _builtin_clients.clear()
         if _old_clients:
             try:
                 import asyncio
@@ -236,6 +242,66 @@ class ClientLifecycleMixin:
                 base_url=base_url,
             ))
 
+    def _builtin_client_cache(self) -> dict[str, Any]:
+        """返回内置 provider 的独立客户端缓存（按 provider 分开，绝不复用 MiMo 客户端）。
+
+        延迟初始化：通过 ``ModelRouter.__new__`` 构造的实例（测试 / 兼容路径）
+        没有该属性，这里按需补上。故意不在 ``ModelRouter.__init__`` 预建缓存
+        （model_router.py 已在 900 行巨型文件阈值上沿，预建会直接撞门禁）。
+        """
+        cache = getattr(self, "_builtin_clients", None)
+        if not isinstance(cache, dict):
+            cache = {}
+            self._builtin_clients = cache
+        return cache
+
+    def _resolve_builtin_endpoint(self, provider: str) -> tuple[str, str]:
+        """从 provider_metadata.json 解析内置 provider 的 (api_key, base_url)。
+
+        凭据字段全部由 catalog 派生（environment_aliases / base_url_default），
+        不在代码里硬编码 DEEPSEEK_API_KEY、api.deepseek.com 之类的名字。
+        解析失败返回 ("", "")，由调用方决定抛 E_LLM006。
+        """
+        try:
+            api_key_env, base_url = _provider_cred_env(provider)
+        except (ImportError, KeyError, OSError, ValueError) as error:
+            logger.warning("router.builtin_provider_resolve_failed provider={} error={}",
+                           provider, str(error))
+            return "", ""
+        api_key = _resolve_provider_key(api_key_env) if api_key_env else ""
+        return api_key, (base_url or "")
+
+    def _create_builtin_client(self, provider: str) -> Any | None:
+        """为内置 provider 创建独立客户端并缓存；无凭据返回 None（绝不回退到 MiMo）。
+
+        严重-1 根因：旧实现只有 ``provider == "agnes"`` 与兜底 else 两支，else 分支
+        注释写着 ``provider == "mimo"``，于是 deepseek 这类内置 provider 直接拿到
+        ``self._client``（MiMo 的 AsyncOpenAI），请求被发到 api.xiaomimimo.com。
+        现在每个内置 provider 一个独立客户端，端点取 catalog 的 base_url_default。
+        """
+        api_key, base_url = self._resolve_builtin_endpoint(provider)
+        if not api_key:
+            logger.warning("router.builtin_client_missing_key provider={}", provider)
+            return None
+        if not base_url:
+            logger.warning("router.builtin_client_missing_base_url provider={}", provider)
+            return None
+        try:
+            _ssrf_check(base_url)
+        except (ValueError, OSError) as error:
+            logger.warning("router.builtin_client_ssrf_blocked provider={} error={}",
+                           provider, str(error))
+            return None
+        client = AsyncOpenAI(api_key=api_key, base_url=base_url)
+        self._builtin_client_cache()[provider] = client
+        logger.info("router.builtin_client_lazy_created provider={} base_url={} key_hash={}",
+                    provider, base_url, _mask_api_key(api_key))
+        return client
+
+    def _get_builtin_client(self, provider: str) -> Any | None:
+        """取已缓存的内置 provider 客户端，尚未创建时返回 None。"""
+        return self._builtin_client_cache().get(provider)
+
     async def _select_client_for_provider(self, provider: str) -> Any:
         """选择指定 provider 的客户端（含懒注册和凭证锁）。无可用客户端时 raise LLMError。
 
@@ -245,10 +311,19 @@ class ClientLifecycleMixin:
         - 原实现直接 raise E_LLM006，导致 _describe_images 拿不到 client → "cannot read image"。
         - 修复：在锁内做"懒恢复"——若 client 为 None，从当前 os.environ 重新读取 Key 重建。
           仍无 Key 才 raise。这样凭证池/环境变量恢复后无需重启即可自愈。
+
+        严重-1 修复（选 DeepSeek 却打到 MiMo 端点）：
+        - 旧实现把内置 provider 只分成两支：``provider == "agnes"`` 走 _agnes_client，
+          其余（else 分支注释写着 ``provider == "mimo"``）一律用 self._client。
+        - provider_metadata.json 里 builtin=true 的有 agnes / mimo / deepseek，
+          于是 provider=deepseek 拿到的是 MiMo 的 AsyncOpenAI（api.xiaomimimo.com）。
+        - 修复：内置 provider 按 provider id 从 catalog 解析凭据与 base_url，在
+          ``_builtin_clients`` 里各自独立缓存；mimo 仍复用 ``self._client``（视觉链路
+          等既有调用方依赖它），其他内置 provider 绝不回退到 MiMo 客户端；
+          无凭据时显式抛 E_LLM006。
         """
         lock = self._get_credential_lock(provider)
         async with lock:
-            client = self._client
             if provider == "agnes":
                 client = self._agnes_client
                 # P0：agnes client 懒恢复（防止 refresh_client 把它置 None 后无法自愈）
@@ -294,9 +369,9 @@ class ClientLifecycleMixin:
                         error_code=ErrorCodeEnum.E_LLM006,
                     )
                 client = custom
-            else:
-                # provider == "mimo"
+            elif provider == "mimo":
                 # P0：mimo client 懒恢复（防止 refresh_client 把它置 None 后 vision API 全挂）
+                client = self._client
                 if client is None:
                     _mimo_key_env, _mimo_url_cfg = _provider_cred_env("mimo")
                     _mimo_key = _resolve_provider_key(_mimo_key_env)
@@ -312,6 +387,20 @@ class ClientLifecycleMixin:
                         except (ValueError, OSError) as ce:
                             logger.warning("router.mimo_client_lazy_recover_failed",
                                            error=str(ce))
+            else:
+                # 其他内置 provider（deepseek 等）：用户注册的客户端 > 已缓存的内置客户端 >
+                # 按 catalog 新建。绝不回退到 self._client（MiMo）——那是严重-1 的根因。
+                client = self.get_custom_client(provider)
+                if client is None:
+                    client = self._get_builtin_client(provider)
+                if client is None:
+                    client = self._create_builtin_client(provider)
+                if client is None:
+                    raise LLMError(
+                        f"{provider} client not initialized: provider_metadata.json "
+                        f"的 environment_aliases 均未配置 API Key，已拒绝回退到其他 provider",
+                        error_code=ErrorCodeEnum.E_LLM006,
+                    )
         if not client:
             raise LLMError(
                 f"{provider} client not initialized, check API_KEY env var",
