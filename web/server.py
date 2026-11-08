@@ -712,13 +712,28 @@ async def _prewarm_connections() -> None:
         logger.debug("embed.prewarm_failed: {}", _e)
 
 
+async def _warm_xp_system() -> Any:
+    """构造 XPSystem 单例（审计 H1 根因修复）。
+
+    `get_xp_system()` 的构造函数内部会同步 `json.load` 整个 xp_state.json
+    （core/xp_system.py:_load，生产 449KB）。协程里直接调用会让这次读盘落在
+    事件循环线程上——2026-11-08 18:01:36 实测 `event_loop.blocked lag=10.5s`
+    的 MainThread 栈正好终止在 `xp_system.py:321 json.load`，随后 18:01:51
+    放大成 `loop.lag_detected lag_ms=24393`。必须在工作线程里构造，
+    不能把构造结果当 to_thread 实参（实参仍在循环线程求值）。
+    """
+    import asyncio as _aio
+
+    from core.xp_system import get_xp_system
+    return await _aio.to_thread(get_xp_system)
+
+
 async def _prewarm_local_singletons(core: Any) -> None:
     """预热 XPSystem/MentalState/constraint/local_embed 单例（治本修复 2026-08-05/08）。"""
     import asyncio as _aio
     async def _warm_xp():
         try:
-            from core.xp_system import get_xp_system
-            _xp = get_xp_system()
+            _xp = await _warm_xp_system()
             # 触发 _load() 加载到内存
             await _aio.to_thread(lambda: _xp.get_state("prewarm"))
             logger.info("xp.prewarm_done")

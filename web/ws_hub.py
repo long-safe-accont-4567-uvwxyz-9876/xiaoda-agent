@@ -750,7 +750,10 @@ async def process_and_serialize(core: Any, text: str, session_id: str,
             try:
                 from core.xp_system import get_xp_system
                 _xp_uid = os.getenv("MASTER_QQ_OPENID", "webui")  # 统一 XP ID
-                await asyncio.to_thread(get_xp_system().add_chat_xp, _xp_uid, len(text))
+                # 审计 H1：get_xp_system() 必须在线程内求值——作为 to_thread 实参
+                # 仍会在事件循环线程构造并同步读盘（同 web/server.py:_warm_xp）。
+                await asyncio.to_thread(
+                    lambda: get_xp_system().add_chat_xp(_xp_uid, len(text)))
             except (ImportError, RuntimeError, OSError) as _e:
                 from loguru import logger as _logger
                 _logger.warning("xp.auto_add_failed", error=str(_e))

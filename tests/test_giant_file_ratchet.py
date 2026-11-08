@@ -85,7 +85,10 @@ BASELINES: dict[str, int] = {
     "qq_bot_adapter.py": 2176,
     "wechat_bot_adapter.py": 1591,
     # 2026-11-08 上调（协议 b）：serialize_result 仅在降级时下发 degraded 键（+6）
-    "web/ws_hub.py": 1238,
+    # 2026-11-08 fix/audit-defects-perf 高危 H1：子 agent 路径的 get_xp_system()
+    # 移到 to_thread 的 lambda 内求值（避免循环线程同步读盘），+3 行注释与缩进，
+    # 基线 1238→1241。
+    "web/ws_hub.py": 1241,
     "web/ws_terminal.py": 590,
     "prompt_builder/_prompt_scene.py": 783,
     "prompt_builder/_prompt_assembly.py": 661,
