@@ -3,6 +3,7 @@ import { computed, ref } from 'vue'
 import { useVisibilityPolling } from '../../composables/useVisibilityPolling'
 import { NButton, NEmpty, NProgress, NTag, NSelect, NModal, NTabs, NTabPane, NSpin, useMessage } from 'naive-ui'
 import { useLocalAiStore, type LocalDeployStatus } from '../../stores/localAi'
+import { localeTag } from '../../utils/datetime'
 
 const store = useLocalAiStore()
 const message = useMessage()
@@ -137,7 +138,7 @@ const lastUpdated = ref<string | null>(null)
 async function refreshStats() {
   try {
     await store.refreshDevices()
-    lastUpdated.value = new Date().toLocaleTimeString('zh-CN', { hour12: false })
+    lastUpdated.value = new Date().toLocaleTimeString(localeTag(), { hour12: false })
   } catch { /* 轮询失败静默，下次重试 */ }
 }
 // 审计 L6：页面隐藏时停表，可见时立即刷新后恢复 5 秒节奏

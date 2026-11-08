@@ -13,6 +13,11 @@ import { t } from '../i18n'
 import Tilt3D from '../components/fx/Tilt3D.vue'
 import ViewTitleIcon from '../components/fx/ViewTitleIcon.vue'
 import { replaceAgentNames } from '../utils/agentNames'
+import { mediaTaskNotice } from '../utils/mediaTaskNotice'
+import { galleryDeletePath, openExternal } from '../utils/mediaLinks'
+import { hasMoreAfterPage } from '../utils/paging'
+import { useLoadError } from '../composables/useLoadError'
+import LoadErrorBar from '../components/common/LoadErrorBar.vue'
 
 const message = useMessage()
 const ui = useUiStore()
@@ -40,9 +45,15 @@ const videoPrompt = ref('')
 const submitting = ref('')
 const tasks = ref<any[]>([])
 
-// 画廊
+// 画廊（审查 M3：按 page 分页拉取，固定 limit=48 会把更早的素材挡在画廊外）
+const GALLERY_PAGE_SIZE = 48
 const galleryType = ref<'image' | 'video' | 'audio'>('image')
 const gallery = ref<any[]>([])
+const galleryPage = ref(0)
+const galleryHasMore = ref(false)
+const galleryLoading = ref(false)
+// 审查 G3：任务列表拉取失败必须与"确实没有任务"可区分
+const { loadError: tasksError, fail: failTasks } = useLoadError('errors.tasksLoadFailed')
 
 onMounted(async () => {
   try {
@@ -67,20 +78,25 @@ onMounted(async () => {
 onBeforeUnmount(() => ws.off('media_task_update', onTaskUpdate))
 
 function onTaskUpdate(e: any) {
-  const t = tasks.value.find(x => x.id === e.task_id)
-  if (t) {
-    t.status = e.status
-    t.progress = e.progress
-    if (e.result_url) t.result_path = e.result_url
-    if (e.error) t.error = e.error
+  // 审查 M1（高危）：这里的局部变量原名叫 t，遮蔽了顶部 import 的 i18n t，
+  // 下面两处 t('mediaView.genDone'/'genFailed') 会抛 TypeError —— 生成完成与
+  // 失败都没有任何提示，成功时 loadGallery() 也被跳过。改名 task，并把
+  // "事件 → 提示"的判定交给纯函数 utils/mediaTaskNotice（translate 走显式参数，
+  // 再次遮蔽会变成类型错误而不是运行期炸）。
+  const task = tasks.value.find(x => x.id === e.task_id)
+  if (task) {
+    task.status = e.status
+    task.progress = e.progress
+    if (e.result_url) task.result_path = e.result_url
+    if (e.error) task.error = e.error
   } else {
     loadTasks()
   }
-  if (e.status === 'done') {
-    message.success(t('mediaView.genDone'))
-    loadGallery()
-  }
-  if (e.status === 'failed' && e.error) message.error(`${t('mediaView.genFailed')}：${e.error}`)
+  const notice = mediaTaskNotice(e, t)
+  if (!notice) return
+  if (notice.level === 'success') message.success(notice.text)
+  else message.error(notice.text)
+  if (notice.refreshGallery) loadGallery()
 }
 
 async function synthesize() {
@@ -192,7 +208,13 @@ async function submitTask(kind: 'image' | 'video') {
 }
 
 async function loadTasks() {
-  try { tasks.value = await get<any[]>('/media/tasks?limit=20') } catch { /* */ }
+  // 审查 G3：原先 catch 完全静默，接口挂了与"暂无任务"长得一模一样
+  try {
+    tasks.value = await get<any[]>('/media/tasks?limit=20')
+    tasksError.value = ''
+  } catch (e) {
+    failTasks(e)
+  }
 }
 
 async function cancelTask(id: string) {
@@ -203,22 +225,52 @@ async function cancelTask(id: string) {
   } catch (e: any) { message.error(e.message) }
 }
 
-async function loadGallery() {
+async function loadGallery(reset = true) {
+  if (reset) galleryPage.value = 0
+  const page = reset ? 0 : galleryPage.value
+  galleryLoading.value = true
   try {
-    gallery.value = await get<any[]>(`/media/gallery?type=${galleryType.value}&limit=48`)
+    await loadGalleryPage(page, reset)
+  } finally {
+    galleryLoading.value = false
+  }
+}
+
+// 审查 M3：单页拉取。后端 /media/gallery 支持 page(0 基) 与 limit≤100，
+// 原先只取最新 48 条且没有下一页入口。
+async function loadGalleryPage(page: number, reset: boolean) {
+  try {
+    const rows = await get<any[]>(`/media/gallery?type=${galleryType.value}&page=${page}&limit=${GALLERY_PAGE_SIZE}`)
+    gallery.value = reset ? rows : [...gallery.value, ...rows]
+    galleryHasMore.value = hasMoreAfterPage(rows.length, GALLERY_PAGE_SIZE)
   } catch (e: any) { message.error(e.message) }
 }
 
 async function removeMedia(name: string) {
   try {
-    await del(`/media/gallery/${galleryType.value}/${name}`, true)
+    // 审查 M5：文件名里的 # / ? / 空格必须编码，否则删除会 404 或删错对象
+    await del(galleryDeletePath(galleryType.value, name), true)
     gallery.value = gallery.value.filter(g => g.name !== name)
     message.success(t('mediaView.deleted'))
   } catch (e: any) { message.error(e.message) }
 }
 
+function loadMoreGallery() {
+  if (!galleryHasMore.value || galleryLoading.value) return
+  galleryPage.value += 1
+  void loadGallery(false)
+}
+
+function onGalleryTypeChange() {
+  gallery.value = []
+  galleryPage.value = 0
+  galleryHasMore.value = false
+  void loadGallery(true)
+}
+
 function openUrl(url: string) {
-  window.open(url, '_blank')
+  // 审查 M5：不带 noopener 时，被打开的页面能通过 window.opener 反向操作本页
+  openExternal(url)
 }
 
 const statusType: Record<string, any> = {
@@ -336,6 +388,7 @@ const statusType: Record<string, any> = {
 
     <Tilt3D :max-x="4" :max-y="6"><section class="glass-panel section">
       <h3>{{ t('mediaView.taskQueue') }}</h3>
+      <LoadErrorBar v-if="tasksError" :message="tasksError" @retry="loadTasks" />
       <div class="task-list">
         <div v-for="task in tasks" :key="task.id" class="task-row">
           <n-tag size="small" :type="statusType[task.status]" :bordered="false">{{ task.status }}</n-tag>
@@ -355,7 +408,7 @@ const statusType: Record<string, any> = {
       <div class="gallery-head">
         <h3>{{ t('mediaView.gallery') }}</h3>
         <n-tabs type="segment" size="small" v-model:value="galleryType"
-                @update:value="loadGallery" style="max-width: 280px">
+                @update:value="onGalleryTypeChange" style="max-width: 280px">
           <n-tab-pane name="image" :tab="t('mediaView.image')" />
           <n-tab-pane name="video" :tab="t('mediaView.video')" />
           <n-tab-pane name="audio" :tab="t('mediaView.audio')" />
@@ -375,6 +428,9 @@ const statusType: Record<string, any> = {
           </div>
         </div></Tilt3D>
         <div v-if="!gallery.length" class="empty-hint">{{ t('mediaView.emptyGallery') }}</div>
+      </div>
+      <div v-if="galleryHasMore" style="text-align: center; margin-top: 12px">
+        <n-button size="small" tertiary :loading="galleryLoading" @click="loadMoreGallery">{{ t('common.loadMore') }}</n-button>
       </div>
     </section>
   </div>

@@ -10,6 +10,7 @@ import { get, post, put, del } from '../api'
 import { t, tf } from '../i18n'
 import Tilt3D from '../components/fx/Tilt3D.vue'
 import ViewTitleIcon from '../components/fx/ViewTitleIcon.vue'
+import { localeTag } from '../utils/datetime'
 
 const message = useMessage()
 
@@ -234,7 +235,7 @@ const reasonLabel: Record<string, string> = {
       <h3>{{ t('scheduleView.sent7d') }}</h3>
       <div class="history-list">
         <div v-for="h in history" :key="h.id" class="history-row">
-          <span class="h-time">{{ new Date(h.fired_at * 1000).toLocaleString('zh-CN') }}</span>
+          <span class="h-time">{{ new Date(h.fired_at * 1000).toLocaleString(localeTag()) }}</span>
           <n-tag size="tiny" :bordered="false">{{ reasonLabel[h.reason] || h.reason }}</n-tag>
           <span class="h-content">{{ h.content }}</span>
           <span class="h-channel">{{ h.channel }}</span>

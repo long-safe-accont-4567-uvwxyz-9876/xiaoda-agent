@@ -21,6 +21,8 @@ export function usePromptUploads(statusKey: Ref<string>) {
   const imagePreviewUrl = ref('')
   const uploadState = ref<'idle' | 'uploading' | 'error'>('idle')
   const showLightbox = ref(false)
+  // 审查 M2：服务端返回的具体原因（413、类型不支持等）不再被丢弃
+  const uploadErrorDetail = ref('')
   let uploadGeneration = 0
   let imagePreviewGeneration: number | null = null
 
@@ -45,6 +47,7 @@ export function usePromptUploads(statusKey: Ref<string>) {
 
   async function uploadFile(file: File) {
     const generation = nextUploadGeneration()
+    uploadErrorDetail.value = ''
     // P0 修复（Task 1.9）：一键包含所有文件 — 自动检测类型并路由
     // 图片 → vision API（uploadImage），文档 → document_reader 工具（uploadDoc）
     // 用户要求"不要添加组件，一键包含所有文件"
@@ -73,12 +76,14 @@ export function usePromptUploads(statusKey: Ref<string>) {
         uploadedDoc.value = result
       }
       uploadState.value = 'idle'
-    } catch {
+    } catch (error) {
       if (generation !== uploadGeneration) return
       if (imagePreviewGeneration === generation) clearImagePreview()
       uploadedImage.value = null
       uploadedDoc.value = null
       uploadState.value = 'error'
+      // 审查 M2：把服务端原因透出（原先任何异常都收敛成一句"上传失败"）
+      uploadErrorDetail.value = error instanceof Error && error.message ? error.message : ''
       statusKey.value = 'promptInput.uploadFailed'
     }
   }
@@ -120,6 +125,7 @@ export function usePromptUploads(statusKey: Ref<string>) {
     uploadedDoc,
     imagePreviewUrl,
     uploadState,
+    uploadErrorDetail,
     showLightbox,
     hasAttachment,
     uploadFile,

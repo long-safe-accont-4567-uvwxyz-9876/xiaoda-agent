@@ -16,7 +16,7 @@ from loguru import logger
 
 from emotion.emotion_simple import detect_emotion
 from web.routers.auth import get_current_user
-from web.schemas import ChatRequest, Envelope, MessageItem, SessionInfo, SlashCommand
+from web.schemas import ChatRequest, Envelope, ErrorDetail, MessageItem, SessionInfo, SlashCommand
 from web.upload_utils import (
     read_upload_limited,
     validate_document_content,
@@ -189,9 +189,15 @@ async def get_messages(session_id: str, request: Request,
                     content=_strip_tags(row["assistant_reply"]),
                     emotion=row["emotion_label"] or None, timestamp=row["timestamp"]))
     except (OSError, ValueError, RuntimeError) as e:
+        # 审查 C3：原先只 warning 然后照样返回 ok=true 的空列表，库读失败在前端
+        # 与“没有历史”长得一模一样。改为显式错误信封，前端据此给重试入口。
         logger.warning("webui.messages.list_failed error={}", str(e))
+        return Envelope(data=[], ok=False,
+                        error=ErrorDetail(code="HISTORY_LOAD_FAILED", message="历史消息读取失败"))
     except Exception:
         logger.exception("chat.get_messages.unexpected_error")
+        return Envelope(data=[], ok=False,
+                        error=ErrorDetail(code="HISTORY_LOAD_FAILED", message="历史消息读取失败"))
     return Envelope(data=messages)
 
 

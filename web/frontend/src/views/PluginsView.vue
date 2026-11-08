@@ -6,8 +6,11 @@ import { get, post, put } from '../api'
 import { t, tf } from '../i18n'
 import Tilt3D from '../components/fx/Tilt3D.vue'
 import ViewTitleIcon from '../components/fx/ViewTitleIcon.vue'
+import LoadErrorBar from '../components/common/LoadErrorBar.vue'
+import { useLoadError } from '../composables/useLoadError'
 
 const message = useMessage()
+const { loadError: pluginsMarketError, fail: failMarket } = useLoadError()
 const plugins = ref<any[]>([])
 const discovering = ref(false)
 const testingPlugin = ref<Record<string, boolean>>({})
@@ -102,7 +105,10 @@ async function loadMarket(force = false) {
   try {
     const data = await get<any>(`/market/plugins${force ? '?force=true' : ''}`)
     marketItems.value = data.items || []
-  } catch { /* 静默失败 */ } finally {
+  } catch (error) {
+    // 审查 C1：市场列表拉取失败原先只剩空白页，分不清“没有插件”与“请求失败”
+    failMarket(error)
+  } finally {
     marketLoading.value = false
   }
 }
@@ -213,6 +219,8 @@ onMounted(() => { load(); loadMarket() })
 
 <template>
   <div class="plugins-view">
+    <LoadErrorBar v-if="pluginsMarketError"
+                  :message="pluginsMarketError" @retry="loadMarket()" />
     <div class="view-header">
       <h2 class="view-title view-title-icon"><ViewTitleIcon name="plugins" /> {{ t('pluginsView.title') }}</h2>
       <n-button type="primary" :loading="discovering" @click="discoverPlugins"><SumeruIcon name="search" :size="14" variant="duo" tone="view" interactive /> {{ t('pluginsView.scan') }}</n-button>

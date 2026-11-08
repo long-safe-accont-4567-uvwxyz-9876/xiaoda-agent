@@ -5,6 +5,7 @@
 import Tilt3D from '../fx/Tilt3D.vue'
 import { t } from '../../i18n'
 import type { TodayItem, TodayStats } from './types'
+import { localeTag } from '../../utils/datetime'
 
 defineProps<{
   items: TodayItem[]
@@ -16,7 +17,7 @@ const kindIcon: Record<string, string> = {
 }
 
 function fmtTs(ts: number): string {
-  return new Date(ts * 1000).toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' })
+  return new Date(ts * 1000).toLocaleTimeString(localeTag(), { hour: '2-digit', minute: '2-digit' })
 }
 </script>
 

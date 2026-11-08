@@ -8,6 +8,7 @@ import SumeruIcon from '../fx/SumeruIcon.vue'
 import Tilt3D from '../fx/Tilt3D.vue'
 import { t } from '../../i18n'
 import type { XpLevelConfig, XpState } from '../../api'
+import { localeTag } from '../../utils/datetime'
 
 const props = defineProps<{
   xpState: XpState
@@ -23,7 +24,7 @@ const nextLevelLabel = computed(() => {
 function formatTime(ts: string | number): string {
   if (!ts) return ''
   const d = typeof ts === 'number' ? new Date(ts * 1000) : new Date(ts)
-  return d.toLocaleString('zh-CN', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' })
+  return d.toLocaleString(localeTag(), { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' })
 }
 
 const _sourceLabels: Record<string, string> = {

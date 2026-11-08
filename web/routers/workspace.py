@@ -55,10 +55,23 @@ def _evict_stale_cmd_decisions() -> None:
         _pending_cmd_decisions.pop(k, None)
 
 
-def register_cmd_decision_scope(request_id: str, session_id: str) -> None:
+# 审查 G2：未决命令确认的存活窗口（与工具层 CMD_CONFIRM_TIMEOUT 对齐）
+CMD_CONFIRM_TIMEOUT_FALLBACK = 60.0
+
+
+def register_cmd_decision_scope(request_id: str, session_id: str,
+                                command: str = '',
+                                deadline: float | None = None) -> None:
     """登记命令确认请求的发起会话（供 confirm_cmd 身份校验）。"""
     _evict_stale_cmd_decisions()
-    _pending_cmd_decisions[request_id] = {"session_id": session_id or "", "decision": "", "_ts": time.time()}
+    _pending_cmd_decisions[request_id] = {
+        "session_id": session_id or "", "decision": "", "_ts": time.time(),
+        # 审查 G2：刷新后要把卡片原样补回来，命令文本与截止时间必须一起存，
+        # 只存 session_id 的话恢复出来是一张不知道在确认什么的空卡片。
+        "command": command,
+        "_deadline": (deadline if deadline is not None
+                      else time.time() + CMD_CONFIRM_TIMEOUT_FALLBACK),
+    }
 
 
 def discard_cmd_decision_scope(request_id: str) -> None:
@@ -197,6 +210,35 @@ async def remove_from_whitelist(command: str, request: Request):
 
 
 # ── 命令动态确认端点 ───────────────────────────────────────
+@router.get("/pending_confirmations")
+async def list_pending_confirmations(session_id: str = "") -> dict:
+    """列出仍未决策且未过期的命令确认请求（审查 G2）。
+
+    前端刷新后据此把命令确认卡片补回来；已决策或已过期的顺手剔除，避免陈旧
+    条目长期驻留内存。
+    """
+    now = time.time()
+    rows = []
+    for request_id, rec in list(_pending_cmd_decisions.items()):
+        if rec.get("decision"):
+            continue
+        command = rec.get("command") or ""
+        # 没记命令的旧记录不返回：补出来是一张"不知道在确认什么"的空卡片
+        if not command:
+            continue
+        expires_in = round((rec.get("_deadline") or 0) - now, 1)
+        if expires_in <= 0:
+            _pending_cmd_decisions.pop(request_id, None)
+            continue
+        owner = rec.get("session_id") or ""
+        if session_id and owner not in (session_id, ""):
+            continue
+        rows.append({"request_id": request_id, "command": command,
+                     "session_id": owner, "expires_in": expires_in})
+    rows.sort(key=lambda row: row["expires_in"])
+    return {"requests": rows}
+
+
 @router.post("/confirm_cmd")
 async def confirm_cmd(body: ConfirmCmdBody):
     """回传命令确认决策

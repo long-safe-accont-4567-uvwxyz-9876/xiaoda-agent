@@ -12,6 +12,7 @@ import { flipCapture } from '../utils/gsapMotion'
 import { t, tf } from '../i18n'
 import Tilt3D from '../components/fx/Tilt3D.vue'
 import ViewTitleIcon from '../components/fx/ViewTitleIcon.vue'
+import { localeTag } from '../utils/datetime'
 
 const message = useMessage()
 const router = useRouter()
@@ -573,7 +574,7 @@ async function rollbackRevision(rev: any) {
             <div class="run-head">
               <n-tag size="small" :type="run.status === 'succeeded' ? 'success' : (run.status === 'failed' || run.status === 'cancelled') ? 'error' : 'info'" :bordered="false">{{ run.status }}</n-tag>
               <span class="run-id mono">{{ run.run_id.slice(0, 8) }}</span>
-              <span class="run-time">{{ run.created_at ? new Date(run.created_at * 1000).toLocaleString('zh-CN') : '—' }}</span>
+              <span class="run-time">{{ run.created_at ? new Date(run.created_at * 1000).toLocaleString(localeTag()) : '—' }}</span>
             </div>
             <div v-if="run.output?.error_message" class="run-error">{{ run.output.error_message }}</div>
             <div v-if="run.status === 'waiting_input'" class="run-review-cards">
@@ -606,7 +607,7 @@ async function rollbackRevision(rev: any) {
           <div v-for="(rev, idx) in revisionsList" :key="rev.revision_id" class="rev-item">
             <div class="rev-head">
               <n-tag size="small" :bordered="false">v{{ revisionsList.length - idx }}</n-tag>
-              <span class="rev-time">{{ rev.created_at ? new Date(rev.created_at * 1000).toLocaleString('zh-CN') : '—' }}</span>
+              <span class="rev-time">{{ rev.created_at ? new Date(rev.created_at * 1000).toLocaleString(localeTag()) : '—' }}</span>
               <span class="rev-hash mono">{{ (rev.content_hash || '').slice(0, 8) }}</span>
               <n-tag v-if="rev.current" size="tiny" type="success" :bordered="false">当前版本</n-tag>
             </div>

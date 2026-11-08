@@ -5,7 +5,7 @@ import { NDrawer, NDrawerContent, NButton, NPopconfirm, useMessage } from 'naive
 import { useChatStore } from '../stores/chat'
 import type { ChatRequestSnapshot } from '../stores/chat'
 import { useUiStore } from '../stores/ui'
-import { api, exportSessionDownload } from '../api'
+import { api, exportSessionDownload, get } from '../api'
 import { getWsClient } from '../api/ws'
 import { renderMarkdown } from '../utils/markdown'
 import { replaceAgentNames } from '../utils/agentNames'
@@ -13,6 +13,8 @@ import { useRenderedBand, escapeHtmlText } from '../composables/useRenderedBand'
 import { useAutoScroll } from '../composables/useAutoScroll'
 import { useAbortableRequests } from '../composables/useAbortableRequests'
 import { isAbortError } from '../utils/abortRegistry'
+import { formatDateTime, formatTime } from '../utils/datetime'
+import { isAutoplayBlocked } from '../utils/autoplay'
 import { reportError } from '../utils/errorLog'
 import ToolCallCard from '../components/chat/ToolCallCard.vue'
 import ChatTerminal from '../components/chat/ChatTerminal.vue'
@@ -82,6 +84,8 @@ function onCmdConfirmRequest(data: any) {
       request_id: data.request_id,
       command: data.command,
       session_id: data.session_id || '',
+      // 审查 G2：带上截止时间，卡片据此显示倒计时（后端 CMD_CONFIRM_TIMEOUT=60s）
+      deadline: Date.now() + 60_000,
     }
     nextTick(() => {
       const el = messagesEl.value
@@ -90,9 +94,33 @@ function onCmdConfirmRequest(data: any) {
   }
 }
 
+/**
+ * 审查 G2：命令确认请求只在 WS 在线时送达，刷新页面后卡片就永久消失，而后端仍在
+ * 等这次确认直到超时。挂载后按当前会话捞一次未决请求，补回卡片。
+ */
+async function recoverPendingConfirm() {
+  if (!chat.sessionId || ws.pendingCmdConfirm) return
+  try {
+    const data = await get<{ requests: Array<{ request_id: string; command: string; session_id: string; expires_in: number }> }>(
+      `/workspace/pending_confirmations?session_id=${encodeURIComponent(chat.sessionId)}`)
+    const rows = (data?.requests || []).filter(r => r.expires_in > 0)
+    if (!rows.length) return
+    const first = rows[0]
+    ws.pendingCmdConfirm = {
+      request_id: first.request_id,
+      command: first.command,
+      session_id: first.session_id,
+      deadline: Date.now() + first.expires_in * 1000,
+    }
+  } catch (error) {
+    console.warn('[chat] pending_confirmations', error)
+  }
+}
+
 onMounted(async () => {
   document.addEventListener('keydown', onGlobalKeydown)
   getWsClient().on('cmd_confirm_request', onCmdConfirmRequest)
+  void recoverPendingConfirm()
   try {
     // 后端命令名自带 "/" 前缀，统一去掉，避免拼接成 "//cmd"
     const raw = await api.getCommands()
@@ -190,7 +218,12 @@ function play(url: string) {
   playingUrl.value = url
   audioEl.onended = () => { playingUrl.value = '' }
   audioEl.onerror = () => { playingUrl.value = '' }
-  audioEl.play().catch(() => { playingUrl.value = '' })
+  // 审查 M4：未与页面交互前浏览器会拒绝播放，原先只清播放态、不给任何提示，
+  // 用户以为什么都没发生。拦截时给一次可见提示。
+  audioEl.play().catch((error: unknown) => {
+    playingUrl.value = ''
+    if (isAutoplayBlocked(error)) message.warning(t('errors.autoplayBlocked'))
+  })
 }
 
 // 组件级在途请求登记（审计 P1-6）：卸载/失活即取消，
@@ -338,6 +371,16 @@ function resend(msg: { id: string }) {
   }
 }
 
+async function loadOlderMessages() {
+  try {
+    const added = await chat.loadOlder()
+    if (!added) message.info(t('chatHistory.allLoaded'))
+  } catch (e) {
+    const detail = e instanceof Error && e.message ? '：' + e.message : ''
+    message.error(t('errors.historyLoadFailed') + detail)
+  }
+}
+
 function clearAll() {
   if (loadingSessionId.value) return  // 加载进行中禁止清空，避免与 loadSession 竞态
   chat.clearMessages()
@@ -348,7 +391,8 @@ function onModelChange(_provider: string, _modelId: string) {
 }
 
 function fmtTime(ts: number): string {
-  return new Date(ts).toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' })
+  // 审查 E1：原先写死 zh-CN，英文界面下时间仍是中文格式
+  return formatTime(ts)
 }
 
 // 17 类情绪标签（与 emotion_enum / emotion_simple / sticker 物理目录对齐）
@@ -391,6 +435,14 @@ const emotionColors: Record<string, string> = {
         <div class="chat-row-error-title">⚠ {{ t('errorBoundary.title') }}</div>
         <div class="chat-row-error-detail">{{ listError }}</div>
         <button class="chat-row-error-btn" @click="recoverFromListError">{{ t('chatView.clear') }}</button>
+      </div>
+
+      <div v-if="chat.historyHasMore" style="text-align: center; margin: 10px 0">
+        <button
+          :disabled="chat.historyLoading"
+          style="padding: 3px 14px; border-radius: 999px; border: 1px solid rgba(127,214,80,.35); background: rgba(127,214,80,.08); color: #bfe3a8; font-size: 12px; cursor: pointer"
+          @click="loadOlderMessages"
+        >{{ chat.historyLoading ? t('chatHistory.loadingOlder') : t('chatHistory.loadOlder') }}</button>
       </div>
 
       <div v-if="chat.messages.length === 0" class="empty-state">
@@ -521,7 +573,7 @@ const emotionColors: Record<string, string> = {
               {{ replaceAgentNames(s.title || s.session_id) }}
             </div>
             <div class="session-meta">
-              <span>{{ s.message_count }} {{ t('chatView.messages') }} · {{ new Date(s.updated_at * 1000).toLocaleString('zh-CN') }}</span>
+              <span>{{ s.message_count }} {{ t('chatView.messages') }} · {{ formatDateTime(s.updated_at * 1000) }}</span>
               <n-popconfirm @positive-click.stop="removeSession(s.session_id)">
                 <template #trigger>
                   <button class="footer-btn" @click.stop><SumeruIcon name="trash" :size="13" variant="duo" tone="del" interactive /></button>

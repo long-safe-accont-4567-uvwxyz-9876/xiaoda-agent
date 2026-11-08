@@ -8,6 +8,7 @@ import { useAgentsStore } from '../../stores/agents'
 import { useUiStore } from '../../stores/ui'
 import { getWsClient } from '../../api/ws'
 import { useRouter, useRoute } from 'vue-router'
+import { attachFocusTrap } from '../../utils/focusTrap'
 
 const auth = useAuthStore()
 const agentsStore = useAgentsStore()
@@ -20,6 +21,14 @@ const mobileSidebarOpen = ref(false)
 function closeMobileSidebar() {
   mobileSidebarOpen.value = false
 }
+
+// 审查 F1：移动端抽屉是自绘覆盖层，naive-ui 的 trap 管不到——Tab 能一路走到
+// 被遮住的正文里。这里在打开时把焦点圈进侧栏，关闭后归还给触发按钮。
+const mobileSidebarTrap = attachFocusTrap(() => document.querySelector<HTMLElement>('.sidebar'))
+watch(mobileSidebarOpen, open => {
+  if (open) mobileSidebarTrap.activate()
+  else mobileSidebarTrap.release()
+})
 
 function onShellKeydown(event: KeyboardEvent) {
   if (mobileSidebarOpen.value && event.key === 'Escape') {
@@ -35,6 +44,7 @@ onMounted(() => {
 })
 
 onBeforeUnmount(() => {
+  mobileSidebarTrap.release()
   window.removeEventListener('keydown', onShellKeydown)
 })
 

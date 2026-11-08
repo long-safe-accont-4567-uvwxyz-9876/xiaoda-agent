@@ -9,6 +9,7 @@ import Tilt3D from '../components/fx/Tilt3D.vue'
 import DendroEmblem from '../components/fx/DendroEmblem.vue'
 import { wallpaperKind } from '../utils/wallpaper'
 import { t } from '../i18n'
+import { resolveRedirectTarget } from '../utils/sessionRedirect'
 import { isPasswordValid } from '../utils/credentialInput'
 
 const DEFAULT_BG = '/assets/webui_background.jpg'
@@ -124,7 +125,8 @@ async function handleLogin() {
     } catch {
       // 检查失败，走正常流程
     }
-    router.replace('/')
+    // 审查 A2：登录后回到被拦截的深链（resolveRedirectTarget 只放行站内路径）
+  router.replace(resolveRedirectTarget(router.currentRoute.value.query.redirect))
   } catch (e: any) {
     error.value = e.message || t('login.loginFailed')
   } finally {
