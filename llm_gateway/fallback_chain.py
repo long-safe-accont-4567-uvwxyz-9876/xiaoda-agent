@@ -16,9 +16,9 @@ from __future__ import annotations
 import openai as _openai_mod
 from loguru import logger
 
-from config import DEFAULT_PROVIDER as _CFG_DEFAULT_PROVIDER
 from config import FREE_EMERGENCY_FALLBACK
 from core.app_exception import LLMError
+from llm_gateway.agent_target import runtime_default_provider as _runtime_default_provider
 from model_router_registry import FALLBACK_ROUTE
 from utils.free_model_backend import DEFAULT_FREE_MODEL
 
@@ -84,7 +84,7 @@ class FallbackChainMixin:
         try:
             # Task 6: 通过 registry 快照读取，避免降级链污染全局 ROUTE_TABLE
             _orig_entry = self._registry.get_task(task_type) or {}
-            _original_provider = _orig_entry.get("client", _CFG_DEFAULT_PROVIDER)
+            _original_provider = _orig_entry.get("client", _runtime_default_provider())
         except Exception:
             logger.warning("router.fallback_original_provider_lookup_failed", exc_info=True)
         # 用户硬约束（2026-08-04）：禁止自动切换模型/provider。
@@ -94,7 +94,7 @@ class FallbackChainMixin:
         while fallback_type:
             # Task 6: 用 registry 快照（深拷贝），降级期间修改不影响全局 ROUTE_TABLE
             fallback_config = self._registry.snapshot_task(fallback_type)
-            fallback_provider = fallback_config.get("client", _CFG_DEFAULT_PROVIDER) if fallback_config else _CFG_DEFAULT_PROVIDER
+            fallback_provider = fallback_config.get("client", _runtime_default_provider()) if fallback_config else _runtime_default_provider()
             # 禁止跨 provider 切换：fallback 目标 provider 必须与原 provider 一致
             if fallback_provider != _original_provider:
                 logger.info("router.fallback_skip_cross_provider",
