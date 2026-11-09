@@ -240,7 +240,10 @@ class ContextGovernance:
                     except (sqlite3.Error, OSError, ValueError, TypeError) as row_error:
                         logger.debug("governance.audit_insert_failed",
                                      memory_id=row[1], error=str(row_error))
-        if inserted and auto_commit:
+        # 2026-11-09 同类修复：只要尝试过写入就必须提交。
+        # 原写法把 commit 挂在 inserted 上，整批失败（inserted=0）时写事务
+        # 留在共享主连接上，其他连接等锁超时 → database is locked。
+        if rows and auto_commit:
             await self._conn.commit()
         return inserted
 

@@ -279,6 +279,12 @@ class ConversationLogMixin:
             if _cleanup_failures:
                 logger.warning('database.cleanup_partial_failures count={} tables_done={}', _cleanup_failures, len(result))
             _cleanup_ms = int((time.time() - _cleanup_t0) * 1000)
+            # 正向回执：只在失败/超时打日志时，成功的启动清理在 journal 里完全静默，
+            # 无法区分“没跑”和“跑了没抢锁”（2026-11-09 排查写锁时踩过）。
+            logger.info(
+                "database.cleanup_done tables={} failures={} elapsed_ms={}",
+                len(result), _cleanup_failures, _cleanup_ms,
+            )
             if _cleanup_ms > 2000:
                 logger.warning("database.cleanup_slow elapsed_ms={}", _cleanup_ms)
             return result

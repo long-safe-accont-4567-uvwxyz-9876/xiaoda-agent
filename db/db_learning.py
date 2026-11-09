@@ -4,6 +4,8 @@ import time
 import aiosqlite
 from loguru import logger
 
+from .db_local_ai import transaction_lock_for
+
 # 瞬态错误特征：限流/超时/连接类失败是**运行噪声**，不是可积累的经验。
 # 记进学习记录只会堆积噪声（实测：TimeoutError 存档躺了两个月没人清，
 # 429 限流一天积一批），用户被迫手动逐条删。源头过滤 + 周期清扫共用本表。
@@ -157,9 +159,33 @@ class LearningDB:
 
         由 LearningManager.auto_promote 的周期调度驱动，免去用户手动逐条删。
 
+        事务契约（2026-11-09 根因修复）：
+        DELETE 即便一行都没删中也已经取得 SQLite 写锁，所以只要执行过语句就必须
+        结束事务。原实现把 commit 挂在「删到行」条件上，未删到行时共享主连接
+        挂着一个未提交写事务，启动清理用的独立连接等锁 20s 后
+        "database is locked"（audit_logs/api_usage/sessions 各 20s，共 60.2s）。
+        现在 auto_commit=True 时整段走连接级事务锁并无条件 commit/rollback。
+
+        Note:
+            auto_commit=True 会获取连接级事务锁，因此不得在外层
+            write_transaction() 内部调用（锁不可重入）；外层事务场景请传
+            auto_commit=False，由外层统一提交。
+
         Returns:
             {"transient": 删除的瞬态条数, "stale": 删除的过期条数}
         """
+        if auto_commit:
+            # 与 write_transaction 共用连接级锁：DELETE 序列 + 提交必须整段串行，
+            # 否则别的协程刚写的半事务会被这次 commit 一并提交。
+            async with transaction_lock_for(self._conn):
+                return await self._purge_transient_learnings(
+                    retention_days, commit=True)
+        return await self._purge_transient_learnings(
+            retention_days, commit=False)
+
+    async def _purge_transient_learnings(self, retention_days: int, *,
+                                         commit: bool) -> dict[str, int]:
+        """purge_transient_learnings 的执行体；commit=False 时由外层事务提交。"""
         result = {"transient": 0, "stale": 0}
         cutoff = time.time() - retention_days * 86400
         try:
@@ -186,12 +212,24 @@ class LearningDB:
                 (cutoff,),
             )
             result["stale"] = cursor.rowcount or 0
-
-            if (result["transient"] or result["stale"]) and auto_commit:
-                await self._conn.commit()
-                logger.info("db_learning.purge_transient_learnings", **result)
         except Exception as e:
             logger.warning("db_learning.purge_failed", error=str(e))
+            if commit:
+                try:
+                    await self._conn.rollback()
+                except Exception as rollback_error:  # noqa: BLE001 - 回滚失败只能记日志
+                    logger.warning(
+                        "db_learning.purge_rollback_failed error={}", rollback_error)
+            return result
+
+        if commit:
+            # 无条件提交：只要上面执行过 DELETE，写事务就已经开着。
+            try:
+                await self._conn.commit()
+            except Exception as e:  # noqa: BLE001 - 提交失败要暴露但不中断周期任务
+                logger.warning("db_learning.purge_commit_failed error={}", e)
+        if result["transient"] or result["stale"]:
+            logger.info("db_learning.purge_transient_learnings", **result)
         return result
 
     async def insert_error(self, summary: str, error_text: str = "",
