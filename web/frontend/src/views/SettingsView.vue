@@ -18,6 +18,7 @@ import Tilt3D from '../components/fx/Tilt3D.vue'
 import WeChatConnectPanel from '../components/WeChatConnectPanel.vue'
 import { sound } from '../utils/sound'
 import { useUnsavedGuard } from '../composables/useUnsavedGuard'
+import { reportLoadError } from '../utils/loadFailure'
 
 const message = useMessage()
 const ui = useUiStore()
@@ -77,7 +78,7 @@ onMounted(async () => {
   try {
     const cfg = await get<SystemConfig>('/system/config')
     sharedPlatforms.value = Array.isArray(cfg?.context?.shared_platforms) ? cfg.context.shared_platforms : []
-  } catch { /* 忽略加载失败 */ }
+  } catch (e) { reportLoadError(e, 'SettingsView.config', (m) => message.error(m)) }
   // 工作目录授权状态、白名单、审计日志
   ws.loadStatus()
   ws.loadWhitelist()
@@ -102,7 +103,7 @@ async function loadLanInfo() {
   try {
     const data = await get<{ localhost: string; lan_ips: string[]; lan_urls: string[]; port: number }>('/system/lan-addresses')
     lanInfo.value = data
-  } catch { /* 忽略 */ }
+  } catch (e) { reportLoadError(e, 'SettingsView.lanAddresses', (m) => message.error(m)) }
 }
 
 function copyUrl(url: string) {

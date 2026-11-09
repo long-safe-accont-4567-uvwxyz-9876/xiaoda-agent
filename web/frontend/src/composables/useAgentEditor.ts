@@ -12,6 +12,7 @@ import { t } from '../i18n'
 import { replaceAgentNames, refreshAgentNames } from '../utils/agentNames'
 import { pinyin } from 'pinyin-pro'
 import type { AgentEditModel, ToolGroup } from '../components/agents/types'
+import { reportLoadError } from '../utils/loadFailure'
 
 // 中文转拼音（当编辑时使用）
 function translateToEn(zhName: string): string {
@@ -71,7 +72,7 @@ export function useAgentEditor() {
     try {
       const data = await get<Array<{ provider: string; label?: string; models: Array<{ id: string; display_name: string; free: boolean }> }>>('/models/discover')
       discoveredModels.value = data || []
-    } catch { /* 忽略，保留手输 */ }
+    } catch (e) { reportLoadError(e, 'useAgentEditor.models', (m) => message.error(m)) }
   }
 
   loadDiscoveredModels()
@@ -151,7 +152,7 @@ export function useAgentEditor() {
     try {
       const tools = await get<any[]>('/tools')
       toolCategory.value = Object.fromEntries(tools.map(t => [t.name, t.category]))
-    } catch { /* 忽略 */ }
+    } catch { /* 静默兜底：分类表缺失只影响工具分组展示 */ }
   }
 
   async function open(agent: AgentEditModel | null) {

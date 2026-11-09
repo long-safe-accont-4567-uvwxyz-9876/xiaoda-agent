@@ -139,7 +139,7 @@ async function loadAll() {
 }
 
 async function loadSystem() {
-  try { system.value = await get('/health/system') } catch { /* */ }
+  try { system.value = await get('/health/system') } catch (e) { reportLoadError(e) }
 }
 
 function renderCostChart(series: any[]) {

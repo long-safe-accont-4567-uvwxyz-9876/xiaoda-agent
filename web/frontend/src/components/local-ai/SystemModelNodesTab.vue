@@ -107,7 +107,7 @@ async function load() {
     nodes.value = await store.fetchModelNodes()
     try {
       deployStatus.value = await store.fetchLocalDeployStatus()
-    } catch { /* 状态拉取失败不影响节点列表 */ }
+    } catch { /* 静默兜底：部署状态拉取失败不影响节点列表 */ }
   } catch (error) {
     message.error(error instanceof Error ? error.message : String(error))
   } finally {

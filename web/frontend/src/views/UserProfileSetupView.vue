@@ -59,7 +59,7 @@ onMounted(async () => {
   try {
     const data = await getSetupVersion()
     version.value = data.version || 'dev'
-  } catch { /* 降级为 dev */ }
+  } catch { /* 静默兜底：版本号获取失败降级为 dev */ }
 
   try {
     const data = await api.getSetupUserProfile()

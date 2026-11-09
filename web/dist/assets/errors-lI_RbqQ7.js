@@ -1,0 +1,1 @@
+function i(t,s=""){if(t instanceof Error&&t.message)return t.message;if(typeof t=="string"&&t.trim())return t;if(t&&typeof t=="object"){const n=t.message;if(typeof n=="string"&&n.trim())return n;const e=t.code;if(typeof e=="string"&&e.trim())return e}return s}function f(t){return!!t&&typeof t=="object"&&t.name==="AbortError"}export{i as d,f as i};

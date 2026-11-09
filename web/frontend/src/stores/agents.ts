@@ -28,7 +28,7 @@ export const useAgentsStore = defineStore('agents', () => {
     try {
       if (url) sessionStorage.setItem(WALLPAPER_CACHE_KEY, url)
       else sessionStorage.removeItem(WALLPAPER_CACHE_KEY)
-    } catch { /* 隐私模式等存储不可用则跳过缓存 */ }
+    } catch { /* 静默兜底：隐私模式下 sessionStorage 不可用 */ }
   }
 
   async function load() {

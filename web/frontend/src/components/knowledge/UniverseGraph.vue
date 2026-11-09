@@ -474,7 +474,7 @@ async function refreshAfterMutation() {
     if (destroyed) return
     acc.merge(data.nodes || [], data.edges || [])
     applyAccumulatedToGraph()
-  } catch { /* 刷新失败不打断操作流，WS 同步会再补 */ }
+  } catch { /* 静默兜底：增量刷新失败由 WS 后续同步补齐 */ }
 }
 
 // ── 生命周期 ──

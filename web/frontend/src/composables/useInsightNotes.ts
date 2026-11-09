@@ -7,13 +7,14 @@ import { get, deleteNote } from '../api'
 import { useMessage } from 'naive-ui'
 import { t } from '../i18n'
 import type { NoteItem } from '../components/insight/types'
+import { reportLoadError } from '../utils/loadFailure'
 
 export function useInsightNotes() {
   const message = useMessage()
   const notes = ref<NoteItem[]>([])
 
   async function loadNotes() {
-    try { notes.value = await get<NoteItem[]>('/insight/notebook') } catch { /* */ }
+    try { notes.value = await get<NoteItem[]>('/insight/notebook') } catch (e) { reportLoadError(e, 'useInsightNotes.load', (m) => message.error(m)) }
   }
 
   async function removeNote(id: number) {

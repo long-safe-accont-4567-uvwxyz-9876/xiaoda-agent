@@ -84,7 +84,7 @@ export const useUiStore = defineStore('ui', () => {
       if (cfg?.ui?.dendro_cursor !== undefined) { dendroCursor.value = !!cfg.ui.dendro_cursor; localStorage.setItem('ui.dendroCursor', String(dendroCursor.value)) }
       if (cfg?.ui?.dendro_cursor_trail !== undefined) { dendroCursorTrail.value = !!cfg.ui.dendro_cursor_trail; localStorage.setItem('ui.dendroCursorTrail', String(dendroCursorTrail.value)) }
       loaded.value = true
-    } catch { /* 未登录时静默 */ }
+    } catch { /* 静默兜底：未登录时读 UI 配置失败属正常 */ }
     // 应用亮度
     applyBrightness()
     startAutoCheck()

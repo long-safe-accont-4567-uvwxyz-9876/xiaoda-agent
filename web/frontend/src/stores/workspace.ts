@@ -39,7 +39,7 @@ export const useWorkspaceStore = defineStore('workspace', () => {
       authorized.value = data.authorized
       currentPath.value = data.path || ''
       authorizedAt.value = data.authorized_at || ''
-    } catch { /* 未登录时静默 */ }
+    } catch { /* 静默兜底：未登录/未授权时的状态探测 */ }
   }
 
   /** 加载命令白名单 */
@@ -47,7 +47,7 @@ export const useWorkspaceStore = defineStore('workspace', () => {
     try {
       const data = await get<any>('/workspace/whitelist')
       whitelist.value = data.whitelist || []
-    } catch { /* 忽略 */ }
+    } catch { /* 静默兜底：白名单拉取失败按空白名单处理 */ }
   }
 
   /** 确认授权工作目录 */

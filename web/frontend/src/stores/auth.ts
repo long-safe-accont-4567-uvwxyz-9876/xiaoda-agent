@@ -40,13 +40,13 @@ export const useAuthStore = defineStore('auth', () => {
           headers: { Authorization: `Bearer ${currentToken}` },
         })
       }
-    } catch { /* 网络异常/服务不可达：登出仍按本地清理完成 */ }
+    } catch { /* 静默兜底：服务不可达时登出仍按本地清理完成 */ }
     token.value = ''
     expiresAt.value = 0
     localStorage.removeItem('token')
     localStorage.removeItem('expires_at')
     // 清理会话级壁纸缓存：避免登出后同标签页短暂残留上一会话的背景
-    try { sessionStorage.removeItem(WALLPAPER_CACHE_KEY) } catch { /* 存储不可用则跳过 */ }
+    try { sessionStorage.removeItem(WALLPAPER_CACHE_KEY) } catch { /* 静默兜底：登出清理时存储不可用可忽略 */ }
     getWsClient().disconnect()
   }
 

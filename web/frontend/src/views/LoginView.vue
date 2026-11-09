@@ -71,9 +71,7 @@ onMounted(async () => {
     // 无条件同步（含空串）：后端已做文件存在性校验，空串即权威"无可用壁纸"，
     // 必须清掉 sessionStorage 里可能残留的死链缓存
     agentsStore.setMainWallpaper(data?.wallpaper || '')
-  } catch {
-    // 忽略，使用默认背景
-  }
+  } catch { /* 静默兜底：壁纸获取失败用默认背景 */ }
   void ensureBackdropAvailable()
   try {
     const data = await api.getSetupFirstRun()
@@ -81,9 +79,7 @@ onMounted(async () => {
       router.replace('/setup')
       return
     }
-  } catch {
-    // 忽略
-  }
+  } catch { /* 静默兜底：首启探测失败按已初始化处理 */ }
   // 检测是否设置了密码
   try {
     // 空密码探测：成功 = 未设置密码。store 版 login 会落地 token，
@@ -122,9 +118,7 @@ async function handleLogin() {
         router.replace('/setup/profile')
         return
       }
-    } catch {
-      // 检查失败，走正常流程
-    }
+    } catch { /* 静默兜底：资料完成度探测失败按已完成处理 */ }
     // 审查 A2：登录后回到被拦截的深链（resolveRedirectTarget 只放行站内路径）
   router.replace(resolveRedirectTarget(router.currentRoute.value.query.redirect))
   } catch (e: any) {

@@ -8,6 +8,7 @@ import { NButton, NSelect, useMessage } from 'naive-ui'
 import { get, api } from '../../api'
 import { t } from '../../i18n'
 import { replaceAgentNames } from '../../utils/agentNames'
+import { reportLoadError } from '../../utils/loadFailure'
 
 const props = defineProps<{ agentName: string }>()
 
@@ -23,7 +24,7 @@ async function loadVoices() {
   try {
     const v = await get<{ groups: Record<string, Array<{ name: string; voice_ref: string }>> }>('/media/tts/voices')
     voiceGroups.value = v.groups || {}
-  } catch { /* */ }
+  } catch (e) { reportLoadError(e, 'AgentVoiceField.voices', (m) => message.error(m)) }
 }
 
 watch(() => props.agentName, () => loadVoices(), { immediate: true })

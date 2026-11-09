@@ -4,6 +4,7 @@ import { useVisibilityPolling } from '../../composables/useVisibilityPolling'
 import { NButton, NEmpty, NProgress, NTag, NSelect, NModal, NTabs, NTabPane, NSpin, useMessage } from 'naive-ui'
 import { useLocalAiStore, type LocalDeployStatus } from '../../stores/localAi'
 import { localeTag } from '../../utils/datetime'
+import { reportLoadError } from '../../utils/loadFailure'
 
 const store = useLocalAiStore()
 const message = useMessage()
@@ -23,7 +24,7 @@ const runtimeBackend = ref('')
 async function loadDeployStatus() {
   try {
     deployStatus.value = await store.fetchLocalDeployStatus()
-  } catch { /* 静默 */ }
+  } catch (e) { reportLoadError(e, 'ComputeDevicesTab.deployStatus', (m) => message.error(m)) }
 }
 
 async function loadDeviceList() {
@@ -32,7 +33,7 @@ async function loadDeviceList() {
     deviceList.value = data.devices
     selectedDevice.value = data.current
     runtimeBackend.value = data.runtime_backend
-  } catch { /* 静默 */ }
+  } catch (e) { reportLoadError(e, 'ComputeDevicesTab.devices', (m) => message.error(m)) }
 }
 
 async function loadLogs() {
@@ -139,7 +140,7 @@ async function refreshStats() {
   try {
     await store.refreshDevices()
     lastUpdated.value = new Date().toLocaleTimeString(localeTag(), { hour12: false })
-  } catch { /* 轮询失败静默，下次重试 */ }
+  } catch { /* 静默兜底：轮询失败下次重试，不反复弹提示 */ }
 }
 // 审计 L6：页面隐藏时停表，可见时立即刷新后恢复 5 秒节奏
 useVisibilityPolling(refreshStats, 5000)

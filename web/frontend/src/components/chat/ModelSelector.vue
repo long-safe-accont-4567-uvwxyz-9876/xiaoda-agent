@@ -7,6 +7,7 @@ import { useChatStore } from '../../stores/chat'
 import { useAgentsStore } from '../../stores/agents'
 import { getWsClient } from '../../api/ws'
 import { t } from '../../i18n'
+import { reportLoadError } from '../../utils/loadFailure'
 
 const chat = useChatStore()
 const agentsStore = useAgentsStore()
@@ -148,7 +149,7 @@ async function fetchCurrentModel() {
       model_id: data.model_id,
       label: buildModelLabel(data.provider, data.model_id)
     }
-  } catch { /* 静默 */ }
+  } catch (e) { reportLoadError(e, 'ModelSelector.current', (m) => message.error(m)) }
 }
 
 async function fetchModels() {
@@ -158,7 +159,7 @@ async function fetchModels() {
     providers.value = data
     // providers 加载完成后，重新计算当前模型标签（处理异步加载顺序）
     updateCurrentModelLabel()
-  } catch { /* 静默 */ }
+  } catch (e) { reportLoadError(e, 'ModelSelector.providers', (m) => message.error(m)) }
   loading.value = false
 }
 

@@ -54,7 +54,7 @@ onMounted(async () => {
   try {
     const data = await getSetupVersion()
     version.value = data.version || 'dev'
-  } catch { /* 降级为 dev */ }
+  } catch { /* 静默兜底：版本号获取失败降级为 dev */ }
 
   try {
     const data = await api.getSetupKeys()
@@ -106,7 +106,7 @@ onMounted(async () => {
     if (status.agreed) {
       localStorage.setItem('xiaoda_disclaimer_agreed', 'true')
     }
-  } catch { /* 降级：首次使用，需要勾选 */ }
+  } catch { /* 静默兜底：免责声明状态读取失败按未同意处理 */ }
 
   // 也检查 localStorage（快速路径）
   if (localStorage.getItem('xiaoda_disclaimer_agreed') === 'true') {
@@ -328,9 +328,7 @@ async function handleSave() {
       // 自动登录以获取 token，避免跳转后被重定向到登录页
       try {
         await authStore.login('')
-      } catch {
-        // 登录失败不影响跳转
-      }
+      } catch { /* 静默兜底：自动登录失败由路由守卫跳登录页 */ }
       // 仅首次配置（用户资料未完成）时引导填写资料；
       // 非首次只是修改 API Key 时不再自动弹出资料页，避免反复打扰。
       let profileDone = localStorage.getItem('xiaoda_profile_done') === 'true'
@@ -338,9 +336,7 @@ async function handleSave() {
         try {
           const fr = await api.getSetupFirstRun()
           profileDone = !!fr?.profile_done
-        } catch {
-          // 检测失败时按 localStorage 判定结果处理
-        }
+        } catch { /* 静默兜底：首启查询失败按 localStorage 判定 */ }
       }
       router.replace(profileDone ? '/' : '/setup/profile')
     }

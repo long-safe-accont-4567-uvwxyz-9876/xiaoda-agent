@@ -42,9 +42,7 @@ async function loadCategories() {
   try {
     const list = await store.hubCategories()
     if (Array.isArray(list) && list.length) CATEGORIES.value = list
-  } catch {
-    /* 后端不可用或旧版本时保留内置兜底 */
-  }
+  } catch { /* 静默兜底：后端旧版本时保留内置分类兜底 */ }
 }
 
 // ── 在线获取：双源并发检索，跨源同 id 合并为一行（来源标注全部源） ──

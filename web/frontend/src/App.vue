@@ -34,7 +34,7 @@ async function checkSignature() {
         el.textContent = expected
       }
     })
-  } catch { /* 静默失败 */ }
+  } catch { /* 静默兜底：水印文案校正失败不影响渲染 */ }
 }
 
 // 根级错误边界（审计 P0-1）：任何未被下层捕获的渲染错误退化为
@@ -134,11 +134,7 @@ onMounted(async () => {
       booting.value = false
       return
     }
-  } catch {
-    // 检测失败：正常启动，不强制跳 setup。
-    // 只有 first_run=true（必填 API Key 未配置）才跳 setup；
-    // 其他异常（网络错误、HTTP 未就绪等）是正常的，不阻塞启动。
-  }
+  } catch { /* 静默兜底：启动探测失败按正常启动流程继续 */ }
   // 2. 非首次运行：未登录则跳转登录页（已登录的直接进主界面）
   if (!auth.isLoggedIn) {
     router.replace('/login')

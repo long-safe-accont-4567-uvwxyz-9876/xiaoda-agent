@@ -26,6 +26,7 @@ import CmdConfirmCard from '../components/workspace/CmdConfirmCard.vue'
 import JSpacePanel from '../components/jspace/JSpacePanel.vue'
 import { useWorkspaceStore } from '../stores/workspace'
 import { t, tf, state as i18nState } from '../i18n'
+import { reportLoadError } from '../utils/loadFailure'
 
 defineOptions({ name: 'ChatView' })
 
@@ -125,7 +126,7 @@ onMounted(async () => {
     // 后端命令名自带 "/" 前缀，统一去掉，避免拼接成 "//cmd"
     const raw = await api.getCommands()
     commands.value = raw.map(c => ({ ...c, name: c.name.replace(/^\/+/, '') }))
-  } catch { /* 忽略 */ }
+  } catch (e) { reportLoadError(e, 'ChatView.commands', (m) => message.error(m)) }
 })
 
 onBeforeUnmount(() => {

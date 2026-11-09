@@ -19,6 +19,7 @@ import * as echarts from 'echarts/core'
 import { BarChart } from 'echarts/charts'
 import { GridComponent, TooltipComponent, LegendComponent } from 'echarts/components'
 import { CanvasRenderer } from 'echarts/renderers'
+import { reportLoadError } from '../utils/loadFailure'
 
 echarts.use([BarChart, GridComponent, TooltipComponent, LegendComponent, CanvasRenderer])
 
@@ -250,7 +251,7 @@ async function loadTemperature() {
     const res = await get<any>('/models/temperature')
     temperature.value = res.temperature ?? 0.7
     tempSource.value = res.source ?? 'config'
-  } catch { /* use default */ }
+  } catch (e) { reportLoadError(e, 'ModelsView.temperature', (m) => message.error(m)) }
   await loadDedup()
 }
 
@@ -286,7 +287,7 @@ async function loadDedup() {
   try {
     const res = await get<any>('/models/reply_dedup')
     dedupEnabled.value = res.enabled ?? true
-  } catch { /* use default */ }
+  } catch (e) { reportLoadError(e, 'ModelsView.replyDedup', (m) => message.error(m)) }
 }
 
 async function _doSaveDedup() {
@@ -324,7 +325,7 @@ async function loadFreqPenalty() {
     const res = await get<any>('/models/frequency_penalty')
     freqPenalty.value = res.frequency_penalty ?? 1.0
     freqSource.value = res.source ?? 'default'
-  } catch { /* use default */ }
+  } catch (e) { reportLoadError(e, 'ModelsView.frequencyPenalty', (m) => message.error(m)) }
 }
 
 async function _doSaveFreqPenalty() {
@@ -369,7 +370,7 @@ async function loadPresPenalty() {
     const res = await get<any>('/models/presence_penalty')
     presPenalty.value = res.presence_penalty ?? 1.0
     presSource.value = res.source ?? 'default'
-  } catch { /* use default */ }
+  } catch (e) { reportLoadError(e, 'ModelsView.presencePenalty', (m) => message.error(m)) }
 }
 
 async function _doSavePresPenalty() {

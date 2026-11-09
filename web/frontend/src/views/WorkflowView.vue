@@ -13,6 +13,7 @@ import { t, tf } from '../i18n'
 import Tilt3D from '../components/fx/Tilt3D.vue'
 import ViewTitleIcon from '../components/fx/ViewTitleIcon.vue'
 import { localeTag } from '../utils/datetime'
+import { reportLoadError } from '../utils/loadFailure'
 
 const message = useMessage()
 const router = useRouter()
@@ -107,9 +108,7 @@ async function loadResources() {
       }
     }
     resourceOptions.value.models = modelOpts
-  } catch {
-    // 静默失败，下拉框为空即可
-  }
+  } catch (e) { reportLoadError(e, 'WorkflowView.models', (m) => message.error(m)) }
 }
 
 // ── 获取某类型节点的可选列表 ──

@@ -155,7 +155,7 @@ export function createUniverseEngine(
     try {
       const prCap = tier === 'low' ? 1.25 : tier === 'medium' ? 1.5 : 2
       g.renderer().setPixelRatio(Math.min(window.devicePixelRatio, prCap))
-    } catch { /* renderer 尚未就绪时忽略 */ }
+    } catch { /* 静默兜底：renderer 尚未就绪 */ }
     applyLinkParticles()
     // 节点分辨率：low 档 6 段，其余 8 段（原 20 段过高）
     g.nodeResolution(tier === 'low' ? 6 : 8)
@@ -491,7 +491,7 @@ export function createUniverseEngine(
     // 像素比上限 2.0（low 档降到 1.25，见 applyQualityTier）
     try {
       g.renderer().setPixelRatio(Math.min(window.devicePixelRatio, 2))
-    } catch { /* renderer 尚未就绪时忽略 */ }
+    } catch { /* 静默兜底：renderer 尚未就绪 */ }
     const w = el.clientWidth || window.innerWidth
     const h = el.clientHeight || window.innerHeight
     g.width(w).height(h)
@@ -567,7 +567,7 @@ export function createUniverseEngine(
         controls.enableDamping = true
         controls.dampingFactor = 0.08
       }
-    } catch { /* 控件能力缺失时忽略 */ }
+    } catch { /* 静默兜底：控件能力缺失（旧版 three） */ }
 
     // 星空自转 + 世界树动画 + 生长动画（独立 RAF，仅更新对象属性，渲染由引擎每帧执行）
     startStarLoop()
@@ -755,8 +755,8 @@ export function createUniverseEngine(
    */
   function disposePostProcessing(): void {
     if (bloomPass) {
-      try { composer?.removePass(bloomPass) } catch { /* composer 可能已析构 */ }
-      try { bloomPass.dispose() } catch { /* 已释放 */ }
+      try { composer?.removePass(bloomPass) } catch { /* 静默兜底：composer 可能已析构 */ }
+      try { bloomPass.dispose() } catch { /* 静默兜底：bloomPass 已释放 */ }
       bloomPass = null
     }
     if (composer) {
@@ -767,9 +767,9 @@ export function createUniverseEngine(
       }
       // three 的 EffectComposer.dispose() 只覆盖自身 RT 与 copyPass，
       // 这里再兜底显式释放两张全屏 RT（不同版本行为不一致）
-      try { c.renderTarget1?.dispose?.() } catch { /* 已释放 */ }
-      try { c.renderTarget2?.dispose?.() } catch { /* 已释放 */ }
-      try { c.dispose?.() } catch { /* 已释放 */ }
+      try { c.renderTarget1?.dispose?.() } catch { /* 静默兜底：渲染目標已释放 */ }
+      try { c.renderTarget2?.dispose?.() } catch { /* 静默兜底：渲染目標已释放 */ }
+      try { c.dispose?.() } catch { /* 静默兜底：渲染目標已释放 */ }
       composer = null
     }
   }

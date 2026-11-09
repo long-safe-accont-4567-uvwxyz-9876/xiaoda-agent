@@ -19,9 +19,7 @@ export async function loadAgentNames(): Promise<void> {
     const data = await get<{ mapping: Record<string, string> }>('/agent-names')
     _mapping.value = data.mapping || {}
     _loaded = true
-  } catch {
-    // 降级：不替换，使用原名（但不标记为已加载，允许后续重试）
-  }
+  } catch { /* 静默兜底：名称映射加载失败保留原名并允许重试 */ }
 }
 
 /** 是否已加载 */

@@ -168,7 +168,7 @@ async function handlePaste() {
     if (text) {
       ws.send({ type: 'terminal_input', term_sid: s.id, data: text })
     }
-  } catch {}
+  } catch { /* 静默兜底：剪贴板权限被拒等同空粘贴 */ }
 }
 
 onMounted(() => {
@@ -278,7 +278,7 @@ function mountTerminal(session: TermSession, shell: string, retries = 0) {
           if (d) {
             ws.send({ type: 'terminal_resize', term_sid: session.id, cols: d.cols, rows: d.rows })
           }
-        } catch {}
+        } catch { /* 静默兜底：终端未完成布局时无法测量尺寸 */ }
       })
       resizeObs.observe(container)
       session.resizeObserver = resizeObs

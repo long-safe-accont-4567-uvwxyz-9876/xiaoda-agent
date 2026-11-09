@@ -12,6 +12,7 @@ import Tilt3D from '../components/fx/Tilt3D.vue'
 import ViewTitleIcon from '../components/fx/ViewTitleIcon.vue'
 import LoadErrorBar from '../components/common/LoadErrorBar.vue'
 import { useLoadError } from '../composables/useLoadError'
+import { reportLoadError } from '../utils/loadFailure'
 
 const message = useMessage()
 const { loadError: toolsLimitsError, fail: failLimits } = useLoadError()
@@ -155,7 +156,7 @@ onMounted(loadSkillMarket)
 async function loadSkills() {
   try {
     skills.value = await get<any[]>('/skills')
-  } catch { /* 忽略 */ }
+  } catch (e) { reportLoadError(e, 'ToolsView.skills', (m) => message.error(m)) }
 }
 
 function uploadSkill(e: Event) {
@@ -249,7 +250,7 @@ async function loadSkillMarket(force = false) {
   try {
     const data = await get<any>(`/market/skills${force ? '?force=true' : ''}`)
     skillMarketItems.value = data.items || []
-  } catch { /* 静默失败 */ } finally {
+  } catch (e) { reportLoadError(e, 'ToolsView.skillMarket', (m) => message.error(m)) } finally {
     skillMarketLoading.value = false
   }
 }

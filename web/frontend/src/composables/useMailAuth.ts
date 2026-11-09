@@ -57,8 +57,7 @@ export function useMailAuth(options: { onAuthorized: () => void }) {
                 message.success(t('mailView.authSuccess'))
                 options.onAuthorized()
               }
-            } catch (_) {
-            } finally {
+            } catch { /* 静默兜底：授权轮询失败静默，等待下次轮询 */ } finally {
               authLogging.value = false
             }
           }, 5000)
@@ -84,8 +83,7 @@ export function useMailAuth(options: { onAuthorized: () => void }) {
       } else {
         message.warning('授权尚未完成，请在浏览器中完成扫码授权后重试')
       }
-    } catch (_) {
-    } finally {
+    } catch { /* 静默兜底：授权轮询失败静默，等待下次轮询 */ } finally {
       authChecking.value = false
     }
   }

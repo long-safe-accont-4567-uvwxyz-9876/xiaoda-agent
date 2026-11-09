@@ -1,0 +1,1 @@
+import{i as n,d as f}from"./errors-lI_RbqQ7.js";import{t as s}from"./index-CYvYKqp1.js";import{r as u}from"./vendor-4BmPi_yG.js";function m(a="errors.loadFailed"){const r=u("");function e(o,t=a){n(o)||(r.value=f(o,s(t)))}function i(){r.value=""}return{loadError:r,fail:e,clear:i}}export{m as u};

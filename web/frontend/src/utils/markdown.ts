@@ -28,7 +28,7 @@ const md = new MarkdownIt({
     if (lang && hljs.getLanguage(lang)) {
       try {
         return `<pre class="hljs"><code>${hljs.highlight(code, { language: lang }).value}</code></pre>`
-      } catch { /* fall through */ }
+      } catch { /* 静默兜底：高亮失败回退为未着色代码块 */ }
     }
     return `<pre class="hljs"><code>${md.utils.escapeHtml(code)}</code></pre>`
   },

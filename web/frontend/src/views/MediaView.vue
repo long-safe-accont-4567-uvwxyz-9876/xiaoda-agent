@@ -18,6 +18,7 @@ import { galleryDeletePath, openExternal } from '../utils/mediaLinks'
 import { hasMoreAfterPage } from '../utils/paging'
 import { useLoadError } from '../composables/useLoadError'
 import LoadErrorBar from '../components/common/LoadErrorBar.vue'
+import { reportLoadError } from '../utils/loadFailure'
 
 const message = useMessage()
 const ui = useUiStore()
@@ -60,7 +61,7 @@ onMounted(async () => {
     const agents = await get<AgentInfo[]>('/agents')
     agentList.value = agents.map(a => ({ name: a.name, display_name: a.display_name || a.name, voice_ref: a.voice_ref ?? null }))
     if (agentList.value.length) selectedAgent.value = agentList.value[0].name
-  } catch { /* */ }
+  } catch (e) { reportLoadError(e, 'MediaView.agents', (m) => message.error(m)) }
   await loadVoices()
   try {
     const cfg = await get<{ auto_speak: boolean; default_voice: string }>('/media/tts/config')
@@ -69,7 +70,7 @@ onMounted(async () => {
     if (!ttsAgent.value || !agentList.value.find(a => a.name === ttsAgent.value)) {
       ttsAgent.value = agentList.value[0]?.name || 'xiaoda'
     }
-  } catch { /* TTS 可能未配置 */ }
+  } catch (e) { reportLoadError(e, 'MediaView.ttsAgents', (m) => message.error(m)) }
   loadTasks()
   loadGallery()
   ws.on('media_task_update', onTaskUpdate)
@@ -135,7 +136,7 @@ async function loadVoices() {
     const v = await get<{ groups: Record<string, Array<{ name: string; voice_ref: string }>>; styles: string[] }>('/media/tts/voices')
     voiceGroups.value = v.groups || {}
     styles.value = (v.styles || []).map(s => ({ label: s, value: s }))
-  } catch { /* */ }
+  } catch (e) { reportLoadError(e, 'MediaView.voices', (m) => message.error(m)) }
 }
 
 function onVoiceFilePick(e: Event) {
@@ -163,7 +164,7 @@ async function reloadAgentVoiceRef() {
   try {
     const agents = await get<AgentInfo[]>('/agents')
     agentList.value = agents.map(a => ({ name: a.name, display_name: a.display_name || a.name, voice_ref: a.voice_ref ?? null }))
-  } catch { /* */ }
+  } catch (e) { reportLoadError(e, 'MediaView.agentList', (m) => message.error(m)) }
 }
 
 const currentAgent = computed(() => agentList.value.find(a => a.name === selectedAgent.value))

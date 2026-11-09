@@ -176,7 +176,7 @@ async function loadBackendTemplates() {
   try {
     const data = await get<any[]>('/mcp/templates')
     if (data?.length) backendTemplates.value = data
-  } catch { /* fallback to hardcoded */ } finally {
+  } catch { /* 静默兜底：后端模板不可用时用内置模板 */ } finally {
     templatesLoading.value = false
   }
 }

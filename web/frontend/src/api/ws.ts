@@ -66,7 +66,7 @@ export class WsClient {
       this.ws = null
       old.onclose = null
       old.onerror = null
-      try { old.close() } catch { /* ignore */ }
+      try { old.close() } catch { /* 静默兜底：关闭旧连接失败不影响新连接 */ }
     }
     this._open(token)
   }
@@ -125,7 +125,7 @@ export class WsClient {
           return
         }
         this.emit(data)
-      } catch { /* ignore */ }
+      } catch { /* 静默兜底：收到非法帧就丢弃，等待后续合法帧 */ }
     }
 
     socket.onclose = (event) => {
@@ -282,7 +282,7 @@ export class WsClient {
     socket.onmessage = null
     socket.onclose = null
     socket.onerror = null
-    try { socket.close() } catch { /* 已断开 */ }
+    try { socket.close() } catch { /* 静默兜底：连接可能已断开，关闭异常可忽略 */ }
     // 先更新重连态再发事件（与 onclose 路径同序，状态灯才会转黄）
     this.emit({ type: 'ws_disconnected' })
     this.scheduleReconnect()

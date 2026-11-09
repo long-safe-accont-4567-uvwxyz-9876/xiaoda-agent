@@ -7,6 +7,7 @@ import { get, deleteLearning, deleteInstinct } from '../api'
 import { useMessage } from 'naive-ui'
 import { t } from '../i18n'
 import type { InstinctItem, LearningItem } from '../components/insight/types'
+import { reportLoadError } from '../utils/loadFailure'
 
 export function useInsightLearnings() {
   const message = useMessage()
@@ -17,7 +18,7 @@ export function useInsightLearnings() {
     try {
       learnings.value = await get<LearningItem[]>('/insight/learnings')
       instincts.value = await get<InstinctItem[]>('/insight/instincts')
-    } catch { /* */ }
+    } catch (e) { reportLoadError(e, 'useInsightLearnings.load', (m) => message.error(m)) }
   }
 
   async function removeLearning(id: number) {

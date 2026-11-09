@@ -321,7 +321,7 @@ function safeMarkdownDownloadName(contentDisposition: string | null, sessionId: 
     if (encoded) {
       try {
         candidates.push(decodeURIComponent(encoded.trim().replace(/^"|"$/g, '')))
-      } catch { /* malformed RFC 5987 value; try the plain filename fallback */ }
+      } catch { /* 静默兜底：非法 RFC5987 文件名回退到普通文件名 */ }
     }
     const plain = contentDisposition.match(/(?:^|;)\s*filename\s*=\s*(?:"([^"]*)"|([^;]*))/i)
     if (plain) candidates.push((plain[1] ?? plain[2]).trim())
