@@ -56,8 +56,6 @@ const sharedPlatformOptions = [
 
 // 审查 C2：改密弹窗里的输入与未提交的命令行原先点侧栏/刷新就静默丢失。
 // 脏值判定交给纯函数模块，这里只负责接线（含 beforeunload）。
-// 审查 C2：改密弹窗里的输入与未提交的命令行原先点侧栏/刷新就静默丢失。
-// 脏值判定交给纯函数模块，这里只负责接线（含 beforeunload）。
 useUnsavedGuard({
   isDirty: () => Boolean(
     changePwdOld.value || changePwdAnswer.value || changePwdNew.value ||

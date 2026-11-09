@@ -336,7 +336,11 @@ async function switchSession(sid: string) {
     await chat.loadSession(sid, abortable.create())
     showSessions.value = false
   } catch (e: any) {
-    if (!isAbortError(e)) message.error(e.message)
+    if (!isAbortError(e)) {
+      // 审查 B2：状态已回滚到原会话，这里说清已回到原会话，而不是只抛原始错误文本
+      const detail = e?.message ? `：${e.message}` : ''
+      message.error(t('errors.sessionSwitchFailed') + detail)
+    }
   } finally { loadingSessionId.value = '' }
 }
 

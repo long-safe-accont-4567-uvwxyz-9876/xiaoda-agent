@@ -105,7 +105,6 @@ onBeforeUnmount(() => {
 })
 
 // 审查 C2：Key 弹窗里已输入但未保存的内容，离开页面即静默丢失
-// 审查 C2：Key 弹窗里已输入但未保存的内容，离开页面即静默丢失
 useUnsavedGuard({
   isDirty: () => Boolean(showKeyModal.value && keyValue.value),
   confirmLeave: async () => window.confirm(t('common.unsavedLeaveConfirm')),
