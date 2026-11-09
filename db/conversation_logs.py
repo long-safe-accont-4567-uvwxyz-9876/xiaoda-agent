@@ -230,10 +230,13 @@ class ConversationLogMixin:
                     # 白名单校验表名和列名，防止 SQL 注入
                     import re
                     if not re.match(r'^[a-zA-Z_][a-zA-Z0-9_]*$', table_name):
-                        logger.warning("database.cleanup_invalid_table", table=table_name)
+                        logger.warning("database.cleanup_invalid_table table={}", table_name)
                         continue
                     if not re.match(r'^[a-zA-Z_][a-zA-Z0-9_]*$', date_column):
-                        logger.warning("database.cleanup_invalid_column", column=date_column)
+                        logger.warning(
+                            "database.cleanup_invalid_column table={} column={}",
+                            table_name, date_column,
+                        )
                         continue
                     del_cursor = await _w_conn.execute(
                         f'DELETE FROM "{table_name}" WHERE "{date_column}" < ? AND "{date_column}" > 0',
@@ -255,7 +258,15 @@ class ConversationLogMixin:
                         except (OSError, RuntimeError, sqlite3.OperationalError) as e:
                             logger.warning("database.cleanup_commit_failed table={} error={}", table_name, e)
                 except (OSError, RuntimeError, sqlite3.OperationalError) as e:
-                    logger.warning("database.cleanup_failed", table=table_name, error=str(e))
+                    # loguru 只按 {} / {name} 占位符格式化，额外的 keyword 参数不会进正文。
+                    # 原写法 logger.warning("database.cleanup_failed", table=..., error=...)
+                    # 让 2026-11-09 启动时 3 次失败只留下裸事件名，表名/异常类型/原因全丢。
+                    logger.warning(
+                        "database.cleanup_failed table={} exc_type={} error={}",
+                        table_name,
+                        type(e).__name__,
+                        str(e) or repr(e),
+                    )
                     _cleanup_failures += 1
                     result[table_name] = 0
 
