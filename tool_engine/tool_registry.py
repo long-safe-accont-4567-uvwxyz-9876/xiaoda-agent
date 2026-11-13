@@ -163,10 +163,18 @@ def register_tool(name: str, description: str, schema: dict,
         """实际注册函数的装饰器内层."""
         global _schema_cache, _schema_version
         if name in _tools:
-            # 显式告警：同名覆写依赖 import 顺序（如 web_browse 旧/增强版），
-            # 静默切实现属于隐式契约，任何新双注册都应在此可见
-            logger.warning("tool_registry.duplicate_overwrite name={} old_source={}",
-                           name, _tools[name].get("source", "?"))
+            existing = _tools[name]
+            if existing.get("_lazy"):
+                # 懒加载占位被模块导入的真实实现覆写是预期解析路径
+                # （register_builtin_tools_lazy 占位 → 装饰器回填），降级为
+                # debug，避免例行日志淹没真正的双注册告警
+                logger.debug("tool_registry.lazy_resolved name={} module={}",
+                             name, existing.get("module_path", "?"))
+            else:
+                # 显式告警：同名覆写依赖 import 顺序（如 web_browse 旧/增强版），
+                # 静默切实现属于隐式契约，任何新双注册都应在此可见
+                logger.warning("tool_registry.duplicate_overwrite name={} old_source={}",
+                               name, existing.get("source", "?"))
         _tools[name] = {
             "name": name,
             "description": description,
