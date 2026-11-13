@@ -947,7 +947,7 @@ class ExecutionMixin:
         P0 重构（用户要求"不许截断" + "重试机制保留"）：
         重试不追加 user message（避免"请继续"prompt 污染上下文），改用
         assistant-prefill（追加已有内容让 LLM 续写），走 _route_for_continuation
-        去递归化。最多 2 轮。
+        去递归化。最多 2 轮。补救失败（续写被丢弃/仍截断）时尾部追加截断标记，不静默半截。
         """
         content_len = len(content)
         logger.warning("llm.truncated_by_max_tokens",
@@ -957,6 +957,7 @@ class ExecutionMixin:
         # Feature flag: TRUNCATION_RETRY_DERECURSE（默认 true）
         _derecurse = os.getenv("TRUNCATION_RETRY_DERECURSE", "true").lower() in ("true", "1", "yes")
         # CodeRabbit #6 修复：加 messages 非空检查（防御性编程）
+        still_truncated = True
         if messages and content and len(content) > 10:
             _retry_max_tokens = max_tokens * 2 if max_tokens else None
             for _retry_round in range(2):  # 最多 2 轮重试
@@ -1001,7 +1002,10 @@ class ExecutionMixin:
                                     merge_action=_merge_action,
                                     method="assistant_prefill")
                         # 检查是否仍然截断（基于真实 finish_reason 判断）
+                        # merge_action=discarded：续写被判重复/重生成丢弃，content 仍是截断原文
                         if _retry_finish != "length":
+                            if _merge_action != "discarded":
+                                still_truncated = False
                             break  # 不再截断，退出重试
                     else:
                         break  # 无内容，退出
@@ -1009,6 +1013,12 @@ class ExecutionMixin:
                     logger.warning("llm.truncated_retry_failed", error=str(e), model=model,
                                    retry_round=_retry_round + 1, exc_info=True)
                     break
+        if still_truncated and content and len(content) > 10:
+            # 截断补救失败（续写被丢弃/仍以 length 结束/未进入重试）：
+            # 追加尾部标记，避免半截回复被静默发出（2026-11-13 QQ 截断事件）
+            content = content + "\n\n（回复被截断，可让我继续）"
+            logger.warning("llm.truncated_tail_marker", model=model, task=task_type,
+                           final_len=len(content))
         return content
 
     async def _handle_route_exception(self, e: Exception, provider: str,

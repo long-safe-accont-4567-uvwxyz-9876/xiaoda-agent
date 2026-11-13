@@ -181,7 +181,9 @@ ALLOWLIST_BASELINES: dict[str, int] = {
     # 2026-11-08 fix/audit-defects-perf 中等 M4（剩余处）：有界排队 +
     # 排队计入超时预算（_bounded_provider_slot / _provider_queue_budget），
     # 1108→1164 行。
-    "llm_gateway/router_execution.py": 1164,
+    # 2026-11-13 fix/qq-truncation-native-tools：length 截断续写补救失败时
+    # 追加尾部标记（still_truncated 跟踪与告警日志，+10 行），1164→1174。
+    "llm_gateway/router_execution.py": 1174,
     # 2026-09-03 上调（协议 b）：connect 取消时 _stop_after_cancel 清理 +26
     "tool_engine/mcp_client.py": 1116,
     "memory/retrieval/pipeline.py": 1084,
