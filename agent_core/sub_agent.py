@@ -586,8 +586,8 @@ class SubAgent:
             "nex-n2", "nex-agi", "thinking", "o1", "o3", "o4",
         ]):
             return True
-        # 系列默认推理模式由 provider_metadata.json 的 reasoning_by_default 表达
-        # （如 agnes 系列默认开启），不硬编码 provider/模型名
+        # 系列默认推理模式由 provider_metadata.json 的 reasoning_by_default 表达，不硬编码 provider/模型名
+        # 2026-11-13：agnes-2.5-flash 移出该名单（supports_tools=true 的普通 chat 模型；DSML 文本路径下模型不输出 DSML 调用，群聊数学题只回前导语）
         try:
             return bool(get_provider_capability(self.config.provider, "reasoning_by_default"))
         except (ImportError, OSError, ValueError):

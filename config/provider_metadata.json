@@ -24,7 +24,7 @@
       "context_window": 524288,
       "default_model": "agnes-2.5-flash",
       "doc_url": "https://agnes-ai.com/zh-Hans/docs/agnes-25-flash",
-      "doc_note": "max_tokens 上限 65536（2026-09-24 实测二分确认：65535→200、65536→200、65537→400 'max_tokens exceeds the limit of 65536'）。文档写 65.5K 即此值。注意上下文窗口是 512K，与输出上限是两个概念——不要再把二者混淆。历史注释曾写 500 InternalServerError，实测为 400 BadRequest。",
+      "doc_note": "max_tokens 上限 65536（2026-09-24 实测二分确认：65535→200、65536→200、65537→400 'max_tokens exceeds the limit of 65536'）。文档写 65.5K 即此值。注意上下文窗口是 512K，与输出上限是两个概念——不要再把二者混淆。历史注释曾写 500 InternalServerError，实测为 400 BadRequest。2026-11-13：reasoning_by_default 改 false——agnes-2.5-flash 是普通 chat 模型（supports_tools=true），子代理按推理模型走 DSML 文本工具路径时模型不输出 DSML 调用（群聊数学题只回前导语、长答被 3072 max_tokens 截断），恢复原生 tools 路径。",
       "supports_vision": false,
       "supports_tools": true,
       "builtin": true,
@@ -37,7 +37,7 @@
       "supports_thinking": false,
       "uses_chat_template_thinking": true,
       "inherit_chat_thinking": true,
-      "reasoning_by_default": true,
+      "reasoning_by_default": false,
       "free_tier": true,
       "default_model_display_name": "Agnes Flash 2.5"
     },
